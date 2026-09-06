@@ -1,6 +1,7 @@
 # NexaAid — Team Progress Log
 
 ## Castillo — Foundation (3.1 + 3.2)
+
 **Status:** Done, merged to develop
 **Last updated:** Sep 3, 2026
 
@@ -20,18 +21,38 @@ building anything that touches `users`.
 ---
 
 ## Hoyohoy — Auth/Registration (3.3)
-**Status:** Not started
-**Last updated:** —
+
+**Status:** Done
+**Last updated:** Sep 6, 2026
+
+- Donor self-registration, organization self-registration (starts "Pending"
+  until an admin approves it), and admin-created internal staff accounts
+  (CSWS, CMO, DRRMO, Barangay Rep) — all built on Castillo's
+  password-hashing/`require_role()` foundation
+- New: `api/v1/auth_router.py` (registration endpoints), `api/v1/admin_router.py`
+  (admin-created accounts), `schemas/organization_schema.py`, `schemas/user_schema.py`
+- Modified: `models/organization_model.py`, `models/user_rbac_model.py` to
+  support the new registration fields
+- Removed the old `api/v1/router.py` — routes now split across the new
+  router files, so double-check everything is re-wired before merging
+- Resolved environment issues (missing `python-jose`, wiped venv, stale DB
+  password, missing `SECRET_KEY`) and confirmed registration/RBAC running
+  end-to-end (200 OK)
+
+**Note for the team:** touched `models/user_rbac_model.py`, which Ivan's
+dashboard/report work also modified — diff this file carefully before merging.
 
 ---
 
 ## Mariquit — CSWS Disaster Unit (3.7, 3.10)
+
 **Status:** Not started
 **Last updated:** —
 
 ---
 
 ## Fernandez — Dashboard (3.13)
+
 **Status:** In progress — core endpoints built, pending final verification
 **Last updated:** Sep 6, 2026
 
@@ -50,6 +71,7 @@ building anything that touches `users`.
 - No writes, no schema changes, no new dependencies
 
 **Blocked on / needs team input:**
+
 - reports.py has an "ASSUMPTION TO VERIFY" comment about role names — if
   that gets corrected, my `DASHBOARD_ROLES` tuple needs the same fix
 - CMO and DRRMO role name strings are still unconfirmed (not found
@@ -58,6 +80,7 @@ building anything that touches `users`.
   someone confirms the real values from the `roles` table
 
 **Still to do:**
+
 - Run `uvicorn main:app --reload` and test all 5 endpoints against the
   test admin account
 - Confirm empty-table case doesn't error (should return zeros)
