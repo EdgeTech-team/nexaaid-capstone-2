@@ -1,9 +1,11 @@
-from backend.app.api.v1 import Dashboard_Routes
+from api.v1.dashboard_routes import router as dashboard_router
 from fastapi import FastAPI
 from api.v1.health_routes import router as health_router
 from api.v1.reports import router as report_router
-
+from api.v1.deliveries import router as delivery_router
 
 app = FastAPI()
 app.include_router(health_router)
-app.include_router(Dashboard_Routes)
+app.include_router(dashboard_router)
+app.include_router(report_router)
+app.include_router(delivery_router)
