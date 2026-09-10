@@ -44,12 +44,32 @@ dashboard/report work also modified — diff this file carefully before merging.
 
 ---
 
-## Mariquit — CSWS Disaster Unit (3.7, 3.10)
-
-**Status:** Not started
-**Last updated:** —
-
 ---
+
+## Mariquit — Module 2 (3.4, 3.11, 3.12) + Module 4 (3.7) + Module 6 (3.10)
+
+### Done & tested (12/12 pytest passing)
+
+- **3.4 Report Management**: full CRUD on disaster_reports, admin validate/reject
+  with audit trail (validated_by, rejection_reason), SMS report ingestion
+  (sms_report_metadata). Migrations applied to real Neon DB.
+- **3.10 Delivery Tracking & Receipt Confirmation**: deliveries move through
+  sequential statuses (Preparing → In Transit → Delivered), barangay confirms
+  receipt (receipts table), which auto-recalculates the linked report's
+  fulfillment_percentage/verification_status (report_fulfillments).
+- Extended validate_report (3.4) to auto-create a report_fulfillments row,
+  since 3.10/3.11 both depend on it existing.
+
+### Still open / needs team input
+
+- Real RBAC role names are placeholders in code (e.g. "admin", "csws_main_office",
+  "barangay_receiving_rep") — need actual values from roles table once decided.
+- No way yet to check a Barangay Rep's own barangay_id when confirming receipt
+  (user_rbac_model has no such column) — the check is written but not enforced.
+- Missing: photo/evidence upload field on disaster_reports (FR 2.1 gap).
+- 3.11 (AI-Assisted Priority Level Assignment) and 3.12 (SMS-Based Alternative
+  Reporting) — not started; 3.12 partially covered by existing SMS ingestion.
+- 3.7 (Needs Monitoring) — not started; mostly extends existing GET /reports/.
 
 ## Fernandez — Dashboard (3.13)
 

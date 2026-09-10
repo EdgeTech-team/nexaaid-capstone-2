@@ -23,6 +23,7 @@ import pytest
 from fastapi import Request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
  
 from main import app
@@ -43,6 +44,7 @@ def db_session():
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     Base.metadata.create_all(bind=engine)
     TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -74,7 +76,15 @@ def seed(db_session):
     strings used in api/v1/reports.py. Those two systems aren't wired
     together yet (see the open item about real RBAC role names).
     """
-    org = Organization(organization_id=1, organization_name="Test Org")
+    org = Organization(
+        organization_id=1,
+        org_name="Test Org",
+        organization_type="NGO",
+        address="Test Address",
+        contact_person="Test Contact",
+        registration_no="TEST-REG-001",
+        contact_email="org@test.local",
+    )
     reporter_role = Role(role_id=1, role_name="Reporter")
     admin_role = Role(role_id=2, role_name="Admin")
     db_session.add_all([org, reporter_role, admin_role])

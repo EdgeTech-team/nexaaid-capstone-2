@@ -144,6 +144,12 @@ class DisasterReport(Base):
         cascade="all, delete-orphan",
     )
 
+    fulfillment = relationship(
+        "ReportFulfillment",
+        back_populates="report",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
 class SmsReportMetadata(Base):
     __tablename__ = "sms_report_metadata"
@@ -166,3 +172,41 @@ class SmsReportMetadata(Base):
     # Relationships
     report = relationship("DisasterReport", back_populates="sms_metadata")
     encoded_by = relationship("User", foreign_keys=[encoded_by_user_id])
+
+
+class ReportFulfillment(Base):
+    """
+    Module 3.10/3.11 support — one row per report, tracking how much of
+    the reported need has actually been delivered and confirmed.
+ 
+    Created automatically when a report is validated (see
+    validate_report in api/v1/reports.py) with total_items_needed
+    seeded from the report's own estimated_quantity. Recalculated
+    every time a delivery's receipt is confirmed (api/v1/deliveries.py).
+    """
+    __tablename__= "report_fulfillments"
+
+    fulfillment_id = Column(Integer, primary_key=True)
+
+    report_id = Column(
+         Integer,
+         ForeignKey("disaster_reports.report_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    total_items_needed = Column(Integer, nullable=False)
+    total_items_delivered = Column(Integer, nullable=False, server_default="0")
+    fulfillment_percentage = Column(Numeric(5,2), nullable=False, server_default="0.00")
+    verification_status = Column(String(20), nullable=False, server_default="Not Started")
+    verified_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+    verified_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "verification_status IN ('Not Started', 'Partial', 'Complete')",
+            name="chk_report_fulfillments_status",
+        ),
+    )
+
+    report = relationship("DisasterReport", back_populates="fulfillment")
+    verified_by = relationship("User", foreign_keys=[verified_by_user_id])
