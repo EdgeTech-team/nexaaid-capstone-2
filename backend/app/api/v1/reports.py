@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.auth import get_current_user, require_role  # see note above
-from models.report import DisasterReport, SmsReportMetadata
+from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment
 from schemas.report import (
     DisasterReportCreate,
     DisasterReportUpdate,
@@ -159,9 +159,22 @@ def validate_report(
     report.status = "Validated"
     report.validated_by = current_user.user_id
     report.rejection_reason = None  # clear any prior rejection on re-approval
-
+    existing_fulfillment =(
+        db.query(ReportFulfillment)
+        .filter(ReportFulfillment.report_id == report_id)
+        .first()
+    )
+    if not existing_fulfillment: 
+        db.add(
+            ReportFulfillment(
+                report_id = report_id,
+                total_items_needed= report.estimated_quantity or 0,
+            )
+        )
+    
     db.flush()
     db.refresh(report)
+
     # TODO: notify the submitting Barangay Representative + publish to
     # donor/org-facing GET endpoint, per UC-02 step 7 / SD4 Phase 3.
     return report
