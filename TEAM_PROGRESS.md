@@ -60,17 +60,32 @@ dashboard/report work also modified — diff this file carefully before merging.
 - Extended validate_report (3.4) to auto-create a report_fulfillments row,
   since 3.10/3.11 both depend on it existing.
 
+- **3.7 Needs Monitoring**: added priority_level filter to GET /reports/,
+  plus new GET /reports/monitoring endpoint joining disaster_reports with
+  report_fulfillments (joinedload, avoids N+1) — returns fulfillment
+  status/percentage/items alongside each report for staff/admin/barangay
+  official roles.
+- **3.11 AI-Assisted Priority Level Assignment**: rule-based scoring
+  (core/priority_engine.py) triggered on report validation — factors in
+  affected_families, estimated_quantity, disaster type severity, and
+  current fulfillment status. Handles the manuscript's alt flows:
+  insufficient data → "Needs Review", missing fulfillment record →
+  scored as max unmet need, out-of-range score → "Review Required"
+  safety fallback. Scoring weights/thresholds are a team-agreed rule,
+  not manuscript-specified (manuscript intentionally leaves the formula
+  open — see UC spec p.93-94).
 ### Still open / needs team input
 
-- Real RBAC role names are placeholders in code (e.g. "admin", "csws_main_office",
-  "barangay_receiving_rep") — need actual values from roles table once decided.
-- No way yet to check a Barangay Rep's own barangay_id when confirming receipt
-  (user_rbac_model has no such column) — the check is written but not enforced.
-- Missing: photo/evidence upload field on disaster_reports (FR 2.1 gap).
-- 3.11 (AI-Assisted Priority Level Assignment) and 3.12 (SMS-Based Alternative
-  Reporting) — not started; 3.12 partially covered by existing SMS ingestion.
-- 3.7 (Needs Monitoring) — not started; mostly extends existing GET /reports/.
-
+- DisasterType stub currently only has 1 real row ("Flood") in the actual
+  Neon DB — Typhoon/Fire/Earthquake severities in priority_engine.py's
+  DISASTER_SEVERITY map are unreachable until whoever owns reference
+  tables actually seeds those rows.
+- Found a real mismatch: models/report.py's DisasterType stub maps the
+  column as `name`, but the actual Postgres column is `type_name` — hasn't
+  broken anything yet since nothing reads it, but will the moment code
+  (like priority_engine.py) starts using report.disaster_type.name.
+  Flagging for whoever owns reference/lookup tables.
+  
 ## Fernandez — Dashboard (3.13)
 
 **Status:** In progress — core endpoints built, pending final verification
