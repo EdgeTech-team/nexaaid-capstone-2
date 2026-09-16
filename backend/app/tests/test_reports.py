@@ -11,6 +11,7 @@ Covers the flows your Capstone doc actually specifies:
 - Access control: non-admin can't validate/reject; a reporter can't list all reports
 - FR 2.4: SMS ingestion creates a report + linked sms_report_metadata together
 """
+from models.report import DisasterReport, ReportFulfillment
 
 
 def test_create_report_success(reporter_client, seed):
@@ -127,6 +128,7 @@ def test_sms_ingest_creates_report_and_metadata(admin_client, seed):
         "affected_families": 5,
         "assistance_needed": "Food, water",
     }
+
     resp = admin_client.post("/reports/sms", json=payload)
 
     assert resp.status_code == 201
@@ -135,3 +137,48 @@ def test_sms_ingest_creates_report_and_metadata(admin_client, seed):
     assert body["report"]["status"] == "Pending"
     assert body["sms_metadata"]["raw_message"] == payload["raw_message"]
     assert body["sms_metadata"]["report_id"] == body["report"]["report_id"]
+
+def test_list_monitoring_empty(admin_client, seed):
+    resp = admin_client.get("/reports/monitoring")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+def test_list_reports_monitoring_with_fulfillment(admin_client, seed, db_session):
+    # 1. Create a validated DisasterReport directly through the ORM
+    report = DisasterReport(
+        user_id=seed["reporter_id"],
+        disaster_type_id=seed["disaster_type_id"],
+        barangay_id=seed["barangay_id"],
+        sitio_id=seed["sitio_id"],
+        source="web",
+        status="Validated",
+    )
+    db_session.add(report)
+    db_session.commit()
+    db_session.refresh(report)
+
+    # 2. Create the linked ReportFulfillment
+    fulfillment = ReportFulfillment(
+        report_id=report.report_id,
+        total_items_needed=100,
+        total_items_delivered=75,
+        fulfillment_percentage=75.0,
+        verification_status="Partial",
+    )
+    db_session.add(fulfillment)
+    db_session.commit()
+
+    # 3. Call the monitoring endpoint
+    response = admin_client.get("/reports/monitoring")
+
+    # 4. Assert successful response and exactly one report
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+
+    # 5. Assert fulfillment fields from ReportMonitoringResponse
+    item = data[0]
+    assert item["total_items_needed"] == 100
+    assert item["total_items_delivered"] == 75
+    assert item["fulfillment_percentage"] == "75.00"
+    assert item["fulfillment_status"] == "Partial"
