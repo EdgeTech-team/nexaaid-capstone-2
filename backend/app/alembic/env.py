@@ -9,6 +9,17 @@ from core.database import Base
 from models.user_rbac_model import User
 from models.role_model import Role
 from models.organization_model import Organization
+from models.item_model import Item
+from models.physical_donation_model import PhysicalDonation
+from models.received_goods_model import ReceivedGoods
+from models.inventory_model import Inventory
+from models.report_model import DisasterReport 
+from models.city_model import City
+from models.barangay_model import Barangay
+from models.disaster_type_model import DisasterType
+from models.sitio_model import Sitio
+from models.guest_donor_model import GuestDonor
+
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
