@@ -131,3 +131,10 @@ class SmsReportMetadataResponse(BaseModel):
 class SmsReportIngestResponse(BaseModel):
     report: DisasterReportResponse
     sms_metadata: SmsReportMetadataResponse
+
+class ReportMonitoringResponse (DisasterReportResponse):
+    fulfillment_status: Optional[str] = None
+    fulfillment_percentage: Optional[Decimal] = None
+    total_items_needed: Optional[int] = None
+    total_items_delivered: Optional[int] = None
+    
