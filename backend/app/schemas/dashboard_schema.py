@@ -1,7 +1,7 @@
 from pydantic import BaseModel
-from typing import List, list, Optional
+from typing import List, Optional
 
-class statusCount(BaseModel):
+class StatusCount(BaseModel):
     status: str
     count: int
 
@@ -16,12 +16,12 @@ class DashboardSummary(BaseModel):
     total_logistics_requests: int
     active_organizations: int
 
-class reportsBreakdown(BaseModel):
-    by_status: List[statusCount]
+class ReportsBreakdown(BaseModel):
+    by_status: List[StatusCount]
     by_priority: List[PriorityCount]
 
 class DonationBreakdown(BaseModel):
-    by_status: List[statusCount]
+    by_status: List[StatusCount]
     total_estimated_value: float
 
 class FulfillmentOverview(BaseModel):
@@ -30,5 +30,5 @@ class FulfillmentOverview(BaseModel):
     pending_verification_count: int
 
 class LogisticsOverview(BaseModel):
-    deliveries_by_status: List[statusCount]
-    request_by_status: List[statusCount]
+    deliveries_by_status: List[StatusCount]
+    request_by_status: List[StatusCount]

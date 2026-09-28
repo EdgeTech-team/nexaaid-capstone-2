@@ -30,6 +30,7 @@ from main import app
 from core.database import Base, get_db
 from core.auth import get_current_user
 from models.report import DisasterType, Barangay, Sitio, DisasterReport
+from models.city_model import City
 from models.user_rbac_model import User
 from models.role_model import Role
 from models.organization_model import Organization
@@ -110,11 +111,12 @@ def seed(db_session):
         role_id=admin_role.role_id,
         organization_id=org.organization_id,
     )
-    dtype = DisasterType(disaster_type_id=1, name="Flood")
-    barangay = Barangay(barangay_id=1, name="Barangay Test")
-    sitio = Sitio(sitio_id=1, name="Sitio Test")
+    city = City(city_id=1, city_name="Test City")
+    dtype = DisasterType(disaster_type_id=1, type_name="Flood")
+    barangay = Barangay(barangay_id=1, barangay_name="Barangay Test", city_id=1)
+    sitio = Sitio(sitio_id=1, barangay_id=1, sitio_name="Sitio Test")
  
-    db_session.add_all([reporter, admin, dtype, barangay, sitio])
+    db_session.add_all([reporter, admin, city, dtype, barangay, sitio])
     db_session.commit()
  
     return {

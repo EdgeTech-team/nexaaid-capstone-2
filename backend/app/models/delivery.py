@@ -20,14 +20,9 @@ from sqlalchemy import(
 
 from sqlalchemy.orm import relationship
 from core.database import Base
-
-class Item(Base):
-  
-
-    __tablename__ = "items"
-
-    item_id = Column(Integer, primary_key=True)
-    name = Column(String(150))
+from models.item_model import Item  # noqa: F401
+from models.barangay_model import Barangay  # noqa: F401
+from models.sitio_model import Sitio  # noqa: F401
 
 # module (3.10)
 
