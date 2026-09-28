@@ -8,7 +8,7 @@
 - Neon Postgres connected (pooled + direct URLs configured)
 - Real schema discovered mid-build — DB already had full production tables,
   models rewritten to match (User: user_id/password_hash, normalized Role
-  via role_id, not an enum)
+  via role_id, not an enum) 
 - Alembic baselined safely (schema-drop near-miss caught before running)
 - core/auth.py: JWT login, password hashing, require_role() dependency
 - /health, /health/secure, throwaway /token all tested working end-to-end

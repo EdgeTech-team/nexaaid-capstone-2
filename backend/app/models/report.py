@@ -44,35 +44,10 @@ from core.database import Base
 # 'users' table would crash SQLAlchemy with a mapper conflict the moment
 # both get imported into the same process.
 from models.user_rbac_model import User  # noqa: F401  (re-exported for convenience)
-
-
-# ---------------------------------------------------------------------------
-# STUB MODELS — delete each one once the real owner merges their model
-# ---------------------------------------------------------------------------
-
-class DisasterType(Base):
-    """STUB — real owner: whoever models reference/lookup tables. Delete on merge."""
-    __tablename__ = "disaster_types"
-
-    disaster_type_id = Column(Integer, primary_key=True)
-    name = Column(String(100))
-
-
-class Barangay(Base):
-    """STUB — real owner: whoever models reference/lookup tables. Delete on merge."""
-    __tablename__ = "barangays"
-
-    barangay_id = Column(Integer, primary_key=True)
-    name = Column(String(100))
-
-
-class Sitio(Base):
-    """STUB — real owner: whoever models reference/lookup tables. Delete on merge."""
-    __tablename__ = "sitios"
-
-    sitio_id = Column(Integer, primary_key=True)
-    name = Column(String(100))
-
+from models.city_model import City  # noqa: F401  (Barangay's FK needs 'cities' loaded)
+from models.disaster_type_model import DisasterType  # noqa: F401
+from models.barangay_model import Barangay  # noqa: F401
+from models.sitio_model import Sitio  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # REAL MODELS — owned by this module (3.4)
