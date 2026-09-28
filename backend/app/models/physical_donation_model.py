@@ -1,5 +1,5 @@
 from models.item_model import Item
-from models.report_model import DisasterReport
+from models.report import DisasterReport
 from models.guest_donor_model import GuestDonor
 from models.user_rbac_model import User
 from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, CheckConstraint, Text  
@@ -12,7 +12,7 @@ class PhysicalDonation(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="physical_donations_quantity_check"),
         CheckConstraint(
-            "handover_method::text = ANY (ARRAY['Drop Off', 'Door to Door']::text[])",
+            "handover_method IN ('Drop Off', 'Door to Door')",
             name="physical_donations_handover_method_check",
         ),
         CheckConstraint(
@@ -20,7 +20,7 @@ class PhysicalDonation(Base):
             name="chk_donation_donor_source",
         ),
         CheckConstraint(
-            "status::text = ANY (ARRAY['Pending', 'Received', 'Confirmed']::text[])",
+            "status IN ('Pending', 'Received', 'Confirmed')",
             name="chk_physical_donations_status",
         ),
     )

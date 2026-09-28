@@ -13,7 +13,7 @@ from models.item_model import Item
 from models.physical_donation_model import PhysicalDonation
 from models.received_goods_model import ReceivedGoods
 from models.inventory_model import Inventory
-from models.report_model import DisasterReport 
+from models.report import DisasterReport 
 from models.city_model import City
 from models.barangay_model import Barangay
 from models.disaster_type_model import DisasterType

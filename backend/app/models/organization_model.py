@@ -5,8 +5,8 @@ from core.database import Base
 class Organization(Base):
     __tablename__ = "organizations"
     __table_args__ = (
-        CheckConstraint(
-            "status::text = ANY (ARRAY['Pending','Approved','Rejected']::text[])",
+                CheckConstraint(
+            "status IN ('Pending','Approved','Rejected')",
             name="chk_organizations_status"
         ),
     )
