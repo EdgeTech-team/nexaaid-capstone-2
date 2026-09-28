@@ -54,8 +54,7 @@ def score_disaster_type(report):
     if not report.disaster_type:
        return 50
 
-    disaster_type_name = report.disaster_type.name
-
+    disaster_type_name = report.disaster_type.type_name
    
     return DISASTER_SEVERITY.get(disaster_type_name, 50)
 

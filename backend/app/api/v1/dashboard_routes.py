@@ -4,14 +4,11 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.auth import require_role
-from models.report import DisasterReport
-from models.Physical_Donation_Model import PhysicalDonation
-from models.Delivery_model import delivery
-from models.Logistics_Request_Model import LogisticsRequest
-from backend.app.models.report_fulfillment_model import ReportFulfillment
-from models.organization_model import Organization
-from schemas.dashboard import (
-    DashboardSummary, ReportsBreakdown, DonationsBreakdown, FulfillmentOverview, LogisticsOverview,
+from models.report import DisasterReport, ReportFulfillment
+from models.physical_donation_model import PhysicalDonation
+from models.delivery import Delivery as delivery
+from models.logistics_request_model import LogisticsRequest
+from schemas.dashboard_schema import (    DashboardSummary, ReportsBreakdown, FulfillmentOverview, LogisticsOverview,
     StatusCount, PriorityCount,
 )
 
@@ -67,7 +64,7 @@ def get_fulfillment_overview(
         pending_verification_count=pending,
     )
 
-@router.get("/logistics", response_model = LogisicsOverview)
+@router.get("/logistics", response_model = LogisticsOverview)
 def get_logistics_overview(
     db:Session = Depends(get_db),
     user=Depends(require_role(*DASHBOARD_ROLES)),
