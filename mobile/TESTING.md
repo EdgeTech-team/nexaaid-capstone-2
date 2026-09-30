@@ -26,21 +26,24 @@ A small Flutter app for testing the backend end to end. It is not the final UI.
   get (200 allowed, 403 blocked, 401 guest). You should see **15 / 15 as expected** for
   every role.
 
-## Full walk-through (one pass tests every role)
+## Full walk-through (follows the manuscript use cases)
+
+Every id is picked from a dropdown (disaster type, barangay, report, donation, delivery,
+request), so you never type an id.
 
 | # | Log in as | Module | Action | Expect |
 |---|-----------|--------|--------|--------|
-| 1 | Barangay Receiving Rep | Disaster reports | Submit a report | 201, status Pending |
-| 2 | Administrator | Disaster reports | Validate the report id | 200, priority_level set |
-| 3 | Individual Donor (or guest) | Donate & QR code | Submit donation | 200 + QR image |
-| 4 | CSWS Main Office | Receiving & inventory | Receive (donation_id, quantity), then Inventory | 200 |
-| 5 | CMO Representative | CMO donation confirmation | Confirm the donation | 201 |
-| 6 | CSWS Main Office | Logistics requests | Submit logistics request | 201 |
-| 7 | DRRMO Logistics Support | Logistics requests | Accept request_id | 200, Accepted |
-| 8 | CSWS Main Office | Deliveries & receipt | Create delivery, Advance twice | Preparing → In Transit → Delivered |
-| 9 | Barangay Receiving Rep | Deliveries & receipt | Confirm receipt | 201, fulfillment % updated |
-| 10 | CSWS Disaster Unit | Needs monitoring | Load | 200, shows fulfillment % |
-| 11 | Admin / CSWS / Barangay | Dashboard | Load all four | 200 |
+| 1 | CSWS Disaster Unit | Submit post-disaster report (UC-CD1) | Fill in and submit | 201, Pending |
+| 2 | Administrator | Process reports (UC-A3) | Validate the report | 200, priority set |
+| 3 | Individual Donor or guest | Support a report (UC-D2) | Pick the validated report, donate | 200 + QR code |
+| 4 | CSWS Main Office | Handle physical donations (UC-CM1) | Receive with actual quantity; Inventory | 200 |
+| 5 | CMO Representative | City donation confirmation (UC-C1) | Confirm the donation | 201 |
+| 6 | CSWS Main Office | Release & delivery tracking (UC-CM2) | Prepare a delivery | 201, Preparing |
+| 7 | CSWS Main Office | Logistics support requests (UC-CM2 3a) | Request transport for that delivery | 201 |
+| 8 | DRRMO Logistics Support | Logistics support requests (UC-DR1) | Accept with a schedule | 200 |
+| 9 | CSWS Main Office | Release & delivery tracking | Move to next status twice | In Transit, then Delivered |
+| 10 | Barangay Receiving Rep | Receive & acknowledge aid (UC-B1) | Confirm receipt | 201, fulfillment updated |
+| 11 | CSWS Disaster Unit | Needs monitoring (UC-CD2) | Load | shows fulfillment % |
 
 The same chain is automated on the backend in `backend/app/tests/test_role_flows.py`
 (`pytest` from `backend/app`).

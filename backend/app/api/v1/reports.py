@@ -35,7 +35,7 @@ from core.priority_engine import compute_priority
 
 from core.database import get_db
 from core.auth import get_current_user, require_role, has_role  # see note above
-from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment
+from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from schemas.report import (
     DisasterReportCreate,
     DisasterReportUpdate,
@@ -92,7 +92,7 @@ def list_reports(
     if disaster_type_id:
         query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
     if source:
-        query = query.filter(DisasterReport.source == source)
+        query = query.filter(DisasterReport.source == canonical_source(source))
     if priority_level:
         query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
@@ -126,7 +126,7 @@ def list_report_monitoring(
     if disaster_type_id:
             query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
     if source:
-            query = query.filter(DisasterReport.source == source)
+            query = query.filter(DisasterReport.source == canonical_source(source))
     if priority_level:
             query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
@@ -321,7 +321,7 @@ def ingest_sms_report(
     current_user=Depends(require_role("csws_staff", "admin")),
 ):
     report_fields = payload.model_dump(exclude={"contact_number", "raw_message"})
-    report = DisasterReport(**report_fields, user_id=current_user.user_id, source="sms")
+    report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")
     db.add(report)
     db.flush()  # need report.report_id for the metadata FK
 

@@ -34,9 +34,22 @@ from sqlalchemy import (
     CheckConstraint,
     func,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 
 from core.database import Base
+
+# Exact values allowed by the live disaster_reports_source_check constraint.
+REPORT_SOURCES = ("Web", "Mobile", "SMS")
+
+
+def canonical_source(value):
+    """'web' / 'WEB' / 'Web' -> 'Web' (and so on). Unknown values pass through
+    unchanged so validation can reject them."""
+    if isinstance(value, str):
+        for s in REPORT_SOURCES:
+            if value.strip().lower() == s.lower():
+                return s
+    return value
 
 # The real User model already exists — models/user_rbac_model.py (Hoyohoy's
 # 3.3) — and is already registered with Base via app/alembic/env.py. Import
@@ -78,7 +91,7 @@ class DisasterReport(Base):
     assistance_needed = Column(Text, nullable=True)
     estimated_quantity = Column(Integer, nullable=True)
 
-    source = Column(String(20), nullable=False)  # 'web' | 'mobile' | 'sms'
+    source = Column(String(20), nullable=False)  # 'Web' | 'Mobile' | 'SMS'
 
     ai_priority_score = Column(Numeric(5, 2), nullable=True)
     ai_recommendation = Column(Text, nullable=True)
@@ -103,7 +116,7 @@ class DisasterReport(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("source IN ('web','mobile','sms')", name="disaster_reports_source_check"),
+        CheckConstraint("source IN ('Web','Mobile','SMS')", name="disaster_reports_source_check"),
     )
 
     # Relationships
@@ -118,6 +131,10 @@ class DisasterReport(Base):
         uselist=False,          # one-to-one (report_id is UNIQUE on the other side)
         cascade="all, delete-orphan",
     )
+
+    @validates("source")
+    def _canonical_source(self, key, value):
+        return canonical_source(value)
 
     fulfillment = relationship(
         "ReportFulfillment",

@@ -11,6 +11,7 @@ from api.v1.admin_router import router as admin_router
 from api.v1.cmo_router import router as cmo_router
 from api.v1.logistics_router import router as logistics_router
 from api.v1.drrmo_router import router as drrmo_router
+from api.v1.lookup_routes import router as lookup_router
 
 app = FastAPI()
 
@@ -34,3 +35,4 @@ app.include_router(admin_router)
 app.include_router(cmo_router)
 app.include_router(logistics_router)
 app.include_router(drrmo_router)
+app.include_router(lookup_router)

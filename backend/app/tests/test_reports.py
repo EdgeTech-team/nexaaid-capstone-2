@@ -133,7 +133,7 @@ def test_sms_ingest_creates_report_and_metadata(admin_client, seed):
 
     assert resp.status_code == 201
     body = resp.json()
-    assert body["report"]["source"] == "sms"
+    assert body["report"]["source"] == "SMS"
     assert body["report"]["status"] == "Pending"
     assert body["sms_metadata"]["raw_message"] == payload["raw_message"]
     assert body["sms_metadata"]["report_id"] == body["report"]["report_id"]

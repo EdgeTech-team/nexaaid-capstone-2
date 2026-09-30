@@ -52,6 +52,20 @@ class Api extends ChangeNotifier {
 
   bool get loggedIn => token != null;
 
+  /// Dropdown data from GET /lookups: disaster_types, barangays, sitios,
+  /// items, reports -> list of {id, name}. Cached; cleared after any change.
+  Future<Map<String, dynamic>>? _lookups;
+  Future<Map<String, dynamic>> lookups() => _lookups ??= get('/lookups').then(
+    (r) => r.ok && r.json is Map
+        ? Map<String, dynamic>.from(r.json as Map)
+        : <String, dynamic>{},
+  );
+
+  void refreshLookups() {
+    _lookups = null;
+    notifyListeners();
+  }
+
   static String _defaultBase() {
     // The Android emulator reaches the host machine at 10.0.2.2
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
@@ -62,7 +76,7 @@ class Api extends ChangeNotifier {
 
   void setBase(String v) {
     baseUrl = v.trim().replaceAll(RegExp(r'/+$'), '');
-    notifyListeners();
+    refreshLookups();
   }
 
   Future<ApiResult> send(
@@ -93,14 +107,21 @@ class Api extends ChangeNotifier {
       } catch (_) {
         decoded = null;
       }
+      // A new report / item may now exist, so reload dropdowns.
+      if (method != 'GET' &&
+          res.statusCode < 300 &&
+          !path.startsWith('/token')) {
+        refreshLookups();
+      }
       return ApiResult(res.statusCode, decoded, res.body);
     } catch (e) {
       return ApiResult(
-          0,
-          null,
-          'Network error: $e\n\nIs uvicorn running and is the base URL right? '
-          'In Chrome a server crash (500) also shows up here, so check the '
-          'uvicorn terminal for a traceback.');
+        0,
+        null,
+        'Network error: $e\n\nIs uvicorn running and is the base URL right? '
+        'In Chrome a server crash (500) also shows up here, so check the '
+        'uvicorn terminal for a traceback.',
+      );
     }
   }
 
@@ -113,8 +134,11 @@ class Api extends ChangeNotifier {
 
   // ---- auth ----
   Future<ApiResult> login(String emailIn, String password) async {
-    final r = await send('POST', '/token',
-        form: {'username': emailIn.trim(), 'password': password});
+    final r = await send(
+      'POST',
+      '/token',
+      form: {'username': emailIn.trim(), 'password': password},
+    );
     if (r.ok && r.json is Map && r.json['access_token'] != null) {
       token = r.json['access_token'] as String;
       email = emailIn.trim();
