@@ -2,6 +2,7 @@
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
+
 class DonorRegisterRequest(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
@@ -11,6 +12,7 @@ class DonorRegisterRequest(BaseModel):
     # Manuscript 1.2: valid identification. Stored as a link / reference
     # (users.id_document_url) until file upload is added.
     id_document_url: Optional[str] = Field(default=None, max_length=500)
+
 
 class UserResponse(BaseModel):
     user_id: int
@@ -23,10 +25,12 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 INTERNAL_ROLES = {
     "CSWS Disaster Unit", "CSWS Main Office", "CMO Representative",
     "DRRMO Logistics Support", "Barangay Receiving Representative",
 }
+
 
 class InternalAccountCreateRequest(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=50)
@@ -36,3 +40,10 @@ class InternalAccountCreateRequest(BaseModel):
     contact_number: str = Field(..., min_length=7, max_length=20)
     role_name: str
     assigned_barangay_id: Optional[int] = None
+
+
+class LoginRequest(BaseModel):
+    # Fields must be indented under the class line, or Python raises
+    # "IndentationError: expected an indented block after class definition".
+    email: EmailStr
+    password: str

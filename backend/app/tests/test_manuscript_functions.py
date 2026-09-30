@@ -27,7 +27,7 @@ def test_admin_accounts_orgs_and_logs(api):
     ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": False}))
     r = client.post("/token", data={"username": "donor.test@example.com", "password": PASSWORD})
     assert r.status_code == 403 and "deactivated" in r.json()["detail"]
-    assert client.get("/health/secure", headers=t["donor"]).status_code == 401  # old token rejected
+    assert client.get("/health/secure", headers=t["donor"]).status_code == 403  # old token rejected
     ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": True}))
     ok(client.post("/token", data={"username": "donor.test@example.com", "password": PASSWORD}))
 
@@ -144,3 +144,13 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["completed"] == 1
     # CSWS sees the request's status
     assert ok(client.get("/logistics/requests", headers=t["csws"]))[0]["status"] == "Completed"
+
+
+def test_session_login_endpoints_after_merge(api):
+    client, t = api
+    r = ok(client.post("/auth/login", json={"email": "CSWS.test@example.com", "password": PASSWORD}))
+    assert r["user"]["role_name"] == "CSWS Main Office"
+    me = ok(client.get("/auth/me", headers={"Authorization": f"Bearer {r['access_token']}"}))
+    assert me["email"] == "csws.test@example.com"
+    assert client.post("/auth/login", json={"email": "csws.test@example.com",
+                                            "password": "wrong"}).status_code == 401
