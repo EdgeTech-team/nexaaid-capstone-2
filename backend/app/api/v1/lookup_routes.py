@@ -5,7 +5,7 @@ Public: it holds no personal data (no donor names or contacts), and guest
 donors need it too.
 """
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from core.database import get_db
 from models.report import DisasterReport, DisasterType, Barangay, Sitio
@@ -22,7 +22,8 @@ def get_lookups(db: Session = Depends(get_db)):
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
 
-    reports = db.query(DisasterReport).order_by(DisasterReport.report_id.desc()).limit(200).all()
+    reports = (db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
+               .order_by(DisasterReport.report_id.desc()).limit(200).all())
 
     def label(r):
         return (f"#{r.report_id} {types.get(r.disaster_type_id, 'Disaster')} - "
@@ -68,7 +69,21 @@ def get_lookups(db: Session = Depends(get_db)):
         # Donor / organization screens: only validated reports are published
         # to donors (manuscript UC-A3 step 9, UC-D2).
         "validated_reports": [
-            {"id": r.report_id, "name": f"{label(r)} - {r.priority_level or 'No priority'}"}
+            {
+                "id": r.report_id,
+                "name": f"{label(r)} - {r.priority_level or 'No priority'}",
+                # Public summary for donor cards (UC-D2 step 2: needs,
+                # priority guidance and fulfillment status).
+                "disaster": types.get(r.disaster_type_id, "Disaster"),
+                "barangay": barangays.get(r.barangay_id, "Barangay"),
+                "priority_level": r.priority_level,
+                "assistance_needed": r.assistance_needed,
+                "affected_families": r.affected_families,
+                "description": r.description,
+                "total_items_needed": r.fulfillment.total_items_needed if r.fulfillment else r.estimated_quantity,
+                "total_items_delivered": r.fulfillment.total_items_delivered if r.fulfillment else 0,
+                "fulfillment_percentage": float(r.fulfillment.fulfillment_percentage) if r.fulfillment else 0.0,
+            }
             for r in reports if r.status == "Validated"
         ],
         "pending_donations": donations("Pending"),     # CSWS receives these
