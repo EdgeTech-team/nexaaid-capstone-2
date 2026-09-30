@@ -9,22 +9,39 @@ import 'package:mobile/modules.dart';
 void main() {
   testWidgets('App starts on the login screen', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
-    expect(find.text('NexaAid'), findsWidgets);
+    expect(find.text('NexaAid'), findsOneWidget);
     expect(find.text('Log in'), findsOneWidget);
     expect(find.text('Donate as guest'), findsOneWidget);
   });
 
-  testWidgets('Guest lands on validated reports with the menu', (tester) async {
+  testWidgets('Guest lands on the donate tab', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
     await tester.tap(find.text('Donate as guest'));
     await tester.pump();
-    expect(find.text('Guest'), findsOneWidget); // role pill
-    await tester.tap(find.byTooltip('Menu'));
-    await tester.pumpAndSettle();
-    expect(find.text('MENU'), findsOneWidget);
-    expect(find.text('Validated Reports'), findsOneWidget);
+    expect(find.text('· Guest'), findsOneWidget);
+    expect(find.text('Donate'), findsWidgets);
     expect(find.text('Profile'), findsOneWidget);
     Api.instance.logout();
+  });
+
+  testWidgets('Each role gets its own bottom menu', (tester) async {
+    final api = Api.instance;
+    Future<void> menuFor(String role, List<String> labels) async {
+      api.token = 't';
+      api.role = role;
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(const NexaAidApp());
+      await tester.pump();
+      for (final l in labels) {
+        expect(find.text(l), findsWidgets, reason: '$role: $l');
+      }
+    }
+
+    await menuFor(Roles.cswsMain, ['Overview', 'Receive', 'Deliveries']);
+    await menuFor(Roles.admin, ['Overview', 'Reports', 'Accounts']);
+    await menuFor(Roles.barangay, ['Incoming aid', 'Overview']);
+    await menuFor(Roles.donor, ['Dashboard', 'Donate']);
+    api.logout();
   });
 
   testWidgets('Developer tools still has the three test tabs', (tester) async {

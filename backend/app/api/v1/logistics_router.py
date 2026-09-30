@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from core.audit import log_action
 from sqlalchemy.orm import Session
 from core.database import get_db
 from core.auth import require_role
@@ -38,7 +39,22 @@ def submit_logistics_request(
         notes=payload.notes,
     )
     db.add(logistics_request)
+    db.flush()
+    log_action(db, current_user, "REQUEST LOGISTICS SUPPORT", "logistics_requests",
+               logistics_request.request_id, new={"delivery_id": delivery.delivery_id})
 
     db.commit()
     db.refresh(logistics_request)
     return logistics_request
+
+
+
+@router.get("/requests")
+def list_my_requests(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
+):
+    """CSWS sees whether DRRMO accepted, scheduled, declined or completed
+    each request (the "system notifies CSWS" steps of UC-DR1)."""
+    from api.v1.drrmo_router import request_rows
+    return request_rows(db, db.query(LogisticsRequest).order_by(LogisticsRequest.request_id.desc()).all())
