@@ -16,6 +16,7 @@ def register_donor(payload: DonorRegisterRequest, db: Session = Depends(get_db))
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
+ 
     donor_role = db.query(Role).filter(Role.role_name == "Individual Donor").first()
     if donor_role is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Role configuration missing")
@@ -41,6 +42,7 @@ def register_organization(payload: OrganizationRegisterRequest, db: Session = De
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     if db.query(Organization).filter(Organization.registration_no == payload.registration_no).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Registration number already used")
+
 
     org_role = db.query(Role).filter(Role.role_name == "Relief Organization").first()  # [NOT SPECIFIED — confirm exact seeded string]
     if org_role is None:
