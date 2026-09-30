@@ -5,7 +5,7 @@ from core.database import Base
 class Organization(Base):
     __tablename__ = "organizations"
     __table_args__ = (
-                CheckConstraint(
+        CheckConstraint(
             "status IN ('Pending','Approved','Rejected')",
             name="chk_organizations_status"
         ),
@@ -18,8 +18,8 @@ class Organization(Base):
     contact_person = Column(String(150), nullable=False)
     registration_no = Column(String(100), nullable=False, unique=True)
     contact_email = Column(String(150), nullable=False)
+    legitimacy_document_url = Column(Text, nullable=True)
     status = Column(String(20), nullable=False, server_default="Pending")
-    approved_by_user_id = Column(Integer, ForeignKey("users.user_id", name="fk_org_approved_by"), nullable=True)
+    approved_by_user_id = Column(Integer, ForeignKey("users.user_id", name="fk_org_approved_by", ondelete="SET NULL"), nullable=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    legitimacy_document_url = Column(Text, nullable=True)
