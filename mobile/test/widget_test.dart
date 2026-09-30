@@ -1,30 +1,61 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
+import 'package:mobile/api.dart';
+import 'package:mobile/checks_tab.dart';
 import 'package:mobile/main.dart';
+import 'package:mobile/modules.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('App shows the three tabs', (tester) async {
+    await tester.pumpWidget(const NexaAidApp());
+    expect(find.text('NexaAid Test'), findsOneWidget);
+    expect(find.text('Account'), findsOneWidget);
+    expect(find.text('Modules'), findsOneWidget);
+    expect(find.text('Checks'), findsOneWidget);
+  });
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+  testWidgets('Every module screen builds', (tester) async {
+    for (final m in modules) {
+      await tester.pumpWidget(MaterialApp(home: Builder(builder: m.builder)));
+      expect(find.byType(Scaffold), findsOneWidget, reason: m.title);
+    }
+  });
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+  test('Every role has at least one module and a guest can donate', () {
+    final api = Api.instance;
+    for (final role in const [
+      Roles.admin,
+      Roles.donor,
+      Roles.org,
+      Roles.cmo,
+      Roles.cswsMain,
+      Roles.cswsUnit,
+      Roles.barangay,
+      Roles.drrmo,
+    ]) {
+      api.token = 't';
+      api.role = role;
+      expect(modules.where((m) => m.isFor(api)), isNotEmpty, reason: role);
+    }
+    api.logout();
+    expect(modules.where((m) => m.isFor(api)).map((m) => m.code), ['3.5']);
+  });
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+  test('Expected statuses follow the backend role rules', () {
+    final api = Api.instance;
+    Check c(String path) => checks.firstWhere((x) => x.path == path);
+
+    api.logout();
+    expect(c('/health').expected(api), 200);
+    expect(c('/reports/').expected(api), 401);
+
+    api.token = 't';
+    api.role = Roles.barangay;
+    expect(c('/reports/').expected(api), 200);
+    expect(c('/donations/pending').expected(api), 403);
+    api.role = Roles.drrmo;
+    expect(c('/drrmo/requests').expected(api), 200);
+    expect(c('/cmo/dashboard').expected(api), 403);
+    api.logout();
   });
 }
