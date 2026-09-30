@@ -158,7 +158,10 @@ def test_full_relief_chain_across_all_roles(api):
     validated = ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
     assert validated["status"] == "Validated"
     assert validated["priority_level"]                      # 3.11 scoring ran
-    assert [r["id"] for r in ok(client.get("/lookups"))["validated_reports"]] == [rid]
+    published = ok(client.get("/lookups"))["validated_reports"]
+    assert [r["id"] for r in published] == [rid]
+    assert published[0]["total_items_needed"] == 100
+    assert published[0]["fulfillment_percentage"] == 0.0
 
     # --- 3.7 needs monitoring: CSWS (both units), admin, barangay --------
     for who in ("admin", "csws", "unit", "brgy"):

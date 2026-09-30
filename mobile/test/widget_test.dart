@@ -2,13 +2,29 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/checks_tab.dart';
+import 'package:mobile/dev_console.dart';
 import 'package:mobile/main.dart';
 import 'package:mobile/modules.dart';
 
 void main() {
-  testWidgets('App shows the three tabs', (tester) async {
+  testWidgets('App starts on the login screen', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
-    expect(find.text('NexaAid Test'), findsOneWidget);
+    expect(find.text('NexaAid'), findsOneWidget);
+    expect(find.text('Log in'), findsOneWidget);
+    expect(find.text('Donate as guest'), findsOneWidget);
+  });
+
+  testWidgets('Guest lands on the donate tab', (tester) async {
+    await tester.pumpWidget(const NexaAidApp());
+    await tester.tap(find.text('Donate as guest'));
+    await tester.pump();
+    expect(find.text('Donate'), findsWidgets);
+    expect(find.text('Profile'), findsOneWidget);
+    Api.instance.logout();
+  });
+
+  testWidgets('Developer tools still has the three test tabs', (tester) async {
+    await tester.pumpWidget(const MaterialApp(home: DevConsole()));
     expect(find.text('Account'), findsOneWidget);
     expect(find.text('Modules'), findsOneWidget);
     expect(find.text('Checks'), findsOneWidget);

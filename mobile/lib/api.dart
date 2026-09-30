@@ -52,6 +52,14 @@ class Api extends ChangeNotifier {
 
   bool get loggedIn => token != null;
 
+  /// Browsing as a guest donor (no account), UC-D2 allows this.
+  bool guest = false;
+
+  void continueAsGuest() {
+    guest = true;
+    notifyListeners();
+  }
+
   /// Dropdown data from GET /lookups: disaster_types, barangays, sitios,
   /// items, reports -> list of {id, name}. Cached; cleared after any change.
   Future<Map<String, dynamic>>? _lookups;
@@ -60,6 +68,9 @@ class Api extends ChangeNotifier {
         ? Map<String, dynamic>.from(r.json as Map)
         : <String, dynamic>{},
   );
+
+  /// Fresh (uncached) GET /lookups, for screens that load lists.
+  Future<ApiResult> lookupsResult() => get('/lookups');
 
   void refreshLookups() {
     _lookups = null;
@@ -143,6 +154,7 @@ class Api extends ChangeNotifier {
       token = r.json['access_token'] as String;
       email = emailIn.trim();
       role = null;
+      guest = false;
       final me = await get('/health/secure');
       if (me.ok && me.json is Map) role = me.json['role']?.toString();
       notifyListeners();
@@ -154,6 +166,7 @@ class Api extends ChangeNotifier {
     token = null;
     email = null;
     role = null;
+    guest = false;
     notifyListeners();
   }
 }

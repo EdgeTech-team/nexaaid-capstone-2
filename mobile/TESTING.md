@@ -16,39 +16,48 @@ A small Flutter app for testing the backend end to end. It is not the final UI.
    ```
    On an Android emulator the base URL defaults to `http://10.0.2.2:8000`.
 
-## The three tabs
+## How the app works
 
-- **Account**: tap a role chip to fill in that test account, then tap **Login**. All test
-  accounts use `testpass123`. This tab can also register a donor or an organization.
-- **Modules**: lists the screens for your role first. The other roles' screens stay
-  tappable, so you can confirm they return 403.
-- **Checks**: calls 15 GET endpoints and compares each status with what your role should
-  get (200 allowed, 403 blocked, 401 guest). You should see **15 / 15 as expected** for
-  every role.
+1. **Login screen**: log in, tap a demo-account chip (one per role, password `testpass123`),
+   or tap **Donate as guest**. You can also register a donor or an organization here.
+   The gear icon (top right) changes the server address.
+2. After login, the **bottom menu depends on the role**:
+
+| Role | Menu |
+|------|------|
+| Individual Donor / Relief Organization / guest | Donate (validated reports → donate → QR code) |
+| CSWS Disaster Unit | New report · Monitoring · Dashboard |
+| Administrator | Reports (validate / reject / encode SMS) · Monitoring · Dashboard · Accounts |
+| CSWS Main Office | Donations (receive, inventory) · Deliveries (prepare, request transport, update status) · Dashboard |
+| CMO Representative | Confirmations |
+| DRRMO Logistics Support | Requests (accept & schedule / decline) |
+| Barangay Receiving Rep | Incoming aid (confirm receipt) · Monitoring · Dashboard |
+
+3. **Profile → Developer tools** opens the original test console (raw API forms and the
+   Checks tab that compares every endpoint against the expected status for the role).
 
 ## Full walk-through (follows the manuscript use cases)
 
-Every id is picked from a dropdown (disaster type, barangay, report, donation, delivery,
-request), so you never type an id.
+Everything is done with buttons, dropdowns and dialogs; no ids are typed.
 
 | # | Log in as | Module | Action | Expect |
 |---|-----------|--------|--------|--------|
-| 1 | CSWS Disaster Unit | Submit post-disaster report (UC-CD1) | Fill in and submit | 201, Pending |
-| 2 | Administrator | Process reports (UC-A3) | Validate the report | 200, priority set |
-| 3 | Individual Donor or guest | Support a report (UC-D2) | Pick the validated report, donate | 200 + QR code |
-| 4 | CSWS Main Office | Handle physical donations (UC-CM1) | Receive with actual quantity; Inventory | 200 |
-| 5 | CMO Representative | City donation confirmation (UC-C1) | Confirm the donation | 201 |
-| 6 | CSWS Main Office | Release & delivery tracking (UC-CM2) | Prepare a delivery | 201, Preparing |
-| 7 | CSWS Main Office | Logistics support requests (UC-CM2 3a) | Request transport for that delivery | 201 |
-| 8 | DRRMO Logistics Support | Logistics support requests (UC-DR1) | Accept with a schedule | 200 |
-| 9 | CSWS Main Office | Release & delivery tracking | Move to next status twice | In Transit, then Delivered |
-| 10 | Barangay Receiving Rep | Receive & acknowledge aid (UC-B1) | Confirm receipt | 201, fulfillment updated |
-| 11 | CSWS Disaster Unit | Needs monitoring (UC-CD2) | Load | shows fulfillment % |
+| 1 | CSWS Disaster Unit | New report (UC-CD1) | Fill in and submit | Pending |
+| 2 | Administrator | Reports (UC-A3) | Tap Validate | Validated, priority set |
+| 3 | Individual Donor or guest | Donate (UC-D2) | Tap Donate on the report | QR code |
+| 4 | CSWS Main Office | Donations (UC-CM1) | Tap Receive, enter actual quantity | Inventory updated |
+| 5 | CMO Representative | Confirmations (UC-C1) | Tap Confirm | Officially confirmed |
+| 6 | CSWS Main Office | Deliveries (UC-CM2) | Tap Prepare delivery | Preparing |
+| 7 | CSWS Main Office | Deliveries (UC-CM2 3a) | Tap Request transport | Sent to DRRMO |
+| 8 | DRRMO Logistics Support | Requests (UC-DR1) | Tap Accept & schedule | Scheduled |
+| 9 | CSWS Main Office | Deliveries | Tap Mark In Transit, then Mark Delivered | Delivered |
+| 10 | Barangay Receiving Rep | Incoming aid (UC-B1) | Tap Confirm receipt | Fulfillment updated |
+| 11 | CSWS Disaster Unit | Monitoring (UC-CD2) | Open | Progress bar, e.g. 50% |
 
 The same chain is automated on the backend in `backend/app/tests/test_role_flows.py`
 (`pytest` from `backend/app`).
 
 ## Before the real demo
 
-- Remove the test-account chips and the prefilled password in `lib/account_tab.dart`.
+- Remove the demo-account card in `lib/ui/login_screen.dart` and the test accounts in `lib/account_tab.dart`.
 - Tighten `allow_origins` in `backend/app/main.py` (it is `*` for development).
