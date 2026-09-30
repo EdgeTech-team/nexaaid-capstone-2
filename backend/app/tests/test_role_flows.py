@@ -51,6 +51,7 @@ ACCOUNTS = {
     "csws": ("csws.test@example.com", 5),
     "unit": ("rico.test@example.com", 6),
     "brgy": ("ana.test@example.com", 7),
+    "brgy2": ("brgy2.test@example.com", 7),   # rep for a different barangay
     "drrmo": ("drrmo.test@example.com", 8),
 }
 
@@ -74,6 +75,7 @@ def api():
     ])
     db.flush()
     db.add(Barangay(barangay_id=1, barangay_name="Barangay Test", city_id=1))
+    db.add(Barangay(barangay_id=2, barangay_name="Barangay Two", city_id=1))
     db.flush()
     db.add(Sitio(sitio_id=1, barangay_id=1, sitio_name="Sitio Test"))
     pw = hash_password(PASSWORD)
@@ -81,7 +83,7 @@ def api():
         db.add(User(
             first_name=key, last_name="Test", contact_number="09170000000",
             email=email, password_hash=pw, role_id=role_id,
-            assigned_barangay_id=1 if key == "brgy" else None,
+            assigned_barangay_id={"brgy": 1, "brgy2": 2}.get(key),
         ))
     db.commit()
     db.close()
@@ -228,6 +230,12 @@ def test_full_relief_chain_across_all_roles(api):
     assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "In Transit"
     assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "Delivered"
     assert client.post(f"/deliveries/{did}/confirm-receipt", headers=t["csws"], json={}).status_code == 403
+    # Each Barangay Rep only sees / confirms aid for their assigned barangay (UC-B1 3a)
+    assert ok(client.get("/deliveries/", headers=t["brgy2"])) == []
+    assert client.get(f"/deliveries/{did}", headers=t["brgy2"]).status_code == 404
+    assert client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy2"], json={}).status_code == 403
+    assert ok(client.get("/reports/monitoring", headers=t["brgy2"])) == []
+    assert len(ok(client.get("/deliveries/", headers=t["brgy"]))) == 1
     receipt = ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
                              json={"remarks": "Received complete"}), 201)
     assert receipt["delivery"]["status"] == "Confirmed"

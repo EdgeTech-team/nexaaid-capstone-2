@@ -9,16 +9,20 @@ import 'package:mobile/modules.dart';
 void main() {
   testWidgets('App starts on the login screen', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
-    expect(find.text('NexaAid'), findsOneWidget);
+    expect(find.text('NexaAid'), findsWidgets);
     expect(find.text('Log in'), findsOneWidget);
     expect(find.text('Donate as guest'), findsOneWidget);
   });
 
-  testWidgets('Guest lands on the donate tab', (tester) async {
+  testWidgets('Guest lands on validated reports with the menu', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
     await tester.tap(find.text('Donate as guest'));
     await tester.pump();
-    expect(find.text('Donate'), findsWidgets);
+    expect(find.text('Guest'), findsOneWidget); // role pill
+    await tester.tap(find.byTooltip('Menu'));
+    await tester.pumpAndSettle();
+    expect(find.text('MENU'), findsOneWidget);
+    expect(find.text('Validated Reports'), findsOneWidget);
     expect(find.text('Profile'), findsOneWidget);
     Api.instance.logout();
   });

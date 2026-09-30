@@ -7,14 +7,9 @@ ASSUMPTIONS TO VERIFY (same caveats as api/v1/reports.py):
 -Role names ("csws_main office", "barangay_receiving_rep", "admin")
 are placeholders- swap for real RBAC role names once Known.
 - confirm_receipt's barangay-match check (alt flow 3a: "delivery
-  record can't be matched to assigned barangay") assumes
-  current_user has a `.barangay_id` attribute. The real User model
-  (user_rbac_model.py) does NOT have this column today — there's no
-  confirmed way yet to know which barangay a Barangay Receiving
-  Representative belongs to. This check is written defensively
-  (skips enforcement if the attribute doesn't exist) so it doesn't
-  crash, but it is NOT actually enforcing anything until that's
-  resolved. Flagged clearly — do not treat this as done.
+  record can't be matched to assigned barangay") uses
+  users.assigned_barangay_id via core.auth.barangay_scope(). Barangay
+  Receiving Representatives also only list/see deliveries to that barangay.
 """
 
 from datetime import datetime, timezone 
@@ -25,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from core.database import get_db
-from core.auth import get_current_user, require_role
+from core.auth import get_current_user, require_role, barangay_scope
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from schemas.delivery import (
@@ -99,6 +94,9 @@ def list_deliveries(
 
 ):
     query = db.query(Delivery).options(joinedload(Delivery.items))
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+       query = query.filter(Delivery.destination_barangay_id == own_barangay)
     if status_filter:
        query = query.filter(Delivery.status == status_filter)
     if barangay_id: 
@@ -127,7 +125,8 @@ def get_delivery(
      .filter(Delivery.delivery_id == delivery_id)
      .first()
   )
-  if not delivery: 
+  own_barangay = barangay_scope(current_user)
+  if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
      raise HTTPException(status_code=404, detail="Delivery not found")
   return delivery
 
@@ -215,15 +214,13 @@ def confirm_receipt(
                   f"'{delivery.status}', must be delivered first",
     )
 
-    # Alt flow 3a: delivery must match the confirming rep's own barangay.
-    # not actually enforced yet — see module docstring. Written
-    # defensively so it doesn't crash while the real linkage is unknown.
-
-    user_barangay_id = getattr(current_user, "barangay_id", None)
-    if user_barangay_id is not None and user_barangay_id != delivery.destination_barangay_id:
+    # Alt flow 3a: delivery must match the confirming rep's assigned
+    # barangay (users.assigned_barangay_id).
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None and own_barangay != delivery.destination_barangay_id:
        raise HTTPException(
           status_code=403,
-          detail="This delivery is not assigned in your barangay.",
+          detail="This delivery is not for your assigned barangay.",
        )
 
     receipt = Receipt(

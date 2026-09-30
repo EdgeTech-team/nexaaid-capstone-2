@@ -16,12 +16,20 @@ A small Flutter app for testing the backend end to end. It is not the final UI.
    ```
    On an Android emulator the base URL defaults to `http://10.0.2.2:8000`.
 
+## First: load the demo data into Neon
+
+Run `database/seeds/demo_seed.sql` in the Neon SQL Editor once. It adds Sitio 1-10 for every
+barangay, relief items with units (rice kg, water gallons, ...), one Barangay Receiving
+Representative per barangay (`<barangay>.rep@example.com`), and sets `testpass123` on the
+donor and organization test accounts. It is safe to run again.
+
 ## How the app works
 
 1. **Login screen**: log in, tap a demo-account chip (one per role, password `testpass123`),
    or tap **Donate as guest**. You can also register a donor or an organization here.
    The gear icon (top right) changes the server address.
-2. After login, the **bottom menu depends on the role**:
+2. After login, the **menu depends on the role** (sidebar on wide screens, ☰ on phones).
+   The look follows the Capstone 1 wireframes in the manuscript:
 
 | Role | Menu |
 |------|------|
