@@ -5,6 +5,7 @@ from api.v1.reports import router as report_router
 from api.v1.deliveries import router as delivery_router
 from api.v1.donation_routes import router as donation_router
 from api.v1.receiving_routes import router as receiving_router
+from api.v1.session_router import router as session_router
 from api.v1.auth_router import router as auth_router
 from api.v1.admin_router import router as admin_router
 
@@ -15,5 +16,6 @@ app.include_router(report_router)
 app.include_router(delivery_router)
 app.include_router(donation_router)
 app.include_router(receiving_router)
+app.include_router(session_router)
 app.include_router(auth_router)
 app.include_router(admin_router)
