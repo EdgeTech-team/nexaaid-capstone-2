@@ -65,11 +65,17 @@ class _HomeShellState extends State<HomeShell> {
         onDestinationSelected: (i) => setState(() => index = i),
         destinations: const [
           NavigationDestination(
-              icon: Icon(Icons.person_outline), label: 'Account'),
+            icon: Icon(Icons.person_outline),
+            label: 'Account',
+          ),
           NavigationDestination(
-              icon: Icon(Icons.apps_outlined), label: 'Modules'),
+            icon: Icon(Icons.apps_outlined),
+            label: 'Modules',
+          ),
           NavigationDestination(
-              icon: Icon(Icons.fact_check_outlined), label: 'Checks'),
+            icon: Icon(Icons.fact_check_outlined),
+            label: 'Checks',
+          ),
         ],
       ),
     );
@@ -93,16 +99,19 @@ class ModulesTab extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           children: [
             Text(
-                api.loggedIn
-                    ? 'For ${api.role ?? "?"}'
-                    : 'For guests (log in on the Account tab for more)',
-                style: const TextStyle(fontWeight: FontWeight.w600)),
+              api.loggedIn
+                  ? 'For ${api.role ?? "?"}'
+                  : 'For guests (log in on the Account tab for more)',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 6),
             for (final m in mine) _tile(context, m, true),
             if (others.isNotEmpty) ...[
               const SizedBox(height: 16),
-              const Text('Other roles\' modules (should be blocked for you)',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text(
+                'Other roles\' modules (should be blocked for you)',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
               const SizedBox(height: 6),
               for (final m in others) _tile(context, m, false),
             ],
@@ -119,8 +128,10 @@ class ModulesTab extends StatelessWidget {
       child: ListTile(
         leading: Icon(m.icon, color: mine ? null : Colors.grey),
         title: Text(m.title),
-        subtitle: Text('Module ${m.code}  -  ${m.roles.join(", ")}'
-            '${m.guest ? ", guest" : ""}'),
+        subtitle: Text(
+          'Module ${m.code}  -  ${m.roles.join(", ")}'
+          '${m.guest ? ", guest" : ""}',
+        ),
         trailing: const Icon(Icons.chevron_right),
         onTap: () =>
             Navigator.of(context).push(MaterialPageRoute(builder: m.builder)),

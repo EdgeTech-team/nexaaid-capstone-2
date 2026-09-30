@@ -19,7 +19,11 @@ from typing import Optional, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SourceType = Literal["web", "mobile", "sms"]
+from models.report import canonical_source
+
+# Stored exactly as the live DB constraint expects; any casing is accepted
+# on input ("web", "WEB", ...) and normalised.
+SourceType = Literal["Web", "Mobile", "SMS"]
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +38,12 @@ class DisasterReportCreate(BaseModel):
     affected_families: Optional[int] = Field(default=None, ge=0)
     assistance_needed: Optional[str] = None
     estimated_quantity: Optional[int] = Field(default=None, ge=0)
-    source: SourceType = "web"
+    source: SourceType = "Web"
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _canonical_source(cls, v):
+        return canonical_source(v)
 
 
 class DisasterReportUpdate(BaseModel):
@@ -80,10 +89,8 @@ class DisasterReportResponse(BaseModel):
 
     @field_validator("source", mode="before")
     @classmethod
-    def _lower_source(cls, v):
-        # The live database stores 'Web' / 'SMS' with capitals; the schema
-        # expects lowercase, so normalise before validation.
-        return v.lower() if isinstance(v, str) else v
+    def _canonical_source(cls, v):
+        return canonical_source(v)
 
 
 # ---------------------------------------------------------------------------

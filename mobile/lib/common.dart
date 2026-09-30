@@ -12,13 +12,22 @@ class F {
   final bool number;
   final bool obscure;
   final List<String>? options; // shows a dropdown instead of a text field
+  /// Dropdown filled from GET /lookups ('disaster_types', 'barangays',
+  /// 'sitios', 'items', 'reports'). The chosen id is sent; the name is shown.
+  final String? lookup;
+  final bool optional; // adds a "none" choice to a lookup dropdown
   final String? hint;
-  const F(this.key, this.label,
-      {this.initial = '',
-      this.number = false,
-      this.obscure = false,
-      this.options,
-      this.hint});
+  const F(
+    this.key,
+    this.label, {
+    this.initial = '',
+    this.number = false,
+    this.obscure = false,
+    this.options,
+    this.lookup,
+    this.optional = false,
+    this.hint,
+  });
 }
 
 /// Reads form values: `v.s('x')` text or null, `v.i('x')` int or null.
@@ -62,10 +71,12 @@ class ApiForm extends StatefulWidget {
 
 class _ApiFormState extends State<ApiForm> {
   late final Map<String, TextEditingController> _c = {
-    for (final f in widget.fields) f.key: TextEditingController(text: f.initial)
+    for (final f in widget.fields)
+      f.key: TextEditingController(text: f.initial),
   };
   bool busy = false;
   ApiResult? result;
+  final _seenIds = <String, Set<String>>{}; // per lookup field
 
   @override
   void dispose() {
@@ -78,7 +89,8 @@ class _ApiFormState extends State<ApiForm> {
   Future<void> _submit() async {
     setState(() => busy = true);
     final r = await widget.onSubmit(
-        Values({for (final e in _c.entries) e.key: e.value.text}));
+      Values({for (final e in _c.entries) e.key: e.value.text}),
+    );
     if (!mounted) return;
     setState(() {
       busy = false;
@@ -86,8 +98,64 @@ class _ApiFormState extends State<ApiForm> {
     });
   }
 
+  Widget _lookupInput(F f, TextEditingController c) {
+    final api = Api.instance;
+    return ListenableBuilder(
+      listenable: api,
+      builder: (context, _) => FutureBuilder<Map<String, dynamic>>(
+        future: api.lookups(),
+        builder: (context, snap) {
+          final rows = (snap.data?[f.lookup] as List?) ?? const [];
+          final items = <DropdownMenuItem<String>>[
+            if (f.optional)
+              const DropdownMenuItem(value: '', child: Text('(none)')),
+            for (final r in rows)
+              DropdownMenuItem(
+                value: '${r['id']}',
+                child: Text('${r['name']}', overflow: TextOverflow.ellipsis),
+              ),
+          ];
+          final ids = items.map((i) => i.value).toSet();
+          final seen = _seenIds[f.key];
+          final fresh = [
+            for (final r in rows)
+              if (seen != null && !seen.contains('${r['id']}')) '${r['id']}',
+          ];
+          if (snap.hasData) _seenIds[f.key] = ids.whereType<String>().toSet();
+          if (fresh.isNotEmpty && !f.optional) {
+            // A record was just created (e.g. a new delivery): select it.
+            c.text = fresh.first;
+          } else if (!ids.contains(c.text)) {
+            // Default to the first choice for required fields.
+            c.text = f.optional || rows.isEmpty ? '' : '${rows.first['id']}';
+          }
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: DropdownButtonFormField<String>(
+              key: ValueKey('${f.key}-${rows.length}-${c.text}'),
+              initialValue: ids.contains(c.text) ? c.text : null,
+              isExpanded: true,
+              items: items,
+              onChanged: (v) => c.text = v ?? '',
+              decoration: InputDecoration(
+                labelText: f.label,
+                helperText:
+                    snap.connectionState == ConnectionState.done && rows.isEmpty
+                    ? 'No ${f.lookup} found (is the backend running?)'
+                    : null,
+                border: const OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _input(F f) {
     final c = _c[f.key]!;
+    if (f.lookup != null) return _lookupInput(f, c);
     if (f.options != null) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 10),
@@ -95,13 +163,14 @@ class _ApiFormState extends State<ApiForm> {
           initialValue: c.text.isEmpty ? null : c.text,
           items: [
             for (final o in f.options!)
-              DropdownMenuItem(value: o, child: Text(o)),
+              DropdownMenuItem(value: o, child: Text(o.isEmpty ? '(any)' : o)),
           ],
           onChanged: (v) => c.text = v ?? '',
           decoration: InputDecoration(
-              labelText: f.label,
-              border: const OutlineInputBorder(),
-              isDense: true),
+            labelText: f.label,
+            border: const OutlineInputBorder(),
+            isDense: true,
+          ),
         ),
       );
     }
@@ -131,16 +200,20 @@ class _ApiFormState extends State<ApiForm> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(widget.title,
-                style:
-                    const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            Text(
+              widget.title,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+            ),
             if (widget.subtitle != null)
               Padding(
                 padding: const EdgeInsets.only(top: 2),
-                child: Text(widget.subtitle!,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                child: Text(
+                  widget.subtitle!,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
               ),
             const SizedBox(height: 10),
             for (final f in widget.fields) _input(f),
@@ -153,8 +226,9 @@ class _ApiFormState extends State<ApiForm> {
             ),
             if (busy)
               const Padding(
-                  padding: EdgeInsets.only(top: 10),
-                  child: LinearProgressIndicator()),
+                padding: EdgeInsets.only(top: 10),
+                child: LinearProgressIndicator(),
+              ),
             if (r != null) ResultBox(r),
             if (r != null && r.ok && widget.extra != null)
               widget.extra!(r) ?? const SizedBox.shrink(),
@@ -165,10 +239,11 @@ class _ApiFormState extends State<ApiForm> {
     // Labelled container so each card is one unit for screen readers
     // (and for the browser-driven test script).
     return Semantics(
-        container: true,
-        explicitChildNodes: true,
-        identifier: widget.title,
-        child: card);
+      container: true,
+      explicitChildNodes: true,
+      identifier: widget.title,
+      child: card,
+    );
   }
 }
 
@@ -200,8 +275,10 @@ class ResultBox extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Chip(
-            label: Text(r.status == 0 ? 'NETWORK ERROR' : 'HTTP ${r.status}',
-                style: const TextStyle(color: Colors.white)),
+            label: Text(
+              r.status == 0 ? 'NETWORK ERROR' : 'HTTP ${r.status}',
+              style: const TextStyle(color: Colors.white),
+            ),
             backgroundColor: statusColor(r.status),
           ),
           const SizedBox(height: 6),
@@ -226,12 +303,17 @@ Widget? qrImage(ApiResult r) {
   if (j is! Map || j['qr_image_base64'] is! String) return null;
   return Padding(
     padding: const EdgeInsets.only(top: 10),
-    child: Column(children: [
-      Text('QR code ${j['qr_reference']}'),
-      const SizedBox(height: 6),
-      Image.memory(base64Decode(j['qr_image_base64'] as String),
-          width: 200, height: 200),
-    ]),
+    child: Column(
+      children: [
+        Text('QR code ${j['qr_reference']}'),
+        const SizedBox(height: 6),
+        Image.memory(
+          base64Decode(j['qr_image_base64'] as String),
+          width: 200,
+          height: 200,
+        ),
+      ],
+    ),
   );
 }
 
@@ -247,8 +329,12 @@ class ModulePage extends StatelessWidget {
   final String title;
   final String? note;
   final List<Widget> children;
-  const ModulePage(
-      {super.key, required this.title, this.note, required this.children});
+  const ModulePage({
+    super.key,
+    required this.title,
+    this.note,
+    required this.children,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -260,10 +346,11 @@ class ModulePage extends StatelessWidget {
           children: [
             Text(title),
             Text(
-                api.loggedIn
-                    ? '${api.email} - ${api.role ?? "?"}'
-                    : 'Not logged in (guest)',
-                style: const TextStyle(fontSize: 12)),
+              api.loggedIn
+                  ? '${api.email} - ${api.role ?? "?"}'
+                  : 'Not logged in (guest)',
+              style: const TextStyle(fontSize: 12),
+            ),
           ],
         ),
       ),

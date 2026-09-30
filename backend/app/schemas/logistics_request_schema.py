@@ -4,11 +4,9 @@ from datetime import datetime
 
 
 class SubmitLogisticsRequest(BaseModel):
-    """CSWS submits this once goods are prepared for release."""
-    report_id: int
-    destination_barangay_id: int
-    destination_sitio_id: Optional[int] = None
-    delivery_date: datetime
+    """CSWS submits this for a delivery it is preparing, when it needs
+    DRRMO transport (manuscript UC-CM2 alt flow 3a)."""
+    delivery_id: int
     notes: Optional[str] = Field(default=None, max_length=1000)
 
 

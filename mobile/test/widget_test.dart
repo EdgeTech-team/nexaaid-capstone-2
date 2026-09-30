@@ -38,7 +38,9 @@ void main() {
       expect(modules.where((m) => m.isFor(api)), isNotEmpty, reason: role);
     }
     api.logout();
-    expect(modules.where((m) => m.isFor(api)).map((m) => m.code), ['3.5']);
+    expect(modules.where((m) => m.isFor(api)).map((m) => m.code), [
+      'UC-D2 / UC-R2',
+    ]);
   });
 
   test('Expected statuses follow the backend role rules', () {

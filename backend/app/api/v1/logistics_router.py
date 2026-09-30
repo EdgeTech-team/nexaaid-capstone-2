@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from core.database import get_db
 from core.auth import require_role
@@ -16,16 +16,21 @@ def submit_logistics_request(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("CSWS Main Office")),  # CONFIRM: or "CSWS Disaster Unit"?
 ):
-    delivery = Delivery(
-        report_id=payload.report_id,
-        destination_barangay_id=payload.destination_barangay_id,
-        destination_sitio_id=payload.destination_sitio_id,
-        handled_by_user_id=current_user.user_id,
-        status="Preparing",
-        delivery_date=payload.delivery_date,
+    # The request is for goods CSWS is already preparing (UC-CM2 3a), so it
+    # attaches to that delivery instead of creating a new, empty one.
+    delivery = db.get(Delivery, payload.delivery_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status in ("Delivered", "Confirmed"):
+        raise HTTPException(status_code=409, detail=f"Delivery is already {delivery.status}")
+    open_request = (
+        db.query(LogisticsRequest)
+        .filter(LogisticsRequest.delivery_id == delivery.delivery_id,
+                LogisticsRequest.status.in_(["Pending", "Accepted"]))
+        .first()
     )
-    db.add(delivery)
-    db.flush()
+    if open_request:
+        raise HTTPException(status_code=409, detail="This delivery already has an open logistics request")
 
     logistics_request = LogisticsRequest(
         delivery_id=delivery.delivery_id,

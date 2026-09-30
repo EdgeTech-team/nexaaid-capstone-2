@@ -134,24 +134,37 @@ def test_full_relief_chain_across_all_roles(api):
     }), 201)
     assert client.post("/admin/users", headers=t["csws"], json={}).status_code in (403, 422)
 
-    # --- 3.4 Barangay rep files a report, admin validates it -------------
-    report = ok(client.post("/reports/", headers=t["brgy"], json={
+    # --- 3.4 CSWS Disaster Unit files a report (UC-CD1), admin validates (UC-A3)
+    report = ok(client.post("/reports/", headers=t["unit"], json={
         "disaster_type_id": 1, "barangay_id": 1, "sitio_id": 1,
         "description": "Flooding", "affected_families": 40,
         "assistance_needed": "Rice", "estimated_quantity": 100,
     }), 201)
     rid = report["report_id"]
+    assert report["source"] == "Web"   # stored exactly as the live DB constraint expects
+    mobile = ok(client.post("/reports/", headers=t["unit"], json={
+        "disaster_type_id": 1, "barangay_id": 1, "source": "mobile"}), 201)
+    assert mobile["source"] == "Mobile"
+
+    # dropdown data (public, used by the app instead of typed ids)
+    lk = ok(client.get("/lookups"))
+    assert lk["disaster_types"] == [{"id": 1, "name": "Flood"}]
+    assert lk["items"][0]["name"] == "Rice (kg)"
+    assert {r["id"] for r in lk["reports"]} == {rid, mobile["report_id"]}
+    assert lk["validated_reports"] == []          # nothing validated yet
     ok(client.get(f"/reports/{rid}", headers=t["csws"]))   # staff can view any report
     ok(client.get(f"/reports/{rid}", headers=t["unit"]))
     assert client.post(f"/reports/{rid}/validate", headers=t["csws"], json={}).status_code == 403
     validated = ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
     assert validated["status"] == "Validated"
     assert validated["priority_level"]                      # 3.11 scoring ran
+    assert [r["id"] for r in ok(client.get("/lookups"))["validated_reports"]] == [rid]
 
     # --- 3.7 needs monitoring: CSWS (both units), admin, barangay --------
     for who in ("admin", "csws", "unit", "brgy"):
         rows = ok(client.get("/reports/monitoring", headers=t[who]))
-        assert rows[0]["total_items_needed"] == 100
+        row = next(r for r in rows if r["report_id"] == rid)
+        assert row["total_items_needed"] == 100
     assert client.get("/reports/", headers=t["donor"]).status_code == 403
 
     # --- 3.5 donations: logged-in donor and guest ------------------------
@@ -169,6 +182,8 @@ def test_full_relief_chain_across_all_roles(api):
     for d, qty in ((d1, 60), (d2, 5)):
         ok(client.post("/donations/receive", headers=t["csws"],
                        json={"donation_id": d["donation_id"], "actual_quantity": qty}))
+    assert ok(client.get("/lookups"))["pending_donations"] == []
+    assert len(ok(client.get("/lookups"))["received_donations"]) == 2
     inv = ok(client.get("/donations/inventory", headers=t["csws"]))
     assert inv[0]["quantity"] == 65
 
@@ -189,18 +204,20 @@ def test_full_relief_chain_across_all_roles(api):
     did = delivery["delivery_id"]
     assert ok(client.get(f"/deliveries/{did}", headers=t["brgy"]))["status"] == "Preparing"
 
-    # --- 3.9 logistics request -> DRRMO accepts one, declines one --------
-    req = {"report_id": rid, "destination_barangay_id": 1, "delivery_date": "2026-10-01T08:00:00"}
+    # --- 3.9 logistics request for that delivery (UC-CM2 3a / UC-DR1) ----
+    req = {"delivery_id": did, "notes": "Need a truck"}
     lr1 = ok(client.post("/logistics/requests", headers=t["csws"], json=req), 201)
-    lr2 = ok(client.post("/logistics/requests", headers=t["csws"], json=req), 201)
+    assert lr1["delivery_id"] == did                          # no new empty delivery
+    assert client.post("/logistics/requests", headers=t["csws"], json=req).status_code == 409
     assert client.get("/drrmo/requests", headers=t["csws"]).status_code == 403
-    assert len(ok(client.get("/drrmo/requests", headers=t["drrmo"]))) == 2
-    acc = ok(client.patch(f"/drrmo/requests/{lr1['request_id']}/accept", headers=t["drrmo"],
-                          json={"scheduled_date": "2026-10-02T08:00:00"}))
-    assert acc["status"] == "Accepted"
-    dec = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/decline", headers=t["drrmo"],
+    assert len(ok(client.get("/drrmo/requests", headers=t["drrmo"]))) == 1
+    dec = ok(client.patch(f"/drrmo/requests/{lr1['request_id']}/decline", headers=t["drrmo"],
                           json={"notes": "No truck available"}))
     assert dec["status"] == "Declined"
+    lr2 = ok(client.post("/logistics/requests", headers=t["csws"], json=req), 201)  # ask again
+    acc = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/accept", headers=t["drrmo"],
+                          json={"scheduled_date": "2026-10-02T08:00:00"}))
+    assert acc["status"] == "Accepted"
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["scheduled"] == 1
 
     # --- 3.10 CSWS advances, Barangay confirms receipt -------------------
@@ -221,5 +238,5 @@ def test_full_relief_chain_across_all_roles(api):
         assert client.get("/dashboard/summary", headers=t["donor"]).status_code == 403
     summary = ok(client.get("/dashboard/summary", headers=t["admin"]))
     assert summary["total_donations"] == 2
-    assert summary["total_deliveries"] == 3
+    assert summary["total_deliveries"] == 1
     assert summary["total_logistics_requests"] == 2
