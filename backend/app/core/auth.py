@@ -85,6 +85,20 @@ def expand_roles(*roles) -> set:
 def has_role(user: User, *roles) -> bool:
     return user.role is not None and _norm_role(user.role.role_name) in expand_roles(*roles)
 
+def barangay_scope(user: User):
+    """Barangay Receiving Representatives only see and act on their own
+    assigned barangay (manuscript UC-B1, alt flow 3a). Returns that
+    barangay_id for them, or None for every other role (no restriction)."""
+    if not has_role(user, "barangay_receiving_rep"):
+        return None
+    barangay_id = getattr(user, "assigned_barangay_id", None)
+    if barangay_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has no assigned barangay. Ask the Administrator to set one.",
+        )
+    return barangay_id
+
 def require_role(*allowed_roles):
     def role_checker(user: User = Depends(get_current_user)):
         if not has_role(user, *allowed_roles):

@@ -133,18 +133,54 @@ class NewReportScreen extends StatefulWidget {
   State<NewReportScreen> createState() => _NewReportScreenState();
 }
 
+/// One line of the needs list: an item (or "Other"), how many, and the unit.
+class _Need {
+  String? itemId; // items.item_id, or _other
+  final qty = TextEditingController();
+  final otherName = TextEditingController();
+  final otherUnit = TextEditingController();
+}
+
+const _other = 'other';
+
 class _NewReportScreenState extends State<NewReportScreen> {
   final _form = GlobalKey<FormState>();
   String? typeId, brgyId, sitioId;
   final desc = TextEditingController();
   final families = TextEditingController();
-  final needs = TextEditingController();
-  final qty = TextEditingController();
+  final needs = <_Need>[_Need()];
   bool busy = false;
 
-  Future<void> _submit() async {
+  String _needName(_Need n, Names names) => n.itemId == _other
+      ? n.otherName.text.trim()
+      : names
+            .of('items', n.itemId, fallback: '')
+            .replaceAll(RegExp(r'\s*\(.*\)$'), '');
+
+  String _needUnit(_Need n, Names names) {
+    if (n.itemId == _other) return n.otherUnit.text.trim();
+    for (final i in names.rows('items')) {
+      if ('${i['id']}' == n.itemId) return '${i['unit'] ?? ''}';
+    }
+    return '';
+  }
+
+  Future<void> _submit(Names names) async {
     if (!_form.currentState!.validate()) return;
     setState(() => busy = true);
+    // The report table has one text field for the needs and one total
+    // quantity, so the list is stored as "Rice: 50 kg, Drinking Water: 20 gallons".
+    final summary = needs
+        .map(
+          (n) =>
+              '${_needName(n, names)}: ${n.qty.text.trim()} ${_needUnit(n, names)}'
+                  .trim(),
+        )
+        .join(', ');
+    final total = needs.fold<int>(
+      0,
+      (a, n) => a + int.parse(n.qty.text.trim()),
+    );
     final r = await act(
       context,
       () => api.post(
@@ -155,25 +191,115 @@ class _NewReportScreenState extends State<NewReportScreen> {
           'sitio_id': (sitioId ?? '').isEmpty ? null : int.parse(sitioId!),
           'description': desc.text.trim(),
           'affected_families': int.parse(families.text.trim()),
-          'assistance_needed': needs.text.trim(),
-          'estimated_quantity': int.parse(qty.text.trim()),
+          'assistance_needed': summary,
+          'estimated_quantity': total,
           'source': 'Mobile',
         },
       ),
       success: 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
-    setState(() => busy = false);
-    if (r.ok) {
-      _form.currentState!.reset();
-      for (final c in [desc, families, needs, qty]) {
-        c.clear();
+    setState(() {
+      busy = false;
+      if (r.ok) {
+        _form.currentState!.reset();
+        desc.clear();
+        families.clear();
+        needs
+          ..clear()
+          ..add(_Need());
+        typeId = brgyId = sitioId = null;
       }
-    }
+    });
   }
 
-  String? _num(String? v) =>
-      int.tryParse(v?.trim() ?? '') == null ? 'Enter a whole number' : null;
+  String? _num(String? v) => (int.tryParse(v?.trim() ?? '') ?? 0) > 0
+      ? null
+      : 'Enter a number above 0';
+
+  Widget _needRow(int i, Names names) {
+    final n = needs[i];
+    final unit = _needUnit(n, names);
+    return Card(
+      key: ObjectKey(n),
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: n.itemId,
+                    isExpanded: true,
+                    decoration: InputDecoration(labelText: 'Need ${i + 1}'),
+                    items: [
+                      for (final it in names.rows('items'))
+                        DropdownMenuItem(
+                          value: '${it['id']}',
+                          child: Text('${it['item_name'] ?? it['name']}'),
+                        ),
+                      const DropdownMenuItem(
+                        value: _other,
+                        child: Text('Other…'),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => n.itemId = v),
+                    validator: (v) => v == null ? 'Choose an item' : null,
+                  ),
+                ),
+                if (needs.length > 1)
+                  IconButton(
+                    tooltip: 'Remove this need',
+                    onPressed: () => setState(() => needs.removeAt(i)),
+                    icon: const Icon(Icons.close),
+                  ),
+              ],
+            ),
+            if (n.itemId == _other) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: n.otherName,
+                      decoration: const InputDecoration(labelText: 'Item'),
+                      validator: (v) =>
+                          (v ?? '').trim().isEmpty ? 'Required' : null,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextFormField(
+                      controller: n.otherUnit,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Unit',
+                        hintText: 'pcs, boxes',
+                      ),
+                      validator: (v) =>
+                          (v ?? '').trim().isEmpty ? 'Required' : null,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 10),
+            TextFormField(
+              controller: n.qty,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'How many?',
+                suffixText: unit.isEmpty ? null : unit,
+              ),
+              validator: _num,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -191,15 +317,12 @@ class _NewReportScreenState extends State<NewReportScreen> {
         return Form(
           key: _form,
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             children: [
-              Text(
-                'New post-disaster report',
-                style: Theme.of(context).textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const Text(
-                'Saved as Pending until the Administrator validates it.',
+              const PageHeader(
+                'Submit Post-Disaster Report',
+                subtitle:
+                    'Saved as Pending until the Administrator validates it.',
               ),
               const SectionTitle('Disaster and location'),
               LookupDropdown(
@@ -233,9 +356,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       child: Text('${s['name']}'),
                     ),
                 ],
-                onChanged: (v) => sitioId = v,
-                decoration: const InputDecoration(
+                onChanged: brgyId == null ? null : (v) => sitioId = v,
+                decoration: InputDecoration(
                   labelText: 'Sitio (optional)',
+                  helperText: brgyId == null ? 'Choose a barangay first' : null,
                 ),
               ),
               const SectionTitle('Situation (DROMIC)'),
@@ -256,27 +380,18 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 ),
                 validator: _num,
               ),
-              const SectionTitle('Needs'),
-              TextFormField(
-                controller: needs,
-                decoration: const InputDecoration(
-                  labelText: 'Type of assistance needed',
-                  hintText: 'e.g. Rice, water, hygiene kits',
+              SectionTitle(
+                'Assistance needed',
+                trailing: TextButton.icon(
+                  onPressed: () => setState(() => needs.add(_Need())),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add need'),
                 ),
-                validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
               ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: qty,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Estimated quantity needed',
-                ),
-                validator: _num,
-              ),
-              const SizedBox(height: 24),
+              for (var i = 0; i < needs.length; i++) _needRow(i, names),
+              const SizedBox(height: 16),
               FilledButton.icon(
-                onPressed: busy ? null : _submit,
+                onPressed: busy ? null : () => _submit(names),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(50),
                 ),
@@ -319,8 +434,13 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
         final rows = (data[0] as List).cast<Map<String, dynamic>>();
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           children: [
+            PageHeader(
+              'Active Reports',
+              subtitle:
+                  'Needs monitoring with fulfillment progress • ${roleLine()}',
+            ),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -448,8 +568,9 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
         final rows = (data[0] as List).cast<Map<String, dynamic>>();
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           children: [
+            PageHeader('Report Validation', subtitle: roleLine()),
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(value: 'Pending', label: Text('Pending')),
@@ -571,14 +692,13 @@ class _AccountsScreenState extends State<AccountsScreen> {
         return Form(
           key: _form,
           child: ListView(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             children: [
-              Text(
-                'Create internal account',
-                style: Theme.of(context).textTheme.titleLarge
-                    ?.copyWith(fontWeight: FontWeight.w700),
+              PageHeader(
+                'User Management',
+                subtitle:
+                    'Create internal accounts for office-based roles (UC-A1) • ${roleLine()}',
               ),
-              const Text('For office-based roles (UC-A1).'),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
                 initialValue: role,
@@ -705,8 +825,12 @@ class DashboardScreen extends StatelessWidget {
         }
 
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           children: [
+            PageHeader(
+              '${api.role ?? 'System'} Dashboard',
+              subtitle: roleLine(),
+            ),
             StatGrid([
               StatTile(
                 'Disaster reports',

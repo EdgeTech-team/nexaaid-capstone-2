@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from core.priority_engine import compute_priority
 
 from core.database import get_db
-from core.auth import get_current_user, require_role, has_role  # see note above
+from core.auth import get_current_user, require_role, has_role, barangay_scope  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from schemas.report import (
     DisasterReportCreate,
@@ -83,6 +83,9 @@ def list_reports(
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
     query = db.query(DisasterReport)
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+        query = query.filter(DisasterReport.barangay_id == own_barangay)
 
    
     if status_filter:
@@ -118,6 +121,9 @@ def list_report_monitoring(
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),    
 ):
     query = db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+        query = query.filter(DisasterReport.barangay_id == own_barangay)
 
     if status_filter:
             query = query.filter(DisasterReport.status == status_filter)

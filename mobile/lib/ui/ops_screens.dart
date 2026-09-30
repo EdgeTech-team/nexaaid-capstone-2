@@ -124,8 +124,9 @@ class _DonationsInScreenState extends State<DonationsInScreen> {
             .toList();
         final inventory = (data[1] as List).cast<Map>();
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           children: [
+            PageHeader('Physical Donations', subtitle: roleLine()),
             TextField(
               decoration: const InputDecoration(
                 prefixIcon: Icon(Icons.qr_code_scanner),
@@ -272,6 +273,10 @@ class DeliveriesScreen extends StatelessWidget {
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
             children: [
+              PageHeader(
+                barangay ? 'Incoming Aid' : 'Release & Delivery Tracking',
+                subtitle: roleLine(),
+              ),
               if (rows.isEmpty)
                 EmptyState(
                   barangay
@@ -421,7 +426,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           return Form(
             key: _form,
             child: ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(20),
               children: [
                 LookupDropdown(
                   list: 'validated_reports',
@@ -527,8 +532,9 @@ class CmoScreen extends StatelessWidget {
         final rows = (data[1] as List).cast<Map>();
         final names = Names(Map<String, dynamic>.from(data[2] as Map));
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           children: [
+            PageHeader('CMO Representative Dashboard', subtitle: roleLine()),
             StatGrid([
               StatTile(
                 'Waiting for city confirmation',
@@ -658,8 +664,12 @@ class DrrmoScreen extends StatelessWidget {
         final rows = (data[1] as List).cast<Map>();
         final names = Names(Map<String, dynamic>.from(data[2] as Map));
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(20),
           children: [
+            PageHeader(
+              'DRRMO Logistics Support Dashboard',
+              subtitle: roleLine(),
+            ),
             StatGrid([
               StatTile(
                 'New requests',

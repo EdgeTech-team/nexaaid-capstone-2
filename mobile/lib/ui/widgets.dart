@@ -5,6 +5,83 @@ import '../api.dart';
 final api = Api.instance;
 
 // ---------------------------------------------------------------------------
+// Brand colors from the Capstone 1 wireframes (manuscript Figures 44-53)
+// ---------------------------------------------------------------------------
+class Brand {
+  static const pink = Color(0xFFFF668A); // logo, buttons, progress bars
+  static const pinkDark = Color(0xFFE0456C);
+  static const pinkSoft = Color(0xFFFFE6EB); // hero band, role pill, icon boxes
+  static const ink = Color(0xFF1F2937); // headings
+  static const muted = Color(0xFF6B7280); // secondary text
+  static const line = Color(0xFFE5E7EB); // card borders
+  static const page = Color(0xFFF8FAFC); // page background
+}
+
+/// Pink rounded "N" square used as the NexaAid logo in the wireframes.
+class NexaLogo extends StatelessWidget {
+  final double size;
+  const NexaLogo({super.key, this.size = 36});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Brand.pink,
+        borderRadius: BorderRadius.circular(size * 0.28),
+      ),
+      child: Text(
+        'N',
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w800,
+          fontSize: size * 0.5,
+        ),
+      ),
+    );
+  }
+}
+
+/// Page title + subtitle, as at the top of every wireframe dashboard.
+class PageHeader extends StatelessWidget {
+  final String title;
+  final String? subtitle;
+  const PageHeader(this.title, {super.key, this.subtitle});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: Brand.ink,
+            ),
+          ),
+          if (subtitle != null) ...[
+            const SizedBox(height: 4),
+            Text(subtitle!, style: const TextStyle(color: Brand.muted)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// "Administrator • Last updated: 10/1/2026" line under page titles.
+String roleLine() {
+  final d = DateTime.now();
+  return '${api.role ?? 'Guest'} • Last updated: ${d.month}/${d.day}/${d.year}';
+}
+
+// ---------------------------------------------------------------------------
 // Colors for statuses and priority levels
 // ---------------------------------------------------------------------------
 Color statusTone(String? s) {
@@ -54,20 +131,16 @@ class Badge2 extends StatelessWidget {
   const Badge2(this.text, this.color, {super.key, this.icon});
 
   factory Badge2.status(String? s) => Badge2(s ?? '-', statusTone(s));
-  factory Badge2.priority(String? p) => Badge2(
-    p == null ? 'No priority' : '$p priority',
-    priorityTone(p),
-    icon: Icons.flag_outlined,
-  );
+  factory Badge2.priority(String? p) =>
+      Badge2(p ?? 'No priority', priorityTone(p));
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -90,7 +163,7 @@ class Badge2 extends StatelessWidget {
   }
 }
 
-/// Fulfillment progress bar with "50 / 100 (50%)" caption.
+/// Fulfillment progress: label and % on top, pink bar, "x of y" below.
 class Progress extends StatelessWidget {
   final num delivered;
   final num needed;
@@ -106,68 +179,97 @@ class Progress extends StatelessWidget {
   Widget build(BuildContext context) {
     final pct = (percent ?? (needed > 0 ? delivered * 100 / needed : 0))
         .toDouble();
+    const small = TextStyle(fontSize: 12, color: Brand.muted);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Row(
+          children: [
+            const Expanded(child: Text('Fulfillment Progress', style: small)),
+            Text(
+              '${pct.toStringAsFixed(0)}%',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
         ClipRRect(
           borderRadius: BorderRadius.circular(6),
           child: LinearProgressIndicator(
             value: (pct / 100).clamp(0, 1),
             minHeight: 8,
-            color: pct >= 100 ? const Color(0xFF2E7D32) : null,
+            color: Brand.pink,
+            backgroundColor: const Color(0xFFEEF0F3),
           ),
         ),
         const SizedBox(height: 4),
-        Text(
-          'Fulfilled $delivered of $needed  (${pct.toStringAsFixed(0)}%)',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
+        Text('$delivered of $needed delivered', style: small),
       ],
     );
   }
 }
 
+/// Wireframe stat card: label, big number, note; tinted icon box top right.
 class StatTile extends StatelessWidget {
   final String label;
   final String value;
   final IconData icon;
   final Color? color;
-  const StatTile(this.label, this.value, this.icon, {super.key, this.color});
+  final String? note;
+  const StatTile(
+    this.label,
+    this.value,
+    this.icon, {
+    super.key,
+    this.color,
+    this.note,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final c = color ?? Theme.of(context).colorScheme.primary;
+    final c = color ?? Brand.pink;
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: c.withValues(alpha: 0.12),
-              child: Icon(icon, color: c, size: 20),
-            ),
-            const SizedBox(width: 10),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    value,
-                    style: const TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  Text(
                     label,
-                    style: Theme.of(context).textTheme.bodySmall,
+                    style: const TextStyle(fontSize: 13, color: Brand.muted),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    value,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      color: Brand.ink,
+                    ),
+                  ),
+                  if (note != null)
+                    Text(
+                      note!,
+                      style: const TextStyle(fontSize: 11, color: Brand.muted),
+                    ),
                 ],
               ),
+            ),
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: c.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: c, size: 20),
             ),
           ],
         ),
@@ -176,7 +278,7 @@ class StatTile extends StatelessWidget {
   }
 }
 
-/// Two-column grid of stat tiles.
+/// Grid of stat tiles: 2 per row on phones, up to 4 on wide screens.
 class StatGrid extends StatelessWidget {
   final List<StatTile> tiles;
   const StatGrid(this.tiles, {super.key});
@@ -185,10 +287,11 @@ class StatGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
-        final w = (c.maxWidth - 10) / 2;
+        final cols = c.maxWidth >= 900 ? 4 : (c.maxWidth >= 600 ? 3 : 2);
+        final w = (c.maxWidth - 12 * (cols - 1)) / cols;
         return Wrap(
-          spacing: 10,
-          runSpacing: 10,
+          spacing: 12,
+          runSpacing: 12,
           children: [for (final t in tiles) SizedBox(width: w, child: t)],
         );
       },
