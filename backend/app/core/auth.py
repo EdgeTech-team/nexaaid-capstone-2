@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -57,9 +58,36 @@ def get_current_user_optional(
         return None
     return db.query(User).filter(User.email == email).first()
 
+def _norm_role(name) -> str:
+    """'CSWS Main Office' / 'csws_main_office' -> 'csws_main_office'"""
+    return re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+
+# Routers use different spellings ("Administrator" vs "admin", etc.).
+# This maps every spelling used in the codebase onto the real roles
+# in the `roles` table (checked against Neon on Sep 30).
+_ROLE_GROUPS = {
+    "admin": {"admin", "administrator"},
+    "administrator": {"admin", "administrator"},
+    "csws_staff": {"csws_main_office", "csws_disaster_unit"},
+    "barangay_official": {"barangay_receiving_representative", "barangay_receiving_rep"},
+    "barangay_receiving_rep": {"barangay_receiving_representative", "barangay_receiving_rep"},
+    "barangay_receiving_representative": {"barangay_receiving_representative", "barangay_receiving_rep"},
+}
+
+def expand_roles(*roles) -> set:
+    allowed = set()
+    for r in roles:
+        n = _norm_role(r)
+        allowed.add(n)
+        allowed |= _ROLE_GROUPS.get(n, set())
+    return allowed
+
+def has_role(user: User, *roles) -> bool:
+    return user.role is not None and _norm_role(user.role.role_name) in expand_roles(*roles)
+
 def require_role(*allowed_roles):
     def role_checker(user: User = Depends(get_current_user)):
-        if user.role.role_name not in allowed_roles:
+        if not has_role(user, *allowed_roles):
             raise HTTPException(status_code=403, detail="You do not have permission to access this resource")
         return user
     return role_checker

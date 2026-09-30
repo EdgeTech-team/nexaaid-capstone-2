@@ -81,7 +81,7 @@ def create_delivery(
       )
     )
 
-  db._flush()
+  db.flush()
   db.refresh(delivery)
   return delivery
 
@@ -104,19 +104,18 @@ def list_deliveries(
     if barangay_id: 
        query = query.filter(Delivery.destination_barangay_id == barangay_id)
     if report_id: 
-        query= query.filter(Delivery.report_idc== report_id)
+        query= query.filter(Delivery.report_id == report_id)
 
     return (
        query.order_by(Delivery.created_at.desc())
        .offset(skip)
        .limit(limit)
-       .unique()
        .all()
     )
 
 # Retrieve one
 
-@router.get("/ {delivery_id}", response_model=DeliveryResponse)
+@router.get("/{delivery_id}", response_model=DeliveryResponse)
 def get_delivery(
    delivery_id: int,
    db: Session= Depends(get_db),
@@ -126,7 +125,7 @@ def get_delivery(
      db.query(Delivery)
      .options(joinedload(Delivery.items))
      .filter(Delivery.delivery_id == delivery_id)
-     .first
+     .first()
   )
   if not delivery: 
      raise HTTPException(status_code=404, detail="Delivery not found")
@@ -195,7 +194,7 @@ def confirm_receipt(
    delivery_id: int,
    payload: ReceiptConfirm,
    db: Session = Depends(get_db),
-   current_user=Depends(require_role("barngay_receiving_rep","admin")),
+   current_user=Depends(require_role("barangay_receiving_rep","admin")),
 ):
     delivery = (
       db.query(Delivery)

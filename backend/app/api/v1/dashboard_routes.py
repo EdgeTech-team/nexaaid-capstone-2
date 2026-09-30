@@ -6,6 +6,7 @@ from core.database import get_db
 from core.auth import require_role
 from models.report import DisasterReport, ReportFulfillment
 from models.physical_donation_model import PhysicalDonation
+from models.organization_model import Organization
 from models.delivery import Delivery as delivery
 from models.logistics_request_model import LogisticsRequest
 from schemas.dashboard_schema import (    DashboardSummary, ReportsBreakdown, FulfillmentOverview, LogisticsOverview,
@@ -42,10 +43,16 @@ def get_reports_breakdown(
         .all()
 
     )
+    by_priority = (
+        db.query(DisasterReport.priority_level, func.count(DisasterReport.report_id))
+        .group_by(DisasterReport.priority_level)
+        .all()
+    )
 
     total_value = db.query(func.coalesce(func.sum(PhysicalDonation.estimated_value), 0)).scalar() or 0
     return ReportsBreakdown(
         by_status=[StatusCount(status=status, count=count) for status, count in by_status],
+        by_priority=[PriorityCount(priority_level=p, count=c) for p, c in by_priority],
         total_estimated_value=float (total_value or 0),
     )
 
@@ -56,8 +63,8 @@ def get_fulfillment_overview(
 
 ):
     avg_pct = db.query(func.coalesce(func.avg(ReportFulfillment.fulfillment_percentage), 0)).scalar() or 0
-    verified = db.query(func.count(ReportFulfillment.fulfillment_id)).filter(ReportFulfillment.verification_status == "verified").scalar() or 0
-    pending = db.query(func.count(ReportFulfillment.fulfillment_id)).filter(ReportFulfillment.verification_status == "pending").scalar() or 0
+    verified = db.query(func.count(ReportFulfillment.fulfillment_id)).filter(ReportFulfillment.verification_status == "Complete").scalar() or 0
+    pending = db.query(func.count(ReportFulfillment.fulfillment_id)).filter(ReportFulfillment.verification_status.in_(["Not Started", "Partial"])).scalar() or 0
     return FulfillmentOverview(
         average_fulfillment_percentage=float(avg_pct or 0),
         fully_verified_count=verified,
@@ -70,13 +77,17 @@ def get_logistics_overview(
     user=Depends(require_role(*DASHBOARD_ROLES)),
 
 ):
- requests = (
-    
-    db.query(LogisticsRequest.status, func.count(LogisticsRequest.request_id))
-    .group_by(LogisticsRequest.status)
-    .all()
-)
- return LogisticsOverview(
-    deliveries_by_status=[StatusCount(status=status, count=count) for status, count in requests],
-    requests_by_status=[StatusCount(status=status, count=count) for status, count in requests],
-)
+    requests = (
+        db.query(LogisticsRequest.status, func.count(LogisticsRequest.request_id))
+        .group_by(LogisticsRequest.status)
+        .all()
+    )
+    deliveries = (
+        db.query(delivery.status, func.count(delivery.delivery_id))
+        .group_by(delivery.status)
+        .all()
+    )
+    return LogisticsOverview(
+        deliveries_by_status=[StatusCount(status=s, count=c) for s, c in deliveries],
+        requests_by_status=[StatusCount(status=s, count=c) for s, c in requests],
+    )
