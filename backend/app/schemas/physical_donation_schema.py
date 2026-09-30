@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Literal
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class GuestDonorInfo(BaseModel):
@@ -11,7 +11,11 @@ class GuestDonorInfo(BaseModel):
     
 class PhysicalDonationCreate(BaseModel):
     report_id : int
-    item_id: int
+    # Either pick an item from the list (item_id) or describe another one
+    # (other_item_name + other_item_unit) when it is not in the list yet.
+    item_id: Optional[int] = None
+    other_item_name: Optional[str] = Field(default=None, max_length=150)
+    other_item_unit: Optional[str] = Field(default=None, max_length=50)
     packaging : str
     quantity : int
     estimated_value : Optional[Decimal] = None
@@ -19,6 +23,12 @@ class PhysicalDonationCreate(BaseModel):
     pickup_address: Optional[str] = None
     guest_donor: Optional[GuestDonorInfo] = None #Only Present for Non logged in donors
     
+    @model_validator(mode="after")
+    def check_item_given(self):
+        if self.item_id is None and not (self.other_item_name or "").strip():
+            raise ValueError("Choose an item, or enter the name of another item")
+        return self
+
     @model_validator(mode="after")
     def check_pickup_address_required(self):
             if self.handover_method == "Door to Door" and not self.pickup_address:

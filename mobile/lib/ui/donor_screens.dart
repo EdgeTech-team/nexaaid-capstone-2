@@ -294,7 +294,42 @@ class _ReportsFeedState extends State<ReportsFeed> {
   }
 }
 
-/// UC-D2 step 5-6: physical donation form, then QR receipt.
+// Drop-off location shown when "Drop Off" is chosen (manuscript UC-D2 7b:
+// "the system shows storage details"). PLACEHOLDER: replace with the real
+// CSWS Main Office storage address and hours.
+const storageAddress = 'CSWS Main Office storage area, Mandaue City';
+const storageHours = 'Monday to Friday, 8:00 AM to 5:00 PM';
+
+// Packaging options (manuscript 3.1: "packaging size, based on the
+// available packaging options shown in the system"; data dictionary
+// example "50kg sack").
+const packagingOptions = [
+  'Sack (50 kg)',
+  'Sack (25 kg)',
+  'Box',
+  'Pack',
+  'Plastic bag',
+  'Bottle',
+  'Gallon container',
+  'Loose / no packaging',
+  'Other',
+];
+
+const _otherItem = 'other';
+
+/// One item line on the donation form.
+class _Line {
+  String? itemId;
+  String packaging = packagingOptions.first;
+  final qty = TextEditingController();
+  final value = TextEditingController();
+  final otherName = TextEditingController();
+  final otherUnit = TextEditingController();
+  final otherPackaging = TextEditingController();
+}
+
+/// UC-D2 step 5-6: physical donation form (one or more items), then the
+/// QR receipt for each item.
 class DonateScreen extends StatefulWidget {
   final Map<String, dynamic> report;
   final Names names;
@@ -306,11 +341,10 @@ class DonateScreen extends StatefulWidget {
 
 class _DonateScreenState extends State<DonateScreen> {
   final _form = GlobalKey<FormState>();
-  String? itemId;
+  final lines = <_Line>[_Line()];
   String handover = 'Drop Off';
-  final packaging = TextEditingController(text: 'Box');
-  final qty = TextEditingController();
-  final value = TextEditingController();
+  bool useSavedAddress = true;
+  String? savedAddress; // organization address, if the account has one
   final address = TextEditingController();
   final guestName = TextEditingController();
   final guestPhone = TextEditingController();
@@ -319,43 +353,90 @@ class _DonateScreenState extends State<DonateScreen> {
   @override
   void initState() {
     super.initState();
-    final items = widget.names.rows('items');
-    if (items.isNotEmpty) itemId = '${items.first['id']}';
+    if (api.loggedIn) {
+      api.get('/donations/mine').then((r) {
+        if (!mounted) return;
+        String? a;
+        if (r.ok) a = r.json['profile']?['address'] as String?;
+        setState(() {
+          savedAddress = (a ?? '').trim().isEmpty ? null : a;
+          useSavedAddress = savedAddress != null;
+        });
+      });
+    }
   }
+
+  String? _req(String? v) => (v ?? '').trim().isEmpty ? 'Required' : null;
+
+  String _itemName(_Line l) => l.itemId == _otherItem
+      ? l.otherName.text.trim()
+      : widget.names.of('items', l.itemId, fallback: 'Item');
 
   Future<void> _submit() async {
     if (!_form.currentState!.validate()) return;
     setState(() => busy = true);
-    final body = <String, dynamic>{
-      'report_id': widget.report['id'],
-      'item_id': int.parse(itemId!),
-      'packaging': packaging.text.trim(),
-      'quantity': int.parse(qty.text.trim()),
-      'estimated_value': double.tryParse(value.text.trim()),
-      'handover_method': handover,
-      'pickup_address': handover == 'Door to Door' ? address.text.trim() : null,
-      if (!api.loggedIn)
-        'guest_donor': {
-          'full_name': guestName.text.trim(),
-          'contact_number': guestPhone.text.trim(),
-        },
-    };
-    final r = await act(
-      context,
-      () => api.post('/donations/', body: body),
-      success: 'Donation recorded. Show the QR code when handing over.',
-    );
+    final pickup = handover == 'Door to Door'
+        ? (useSavedAddress && savedAddress != null
+              ? savedAddress
+              : address.text.trim())
+        : null;
+    final results = <Map<String, dynamic>>[];
+    String? error;
+    // The database keeps one item per donation record, so each line becomes
+    // its own donation with its own QR reference.
+    for (final l in lines) {
+      final body = <String, dynamic>{
+        'report_id': widget.report['id'],
+        if (l.itemId == _otherItem) ...{
+          'other_item_name': l.otherName.text.trim(),
+          'other_item_unit': l.otherUnit.text.trim(),
+        } else
+          'item_id': int.parse(l.itemId!),
+        'packaging': l.packaging == 'Other'
+            ? l.otherPackaging.text.trim()
+            : l.packaging,
+        'quantity': int.parse(l.qty.text.trim()),
+        'estimated_value': double.tryParse(l.value.text.trim()),
+        'handover_method': handover,
+        'pickup_address': pickup,
+        if (!api.loggedIn)
+          'guest_donor': {
+            'full_name': guestName.text.trim(),
+            'contact_number': guestPhone.text.trim(),
+          },
+      };
+      final r = await api.post('/donations/', body: body);
+      if (!r.ok) {
+        error = r.status == 0 ? 'Cannot reach the server' : r.errorText;
+        break;
+      }
+      final qr = await api.get('/donations/${r.json['donation_id']}/qr');
+      results.add({
+        ...Map<String, dynamic>.from(r.json as Map),
+        'item_label': _itemName(l),
+        'qr_image_base64': qr.ok ? qr.json['qr_image_base64'] : null,
+      });
+    }
     if (!mounted) return;
     setState(() => busy = false);
-    if (!r.ok) return;
-    final qr = await api.get('/donations/${r.json['donation_id']}/qr');
-    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (error != null) {
+      messenger.showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFFC62828),
+          content: Text(
+            results.isEmpty
+                ? error
+                : '${results.length} item(s) saved, then: $error',
+          ),
+        ),
+      );
+      if (results.isEmpty) return;
+    }
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => DonationReceipt(
-          donation: Map<String, dynamic>.from(r.json as Map),
-          qrBase64: qr.ok ? qr.json['qr_image_base64'] as String? : null,
-          itemName: widget.names.of('items', itemId),
+          donations: results,
           reportTitle:
               '${widget.report['disaster']} in ${widget.report['barangay']}',
         ),
@@ -363,96 +444,253 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  String? _req(String? v) => (v ?? '').trim().isEmpty ? 'Required' : null;
-
-  @override
-  Widget build(BuildContext context) {
-    final r = widget.report;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Donate goods')),
-      body: Form(
-        key: _form,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+  Widget _lineCard(int i) {
+    final l = lines[i];
+    final items = widget.names.rows('items');
+    String unit = '';
+    for (final it in items) {
+      if ('${it['id']}' == l.itemId) unit = '${it['unit'] ?? ''}';
+    }
+    if (l.itemId == _otherItem) unit = l.otherUnit.text.trim();
+    return Card(
+      key: ObjectKey(l),
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
           children: [
-            Card(
-              child: ListTile(
-                leading: const Icon(Icons.flood_outlined),
-                title: Text('${r['disaster']} in ${r['barangay']}'),
-                subtitle: Text('Needs: ${r['assistance_needed'] ?? '-'}'),
-                trailing: Badge2.priority(r['priority_level'] as String?),
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    initialValue: l.itemId,
+                    isExpanded: true,
+                    decoration: InputDecoration(labelText: 'Item ${i + 1}'),
+                    items: [
+                      for (final it in items)
+                        DropdownMenuItem(
+                          value: '${it['id']}',
+                          child: Text('${it['item_name'] ?? it['name']}'),
+                        ),
+                      const DropdownMenuItem(
+                        value: _otherItem,
+                        child: Text('Other…'),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => l.itemId = v),
+                    validator: (v) => v == null ? 'Choose an item' : null,
+                  ),
+                ),
+                if (lines.length > 1)
+                  IconButton(
+                    tooltip: 'Remove this item',
+                    onPressed: () => setState(() => lines.removeAt(i)),
+                    icon: const Icon(Icons.close),
+                  ),
+              ],
+            ),
+            if (l.itemId == _otherItem) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: TextFormField(
+                      controller: l.otherName,
+                      decoration: const InputDecoration(
+                        labelText: 'What item?',
+                      ),
+                      validator: _req,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: TextFormField(
+                      controller: l.otherUnit,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Unit',
+                        hintText: 'pcs, boxes',
+                      ),
+                      validator: _req,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            const SectionTitle('What are you donating?'),
-            LookupDropdown(
-              list: 'items',
-              label: 'Item',
-              value: itemId,
-              names: widget.names,
-              onChanged: (v) => setState(() => itemId = v),
-            ),
-            const SizedBox(height: 12),
+            ],
+            const SizedBox(height: 10),
             Row(
               children: [
                 Expanded(
                   child: TextFormField(
-                    controller: qty,
+                    controller: l.qty,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Quantity'),
+                    decoration: InputDecoration(
+                      labelText: 'Quantity',
+                      suffixText: unit.isEmpty ? null : unit,
+                    ),
                     validator: (v) => (int.tryParse(v?.trim() ?? '') ?? 0) > 0
                         ? null
-                        : 'Enter a number above 0',
+                        : 'Above 0',
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 10),
                 Expanded(
-                  child: TextFormField(
-                    controller: packaging,
-                    decoration: const InputDecoration(
-                      labelText: 'Packaging',
-                      hintText: 'Box, sack, pack',
-                    ),
-                    validator: _req,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: l.packaging,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Packaging'),
+                    items: [
+                      for (final o in packagingOptions)
+                        DropdownMenuItem(value: o, child: Text(o)),
+                    ],
+                    onChanged: (v) => setState(() => l.packaging = v!),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+            if (l.packaging == 'Other') ...[
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: l.otherPackaging,
+                decoration: const InputDecoration(
+                  labelText: 'Describe the packaging',
+                ),
+                validator: _req,
+              ),
+            ],
+            const SizedBox(height: 10),
             TextFormField(
-              controller: value,
+              controller: l.value,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
                 labelText: 'Estimated value in PHP (optional)',
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.report;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Physical Donation')),
+      body: Form(
+        key: _form,
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.flood_outlined, color: Brand.pink),
+                title: Text('${r['disaster']} in Barangay ${r['barangay']}'),
+                subtitle: Text('Needs: ${r['assistance_needed'] ?? '-'}'),
+                trailing: Badge2.priority(r['priority_level'] as String?),
+              ),
+            ),
+            SectionTitle(
+              'What are you donating?',
+              trailing: TextButton.icon(
+                onPressed: () => setState(() => lines.add(_Line())),
+                icon: const Icon(Icons.add),
+                label: const Text('Add another item'),
+              ),
+            ),
+            for (var i = 0; i < lines.length; i++) _lineCard(i),
             const SectionTitle('How will you hand it over?'),
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(
                   value: 'Drop Off',
-                  label: Text('Drop off'),
+                  label: Text('Drop Off'),
                   icon: Icon(Icons.store_mall_directory_outlined),
                 ),
                 ButtonSegment(
                   value: 'Door to Door',
-                  label: Text('Pick up'),
+                  label: Text('Door to Door'),
                   icon: Icon(Icons.local_shipping_outlined),
                 ),
               ],
               selected: {handover},
               onSelectionChanged: (s) => setState(() => handover = s.first),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             if (handover == 'Drop Off')
-              const Text(
-                'Bring the goods to the CSWS Main Office and show your QR code.',
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Brand.pinkSoft.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Storage details',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(Icons.place_outlined, size: 18),
+                        SizedBox(width: 6),
+                        Expanded(child: Text(storageAddress)),
+                      ],
+                    ),
+                    SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(Icons.schedule, size: 18),
+                        SizedBox(width: 6),
+                        Expanded(child: Text(storageHours)),
+                      ],
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Bring the goods and show your QR code. CSWS will count '
+                      'what arrives and record the actual quantity.',
+                      style: TextStyle(fontSize: 12, color: Brand.muted),
+                    ),
+                  ],
+                ),
               )
-            else
-              TextFormField(
-                controller: address,
-                decoration: const InputDecoration(labelText: 'Pickup address'),
-                validator: _req,
-              ),
+            else ...[
+              if (savedAddress != null) ...[
+                RadioGroup<bool>(
+                  groupValue: useSavedAddress,
+                  onChanged: (v) => setState(() => useSavedAddress = v!),
+                  child: Column(
+                    children: [
+                      RadioListTile<bool>(
+                        value: true,
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Use my registered address'),
+                        subtitle: Text(savedAddress!),
+                      ),
+                      const RadioListTile<bool>(
+                        value: false,
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Use another address'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (savedAddress == null || !useSavedAddress)
+                TextFormField(
+                  controller: address,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Pickup address',
+                    hintText: 'House no., street, barangay',
+                  ),
+                  validator: _req,
+                ),
+            ],
             if (!api.loggedIn) ...[
               const SectionTitle('Your details (guest)'),
               TextFormField(
@@ -475,7 +713,11 @@ class _DonateScreenState extends State<DonateScreen> {
                 minimumSize: const Size.fromHeight(50),
               ),
               icon: const Icon(Icons.qr_code_2),
-              label: const Text('Submit & get QR code'),
+              label: Text(
+                lines.length > 1
+                    ? 'Submit ${lines.length} items & get QR codes'
+                    : 'Submit & get QR code',
+              ),
             ),
           ],
         ),
@@ -484,16 +726,13 @@ class _DonateScreenState extends State<DonateScreen> {
   }
 }
 
+/// QR receipt: one QR code per donated item.
 class DonationReceipt extends StatelessWidget {
-  final Map<String, dynamic> donation;
-  final String? qrBase64;
-  final String itemName;
+  final List<Map<String, dynamic>> donations;
   final String reportTitle;
   const DonationReceipt({
     super.key,
-    required this.donation,
-    required this.qrBase64,
-    required this.itemName,
+    required this.donations,
     required this.reportTitle,
   });
 
@@ -502,80 +741,327 @@ class DonationReceipt extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Donation recorded')),
       body: ListView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
         children: [
           const Icon(Icons.check_circle, color: Color(0xFF2E7D32), size: 56),
           const SizedBox(height: 8),
-          Text(
+          const Text(
             'Thank you!',
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.headlineSmall
-                ?.copyWith(fontWeight: FontWeight.w700),
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 4),
           Text(
-            'Show this QR code to the CSWS Main Office.',
+            'For $reportTitle. Show '
+            '${donations.length > 1 ? 'these QR codes' : 'this QR code'} '
+            'to the CSWS Main Office.',
             textAlign: TextAlign.center,
+            style: const TextStyle(color: Brand.muted),
           ),
           const SizedBox(height: 16),
-          if (qrBase64 != null)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                color: Colors.white,
-                child: Image.memory(
-                  base64Decode(qrBase64!),
-                  width: 220,
-                  height: 220,
+          for (final d in donations)
+            Card(
+              margin: const EdgeInsets.only(bottom: 14),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Text(
+                      '${d['quantity']} × ${d['item_label']} (${d['packaging']})',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (d['qr_image_base64'] != null)
+                      Image.memory(
+                        base64Decode(d['qr_image_base64'] as String),
+                        width: 200,
+                        height: 200,
+                      ),
+                    SelectableText(
+                      '${d['qr_reference']}',
+                      style: const TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        Badge2('${d['handover_method']}', Colors.blueGrey),
+                        Badge2.status('${d['status']}'),
+                      ],
+                    ),
+                    if (d['pickup_address'] != null) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        'Pickup: ${d['pickup_address']}',
+                        style: const TextStyle(color: Brand.muted),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
-          const SizedBox(height: 8),
-          SelectableText(
-            '${donation['qr_reference']}',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Column(
-              children: [
-                ListTile(
-                  dense: true,
-                  title: const Text('Donation'),
-                  trailing: Text(
-                    '${donation['quantity']} × $itemName (${donation['packaging']})',
-                  ),
-                ),
-                ListTile(
-                  dense: true,
-                  title: const Text('For'),
-                  trailing: Text(reportTitle),
-                ),
-                ListTile(
-                  dense: true,
-                  title: const Text('Handover'),
-                  trailing: Text('${donation['handover_method']}'),
-                ),
-                ListTile(
-                  dense: true,
-                  title: const Text('Status'),
-                  trailing: Badge2.status('${donation['status']}'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
           FilledButton(
             onPressed: () => Navigator.pop(context),
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(46),
+            ),
             child: const Text('Done'),
           ),
         ],
       ),
+    );
+  }
+}
+
+const _donationSteps = ['Pending', 'Received', 'Confirmed'];
+
+/// Pending -> Received (CSWS) -> Confirmed (CMO), as small labeled dots.
+class _DonationSteps extends StatelessWidget {
+  final String status;
+  const _DonationSteps(this.status);
+
+  @override
+  Widget build(BuildContext context) {
+    final at = _donationSteps.indexOf(status);
+    const labels = ['Submitted', 'Received by CSWS', 'Confirmed by City'];
+    return Row(
+      children: [
+        for (var i = 0; i < 3; i++) ...[
+          Icon(
+            i <= at ? Icons.check_circle : Icons.radio_button_unchecked,
+            size: 16,
+            color: i <= at ? Brand.pink : Colors.black26,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              labels[i],
+              style: TextStyle(
+                fontSize: 11,
+                color: i <= at ? Brand.ink : Brand.muted,
+              ),
+            ),
+          ),
+          if (i < 2) const SizedBox(width: 8),
+        ],
+      ],
+    );
+  }
+}
+
+/// UC-D3 / UC-D4 (donor) and UC-R3 / UC-R4 (relief organization):
+/// own donation history, status, supported reports and their fulfillment.
+class DonorDashboard extends StatelessWidget {
+  const DonorDashboard({super.key});
+
+  Future<void> _showQr(BuildContext context, Map d) async {
+    final r = await api.get('/donations/${d['donation_id']}/qr');
+    if (!context.mounted || !r.ok) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('${d['qr_reference']}'),
+        content: Image.memory(
+          base64Decode(r.json['qr_image_base64'] as String),
+          width: 220,
+          height: 220,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Loader(
+      load: [() => api.get('/donations/mine'), api.lookupsResult],
+      builder: (context, data) {
+        final m = data[0] as Map;
+        final profile = m['profile'] as Map, sum = m['summary'] as Map;
+        final donations = (m['donations'] as List).cast<Map>();
+        final supported = (m['supported_reports'] as List).cast<Map>();
+        final active = Names(Map<String, dynamic>.from(data[1] as Map))
+            .rows('validated_reports');
+        final isOrg = profile['organization'] != null;
+        return ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            PageHeader(
+              isOrg ? 'Relief Organization Dashboard' : 'Donor Dashboard',
+              subtitle: isOrg
+                  ? '${profile['organization']} • ${roleLine()}'
+                  : '${profile['name']} • ${roleLine()}',
+            ),
+            if (isOrg)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Account status: ',
+                      style: TextStyle(color: Brand.muted),
+                    ),
+                    Badge2.status(
+                      profile['account_status'] == 'Approved'
+                          ? 'Validated'
+                          : '${profile['account_status']}',
+                    ),
+                  ],
+                ),
+              ),
+            StatGrid([
+              StatTile(
+                'Total donations',
+                '${sum['total_donations']}',
+                Icons.volunteer_activism_outlined,
+              ),
+              StatTile(
+                'Waiting for drop-off / pickup',
+                '${sum['pending']}',
+                Icons.hourglass_top,
+                color: const Color(0xFFEF6C00),
+              ),
+              StatTile(
+                'Received by CSWS',
+                '${sum['received']}',
+                Icons.inventory_2_outlined,
+                color: const Color(0xFF1565C0),
+              ),
+              StatTile(
+                'Confirmed by the City',
+                '${sum['confirmed']}',
+                Icons.verified_outlined,
+                color: const Color(0xFF2E7D32),
+              ),
+              StatTile(
+                'Reports supported',
+                '${sum['supported_reports']}',
+                Icons.flag_outlined,
+              ),
+              StatTile(
+                'Total quantity given',
+                '${sum['total_quantity']}',
+                Icons.inventory_outlined,
+              ),
+            ]),
+            const SectionTitle('Donation history'),
+            if (donations.isEmpty)
+              const EmptyState(
+                'No donations yet. Open Validated Reports to donate.',
+              ),
+            for (final d in donations)
+              Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${d['quantity']} ${d['unit']} ${d['item_name']}',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Badge2.status('${d['status']}'),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${d['qr_reference']} · ${d['packaging']} · '
+                        '${d['handover_method']} · ${niceDate(d['created_at'])}',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Brand.muted,
+                        ),
+                      ),
+                      if (d['report'] != null)
+                        Text(
+                          'For: ${d['report']['label']}',
+                          style: const TextStyle(fontSize: 13),
+                        ),
+                      const SizedBox(height: 10),
+                      _DonationSteps('${d['status']}'),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: () => _showQr(context, d),
+                          icon: const Icon(Icons.qr_code_2),
+                          label: const Text('Show QR'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            const SectionTitle('Supported reports'),
+            if (supported.isEmpty)
+              const EmptyState('You have not supported a report yet.'),
+            for (final r in supported)
+              Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${r['label']}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Badge2.priority(r['priority_level'] as String?),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Progress(
+                        delivered: r['total_items_delivered'] as num? ?? 0,
+                        needed: r['total_items_needed'] as num? ?? 0,
+                        percent: r['fulfillment_percentage'] as num?,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            const SectionTitle('Active reports and priority'),
+            if (active.isEmpty) const EmptyState('No active reports.'),
+            for (final r in active.take(5))
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  dense: true,
+                  title: Text('${r['disaster']} in ${r['barangay']}'),
+                  subtitle: Text(
+                    'Fulfilled ${(r['fulfillment_percentage'] as num? ?? 0).toStringAsFixed(0)}%',
+                  ),
+                  trailing: Badge2.priority(r['priority_level'] as String?),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }

@@ -81,13 +81,27 @@ List<_Tab> _tabsFor(String? role) {
         monitoring,
         overview, // UC-B2
       ];
-    default: // Individual Donor, Relief Organization, guest
+    case Roles.donor:
+    case Roles.org:
       return const [
+        _Tab(
+          'Dashboard',
+          Icons.grid_view_rounded,
+          DonorDashboard(),
+        ), // UC-D3/D4, UC-R3/R4
         _Tab(
           'Validated Reports',
           Icons.volunteer_activism_outlined,
           ReportsFeed(),
         ), // UC-D2/R2
+      ];
+    default: // guest (no account): browse and donate only
+      return const [
+        _Tab(
+          'Validated Reports',
+          Icons.volunteer_activism_outlined,
+          ReportsFeed(),
+        ), // UC-D2
       ];
   }
 }
