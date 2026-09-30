@@ -21,6 +21,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from core.database import get_db
 from core.auth import get_current_user, require_role, barangay_scope
+from core.audit import log_action
+from models.inventory_model import Inventory
+from models.audit_log_model import AuditLog
+from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from schemas.delivery import (
@@ -54,6 +58,29 @@ def create_delivery(
   report = db.get (DisasterReport,payload.report_id)
   if not report:
     raise HTTPException(status_code=404, detail="Report not found")
+  if report.status != "Validated":
+    raise HTTPException(status_code=409, detail="Only validated reports can receive deliveries")
+
+  # Goods are released from this report's inventory (manuscript: "Inventory
+  # is linked to specific report records"), so there must be enough stock.
+  stock = {}
+  for item_payload in payload.items:
+    inv = (
+      db.query(Inventory)
+      .filter(Inventory.item_id == item_payload.item_id, Inventory.report_id == payload.report_id)
+      .first()
+    )
+    available = inv.quantity if inv else 0
+    wanted = item_payload.quantity + stock.get(item_payload.item_id, (None, 0))[1]
+    if wanted > available:
+      raise HTTPException(
+        status_code=409,
+        detail=f"Not enough stock for item #{item_payload.item_id} in this report's inventory "
+               f"(available {available}, requested {wanted})",
+      )
+    stock[item_payload.item_id] = (inv, wanted)
+  for inv, qty in stock.values():
+    inv.quantity -= qty
 
   delivery = Delivery (
     report_id=payload.report_id,
@@ -77,6 +104,8 @@ def create_delivery(
     )
 
   db.flush()
+  log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
+             new={"status": "Preparing", "items": [i.model_dump() for i in payload.items]})
   db.refresh(delivery)
   return delivery
 
@@ -173,7 +202,11 @@ def advance_delivery(
 
     current_index = _STATUS_SEQUENCE.index(delivery.status)
 
+    old_status = delivery.status
     delivery.status = _STATUS_SEQUENCE[current_index + 1]
+    # Timestamped status history (UC-CM2 / delivery module step 3)
+    log_action(db, current_user, "UPDATE DELIVERY STATUS", "deliveries", delivery.delivery_id,
+               old={"status": old_status}, new={"status": delivery.status})
 
     db.flush()
     db.refresh(delivery)
@@ -231,6 +264,8 @@ def confirm_receipt(
 
     db.add(receipt)
     delivery.status = "Confirmed"
+    log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
+               old={"status": "Delivered"}, new={"status": "Confirmed", "remarks": payload.remarks})
     db.flush()
 
     fulfillment = _recalculate_fulfillment (
@@ -243,6 +278,69 @@ def confirm_receipt(
     db.refresh(fulfillment)
 
     return ReceiptConfirmResponse(receipt=receipt, delivery=delivery, fulfillment=fulfillment)
+
+# Acknowledge — Barangay Receiving Representative (UC-B1 step 5).
+# Acknowledgment is separate from receipt confirmation and only allowed
+# after it (delivery module alt flow 4a). Stored in audit_logs.
+
+@router.post("/{delivery_id}/acknowledge")
+def acknowledge_delivery(
+   delivery_id: int,
+   db: Session = Depends(get_db),
+   current_user=Depends(require_role("barangay_receiving_rep", "admin")),
+):
+    delivery = db.get(Delivery, delivery_id)
+    own_barangay = barangay_scope(current_user)
+    if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status != "Confirmed":
+        raise HTTPException(status_code=409, detail="Confirm receipt first, then acknowledge")
+    if _is_acknowledged(db, delivery_id):
+        raise HTTPException(status_code=409, detail="Already acknowledged")
+    log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery_id,
+               new={"acknowledged": True})
+    db.flush()
+    return {"delivery_id": delivery_id, "acknowledged": True}
+
+
+def _is_acknowledged(db: Session, delivery_id: int) -> bool:
+    return db.query(AuditLog).filter(
+        AuditLog.entity_type == "deliveries",
+        AuditLog.entity_id == delivery_id,
+        AuditLog.action == "ACKNOWLEDGE AID",
+    ).first() is not None
+
+
+# Status history with timestamps (who moved it, when)
+
+@router.get("/{delivery_id}/history")
+def delivery_history(
+   delivery_id: int,
+   db: Session = Depends(get_db),
+   current_user=Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep", "drrmo logistics support")),
+):
+    delivery = db.get(Delivery, delivery_id)
+    own_barangay = barangay_scope(current_user)
+    if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    rows = (
+        db.query(AuditLog, User.email)
+        .join(User, User.user_id == AuditLog.user_id)
+        .filter(AuditLog.entity_type == "deliveries", AuditLog.entity_id == delivery_id)
+        .order_by(AuditLog.log_id)
+        .all()
+    )
+    return {
+        "delivery_id": delivery_id,
+        "status": delivery.status,
+        "acknowledged": any(l.action == "ACKNOWLEDGE AID" for l, _ in rows),
+        "history": [
+            {"action": l.action, "old": l.old_value, "new": l.new_value,
+             "by": email, "at": l.timestamp}
+            for l, email in rows
+        ],
+    }
+
 
 # Fulfillment recalculation — internal helper, not an endpoint
 

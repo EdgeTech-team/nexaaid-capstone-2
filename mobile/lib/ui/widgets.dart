@@ -5,16 +5,18 @@ import '../api.dart';
 final api = Api.instance;
 
 // ---------------------------------------------------------------------------
-// Brand colors from the Capstone 1 wireframes (manuscript Figures 44-53)
+// Brand colors
 // ---------------------------------------------------------------------------
 class Brand {
-  static const pink = Color(0xFFFF668A); // logo, buttons, progress bars
-  static const pinkDark = Color(0xFFE0456C);
-  static const pinkSoft = Color(0xFFFFE6EB); // hero band, role pill, icon boxes
+  // Teal palette (the earlier prototype theme). The names are kept from the
+  // wireframe version so every screen picks the colors up from one place.
+  static const pink = Color(0xFF00695C); // primary: buttons, bars, logo
+  static const pinkDark = Color(0xFF004D40);
+  static const pinkSoft = Color(0xFFB2DFDB); // tints and highlights
   static const ink = Color(0xFF1F2937); // headings
   static const muted = Color(0xFF6B7280); // secondary text
-  static const line = Color(0xFFE5E7EB); // card borders
-  static const page = Color(0xFFF8FAFC); // page background
+  static const line = Color(0xFFE0E0E0); // borders
+  static const page = Color(0xFFF5F7F6); // page background
 }
 
 /// Pink rounded "N" square used as the NexaAid logo in the wireframes.

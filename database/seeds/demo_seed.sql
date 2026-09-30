@@ -15,7 +15,9 @@ WHERE NOT EXISTS (
 
 -- 2. Common relief items with their units, used by the "needs" builder
 --    on the report form and by donations / deliveries.
-INSERT INTO items (item_name, category, unit_of_measure) VALUES
+INSERT INTO items (item_name, category, unit_of_measure)
+SELECT v.item_name, v.category, v.unit
+FROM (VALUES
     ('Rice',            'Food',     'kg'),
     ('Drinking Water',  'Water',    'gallons'),
     ('Canned Goods',    'Food',     'cans'),
@@ -25,7 +27,40 @@ INSERT INTO items (item_name, category, unit_of_measure) VALUES
     ('Sleeping Mat',    'Shelter',  'pcs'),
     ('Medicine Kit',    'Medical',  'boxes'),
     ('Clothing',        'Clothing', 'packs')
-ON CONFLICT (item_name) DO NOTHING;
+) AS v(item_name, category, unit)
+WHERE NOT EXISTS (SELECT 1 FROM items i WHERE lower(i.item_name) = lower(v.item_name));
+
+-- 2b. Disaster types common in Mandaue City / Cebu (report form dropdown).
+INSERT INTO disaster_types (type_name, description)
+SELECT v.type_name, v.description
+FROM (VALUES
+    ('Flood',             'Rising water from heavy rain or overflowing rivers'),
+    ('Flash Flood',       'Sudden flooding within hours of heavy rain'),
+    ('Typhoon',           'Tropical cyclone with strong winds and heavy rain'),
+    ('Storm Surge',       'Coastal flooding pushed in by a typhoon'),
+    ('Fire',              'Residential or commercial fire'),
+    ('Earthquake',        'Ground shaking and structural damage'),
+    ('Landslide',         'Soil or rock sliding down slopes'),
+    ('Tsunami',           'Sea waves caused by an undersea earthquake'),
+    ('Volcanic Eruption', 'Ashfall or eruption affecting the area'),
+    ('Drought',           'Long dry spell affecting water and food supply'),
+    ('Disease Outbreak',  'Epidemic needing medical and hygiene supplies')
+) AS v(type_name, description)
+WHERE NOT EXISTS (SELECT 1 FROM disaster_types d WHERE lower(d.type_name) = lower(v.type_name));
+
+-- 2c. audit_logs (manuscript data dictionary) for the activity logs on the
+--     Administrator and CSWS dashboards. Only created if it is missing.
+CREATE TABLE IF NOT EXISTS audit_logs (
+    log_id      SERIAL PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(user_id),
+    action      TEXT NOT NULL,
+    entity_type VARCHAR(100) NOT NULL,
+    entity_id   INTEGER,
+    old_value   JSONB,
+    new_value   JSONB,
+    ip_address  VARCHAR(45),
+    "timestamp" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 -- 3. One Barangay Receiving Representative per barangay (manuscript UC-B1:
 --    each rep only sees aid for the assigned barangay).
@@ -48,6 +83,12 @@ ON CONFLICT (email) DO NOTHING;
 UPDATE users
 SET assigned_barangay_id = (SELECT MIN(barangay_id) FROM barangays)
 WHERE email = 'ana.test@example.com' AND assigned_barangay_id IS NULL;
+
+-- Relief organizations must be Approved by the Administrator to log in
+-- (manuscript UC-A2). Approve the existing test organization.
+UPDATE organizations SET status = 'Approved', approved_at = NOW()
+WHERE status <> 'Approved' AND organization_id IN (
+    SELECT organization_id FROM users WHERE email = 'maria.santos@helpinghands.org');
 
 -- 4. Give the donor and relief organization test accounts the same test
 --    password (testpass123) so they can log in from the demo chips.

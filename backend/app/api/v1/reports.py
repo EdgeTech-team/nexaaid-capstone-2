@@ -34,7 +34,8 @@ from datetime import datetime, timezone
 from core.priority_engine import compute_priority
 
 from core.database import get_db
-from core.auth import get_current_user, require_role, has_role, barangay_scope  # see note above
+from core.auth import get_current_user, require_role, has_role, barangay_scope
+from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from schemas.report import (
     DisasterReportCreate,
@@ -261,6 +262,9 @@ def validate_report(
     report.priority_level = priority_result["priority_level"]
     report.ai_recommendation = priority_result["recommendation"]
     report.ai_processed_at = datetime.now(timezone.utc)
+    log_action(db, current_user, "VALIDATE REPORT", "disaster_reports", report.report_id,
+               old={"status": "Pending"},
+               new={"status": "Validated", "priority_level": report.priority_level})
 
     db.flush()
     db.refresh(report)
@@ -289,6 +293,8 @@ def reject_report(
     report.status = "Rejected"
     report.validated_by = current_user.user_id  # who made the rejection call
     report.rejection_reason = payload.rejection_reason
+    log_action(db, current_user, "REJECT REPORT", "disaster_reports", report.report_id,
+               new={"status": "Rejected", "reason": payload.rejection_reason})
 
     db.flush()
     db.refresh(report)

@@ -8,6 +8,9 @@ class DonorRegisterRequest(BaseModel):
     email: EmailStr = Field(..., max_length=150)
     password: str = Field(..., min_length=8, max_length=128)
     contact_number: str = Field(..., min_length=7, max_length=20)
+    # Manuscript 1.2: valid identification. Stored as a link / reference
+    # (users.id_document_url) until file upload is added.
+    id_document_url: Optional[str] = Field(default=None, max_length=500)
 
 class UserResponse(BaseModel):
     user_id: int

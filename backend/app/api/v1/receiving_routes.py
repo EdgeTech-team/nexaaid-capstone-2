@@ -14,6 +14,9 @@ from typing import Optional
 from pydantic import BaseModel
 from models.item_model import Item
 from datetime import datetime
+from core.audit import log_action
+from models.guest_donor_model import GuestDonor
+from models.report import DisasterReport, DisasterType, Barangay
 
 router = APIRouter(prefix="/donations", tags=["CSWS Receiving"])
 
@@ -30,7 +33,9 @@ class InventoryResponse(BaseModel):
     inventory_id: int
     item_id: int
     item_name: str
+    unit: Optional[str] = None
     report_id: int
+    report_label: Optional[str] = None
     quantity: int
     last_updated: datetime
 
@@ -44,22 +49,77 @@ def view_inventory(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
 ):
-    query = db.query(Inventory, Item.item_name).join(Item, Inventory.item_id == Item.item_id)
+    query = db.query(Inventory, Item.item_name, Item.unit_of_measure).join(Item, Inventory.item_id == Item.item_id)
     if report_id is not None:
         query = query.filter(Inventory.report_id == report_id)
 
-    results = query.all()
+    results = query.order_by(Inventory.report_id, Item.item_name).all()
+    labels = _report_labels(db, {inv.report_id for inv, _, _ in results})
     return [
         InventoryResponse(
             inventory_id=inv.inventory_id,
             item_id=inv.item_id,
             item_name=item_name,
+            unit=unit,
             report_id=inv.report_id,
+            report_label=labels.get(inv.report_id),
             quantity=inv.quantity,
             last_updated=inv.last_updated,
         )
-        for inv, item_name in results
+        for inv, item_name, unit in results
     ]
+
+
+def _report_labels(db: Session, report_ids) -> dict:
+    if not report_ids:
+        return {}
+    types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
+    brgys = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
+    return {
+        r.report_id: f"#{r.report_id} {types.get(r.disaster_type_id, 'Disaster')} - {brgys.get(r.barangay_id, 'Barangay')}"
+        for r in db.query(DisasterReport).filter(DisasterReport.report_id.in_(report_ids)).all()
+    }
+
+
+# UC-CM1 step 2: identify the donation entry by its QR reference (scanned or
+# typed). Alt flow 2a: if the code cannot be read, search manually instead.
+@router.get("/by-qr/{qr_reference}")
+def find_by_qr(
+    qr_reference: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
+):
+    d = db.query(PhysicalDonation).filter(
+        PhysicalDonation.qr_reference == qr_reference.strip().upper()
+    ).first()
+    if d is None:
+        raise HTTPException(status_code=404, detail=f"No donation with reference {qr_reference}")
+    item = db.get(Item, d.item_id)
+    if d.user_id:
+        donor_user = db.get(User, d.user_id)
+        donor = f"{donor_user.first_name} {donor_user.last_name}".strip() if donor_user else "Donor"
+    else:
+        guest = db.get(GuestDonor, d.guest_donor_id) if d.guest_donor_id else None
+        donor = f"{guest.full_name} (guest)" if guest else "Guest"
+    received = db.query(ReceivedGoods).filter(ReceivedGoods.donation_id == d.donation_id).first()
+    return {
+        "donation_id": d.donation_id,
+        "qr_reference": d.qr_reference,
+        "status": d.status,
+        "item_id": d.item_id,
+        "item_name": item.item_name if item else None,
+        "unit": item.unit_of_measure if item else None,
+        "quantity": d.quantity,
+        "packaging": d.packaging,
+        "estimated_value": d.estimated_value,
+        "handover_method": d.handover_method,
+        "pickup_address": d.pickup_address,
+        "donor": donor,
+        "report_id": d.report_id,
+        "report_label": _report_labels(db, {d.report_id}).get(d.report_id),
+        "actual_quantity_received": received.actual_quantity if received else None,
+        "created_at": d.created_at,
+    }
 
 
 @router.post("/receive", response_model=ReceivedGoodsResponse)
@@ -101,6 +161,11 @@ def receive_donation(
         )
         db.add(inventory_item)
 
+    db.flush()
+    log_action(db, current_user, "RECEIVE DONATION", "physical_donations", donation.donation_id,
+               old={"status": "Pending"},
+               new={"status": "Received", "declared": donation.quantity,
+                    "actual_quantity": payload.actual_quantity})
     db.commit()
     db.refresh(receipt)
     return receipt

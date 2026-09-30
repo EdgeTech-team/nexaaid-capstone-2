@@ -27,6 +27,7 @@ def register_donor(payload: DonorRegisterRequest, db: Session = Depends(get_db))
         email=payload.email,
         password_hash=hash_password(payload.password),
         contact_number=payload.contact_number,
+        id_document_url=payload.id_document_url,
         role_id=donor_role.role_id,
         organization_id=None,
     )

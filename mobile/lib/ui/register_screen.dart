@@ -74,10 +74,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'email': v('email'),
                 'password': _c('password').text,
                 'contact_number': v('contact_number'),
+                'id_document_url': v('id_doc').isEmpty ? null : v('id_doc'),
               },
             ),
       success: widget.org
-          ? 'Registration submitted. It stays pending until an administrator approves it.'
+          ? 'Registration submitted. You can log in once the Administrator approves your organization.'
           : 'Account created. You can now log in.',
     );
     if (!mounted) return;
@@ -110,6 +111,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ] else ...[
               _field('first_name', 'First name'),
               _field('last_name', 'Last name'),
+              _field(
+                'id_doc',
+                'Valid ID (link to a photo or scan of your ID)',
+                required: false,
+              ),
             ],
             _field('email', 'Email', type: TextInputType.emailAddress),
             _field(

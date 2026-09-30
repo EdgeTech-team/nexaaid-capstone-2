@@ -95,6 +95,20 @@ class _ReportsFeedState extends State<ReportsFeed> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  StatGrid([
+                    StatTile(
+                      'Validated reports',
+                      '${all.length}',
+                      Icons.report_outlined,
+                    ),
+                    StatTile(
+                      'High / critical priority',
+                      '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
+                      Icons.trending_up,
+                      color: const Color(0xFFE65100),
+                    ),
+                  ]),
+                  const SizedBox(height: 14),
                   TextField(
                     decoration: const InputDecoration(
                       prefixIcon: Icon(Icons.search),

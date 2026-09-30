@@ -52,228 +52,168 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Colors.white,
       body: SafeArea(
-        child: ListView(
-          children: [
-            // Top bar like the wireframes: logo left, settings right.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
-              child: Row(
-                children: [
-                  const NexaLogo(size: 34),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'NexaAid',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w800,
-                        fontSize: 18,
-                        color: Brand.ink,
-                      ),
-                    ),
-                  ),
-                  IconButton(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: ListView(
+              padding: const EdgeInsets.all(24),
+              children: [
+                Align(
+                  alignment: Alignment.topRight,
+                  child: IconButton(
                     tooltip: 'Server address',
                     onPressed: _server,
                     icon: const Icon(Icons.settings_outlined),
                   ),
-                ],
-              ),
-            ),
-            // Pink hero band from the public homepage wireframe (Fig. 44).
-            Container(
-              padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Brand.pinkSoft, Colors.white],
                 ),
-              ),
-              child: const Column(
-                children: [
-                  Text(
-                    'NexaAid',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.w800,
-                      color: Brand.ink,
+                const SizedBox(height: 8),
+                CircleAvatar(
+                  radius: 38,
+                  backgroundColor: cs.primaryContainer,
+                  child: Icon(
+                    Icons.volunteer_activism,
+                    size: 40,
+                    color: cs.primary,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'NexaAid',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: cs.primary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Post-disaster relief coordination',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 28),
+                TextField(
+                  controller: emailC,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon: Icon(Icons.mail_outline),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passC,
+                  obscureText: hide,
+                  onSubmitted: (_) => _login(),
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      tooltip: hide ? 'Show password' : 'Hide password',
+                      onPressed: () => setState(() => hide = !hide),
+                      icon: Icon(
+                        hide
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
                     ),
                   ),
-                  SizedBox(height: 8),
-                  Text(
-                    'Digital Disaster Relief Coordination and AI-Assisted '
-                    'Decision-Support System for Mandaue City.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Brand.muted, height: 1.4),
+                ),
+                if (error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text(error!, style: TextStyle(color: cs.error)),
                   ),
-                ],
-              ),
-            ),
-            Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 440),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              const Text(
-                                'Sign in',
-                                style: TextStyle(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              TextField(
-                                controller: emailC,
-                                keyboardType: TextInputType.emailAddress,
-                                decoration: const InputDecoration(
-                                  labelText: 'Email',
-                                  prefixIcon: Icon(Icons.mail_outline),
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              TextField(
-                                controller: passC,
-                                obscureText: hide,
-                                onSubmitted: (_) => _login(),
-                                decoration: InputDecoration(
-                                  labelText: 'Password',
-                                  prefixIcon: const Icon(Icons.lock_outline),
-                                  suffixIcon: IconButton(
-                                    tooltip: hide
-                                        ? 'Show password'
-                                        : 'Hide password',
-                                    onPressed: () =>
-                                        setState(() => hide = !hide),
-                                    icon: Icon(
-                                      hide
-                                          ? Icons.visibility_outlined
-                                          : Icons.visibility_off_outlined,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              if (error != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 10),
-                                  child: Text(
-                                    error!,
-                                    style: const TextStyle(
-                                      color: Color(0xFFC62828),
-                                    ),
-                                  ),
-                                ),
-                              const SizedBox(height: 16),
-                              FilledButton(
-                                onPressed: busy ? null : _login,
-                                style: FilledButton.styleFrom(
-                                  minimumSize: const Size.fromHeight(48),
-                                ),
-                                child: busy
-                                    ? const SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Text('Log in'),
-                              ),
-                              const SizedBox(height: 10),
-                              OutlinedButton.icon(
-                                onPressed: api.continueAsGuest,
-                                style: OutlinedButton.styleFrom(
-                                  minimumSize: const Size.fromHeight(48),
-                                ),
-                                icon: const Icon(Icons.favorite_border),
-                                label: const Text('Donate as guest'),
-                              ),
-                            ],
-                          ),
+                const SizedBox(height: 18),
+                FilledButton(
+                  onPressed: busy ? null : _login,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  child: busy
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Log in'),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: api.continueAsGuest,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  icon: const Icon(Icons.favorite_border),
+                  label: const Text('Donate as guest'),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const RegisterScreen(org: false),
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        alignment: WrapAlignment.center,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          TextButton(
-                            onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    const RegisterScreen(org: false),
-                              ),
-                            ),
-                            child: const Text('Register as Individual →'),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const RegisterScreen(org: true),
-                              ),
-                            ),
-                            child: const Text('Register as Organization →'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      // Demo helper: one tap logs in as each role.
-                      // TEST ONLY - remove before the real demo.
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFFF5F7),
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Brand.pinkSoft),
+                      child: const Text('Register as donor'),
+                    ),
+                    const Text('·'),
+                    TextButton(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const RegisterScreen(org: true),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
+                      ),
+                      child: const Text('Register organization'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                // Demo helper: one tap fills a test account for each role.
+                // TEST ONLY - remove before the real demo.
+                Card(
+                  color: cs.surfaceContainerHighest,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Demo accounts (password: testpass123)',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
                           children: [
-                            const Text(
-                              'Demo accounts (password: testpass123)',
-                              style: TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 6,
-                              runSpacing: 6,
-                              children: [
-                                for (final e in testAccounts.entries)
-                                  ActionChip(
-                                    backgroundColor: Colors.white,
-                                    label: Text(
-                                      e.value,
-                                      style: const TextStyle(fontSize: 12),
-                                    ),
-                                    onPressed: () {
-                                      emailC.text = e.key;
-                                      passC.text = 'testpass123';
-                                      _login();
-                                    },
-                                  ),
-                              ],
-                            ),
+                            for (final e in testAccounts.entries)
+                              ActionChip(
+                                label: Text(
+                                  e.value,
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                                onPressed: () {
+                                  emailC.text = e.key;
+                                  passC.text = 'testpass123';
+                                  _login();
+                                },
+                              ),
                           ],
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

@@ -55,151 +55,50 @@ class DeliveryStepper extends StatelessWidget {
   }
 }
 
-String _donationTitle(Map d, Names n) =>
-    '${d['quantity']} × ${n.of('items', d['item_id'], fallback: 'item')}';
-
-// ---------------------------------------------------------------------------
-// UC-CM1 Handle physical donations (CSWS Main Office)
-// ---------------------------------------------------------------------------
-class DonationsInScreen extends StatefulWidget {
-  const DonationsInScreen({super.key});
-
-  @override
-  State<DonationsInScreen> createState() => _DonationsInScreenState();
-}
-
-class _DonationsInScreenState extends State<DonationsInScreen> {
-  String search = '';
-
-  Future<void> _receive(Map d, Names n) async {
-    final v = await formDialog(
-      context,
-      title: 'Receive ${d['qr_reference']}',
-      message:
-          'Declared: ${_donationTitle(d, n)} (${d['packaging']}).\n'
-          'Count what actually arrived.',
-      fields: [
-        DialogField(
-          'qty',
-          'Actual quantity received',
-          number: true,
-          initial: '${d['quantity']}',
+/// Timeline of a delivery's status changes (who, when).
+Future<void> showDeliveryHistory(BuildContext context, int deliveryId) async {
+  final r = await api.get('/deliveries/$deliveryId/history');
+  if (!context.mounted || !r.ok) return;
+  final h = (r.json['history'] as List).cast<Map>();
+  showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    builder: (_) => ListView(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+      children: [
+        Text(
+          'Delivery #$deliveryId history',
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
         ),
-        const DialogField('notes', 'Notes (optional)', required: false),
-      ],
-      confirm: 'Receive into inventory',
-    );
-    if (v == null || !mounted) return;
-    await act(
-      context,
-      () => api.post(
-        '/donations/receive',
-        body: {
-          'donation_id': d['donation_id'],
-          'actual_quantity': int.parse(v['qty']!),
-          'notes': v['notes']!.isEmpty ? null : v['notes'],
-        },
-      ),
-      success: '${d['qr_reference']} received and added to inventory',
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Loader(
-      load: [
-        () => api.get('/donations/pending'),
-        () => api.get('/donations/inventory'),
-        api.lookupsResult,
-      ],
-      builder: (context, data) {
-        final names = Names(Map<String, dynamic>.from(data[2] as Map));
-        final pending = (data[0] as List)
-            .cast<Map>()
-            .where(
-              (d) => '${d['qr_reference']}'.toLowerCase().contains(
-                search.toLowerCase(),
-              ),
-            )
-            .toList();
-        final inventory = (data[1] as List).cast<Map>();
-        return ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            PageHeader('Physical Donations', subtitle: roleLine()),
-            TextField(
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.qr_code_scanner),
-                labelText: 'Find by QR reference',
-                hintText: 'DON-...',
-              ),
-              onChanged: (v) => setState(() => search = v.trim()),
+        const SizedBox(height: 8),
+        for (final e in h)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.schedule, color: Brand.pink),
+            title: Text(
+              e['new']?['status'] != null
+                  ? '${e['action']}: ${e['new']['status']}'
+                  : '${e['action']}',
             ),
-            SectionTitle('Pending donations (${pending.length})'),
-            if (pending.isEmpty)
-              const EmptyState('Nothing waiting to be received.'),
-            for (final d in pending)
-              Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: ListTile(
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.inventory_2_outlined),
-                  ),
-                  title: Text(_donationTitle(d, names)),
-                  subtitle: Text(
-                    '${d['qr_reference']} · ${d['handover_method']}\n'
-                    'For ${names.of('reports', d['report_id'], fallback: 'report #${d['report_id']}')}',
-                  ),
-                  isThreeLine: true,
-                  trailing: FilledButton(
-                    onPressed: () => _receive(d, names),
-                    child: const Text('Receive'),
-                  ),
-                ),
-              ),
-            SectionTitle('Inventory (${inventory.length})'),
-            if (inventory.isEmpty) const EmptyState('Inventory is empty.'),
-            for (final i in inventory)
-              Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.warehouse_outlined),
-                  title: Text('${i['item_name']}'),
-                  subtitle: Text(
-                    names.of(
-                      'reports',
-                      i['report_id'],
-                      fallback: 'Report #${i['report_id']}',
-                    ),
-                  ),
-                  trailing: Text(
-                    '${i['quantity']}',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
+            subtitle: Text('${niceDate(e['at'])} · ${e['by']}'),
+          ),
+      ],
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
-// UC-CM2 Prepare release and delivery tracking (CSWS Main Office)
+// UC-CM2 release & delivery tracking (CSWS) and UC-B1 receive & acknowledge
+// (Barangay Receiving Representative)
 // ---------------------------------------------------------------------------
 class DeliveriesScreen extends StatelessWidget {
-  final bool barangay; // UC-B1: receiving side only
+  final bool barangay;
   const DeliveriesScreen({super.key, this.barangay = false});
 
   Future<void> _requestTransport(BuildContext context, Map d) async {
     final v = await formDialog(
       context,
-      title: 'Request DRRMO transport',
+      title: 'Request DRRMO logistics support',
       message: 'For delivery #${d['delivery_id']}.',
       fields: const [
         DialogField(
@@ -230,8 +129,8 @@ class DeliveriesScreen extends StatelessWidget {
       context,
       title: 'Confirm receipt',
       message:
-          'Confirm that delivery #${d['delivery_id']} arrived. This updates '
-          'the report\'s fulfillment progress.',
+          'Confirm that delivery #${d['delivery_id']} arrived. If it is '
+          'incomplete you can wait until it is resolved (UC-B1 4a).',
       fields: const [
         DialogField(
           'remarks',
@@ -266,16 +165,35 @@ class DeliveriesScreen extends StatelessWidget {
               label: const Text('Prepare delivery'),
             ),
       body: Loader(
-        load: [() => api.get('/deliveries/'), api.lookupsResult],
+        load: [
+          () => api.get('/deliveries/'),
+          api.lookupsResult,
+          barangay
+              ? () => api.get('/dashboard/barangay')
+              : () => api.get('/logistics/requests'),
+        ],
         builder: (context, data) {
           final names = Names(Map<String, dynamic>.from(data[1] as Map));
           final rows = (data[0] as List).cast<Map>();
+          final acked = barangay
+              ? ((data[2] as Map)['acknowledged_deliveries'] as List).toSet()
+              : <dynamic>{};
+          final requests = <dynamic, Map>{};
+          if (!barangay) {
+            for (final r in (data[2] as List).cast<Map>().reversed) {
+              requests[r['delivery_id']] = r; // latest request per delivery
+            }
+          }
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
             children: [
               PageHeader(
                 barangay ? 'Incoming Aid' : 'Release & Delivery Tracking',
-                subtitle: roleLine(),
+                subtitle: barangay
+                    ? 'Aid for your assigned barangay. Confirm receipt when it '
+                          'arrives, then acknowledge it.'
+                    : 'Prepare goods from a report\'s inventory, then move the '
+                          'status one step at a time.',
               ),
               if (rows.isEmpty)
                 EmptyState(
@@ -283,7 +201,14 @@ class DeliveriesScreen extends StatelessWidget {
                       ? 'No deliveries to your barangay yet.'
                       : 'No deliveries yet. Tap "Prepare delivery".',
                 ),
-              for (final d in rows) _card(context, d, names),
+              for (final d in rows)
+                _card(
+                  context,
+                  d,
+                  names,
+                  acked.contains(d['delivery_id']),
+                  requests[d['delivery_id']],
+                ),
             ],
           );
         },
@@ -291,7 +216,13 @@ class DeliveriesScreen extends StatelessWidget {
     );
   }
 
-  Widget _card(BuildContext context, Map d, Names names) {
+  Widget _card(
+    BuildContext context,
+    Map d,
+    Names names,
+    bool acknowledged,
+    Map? request,
+  ) {
     final status = '${d['status']}';
     final i = _deliverySteps.indexOf(status);
     final next = i >= 0 && i < 2 ? _deliverySteps[i + 1] : null;
@@ -301,6 +232,7 @@ class DeliveriesScreen extends StatelessWidget {
               '${it['quantity']} × ${names.of('items', it['item_id'], fallback: 'item')}',
         )
         .join(', ');
+    final reqStage = request?['stage'] as String?;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -330,6 +262,39 @@ class DeliveriesScreen extends StatelessWidget {
               ' · ${niceDate(d['delivery_date'])}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
+            if (request != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    const Icon(Icons.fire_truck_outlined, size: 16),
+                    const SizedBox(width: 4),
+                    const Text('DRRMO: ', style: TextStyle(fontSize: 12)),
+                    Badge2.status(reqStage == 'Pending' ? 'Pending' : reqStage),
+                    if (request['scheduled_date'] != null) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        niceDate(request['scheduled_date']),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            if (acknowledged)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    Icon(Icons.verified, size: 16, color: Color(0xFF2E7D32)),
+                    SizedBox(width: 4),
+                    Text(
+                      'Acknowledged by the barangay',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
             const SizedBox(height: 12),
             DeliveryStepper(status),
             const SizedBox(height: 8),
@@ -338,8 +303,17 @@ class DeliveriesScreen extends StatelessWidget {
               spacing: 8,
               runSpacing: 6,
               children: [
+                TextButton.icon(
+                  onPressed: () =>
+                      showDeliveryHistory(context, d['delivery_id'] as int),
+                  icon: const Icon(Icons.history),
+                  label: const Text('History'),
+                ),
                 if (!barangay &&
-                    (status == 'Preparing' || status == 'In Transit'))
+                    (status == 'Preparing' || status == 'In Transit') &&
+                    (request == null ||
+                        reqStage == 'Declined' ||
+                        reqStage == 'Completed'))
                   OutlinedButton.icon(
                     onPressed: () => _requestTransport(context, d),
                     icon: const Icon(Icons.fire_truck_outlined),
@@ -361,6 +335,18 @@ class DeliveriesScreen extends StatelessWidget {
                     icon: const Icon(Icons.task_alt),
                     label: const Text('Confirm receipt'),
                   ),
+                if (barangay && status == 'Confirmed' && !acknowledged)
+                  FilledButton.icon(
+                    onPressed: () => act(
+                      context,
+                      () => api.post(
+                        '/deliveries/${d['delivery_id']}/acknowledge',
+                      ),
+                      success: 'Aid acknowledged',
+                    ),
+                    icon: const Icon(Icons.verified_outlined),
+                    label: const Text('Acknowledge'),
+                  ),
               ],
             ),
           ],
@@ -370,6 +356,7 @@ class DeliveriesScreen extends StatelessWidget {
   }
 }
 
+/// Prepare goods for release from a validated report's inventory.
 class NewDeliveryScreen extends StatefulWidget {
   const NewDeliveryScreen({super.key});
 
@@ -380,9 +367,45 @@ class NewDeliveryScreen extends StatefulWidget {
 class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   final _form = GlobalKey<FormState>();
   String? reportId, brgyId, itemId;
+  List<Map> stock = const [];
+  bool loadingStock = false;
   final qty = TextEditingController();
   String? date;
   bool busy = false;
+
+  Future<void> _loadStock(String? rid, Names names) async {
+    setState(() {
+      reportId = rid;
+      itemId = null;
+      stock = const [];
+      loadingStock = true;
+      // The report's own barangay is the usual destination.
+      for (final r in names.rows('validated_reports')) {
+        if ('${r['id']}' == rid) brgyId = '${r['barangay_id']}';
+      }
+    });
+    final r = await api.get(
+      '/donations/inventory',
+      query: {'report_id': rid ?? ''},
+    );
+    if (!mounted) return;
+    setState(() {
+      loadingStock = false;
+      stock = r.ok
+          ? (r.json as List)
+                .cast<Map>()
+                .where((i) => i['quantity'] > 0)
+                .toList()
+          : const [];
+    });
+  }
+
+  Map? get _chosen {
+    for (final s in stock) {
+      if ('${s['item_id']}' == itemId) return s;
+    }
+    return null;
+  }
 
   Future<void> _submit() async {
     if (!_form.currentState!.validate()) return;
@@ -423,20 +446,22 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           final names = Names(snap.data!);
+          final chosen = _chosen;
           return Form(
             key: _form,
             child: ListView(
-              padding: const EdgeInsets.all(20),
+              padding: const EdgeInsets.all(16),
               children: [
                 LookupDropdown(
                   list: 'validated_reports',
                   label: 'For which validated report?',
                   value: reportId,
                   names: names,
-                  onChanged: (v) => setState(() => reportId = v),
+                  onChanged: (v) => _loadStock(v, names),
                 ),
                 const SizedBox(height: 12),
                 LookupDropdown(
+                  key: ValueKey('brgy-$brgyId'),
                   list: 'barangays',
                   label: 'Destination barangay',
                   value: brgyId,
@@ -444,21 +469,46 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                   onChanged: (v) => setState(() => brgyId = v),
                 ),
                 const SizedBox(height: 12),
-                LookupDropdown(
-                  list: 'items',
-                  label: 'Item from inventory',
-                  value: itemId,
-                  names: names,
+                if (loadingStock) const LinearProgressIndicator(),
+                DropdownButtonFormField<String>(
+                  key: ValueKey('stock-$reportId-${stock.length}'),
+                  initialValue: itemId,
+                  isExpanded: true,
+                  items: [
+                    for (final s in stock)
+                      DropdownMenuItem(
+                        value: '${s['item_id']}',
+                        child: Text(
+                          '${s['item_name']} (${s['quantity']} ${s['unit'] ?? ''} available)',
+                        ),
+                      ),
+                  ],
                   onChanged: (v) => setState(() => itemId = v),
+                  validator: (v) => v == null ? 'Choose an item' : null,
+                  decoration: InputDecoration(
+                    labelText: 'Item from this report\'s inventory',
+                    helperText:
+                        reportId != null && !loadingStock && stock.isEmpty
+                        ? 'No stock for this report yet. Receive donations first.'
+                        : null,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: qty,
                   keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(labelText: 'Quantity'),
-                  validator: (v) => (int.tryParse(v?.trim() ?? '') ?? 0) > 0
-                      ? null
-                      : 'Enter a number above 0',
+                  decoration: InputDecoration(
+                    labelText: 'Quantity',
+                    suffixText: chosen?['unit'] as String?,
+                  ),
+                  validator: (v) {
+                    final n = int.tryParse(v?.trim() ?? '') ?? 0;
+                    if (n <= 0) return 'Enter a number above 0';
+                    if (chosen != null && n > (chosen['quantity'] as num)) {
+                      return 'Only ${chosen['quantity']} available';
+                    }
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
@@ -492,10 +542,17 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
 // ---------------------------------------------------------------------------
 // UC-C1 / UC-C2 City donation confirmation (CMO Representative)
 // ---------------------------------------------------------------------------
-class CmoScreen extends StatelessWidget {
+class CmoScreen extends StatefulWidget {
   const CmoScreen({super.key});
 
-  Future<void> _decide(BuildContext context, Map d, String decision) async {
+  @override
+  State<CmoScreen> createState() => _CmoScreenState();
+}
+
+class _CmoScreenState extends State<CmoScreen> {
+  String view = 'pending';
+
+  Future<void> _decide(Map d, String decision) async {
     String? notes;
     if (decision != 'Confirmed') {
       final v = await formDialog(
@@ -506,7 +563,7 @@ class CmoScreen extends StatelessWidget {
       if (v == null) return;
       notes = v['notes'];
     }
-    if (!context.mounted) return;
+    if (!mounted) return;
     await act(
       context,
       () => api.post(
@@ -519,28 +576,120 @@ class CmoScreen extends StatelessWidget {
     );
   }
 
+  Widget _donationCard(Map d) {
+    final confirmed = d['officially_recognized'] == true;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${d['quantity']} ${d['unit']} ${d['item_name']}',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                if (confirmed)
+                  const Badge2(
+                    'City confirmed',
+                    Color(0xFF2E7D32),
+                    icon: Icons.verified,
+                  )
+                else
+                  Badge2.status(d['cmo_decision'] as String? ?? 'Received'),
+              ],
+            ),
+            Text('${d['qr_reference']} · ${d['packaging']}'),
+            Text(
+              'For ${d['report_label'] ?? 'report'}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (d['cmo_notes'] != null && !confirmed)
+              Text(
+                'Note: ${d['cmo_notes']}',
+                style: const TextStyle(fontSize: 12, color: Brand.muted),
+              ),
+            const SizedBox(height: 8),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 8,
+              children: confirmed
+                  ? [
+                      OutlinedButton.icon(
+                        onPressed: () => act(
+                          context,
+                          () => api.post(
+                            '/cmo/donations/${d['donation_id']}/revert',
+                          ),
+                          success: 'Confirmation reversed',
+                        ),
+                        icon: const Icon(Icons.undo),
+                        label: const Text('Revert'),
+                      ),
+                    ]
+                  : [
+                      TextButton(
+                        onPressed: () => _decide(d, 'Pending Review'),
+                        child: const Text('Review'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => _decide(d, 'On Hold'),
+                        child: const Text('Hold'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => _decide(d, 'Confirmed'),
+                        icon: const Icon(Icons.verified),
+                        label: const Text('Confirm'),
+                      ),
+                    ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Loader(
       load: [
         () => api.get('/cmo/dashboard'),
         () => api.get('/cmo/donations/pending'),
-        api.lookupsResult,
+        () => api.get('/cmo/donations/confirmed'),
       ],
       builder: (context, data) {
         final dash = data[0] as Map;
-        final rows = (data[1] as List).cast<Map>();
-        final names = Names(Map<String, dynamic>.from(data[2] as Map));
+        final pending = (data[1] as List).cast<Map>();
+        final confirmed = (data[2] as List).cast<Map>();
+        final perReport = (dash['per_report'] as List).cast<Map>();
+        final rows = view == 'pending' ? pending : confirmed;
         return ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(16),
           children: [
-            PageHeader('CMO Representative Dashboard', subtitle: roleLine()),
+            PageHeader('City Donation Confirmation', subtitle: roleLine()),
             StatGrid([
               StatTile(
-                'Waiting for city confirmation',
+                'Pending city confirmation',
                 '${dash['pending_confirmation']}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
+              ),
+              StatTile(
+                'On hold',
+                '${dash['on_hold']}',
+                Icons.pause_circle_outline,
+              ),
+              StatTile(
+                'Pending review',
+                '${dash['pending_review']}',
+                Icons.rate_review_outlined,
               ),
               StatTile(
                 'Officially confirmed',
@@ -549,59 +698,55 @@ class CmoScreen extends StatelessWidget {
                 color: const Color(0xFF2E7D32),
               ),
             ]),
-            const SectionTitle('Donations received by CSWS'),
-            if (rows.isEmpty) const EmptyState('No donations to confirm.'),
-            for (final d in rows)
+            const SizedBox(height: 14),
+            SegmentedButton<String>(
+              segments: [
+                ButtonSegment(
+                  value: 'pending',
+                  label: Text('Pending (${pending.length})'),
+                ),
+                ButtonSegment(
+                  value: 'confirmed',
+                  label: Text('Confirmed (${confirmed.length})'),
+                ),
+              ],
+              selected: {view},
+              onSelectionChanged: (s) => setState(() => view = s.first),
+            ),
+            const SizedBox(height: 12),
+            if (rows.isEmpty)
+              EmptyState(
+                view == 'pending'
+                    ? 'No donations waiting for confirmation.'
+                    : 'No confirmed donations yet.',
+              ),
+            for (final d in rows) _donationCard(d),
+            const SectionTitle('Donation summary per report'),
+            if (perReport.isEmpty) const EmptyState('No donations yet.'),
+            for (final r in perReport)
               Card(
-                margin: const EdgeInsets.only(bottom: 12),
+                margin: const EdgeInsets.only(bottom: 10),
                 child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _donationTitle(d, names),
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          Badge2.status('${d['status']}'),
-                        ],
-                      ),
-                      Text('${d['qr_reference']} · ${d['packaging']}'),
                       Text(
-                        names.of(
-                          'reports',
-                          d['report_id'],
-                          fallback: 'Report #${d['report_id']}',
-                        ),
-                        style: Theme.of(context).textTheme.bodySmall,
+                        '${r['report_label']}',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${r['confirmed_count']} confirmed '
+                        '(${r['confirmed_quantity']} units'
+                        '${(r['confirmed_value'] as num) > 0 ? ', PHP ${(r['confirmed_value'] as num).toStringAsFixed(0)}' : ''}'
+                        ') · ${r['pending_count']} pending',
                       ),
                       const SizedBox(height: 8),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: 8,
-                        children: [
-                          TextButton(
-                            onPressed: () =>
-                                _decide(context, d, 'Pending Review'),
-                            child: const Text('Review'),
-                          ),
-                          OutlinedButton(
-                            onPressed: () => _decide(context, d, 'On Hold'),
-                            child: const Text('Hold'),
-                          ),
-                          FilledButton.icon(
-                            onPressed: () => _decide(context, d, 'Confirmed'),
-                            icon: const Icon(Icons.verified),
-                            label: const Text('Confirm'),
-                          ),
-                        ],
+                      Progress(
+                        delivered: 0,
+                        needed: 0,
+                        percent: r['fulfillment_percentage'] as num,
                       ),
                     ],
                   ),
@@ -617,30 +762,55 @@ class CmoScreen extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // UC-DR1 / UC-DR2 Logistics support (DRRMO)
 // ---------------------------------------------------------------------------
-class DrrmoScreen extends StatelessWidget {
+class DrrmoScreen extends StatefulWidget {
   const DrrmoScreen({super.key});
 
-  Future<void> _accept(BuildContext context, Map r) async {
+  @override
+  State<DrrmoScreen> createState() => _DrrmoScreenState();
+}
+
+class _DrrmoScreenState extends State<DrrmoScreen> {
+  String stage = 'Pending';
+
+  Future<void> _accept(Map r) async {
     final date = await pickDateTime(context);
-    if (date == null || !context.mounted) return;
+    if (date == null || !mounted) return;
+    final v = await formDialog(
+      context,
+      title: 'Logistics details',
+      fields: const [
+        DialogField(
+          'notes',
+          'Vehicle / team (optional)',
+          hint: 'e.g. Truck 2, 3 personnel',
+          required: false,
+        ),
+      ],
+      confirm: 'Schedule',
+    );
+    if (v == null || !mounted) return;
     await act(
       context,
       () => api.patch(
         '/drrmo/requests/${r['request_id']}/accept',
-        body: {'scheduled_date': date},
+        body: {
+          'scheduled_date': date,
+          if (v['notes']!.isNotEmpty) 'notes': v['notes'],
+        },
       ),
       success: 'Scheduled for ${niceDate(date)}',
     );
   }
 
-  Future<void> _decline(BuildContext context, Map r) async {
+  Future<void> _decline(Map r) async {
     final v = await formDialog(
       context,
       title: 'Decline request #${r['request_id']}',
+      message: 'CSWS will see the reason and make other arrangements.',
       fields: const [DialogField('notes', 'Reason', multiline: true)],
       confirm: 'Decline',
     );
-    if (v == null || !context.mounted) return;
+    if (v == null || !mounted) return;
     await act(
       context,
       () => api.patch(
@@ -651,25 +821,56 @@ class DrrmoScreen extends StatelessWidget {
     );
   }
 
+  Future<void> _complete(Map r) async {
+    final v = await formDialog(
+      context,
+      title: 'Record logistics assistance',
+      message:
+          'Goods: ${(r['goods'] as List).join(', ')}\n'
+          'Destination: ${r['destination']}',
+      fields: const [
+        DialogField(
+          'summary',
+          'Summary of the assistance given',
+          hint: 'e.g. Delivered by Truck 2, 2 trips',
+          multiline: true,
+        ),
+      ],
+      confirm: 'Mark completed',
+    );
+    if (v == null || !mounted) return;
+    await act(
+      context,
+      () => api.patch(
+        '/drrmo/requests/${r['request_id']}/complete',
+        body: {'summary': v['summary']},
+      ),
+      success: 'Logistics support completed',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Loader(
       load: [
         () => api.get('/drrmo/dashboard'),
         () => api.get('/drrmo/requests'),
-        api.lookupsResult,
       ],
       builder: (context, data) {
         final dash = data[0] as Map;
-        final rows = (data[1] as List).cast<Map>();
-        final names = Names(Map<String, dynamic>.from(data[2] as Map));
+        final all = (data[1] as List).cast<Map>();
+        final rows = all.where((r) => r['stage'] == stage).toList();
+        const stages = {
+          'Pending': 'New',
+          'Accepted': 'Scheduled',
+          'In Transit': 'In transit',
+          'Completed': 'Completed',
+          'Declined': 'Declined',
+        };
         return ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(16),
           children: [
-            PageHeader(
-              'DRRMO Logistics Support Dashboard',
-              subtitle: roleLine(),
-            ),
+            PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
             StatGrid([
               StatTile(
                 'New requests',
@@ -683,14 +884,39 @@ class DrrmoScreen extends StatelessWidget {
                 Icons.event_available,
               ),
               StatTile(
+                'In transit',
+                '${dash['in_transit']}',
+                Icons.local_shipping_outlined,
+                color: const Color(0xFF1565C0),
+              ),
+              StatTile(
                 'Completed',
                 '${dash['completed']}',
                 Icons.done_all,
                 color: const Color(0xFF2E7D32),
               ),
             ]),
-            const SectionTitle('Requests from CSWS'),
-            if (rows.isEmpty) const EmptyState('No new logistics requests.'),
+            const SizedBox(height: 12),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final e in stages.entries)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: Text(
+                          '${e.value} (${all.where((r) => r['stage'] == e.key).length})',
+                        ),
+                        selected: stage == e.key,
+                        onSelected: (_) => setState(() => stage = e.key),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (rows.isEmpty) const EmptyState('No requests here.'),
             for (final r in rows)
               Card(
                 margin: const EdgeInsets.only(bottom: 12),
@@ -703,24 +929,28 @@ class DrrmoScreen extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              'Request #${r['request_id']}',
+                              'Request #${r['request_id']} · to ${r['destination']}',
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
                           ),
-                          Badge2.status('${r['status']}'),
+                          Badge2.status('${r['stage']}'),
                         ],
                       ),
-                      Text(
-                        names.of(
-                          'open_deliveries',
-                          r['delivery_id'],
-                          fallback: 'Delivery #${r['delivery_id']}',
+                      Text('${r['report_label'] ?? ''}'),
+                      Text('Goods: ${(r['goods'] as List).join(', ')}'),
+                      if (r['scheduled_date'] != null)
+                        Text('Scheduled: ${niceDate(r['scheduled_date'])}'),
+                      if (r['notes'] != null)
+                        Text(
+                          '${r['notes']}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Brand.muted,
+                          ),
                         ),
-                      ),
-                      if (r['notes'] != null) Text('Needs: ${r['notes']}'),
                       Text(
                         'Requested ${niceDate(r['created_at'])}',
                         style: Theme.of(context).textTheme.bodySmall,
@@ -729,16 +959,25 @@ class DrrmoScreen extends StatelessWidget {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
-                          OutlinedButton(
-                            onPressed: () => _decline(context, r),
-                            child: const Text('Decline'),
-                          ),
-                          const SizedBox(width: 8),
-                          FilledButton.icon(
-                            onPressed: () => _accept(context, r),
-                            icon: const Icon(Icons.event),
-                            label: const Text('Accept & schedule'),
-                          ),
+                          if (r['stage'] == 'Pending') ...[
+                            OutlinedButton(
+                              onPressed: () => _decline(r),
+                              child: const Text('Decline'),
+                            ),
+                            const SizedBox(width: 8),
+                            FilledButton.icon(
+                              onPressed: () => _accept(r),
+                              icon: const Icon(Icons.event),
+                              label: const Text('Accept & schedule'),
+                            ),
+                          ],
+                          if (r['stage'] == 'Accepted' ||
+                              r['stage'] == 'In Transit')
+                            FilledButton.icon(
+                              onPressed: () => _complete(r),
+                              icon: const Icon(Icons.done_all),
+                              label: const Text('Mark completed'),
+                            ),
                         ],
                       ),
                     ],

@@ -4,6 +4,14 @@ DISASTER_SEVERITY = {
     "Typhoon": 85,
     "Fire": 60,
     "Earthquake": 90,
+    # Added with the demo seed's disaster types
+    "Flash Flood": 75,
+    "Storm Surge": 85,
+    "Landslide": 80,
+    "Tsunami": 95,
+    "Volcanic Eruption": 90,
+    "Drought": 55,
+    "Disease Outbreak": 65,
 }
 
 def score_affected_families(affected_families):

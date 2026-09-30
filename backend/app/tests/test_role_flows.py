@@ -199,7 +199,9 @@ def test_full_relief_chain_across_all_roles(api):
                           json={"status": "Confirmed", "notes": "ok"}), 201)
     assert conf["status"] == "Confirmed"
     ok(client.post(f"/donations/{d2['donation_id']}/confirm", headers=t["csws"]))
-    assert ok(client.get("/cmo/dashboard", headers=t["cmo"])) == {"pending_confirmation": 0, "confirmed": 2}
+    cmo = ok(client.get("/cmo/dashboard", headers=t["cmo"]))
+    assert (cmo["pending_confirmation"], cmo["confirmed"]) == (0, 2)
+    assert cmo["per_report"][0]["confirmed_quantity"] == 65   # summary per report (UC-C2)
 
     # --- 3.10 CSWS creates a delivery ------------------------------------
     delivery = ok(client.post("/deliveries/", headers=t["csws"], json={
