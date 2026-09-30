@@ -251,3 +251,33 @@ def test_full_relief_chain_across_all_roles(api):
     assert summary["total_donations"] == 2
     assert summary["total_deliveries"] == 1
     assert summary["total_logistics_requests"] == 2
+
+
+def test_donor_dashboard_and_other_item(api):
+    client, t = api
+    rid = ok(client.post("/reports/", headers=t["unit"], json={
+        "disaster_type_id": 1, "barangay_id": 1, "estimated_quantity": 50}), 201)["report_id"]
+    ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
+
+    base = {"report_id": rid, "packaging": "Box", "handover_method": "Drop Off"}
+    ok(client.post("/donations/", headers=t["donor"], json={**base, "item_id": 1, "quantity": 10}))
+    # "Other" item not in the list yet: it is added to items and reused next time
+    other = ok(client.post("/donations/", headers=t["donor"], json={
+        **base, "other_item_name": "Face Masks", "other_item_unit": "boxes", "quantity": 5}))
+    again = ok(client.post("/donations/", headers=t["donor"], json={
+        **base, "other_item_name": "face masks", "quantity": 2}))
+    assert other["item_id"] == again["item_id"] != 1
+    assert "Face Masks (boxes)" in [i["name"] for i in ok(client.get("/lookups"))["items"]]
+    assert client.post("/donations/", headers=t["donor"], json={**base, "quantity": 1}).status_code == 422
+
+    # someone else's donation must not show on this donor's dashboard
+    ok(client.post("/donations/", json={**base, "item_id": 1, "quantity": 3,
+                                        "guest_donor": {"full_name": "G", "contact_number": "0917"}}))
+
+    mine = ok(client.get("/donations/mine", headers=t["donor"]))
+    assert mine["summary"]["total_donations"] == 3
+    assert mine["summary"]["pending"] == 3
+    assert mine["summary"]["supported_reports"] == 1
+    assert {d["item_name"] for d in mine["donations"]} == {"Rice", "Face Masks"}
+    assert mine["supported_reports"][0]["total_items_needed"] == 50
+    assert client.get("/donations/mine").status_code == 401

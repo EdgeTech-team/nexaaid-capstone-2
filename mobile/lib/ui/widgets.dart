@@ -666,7 +666,19 @@ class LookupDropdown extends StatelessWidget {
       onChanged: onChanged,
       validator: (v) =>
           !optional && (v == null || v.isEmpty) ? 'Please choose one' : null,
-      decoration: InputDecoration(labelText: label),
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: rows.isEmpty
+            ? _emptyHints[list] ?? 'Nothing to choose yet'
+            : null,
+        helperMaxLines: 2,
+      ),
     );
   }
 }
+
+const _emptyHints = {
+  'validated_reports': 'No validated reports yet. The Administrator must validate a report first.',
+  'items': 'No items yet. Run database/seeds/demo_seed.sql in Neon.',
+  'barangays': 'No barangays in the database.',
+};
