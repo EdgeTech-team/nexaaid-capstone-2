@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 from core.priority_engine import compute_priority
 
 from core.database import get_db
-from core.auth import get_current_user, require_role  # see note above
+from core.auth import get_current_user, require_role, has_role  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment
 from schemas.report import (
     DisasterReportCreate,
@@ -179,7 +179,7 @@ def get_report(
 
     # Reporters can see their own report; staff can see any.
     is_owner = report.user_id == current_user.user_id
-    is_staff = getattr(current_user, "role", None) in ("csws_staff", "admin", "barangay_official")
+    is_staff = has_role(current_user, "csws_staff", "admin", "barangay_official")
     if not (is_owner or is_staff):
         raise HTTPException(status_code=403, detail="Not authorized to view this report")
 

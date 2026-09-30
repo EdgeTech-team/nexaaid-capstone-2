@@ -11,14 +11,15 @@ class PriorityCount(BaseModel):
 
 class DashboardSummary(BaseModel):
     total_reports: int
-    total_donation: int
-    total_delivered: int
+    total_donations: int
+    total_deliveries: int
     total_logistics_requests: int
     active_organizations: int
 
 class ReportsBreakdown(BaseModel):
     by_status: List[StatusCount]
     by_priority: List[PriorityCount]
+    total_estimated_value: float = 0
 
 class DonationBreakdown(BaseModel):
     by_status: List[StatusCount]
@@ -31,4 +32,4 @@ class FulfillmentOverview(BaseModel):
 
 class LogisticsOverview(BaseModel):
     deliveries_by_status: List[StatusCount]
-    request_by_status: List[StatusCount]
+    requests_by_status: List[StatusCount]

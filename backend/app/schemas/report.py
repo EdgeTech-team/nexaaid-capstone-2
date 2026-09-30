@@ -17,7 +17,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SourceType = Literal["web", "mobile", "sms"]
 
@@ -77,6 +77,13 @@ class DisasterReportResponse(BaseModel):
     rejection_reason: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _lower_source(cls, v):
+        # The live database stores 'Web' / 'SMS' with capitals; the schema
+        # expects lowercase, so normalise before validation.
+        return v.lower() if isinstance(v, str) else v
 
 
 # ---------------------------------------------------------------------------

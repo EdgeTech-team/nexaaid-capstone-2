@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from core.auth import require_role
 from models.user_rbac_model import User
-from models.delivery_model import Delivery
+from models.delivery import Delivery
 from models.logistics_request_model import LogisticsRequest
 from schemas.logistics_request_schema import SubmitLogisticsRequest, LogisticsRequestResponse
 

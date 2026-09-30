@@ -10,5 +10,11 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+        # Several routers only flush() and rely on this commit
+        # (reports.py, deliveries.py) — without it their writes were lost.
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
