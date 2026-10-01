@@ -154,3 +154,51 @@ def test_session_login_endpoints_after_merge(api):
     assert me["email"] == "csws.test@example.com"
     assert client.post("/auth/login", json={"email": "csws.test@example.com",
                                             "password": "wrong"}).status_code == 401
+
+
+def test_appendix_h_module_access(api):
+    """Appendix H: who may use which module."""
+    client, t = api
+    report_id, d = _validated_report_with_stock(client, t)
+    ok(client.post("/donations/receive", headers=t["csws"],
+                   json={"donation_id": d["donation_id"], "actual_quantity": 60}))
+    priority = ok(client.get(f"/reports/{report_id}", headers=t["admin"]))["priority_level"]
+
+    # 2.4 View Validated Reports: every role.
+    for role in ("admin", "donor", "csws", "unit", "cmo", "drrmo", "brgy", "brgy2"):
+        rows = ok(client.get("/reports/validated", headers=t[role]))
+        assert [r["report_id"] for r in rows] == [report_id], role
+    # 3.3 Priority-based filtering.
+    assert ok(client.get("/reports/validated", params={"priority_level": priority}, headers=t["donor"]))
+    other = "Low" if priority != "Low" else "High"
+    assert ok(client.get("/reports/validated", params={"priority_level": other}, headers=t["donor"])) == []
+
+    # 2.5 Monitor Report Status: Admin, Main Office, Disaster Unit.
+    for role in ("admin", "csws", "unit"):
+        ok(client.get("/reports/monitoring", headers=t[role]))
+    for role in ("donor", "drrmo", "cmo"):
+        ok(client.get("/reports/monitoring", headers=t[role]), 403)
+
+    # 2.2 SMS-based reporting: Disaster Unit only.
+    sms = {"contact_number": "09171234567", "raw_message": "FLOOD 5FAM",
+           "disaster_type_id": 1, "barangay_id": 1}
+    for role in ("admin", "csws", "donor"):
+        ok(client.post("/reports/sms", json=sms, headers=t[role]), 403)
+    created = ok(client.post("/reports/sms", json=sms, headers=t["unit"]), 201)
+    assert created["report"]["source"] == "SMS"
+
+    # 4.4 / 4.5 Donation records: Admin, Main Office, CMO.
+    for role in ("admin", "csws", "cmo"):
+        rows = ok(client.get("/donations/records", headers=t[role]))
+        assert rows and rows[0]["donor"]
+    ok(client.get("/donations/records", headers=t["drrmo"]), 403)
+
+    # 6.3 Donation summaries per report: CMO and Admin.
+    for role in ("cmo", "admin"):
+        assert ok(client.get("/cmo/dashboard", headers=t[role]))["per_report"]
+    ok(client.get("/cmo/dashboard", headers=t["csws"]), 403)
+
+    # 8.5 View Delivery Records: Admin, Main Office, DRRMO, Barangay.
+    for role in ("admin", "csws", "drrmo", "brgy"):
+        ok(client.get("/deliveries/", headers=t[role]))
+    ok(client.get("/deliveries/", headers=t["donor"]), 403)

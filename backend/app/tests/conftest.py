@@ -215,3 +215,12 @@ def admin_client(db_session, seed):
 
 
 
+
+
+@pytest.fixture()
+def unit_client(db_session, seed):
+    """CSWS Disaster Unit (Appendix H: submits reports and encodes SMS reports)."""
+    user = FakeUser(user_id=seed["reporter_id"], role_name="CSWS Disaster Unit")
+    yield make_client(db_session, user)
+    app.dependency_overrides.clear()
+    _fake_users_by_id.clear()

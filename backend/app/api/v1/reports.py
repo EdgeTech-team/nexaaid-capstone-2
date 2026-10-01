@@ -137,39 +137,51 @@ def list_report_monitoring(
     if priority_level:
             query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
+    return _monitoring_rows(query, skip, limit)
+
+def _monitoring_rows(query, skip: int, limit: int):
     results = []
     for report in (
-         query.order_by(DisasterReport.created_at.desc())
-         .offset(skip)
-         .limit(limit)
-         .all()                 
-         ):
-            fulfillment = report.fulfillment
-            results.append(ReportMonitoringResponse(
-                **DisasterReportResponse.model_validate(report).model_dump(),
-                fulfillment_status=(
-                    fulfillment.verification_status
-                    if fulfillment
-                    else None
-                ),
-                fulfillment_percentage=(
-                    fulfillment.fulfillment_percentage
-                    if fulfillment
-                    else None
-                ),
-                total_items_needed=(
-                    fulfillment.total_items_needed
-                    if fulfillment
-                    else None
-                ),
-                total_items_delivered=(
-                    fulfillment.total_items_delivered
-                    if fulfillment
-                    else None
-                ),
-
-            ))
+        query.order_by(DisasterReport.created_at.desc()).offset(skip).limit(limit).all()
+    ):
+        fulfillment = report.fulfillment
+        results.append(ReportMonitoringResponse(
+            **DisasterReportResponse.model_validate(report).model_dump(),
+            fulfillment_status=fulfillment.verification_status if fulfillment else None,
+            fulfillment_percentage=fulfillment.fulfillment_percentage if fulfillment else None,
+            total_items_needed=fulfillment.total_items_needed if fulfillment else None,
+            total_items_delivered=fulfillment.total_items_delivered if fulfillment else None,
+        ))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Appendix H, Module 2.4 / 3.3: every logged-in role views validated reports,
+# filtered by priority level where the role has priority-based filtering.
+# ---------------------------------------------------------------------------
+@router.get("/validated", response_model=List[ReportMonitoringResponse])
+def list_validated_reports(
+    barangay_id: Optional[int] = Query(default=None),
+    disaster_type_id: Optional[int] = Query(default=None),
+    priority_level: Optional[str] = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    query = (
+        db.query(DisasterReport)
+        .options(joinedload(DisasterReport.fulfillment))
+        .filter(DisasterReport.status == "Validated")
+    )
+    if barangay_id:
+        query = query.filter(DisasterReport.barangay_id == barangay_id)
+    if disaster_type_id:
+        query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
+    if priority_level:
+        query = query.filter(DisasterReport.priority_level == priority_level)
+    return _monitoring_rows(query, skip, limit)
+
 
 # ---------------------------------------------------------------------------
 # Retrieve one
@@ -330,7 +342,9 @@ def delete_report(
 def ingest_sms_report(
     payload: SmsReportIngest,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin")),
+    # Appendix H, Module 2.2: SMS-based alternative reporting is the
+    # CSWS Disaster Unit's function.
+    current_user=Depends(require_role("csws_disaster_unit")),
 ):
     report_fields = payload.model_dump(exclude={"contact_number", "raw_message"})
     report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")
@@ -358,7 +372,7 @@ def ingest_sms_report(
 def get_sms_metadata(
     report_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin")),
+    current_user=Depends(require_role("csws_disaster_unit", "admin")),
 ):
     meta = (
         db.query(SmsReportMetadata)

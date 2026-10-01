@@ -37,9 +37,24 @@ void main() {
       }
     }
 
-    await menuFor(Roles.cswsMain, ['Overview', 'Receive', 'Deliveries']);
-    await menuFor(Roles.admin, ['Overview', 'Reports', 'Accounts']);
-    await menuFor(Roles.barangay, ['Incoming aid', 'Overview']);
+    // Appendix H: module access per role.
+    await menuFor(Roles.cswsMain, [
+      'Overview',
+      'Reports',
+      'Receive',
+      'Deliveries',
+    ]);
+    await menuFor(Roles.cswsUnit, ['Overview', 'New report', 'Reports']);
+    await menuFor(Roles.admin, [
+      'Overview',
+      'Validate',
+      'Monitoring',
+      'Records',
+      'Accounts',
+    ]);
+    await menuFor(Roles.cmo, ['Confirmations', 'Reports']);
+    await menuFor(Roles.drrmo, ['Logistics', 'Deliveries', 'Reports']);
+    await menuFor(Roles.barangay, ['Incoming aid', 'Overview', 'Reports']);
     await menuFor(Roles.donor, ['Dashboard', 'Donate']);
     api.logout();
   });

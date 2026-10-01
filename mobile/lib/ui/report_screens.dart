@@ -15,6 +15,8 @@ class ReportCard extends StatelessWidget {
     final type = names.of('disaster_types', r['disaster_type_id']);
     final brgy = names.of('barangays', r['barangay_id']);
     final hasFulfillment = r['total_items_needed'] != null;
+    // Appendix H 3.2: every role except DRRMO views priority guidance.
+    final showPriority = api.role != Roles.drrmo;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -41,7 +43,7 @@ class ReportCard extends StatelessWidget {
               spacing: 6,
               runSpacing: 6,
               children: [
-                if (r['priority_level'] != null)
+                if (showPriority && r['priority_level'] != null)
                   Badge2.priority(r['priority_level'] as String?),
                 Badge2(
                   'via ${r['source']}',
@@ -69,7 +71,7 @@ class ReportCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            if (r['ai_recommendation'] != null)
+            if (showPriority && r['ai_recommendation'] != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Row(
@@ -124,7 +126,8 @@ class ReportCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// UC-CD1 Submit post-disaster report (CSWS Disaster Unit)
+// UC-CD1 Submit post-disaster report and Appendix H 2.2 SMS-based
+// alternative reporting (both CSWS Disaster Unit)
 // ---------------------------------------------------------------------------
 class NewReportScreen extends StatefulWidget {
   const NewReportScreen({super.key});
@@ -148,8 +151,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
   String? typeId, brgyId, sitioId;
   final desc = TextEditingController();
   final families = TextEditingController();
+  final smsSender = TextEditingController();
+  final smsText = TextEditingController();
   final needs = <_Need>[_Need()];
   bool busy = false;
+
+  /// true when encoding a report that arrived by SMS (Appendix H, 2.2).
+  bool sms = false;
 
   String _needName(_Need n, Names names) => n.itemId == _other
       ? n.otherName.text.trim()
@@ -181,22 +189,30 @@ class _NewReportScreenState extends State<NewReportScreen> {
       0,
       (a, n) => a + int.parse(n.qty.text.trim()),
     );
+    final body = {
+      'disaster_type_id': int.parse(typeId!),
+      'barangay_id': int.parse(brgyId!),
+      'sitio_id': (sitioId ?? '').isEmpty ? null : int.parse(sitioId!),
+      'description': desc.text.trim(),
+      'affected_families': int.parse(families.text.trim()),
+      'assistance_needed': summary,
+      'estimated_quantity': total,
+    };
     final r = await act(
       context,
-      () => api.post(
-        '/reports/',
-        body: {
-          'disaster_type_id': int.parse(typeId!),
-          'barangay_id': int.parse(brgyId!),
-          'sitio_id': (sitioId ?? '').isEmpty ? null : int.parse(sitioId!),
-          'description': desc.text.trim(),
-          'affected_families': int.parse(families.text.trim()),
-          'assistance_needed': summary,
-          'estimated_quantity': total,
-          'source': 'Mobile',
-        },
-      ),
-      success: 'Report submitted. It is now pending admin validation.',
+      () => sms
+          ? api.post(
+              '/reports/sms',
+              body: {
+                ...body,
+                'contact_number': smsSender.text.trim(),
+                'raw_message': smsText.text.trim(),
+              },
+            )
+          : api.post('/reports/', body: {...body, 'source': 'Mobile'}),
+      success: sms
+          ? 'SMS report encoded. It is now pending admin validation.'
+          : 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
     setState(() {
@@ -205,6 +221,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
         _form.currentState!.reset();
         desc.clear();
         families.clear();
+        smsSender.clear();
+        smsText.clear();
         needs
           ..clear()
           ..add(_Need());
@@ -319,11 +337,52 @@ class _NewReportScreenState extends State<NewReportScreen> {
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
-              const PageHeader(
-                'Submit Post-Disaster Report',
-                subtitle:
-                    'Saved as Pending until the Administrator validates it.',
+              PageHeader(
+                sms ? 'Encode SMS Report' : 'Submit Post-Disaster Report',
+                subtitle: sms
+                    ? 'For reports texted in when there is no internet. '
+                          'Saved as Pending until the Administrator validates it.'
+                    : 'Saved as Pending until the Administrator validates it.',
               ),
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(
+                    value: false,
+                    icon: Icon(Icons.edit_note),
+                    label: Text('Field report'),
+                  ),
+                  ButtonSegment(
+                    value: true,
+                    icon: Icon(Icons.sms_outlined),
+                    label: Text('SMS report'),
+                  ),
+                ],
+                selected: {sms},
+                onSelectionChanged: (v) => setState(() => sms = v.first),
+              ),
+              if (sms) ...[
+                const SectionTitle('SMS as received'),
+                TextFormField(
+                  controller: smsSender,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Sender number',
+                    hintText: '09XXXXXXXXX',
+                  ),
+                  validator: (v) =>
+                      (v ?? '').trim().isEmpty ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: smsText,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'SMS text (copy it exactly)',
+                  ),
+                  validator: (v) =>
+                      (v ?? '').trim().isEmpty ? 'Required' : null,
+                ),
+              ],
               const SectionTitle('Disaster and location'),
               LookupDropdown(
                 list: 'disaster_types',
@@ -395,8 +454,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(50),
                 ),
-                icon: const Icon(Icons.send),
-                label: const Text('Submit report'),
+                icon: Icon(sms ? Icons.sms_outlined : Icons.send),
+                label: Text(sms ? 'Encode SMS report' : 'Submit report'),
               ),
             ],
           ),
@@ -406,8 +465,155 @@ class _NewReportScreenState extends State<NewReportScreen> {
   }
 }
 
+/// Appendix H 3.3 Priority-based report filtering.
+class PriorityChips extends StatelessWidget {
+  final String value;
+  final ValueChanged<String> onChanged;
+  const PriorityChips({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+
+  static const levels = [
+    '',
+    'Critical',
+    'High',
+    'Medium',
+    'Low',
+    'Needs Review',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final p in levels)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: ChoiceChip(
+                label: Text(p.isEmpty ? 'All priorities' : p),
+                selected: value == p,
+                onSelected: (_) => onChanged(p),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
-// UC-CD2 / UC-B2 needs monitoring: reports with fulfillment progress
+// Appendix H 2.4 View validated reports (every role), with 3.3
+// priority-based filtering for the roles that have it.
+// ---------------------------------------------------------------------------
+class ValidatedReportsScreen extends StatefulWidget {
+  /// Show the priority filter (Admin, donors, CSWS Main Office and
+  /// Disaster Unit in Appendix H 3.3).
+  final bool filter;
+  final bool header;
+  const ValidatedReportsScreen({
+    super.key,
+    this.filter = false,
+    this.header = true,
+  });
+
+  @override
+  State<ValidatedReportsScreen> createState() => _ValidatedReportsScreenState();
+}
+
+class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
+  String priority = '';
+
+  @override
+  Widget build(BuildContext context) {
+    return Loader(
+      key: ValueKey(priority),
+      load: [
+        () => api.get(
+          '/reports/validated',
+          query: {if (priority.isNotEmpty) 'priority_level': priority},
+        ),
+        api.lookupsResult,
+      ],
+      builder: (context, data) {
+        final rows = (data[0] as List).cast<Map<String, dynamic>>();
+        final names = Names(Map<String, dynamic>.from(data[1] as Map));
+        return ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            if (widget.header)
+              PageHeader(
+                'Validated Reports',
+                subtitle:
+                    'Reports approved by the Administrator • ${roleLine()}',
+              ),
+            if (widget.filter) ...[
+              PriorityChips(
+                value: priority,
+                onChanged: (p) => setState(() => priority = p),
+              ),
+              const SizedBox(height: 12),
+            ],
+            if (rows.isEmpty) const EmptyState('No validated reports to show.'),
+            for (final r in rows) ReportCard(r, names),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Reports menu for CSWS Main Office and Disaster Unit: validated reports
+/// (2.4) and report status monitoring (2.5), both with priority filters.
+class ReportsHub extends StatefulWidget {
+  const ReportsHub({super.key});
+
+  @override
+  State<ReportsHub> createState() => _ReportsHubState();
+}
+
+class _ReportsHubState extends State<ReportsHub> {
+  bool monitor = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+          child: SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(
+                value: false,
+                icon: Icon(Icons.verified_outlined),
+                label: Text('Validated'),
+              ),
+              ButtonSegment(
+                value: true,
+                icon: Icon(Icons.monitor_heart_outlined),
+                label: Text('Status'),
+              ),
+            ],
+            selected: {monitor},
+            onSelectionChanged: (v) => setState(() => monitor = v.first),
+          ),
+        ),
+        Expanded(
+          child: monitor
+              ? const MonitoringScreen()
+              : const ValidatedReportsScreen(filter: true),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Appendix H 2.5 Monitor report status (Admin, CSWS Main Office,
+// CSWS Disaster Unit): every report with its fulfillment progress.
 // ---------------------------------------------------------------------------
 class MonitoringScreen extends StatefulWidget {
   const MonitoringScreen({super.key});
@@ -441,28 +647,9 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
               subtitle:
                   'Needs monitoring with fulfillment progress • ${roleLine()}',
             ),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final p in const [
-                    '',
-                    'Critical',
-                    'High',
-                    'Medium',
-                    'Low',
-                    'Needs Review',
-                  ])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        label: Text(p.isEmpty ? 'All' : p),
-                        selected: priority == p,
-                        onSelected: (_) => setState(() => priority = p),
-                      ),
-                    ),
-                ],
-              ),
+            PriorityChips(
+              value: priority,
+              onChanged: (p) => setState(() => priority = p),
             ),
             const SizedBox(height: 12),
             if (rows.isEmpty) const EmptyState('No reports to show.'),
@@ -486,6 +673,7 @@ class AdminReportsScreen extends StatefulWidget {
 
 class _AdminReportsScreenState extends State<AdminReportsScreen> {
   String status = 'Pending';
+  String priority = '';
 
   Future<void> _reject(Map<String, dynamic> r) async {
     final v = await formDialog(
@@ -506,62 +694,19 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
     );
   }
 
-  Future<void> _encodeSms(Names names) async {
-    final types = names.rows('disaster_types');
-    final brgys = names.rows('barangays');
-    if (types.isEmpty || brgys.isEmpty) return;
-    final v = await formDialog(
-      context,
-      title: 'Encode SMS report',
-      message: 'UC-A3 step 8a: type in a report received by SMS.',
-      fields: [
-        const DialogField('contact', 'Sender number'),
-        const DialogField('raw', 'SMS text as received', multiline: true),
-        DialogField(
-          'type',
-          'Disaster type',
-          initial: '${types.first['name']}',
-          options: [for (final t in types) '${t['name']}'],
-        ),
-        DialogField(
-          'brgy',
-          'Barangay',
-          initial: '${brgys.first['name']}',
-          options: [for (final b in brgys) '${b['name']}'],
-        ),
-        const DialogField('families', 'Affected families', number: true),
-        const DialogField('needs', 'Assistance needed'),
-        const DialogField('qty', 'Estimated quantity', number: true),
-      ],
-      confirm: 'Encode',
-    );
-    if (v == null || !mounted) return;
-    int idOf(List<Map<String, dynamic>> rows, String name) =>
-        rows.firstWhere((r) => r['name'] == name)['id'] as int;
-    await act(
-      context,
-      () => api.post(
-        '/reports/sms',
-        body: {
-          'contact_number': v['contact'],
-          'raw_message': v['raw'],
-          'disaster_type_id': idOf(types, v['type']!),
-          'barangay_id': idOf(brgys, v['brgy']!),
-          'affected_families': int.tryParse(v['families']!),
-          'assistance_needed': v['needs'],
-          'estimated_quantity': int.tryParse(v['qty']!),
-        },
-      ),
-      success: 'SMS report encoded. It is now in the pending list.',
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey(status),
+      key: ValueKey('$status/$priority'),
       load: [
-        () => api.get('/reports/', query: {'status': status}),
+        () => api.get(
+          '/reports/',
+          query: {
+            'status': status,
+            if (status == 'Validated' && priority.isNotEmpty)
+              'priority_level': priority,
+          },
+        ),
         api.lookupsResult,
       ],
       builder: (context, data) {
@@ -580,15 +725,14 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
               selected: {status},
               onSelectionChanged: (s) => setState(() => status = s.first),
             ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => _encodeSms(names),
-                icon: const Icon(Icons.sms_outlined),
-                label: const Text('Encode SMS report'),
+            const SizedBox(height: 12),
+            if (status == 'Validated') ...[
+              PriorityChips(
+                value: priority,
+                onChanged: (p) => setState(() => priority = p),
               ),
-            ),
+              const SizedBox(height: 12),
+            ],
             if (rows.isEmpty) EmptyState('No ${status.toLowerCase()} reports.'),
             for (final r in rows)
               ReportCard(
