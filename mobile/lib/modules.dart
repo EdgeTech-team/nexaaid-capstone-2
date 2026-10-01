@@ -228,7 +228,8 @@ class ProcessReportsPage extends StatelessWidget {
       note:
           'UC-A3: review pending reports, then validate (runs the AI-assisted '
           'priority guidance and publishes it to donors) or reject with a '
-          'reason. SMS reports are encoded here (step 8a).',
+          'reason. SMS reports are encoded by the CSWS Disaster Unit '
+          '(Appendix H 2.2), so the SMS form below is for that role.',
       children: [
         ApiForm(
           title: 'Pending reports',

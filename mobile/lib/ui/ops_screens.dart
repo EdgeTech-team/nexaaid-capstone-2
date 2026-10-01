@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../api.dart' show Roles;
+import 'records_screens.dart' show SupportRecordsScreen;
 import 'widgets.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
@@ -93,7 +95,14 @@ Future<void> showDeliveryHistory(BuildContext context, int deliveryId) async {
 // ---------------------------------------------------------------------------
 class DeliveriesScreen extends StatelessWidget {
   final bool barangay;
-  const DeliveriesScreen({super.key, this.barangay = false});
+
+  /// Appendix H 8.5 View delivery records only (Administrator, DRRMO).
+  final bool readOnly;
+  const DeliveriesScreen({
+    super.key,
+    this.barangay = false,
+    this.readOnly = false,
+  });
 
   Future<void> _requestTransport(BuildContext context, Map d) async {
     final v = await formDialog(
@@ -155,7 +164,7 @@ class DeliveriesScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      floatingActionButton: barangay
+      floatingActionButton: barangay || readOnly
           ? null
           : FloatingActionButton.extended(
               onPressed: () => Navigator.of(context).push(
@@ -170,6 +179,8 @@ class DeliveriesScreen extends StatelessWidget {
           api.lookupsResult,
           barangay
               ? () => api.get('/dashboard/barangay')
+              : api.role == Roles.drrmo
+              ? () => api.get('/drrmo/requests')
               : () => api.get('/logistics/requests'),
         ],
         builder: (context, data) {
@@ -188,17 +199,43 @@ class DeliveriesScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
             children: [
               PageHeader(
-                barangay ? 'Incoming Aid' : 'Release & Delivery Tracking',
+                barangay
+                    ? 'Incoming Aid'
+                    : readOnly
+                    ? 'Delivery Records'
+                    : 'Release & Delivery Tracking',
                 subtitle: barangay
                     ? 'Aid for your assigned barangay. Confirm receipt when it '
                           'arrives, then acknowledge it.'
+                    : readOnly
+                    ? 'Every delivery with its tracking status and history.'
                     : 'Prepare goods from a report\'s inventory, then move the '
                           'status one step at a time.',
               ),
+              if (!barangay && !readOnly)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => Scaffold(
+                          appBar: AppBar(
+                            title: const Text('Logistics support records'),
+                          ),
+                          body: const SupportRecordsScreen(),
+                        ),
+                      ),
+                    ),
+                    icon: const Icon(Icons.fire_truck_outlined),
+                    label: const Text('Logistics support records'),
+                  ),
+                ),
               if (rows.isEmpty)
                 EmptyState(
                   barangay
                       ? 'No deliveries to your barangay yet.'
+                      : readOnly
+                      ? 'No deliveries yet.'
                       : 'No deliveries yet. Tap "Prepare delivery".',
                 ),
               for (final d in rows)
@@ -310,6 +347,7 @@ class DeliveriesScreen extends StatelessWidget {
                   label: const Text('History'),
                 ),
                 if (!barangay &&
+                    !readOnly &&
                     (status == 'Preparing' || status == 'In Transit') &&
                     (request == null ||
                         reqStage == 'Declined' ||
@@ -319,7 +357,7 @@ class DeliveriesScreen extends StatelessWidget {
                     icon: const Icon(Icons.fire_truck_outlined),
                     label: const Text('Request transport'),
                   ),
-                if (!barangay && next != null)
+                if (!barangay && !readOnly && next != null)
                   FilledButton.icon(
                     onPressed: () => act(
                       context,

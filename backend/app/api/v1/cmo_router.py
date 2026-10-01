@@ -161,7 +161,8 @@ def list_confirmed_donations(
 @router.get("/dashboard")
 def cmo_dashboard(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(CMO)),
+    # Appendix H, Module 6.3: Admin also views donation summaries per report.
+    current_user: User = Depends(require_role(CMO, "Administrator")),
 ):
     """UC-C2: pending, confirmed, and donation summaries per report."""
     donations = db.query(PhysicalDonation).filter(

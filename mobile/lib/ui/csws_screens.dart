@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
 
 /// Camera QR scanner. Returns the scanned text (e.g. DON-1A2B3C...).
@@ -259,7 +260,21 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
               icon: const Icon(Icons.qr_code_scanner),
               label: const Text('Scan QR code'),
             ),
-            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: const Text('Donation records')),
+                      body: const DonationRecordsScreen(header: false),
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.folder_open_outlined),
+                label: const Text('All donation records'),
+              ),
+            ),
             Row(
               children: [
                 Expanded(

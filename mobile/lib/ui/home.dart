@@ -6,6 +6,7 @@ import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_screens.dart';
 import 'ops_screens.dart';
+import 'records_screens.dart';
 import 'report_screens.dart';
 import 'widgets.dart';
 
@@ -16,57 +17,63 @@ class _Tab {
   const _Tab(this.label, this.icon, this.body);
 }
 
-/// Bottom menu for each role, following the manuscript use cases and the
-/// role-based dashboards of section 7.
+/// Bottom menu for each role, following the module list in Appendix H
+/// (who may use which module) and the role dashboards of section 7.
 List<_Tab> _tabsFor(String? role) {
-  const monitoring = _Tab(
-    'Monitoring',
-    Icons.monitor_heart_outlined,
-    MonitoringScreen(),
+  // Appendix H 2.4 View Validated Reports: every role. Roles that also
+  // have 3.3 Priority-Based Report Filtering get the priority chips.
+  const reports = _Tab(
+    'Reports',
+    Icons.article_outlined,
+    ValidatedReportsScreen(),
   );
+  // 2.4 + 2.5 Monitor Report Status, with priority filters (3.3).
+  const reportsHub = _Tab('Reports', Icons.article_outlined, ReportsHub());
   switch (role) {
     case Roles.admin:
       return const [
+        _Tab('Overview', Icons.dashboard_outlined, AdminDashboard()), // 9.1
         _Tab(
-          'Overview',
-          Icons.dashboard_outlined,
-          AdminDashboard(),
-        ), // UC-A4, 7.7
-        _Tab(
-          'Reports',
+          'Validate',
           Icons.fact_check_outlined,
           AdminReportsScreen(),
-        ), // UC-A3
+        ), // 2.3, 2.4, 3.1, 3.3
+        _Tab(
+          'Monitoring',
+          Icons.monitor_heart_outlined,
+          MonitoringScreen(),
+        ), // 2.5
+        _Tab(
+          'Records',
+          Icons.folder_open_outlined,
+          AdminRecordsScreen(),
+        ), // 4.4, 4.5, 5.5, 6.3, 7.5, 8.5
         _Tab(
           'Accounts',
           Icons.manage_accounts_outlined,
           AccountsHub(),
-        ), // UC-A1, UC-A2
-        monitoring,
+        ), // 1.2, 1.3, 1.5
       ];
     case Roles.cswsUnit:
       return const [
-        _Tab(
-          'Overview',
-          Icons.dashboard_outlined,
-          DashboardScreen(),
-        ), // UC-CD2, 7.2
-        _Tab('New report', Icons.edit_note, NewReportScreen()), // UC-CD1
-        monitoring, // 4.1 needs monitoring
+        _Tab('Overview', Icons.dashboard_outlined, DashboardScreen()), // 9.3
+        _Tab('New report', Icons.edit_note, NewReportScreen()), // 2.1, 2.2 SMS
+        reportsHub, // 2.4, 2.5, 3.3
       ];
     case Roles.cswsMain:
       return const [
+        _Tab('Overview', Icons.dashboard_outlined, CswsMainDashboard()), // 9.2
+        reportsHub, // 2.4, 2.5, 3.3
         _Tab(
-          'Overview',
-          Icons.dashboard_outlined,
-          CswsMainDashboard(),
-        ), // UC-CM3, 7.1
-        _Tab('Receive', Icons.qr_code_scanner, ReceiveScreen()), // UC-CM1
+          'Receive',
+          Icons.qr_code_scanner,
+          ReceiveScreen(),
+        ), // Module 5, 4.4
         _Tab(
           'Deliveries',
           Icons.local_shipping_outlined,
           DeliveriesScreen(),
-        ), // UC-CM2
+        ), // 5.4, 7.1, 8.1
       ];
     case Roles.cmo:
       return const [
@@ -74,7 +81,8 @@ List<_Tab> _tabsFor(String? role) {
           'Confirmations',
           Icons.verified_outlined,
           CmoScreen(),
-        ), // UC-C1, UC-C2
+        ), // Module 6, 9.5
+        reports, // 2.4
       ];
     case Roles.drrmo:
       return const [
@@ -82,7 +90,13 @@ List<_Tab> _tabsFor(String? role) {
           'Logistics',
           Icons.fire_truck_outlined,
           DrrmoScreen(),
-        ), // UC-DR1, UC-DR2
+        ), // Module 7, 9.6
+        _Tab(
+          'Deliveries',
+          Icons.local_shipping_outlined,
+          DeliveriesScreen(readOnly: true),
+        ), // 8.5
+        reports, // 2.4
       ];
     case Roles.barangay:
       return const [
@@ -90,26 +104,19 @@ List<_Tab> _tabsFor(String? role) {
           'Incoming aid',
           Icons.move_to_inbox_outlined,
           DeliveriesScreen(barangay: true),
-        ), // UC-B1
-        _Tab(
-          'Overview',
-          Icons.dashboard_outlined,
-          BarangayDashboard(),
-        ), // UC-B2, 7.6
+        ), // 8.2-8.5
+        _Tab('Overview', Icons.dashboard_outlined, BarangayDashboard()), // 9.7
+        reports, // 2.4
       ];
     case Roles.donor:
     case Roles.org:
       return const [
-        _Tab(
-          'Dashboard',
-          Icons.dashboard_outlined,
-          DonorDashboard(),
-        ), // UC-D3/D4, R3/R4
+        _Tab('Dashboard', Icons.dashboard_outlined, DonorDashboard()), // 9.4
         _Tab(
           'Donate',
           Icons.volunteer_activism_outlined,
           ReportsFeed(),
-        ), // UC-D2, R2
+        ), // 2.4, 3.3, Module 4
       ];
     default: // guest: public homepage (1.4)
       return const [

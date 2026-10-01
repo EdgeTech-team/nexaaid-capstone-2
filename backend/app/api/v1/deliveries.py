@@ -111,6 +111,7 @@ def create_delivery(
 
 # List — staff, with filters
 
+# Appendix H, Module 8.5: DRRMO also views delivery records (read only).
 @router.get("/",response_model=List[DeliveryResponse])
 def list_deliveries(
   status_filter: Optional[str] = Query(default=None, alias="status"),
@@ -119,7 +120,7 @@ def list_deliveries(
   skip: int = Query(default=0, ge=0),
   limit: int =Query(default=50, ge=1, le=200),
   db: Session = Depends(get_db),
-  current_user=Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep")),
+  current_user=Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep", "drrmo logistics support")),
 
 ):
     query = db.query(Delivery).options(joinedload(Delivery.items))

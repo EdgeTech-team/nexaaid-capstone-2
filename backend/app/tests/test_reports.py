@@ -118,8 +118,8 @@ def test_reporter_cannot_validate_report(reporter_client, seed):
     assert resp.status_code == 403
 
 
-def test_sms_ingest_creates_report_and_metadata(admin_client, seed):
-    # FR 2.4: SMS reports are reviewed and manually encoded by staff.
+def test_sms_ingest_creates_report_and_metadata(unit_client, admin_client, seed):
+    # FR 2.4 / Appendix H Module 2.2: the CSWS Disaster Unit encodes SMS reports.
     payload = {
         "contact_number": "09171234567",
         "raw_message": "FLOOD BRGY TEST 5FAM FOOD WATER",
@@ -129,7 +129,9 @@ def test_sms_ingest_creates_report_and_metadata(admin_client, seed):
         "assistance_needed": "Food, water",
     }
 
-    resp = admin_client.post("/reports/sms", json=payload)
+    assert admin_client.post("/reports/sms", json=payload).status_code == 403
+
+    resp = unit_client.post("/reports/sms", json=payload)
 
     assert resp.status_code == 201
     body = resp.json()

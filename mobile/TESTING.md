@@ -24,18 +24,18 @@ Representative per barangay (`<barangay>.rep@example.com`), the `audit_logs` tab
 missing), approves the test organization, and sets `testpass123` on the donor and
 organization test accounts.
 
-## Menus per role (bottom bar)
+## Menus per role (bottom bar), following Appendix H (List of Modules)
 
-| Role | Menu | Manuscript |
+| Role | Menu | Appendix H |
 |------|------|------------|
-| Guest | Donate | 1.4, UC-D2 |
-| Individual Donor / Relief Organization | Dashboard · Donate | UC-D2-D4, UC-R2-R4, 7.3 |
-| Administrator | Overview (activity log) · Reports · Accounts (users, organizations, new account) · Monitoring | UC-A1-A4, 7.7 |
-| CSWS Disaster Unit | Overview · New report · Monitoring | UC-CD1, UC-CD2, 7.2 |
-| CSWS Main Office | Overview · Receive (scan QR / search, inventory per report) · Deliveries | UC-CM1-CM3, 7.1 |
-| CMO Representative | Confirmations (confirm / hold / review / revert, summary per report) | UC-C1, UC-C2, 7.4 |
-| DRRMO Logistics Support | Logistics (new / scheduled / in transit / completed) | UC-DR1, UC-DR2, 7.5 |
-| Barangay Receiving Rep | Incoming aid (confirm receipt, acknowledge, history) · Overview | UC-B1, UC-B2, 7.6 |
+| Guest | Donate | 4.2 |
+| Individual Donor / Relief Organization | Dashboard · Donate (validated reports with priority filter) | 1.1, 2.4, 3.2, 3.3, Module 4, 9.4 |
+| Administrator | Overview · Validate (pending / validated with priority filter / rejected) · Monitoring · Records (donations, per report, deliveries, logistics) · Accounts | 1.2, 1.3, 2.3-2.5, 3.1-3.3, 4.4, 4.5, 6.3, 7.5, 8.5, 9.1 |
+| CSWS Disaster Unit | Overview · New report (field report or **SMS report**) · Reports (validated / status, priority filter) | 2.1, 2.2, 2.4, 2.5, 3.3, 9.3 |
+| CSWS Main Office | Overview · Reports (validated / status, priority filter) · Receive (scan QR, inventory, all donation records) · Deliveries (logistics support records) | 2.4, 2.5, 3.3, 4.4, Module 5, 7.1, 7.5, 8.1, 9.2 |
+| CMO Representative | Confirmations · Reports | Module 6, 2.4, 9.5 |
+| DRRMO Logistics Support | Logistics · Deliveries (view only) · Reports (no priority, per 3.2) | Module 7, 8.5, 2.4, 9.6 |
+| Barangay Receiving Rep | Incoming aid · Overview · Reports | 8.2-8.5, 2.4, 9.7 |
 
 Profile → Developer tools opens the original test console.
 
@@ -45,7 +45,7 @@ Profile → Developer tools opens the original test console.
 |---|-----------|----|--------|
 | 1 | new organization | Register organization, then try to log in | "registration is Pending" |
 | 2 | Administrator | Accounts → Organizations → Approve | organization can log in |
-| 3 | CSWS Disaster Unit | New report: type, barangay, sitio, needs | Pending |
+| 3 | CSWS Disaster Unit | New report: type, barangay, sitio, needs (or switch to SMS report) | Pending |
 | 4 | Administrator | Reports → Validate | Validated, priority set |
 | 5 | Donor or guest | Donate → Donate → items → Submit | QR code per item |
 | 6 | CSWS Main Office | Receive → Scan QR code (or type it) → Receive goods, actual quantity | stock under the report |

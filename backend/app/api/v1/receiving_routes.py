@@ -191,3 +191,33 @@ def confirm_donation(
     db.commit()
     db.refresh(donation)
     return donation
+
+@router.get("/records")
+def donation_records(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("Administrator", "CSWS Main Office", "CMO Representative")),
+):
+    """Appendix H, Module 4.4 / 4.5: View donation records and monitor
+    donation status (Administrator, CSWS Main Office, CMO)."""
+    from api.v1.cmo_router import _rows
+    query = db.query(PhysicalDonation)
+    if status:
+        query = query.filter(PhysicalDonation.status == status)
+    donations = query.order_by(PhysicalDonation.donation_id.desc()).limit(300).all()
+    users = {
+        u.user_id: f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
+        for u in db.query(User).filter(User.user_id.in_({d.user_id for d in donations if d.user_id})).all()
+    }
+    guests = {
+        g.guest_donor_id: g.full_name
+        for g in db.query(GuestDonor).filter(
+            GuestDonor.guest_donor_id.in_({d.guest_donor_id for d in donations if d.guest_donor_id})
+        ).all()
+    }
+    rows = _rows(db, donations)
+    for row, d in zip(rows, donations):
+        row["donor"] = users.get(d.user_id) if d.user_id else f"{guests.get(d.guest_donor_id, 'Guest')} (guest)"
+        row["handover_method"] = d.handover_method
+        row["created_at"] = d.created_at
+    return rows
