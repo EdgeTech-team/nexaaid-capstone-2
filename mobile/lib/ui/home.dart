@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../design/gallery_screen.dart';
 import '../dev_console.dart';
 import 'admin_screens.dart';
 import 'csws_screens.dart';
@@ -125,6 +126,13 @@ List<_Tab> _tabsFor(String? role) {
   }
 }
 
+/// Extra buttons in the signed-in app bar.
+/// Mariquit (Sprint 0): add the notification bell here, e.g.
+/// `const NotificationBell()`.
+List<Widget> _shellActions(BuildContext context) => const [];
+
+/// The app shell: role-based navigation (bottom bar on phones, side rail
+/// on tablets and Chrome) around the role's screens.
 class RoleHome extends StatefulWidget {
   const RoleHome({super.key});
 
@@ -142,36 +150,83 @@ class _RoleHomeState extends State<RoleHome> {
       const _Tab('Profile', Icons.person_outline, ProfileScreen()),
     ];
     if (index >= tabs.length) index = 0;
+    final wide = MediaQuery.sizeOf(context).width >= Breakpoints.expanded;
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+
+    final body = AnimatedSwitcher(
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : Motion.fast,
+      child: KeyedSubtree(key: ValueKey(index), child: tabs[index].body),
+    );
+
     return Scaffold(
       appBar: AppBar(
+        titleSpacing: Space.md,
         title: Row(
           children: [
-            const Icon(Icons.volunteer_activism, size: 22),
-            const SizedBox(width: 8),
-            const Text(
-              'NexaAid',
-              style: TextStyle(fontWeight: FontWeight.w800),
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: cs.primary,
+                borderRadius: BorderRadius.circular(Radii.sm),
+              ),
+              child: Icon(
+                Icons.volunteer_activism,
+                size: 18,
+                color: cs.onPrimary,
+              ),
             ),
-            const SizedBox(width: 10),
+            Gaps.h12,
             Flexible(
-              child: Text(
-                api.loggedIn ? '· ${api.role}' : '· Guest',
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('NexaAid', style: t.titleMedium),
+                  Text(
+                    api.loggedIn ? (api.role ?? 'Signed in') : 'Guest',
+                    overflow: TextOverflow.ellipsis,
+                    style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ],
               ),
             ),
           ],
         ),
+        actions: [..._shellActions(context), Gaps.h8],
       ),
-      body: tabs[index].body,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: (i) => setState(() => index = i),
-        destinations: [
-          for (final t in tabs)
-            NavigationDestination(icon: Icon(t.icon), label: t.label),
-        ],
-      ),
+      body: wide
+          ? Row(
+              children: [
+                NavigationRail(
+                  selectedIndex: index,
+                  onDestinationSelected: (i) => setState(() => index = i),
+                  labelType: NavigationRailLabelType.all,
+                  destinations: [
+                    for (final tab in tabs)
+                      NavigationRailDestination(
+                        icon: Icon(tab.icon),
+                        label: Text(tab.label),
+                      ),
+                  ],
+                ),
+                const VerticalDivider(width: 1),
+                Expanded(child: body),
+              ],
+            )
+          : body,
+      bottomNavigationBar: wide
+          ? null
+          : FloatingNavBar(
+              selectedIndex: index,
+              onSelected: (i) => setState(() => index = i),
+              items: [
+                for (final tab in tabs) FloatingNavItem(tab.icon, tab.label),
+              ],
+            ),
     );
   }
 }
@@ -181,22 +236,66 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    void open(Widget page) =>
+        Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+
     return ListView(
-      padding: const EdgeInsets.all(20),
+      padding: Space.page,
       children: [
-        const PageHeader('Profile'),
-        Card(
-          child: ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: Brand.pinkSoft,
-              child: Icon(Icons.person, color: Brand.pink),
-            ),
-            title: Text(api.email ?? 'Guest donor'),
-            subtitle: Text(api.role ?? 'Not logged in'),
+        AppCard(
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 26,
+                backgroundColor: cs.primaryContainer,
+                child: Icon(Icons.person, color: cs.onPrimaryContainer),
+              ),
+              Gaps.h16,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(api.email ?? 'Guest donor', style: t.titleMedium),
+                    Text(
+                      api.role ?? 'Not logged in',
+                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 8),
-        Card(
+        const SectionHeader('Appearance'),
+        ValueListenableBuilder<ThemeMode>(
+          valueListenable: AppTheme.mode,
+          builder: (context, mode, _) => SegmentedButton<ThemeMode>(
+            segments: const [
+              ButtonSegment(
+                value: ThemeMode.system,
+                icon: Icon(Icons.brightness_auto_outlined),
+                label: Text('System'),
+              ),
+              ButtonSegment(
+                value: ThemeMode.light,
+                icon: Icon(Icons.light_mode_outlined),
+                label: Text('Light'),
+              ),
+              ButtonSegment(
+                value: ThemeMode.dark,
+                icon: Icon(Icons.dark_mode_outlined),
+                label: Text('Dark'),
+              ),
+            ],
+            selected: {mode},
+            onSelectionChanged: (s) => AppTheme.mode.value = s.first,
+          ),
+        ),
+        const SectionHeader('Developer tools'),
+        AppCard(
+          padding: EdgeInsets.zero,
           child: Column(
             children: [
               ListTile(
@@ -204,24 +303,34 @@ class ProfileScreen extends StatelessWidget {
                 title: const Text('Server'),
                 subtitle: Text(api.baseUrl),
               ),
+              const Divider(),
               ListTile(
                 leading: const Icon(Icons.developer_mode),
-                title: const Text('Developer tools'),
+                title: const Text('API console'),
                 subtitle: const Text('Raw API forms and role checks'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(
-                  context,
-                ).push(MaterialPageRoute(builder: (_) => const DevConsole())),
+                onTap: () => open(const DevConsole()),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.palette_outlined),
+                title: const Text('Design system gallery'),
+                subtitle: const Text(
+                  'Every component, in dark mode and large text',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => open(const DesignGalleryScreen()),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 16),
-        FilledButton.icon(
+        Gaps.v24,
+        AppButton(
+          api.loggedIn ? 'Log out' : 'Back to start',
+          icon: Icons.logout,
+          variant: AppButtonVariant.secondary,
+          expand: true,
           onPressed: api.logout,
-          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-          icon: const Icon(Icons.logout),
-          label: Text(api.loggedIn ? 'Log out' : 'Back to login'),
         ),
       ],
     );

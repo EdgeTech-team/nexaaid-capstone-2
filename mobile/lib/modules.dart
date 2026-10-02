@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'common.dart';
+import 'report_api.dart';
+import 'report_list_screen.dart';
 
 /// One feature screen and the roles that are meant to use it.
 /// `guest: true` means it also works without logging in.
@@ -84,6 +86,11 @@ final modules = <Module>[
     {Roles.admin},
     (_) => const AdminPage(),
   ),
+  
+    Module('Browse validated reports', '3.7 / 3.11', Icons.list_alt_outlined, {
+    Roles.cswsUnit,
+    Roles.admin,
+  }, (_) => const ReportListScreen(api: ReportApi())),
 ];
 
 final _api = Api.instance;
