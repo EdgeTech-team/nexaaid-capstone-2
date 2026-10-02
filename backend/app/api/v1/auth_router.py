@@ -1,8 +1,11 @@
 # routers/auth_router.py
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from core.database import get_db                     # [NOT SPECIFIED — confirm against Mark's real dependency name]
-from core.auth import hash_password                    # [NOT SPECIFIED — confirm against Mark's real function name]
+
+from core.database import get_db
+from core.auth import hash_password
 from models.user_rbac_model import User
 from models.role_model import Role
 from models.organization_model import Organization
@@ -11,15 +14,19 @@ from schemas.organization_schema import OrganizationRegisterRequest, Organizatio
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+
+def _email_taken(db: Session, email: str) -> bool:
+    return db.query(User).filter(func.lower(User.email) == email.lower()).first() is not None
+
+
 @router.post("/register/donor", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register_donor(payload: DonorRegisterRequest, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == payload.email).first():
+    if _email_taken(db, payload.email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
- 
     donor_role = db.query(Role).filter(Role.role_name == "Individual Donor").first()
     if donor_role is None:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Role configuration missing")
+        raise HTTPException(status_code=500, detail="Role configuration missing")
 
     new_user = User(
         first_name=payload.first_name,
@@ -30,24 +37,28 @@ def register_donor(payload: DonorRegisterRequest, db: Session = Depends(get_db))
         id_document_url=payload.id_document_url,
         role_id=donor_role.role_id,
         organization_id=None,
+        must_change_password=False,  # they chose this password themselves
     )
     db.add(new_user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Email already registered")
     db.refresh(new_user)
     return new_user
 
 
 @router.post("/register/organization", response_model=OrganizationResponse, status_code=status.HTTP_201_CREATED)
 def register_organization(payload: OrganizationRegisterRequest, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == payload.contact_email).first():
+    if _email_taken(db, payload.contact_email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     if db.query(Organization).filter(Organization.registration_no == payload.registration_no).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Registration number already used")
 
-
-    org_role = db.query(Role).filter(Role.role_name == "Relief Organization").first()  # [NOT SPECIFIED — confirm exact seeded string]
+    org_role = db.query(Role).filter(Role.role_name == "Relief Organization").first()
     if org_role is None:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Role configuration missing")
+        raise HTTPException(status_code=500, detail="Role configuration missing")
 
     new_org = Organization(
         org_name=payload.org_name,
@@ -56,21 +67,27 @@ def register_organization(payload: OrganizationRegisterRequest, db: Session = De
         contact_person=payload.contact_person,
         registration_no=payload.registration_no,
         contact_email=payload.contact_email,
-        legitimacy_document_url=payload.legitimacy_document_url,  # now a real column — this actually persists
+        legitimacy_document_url=payload.legitimacy_document_url,
     )
     db.add(new_org)
     db.flush()
 
     new_user = User(
-        first_name=payload.contact_person,
-        last_name="",  # [NOT SPECIFIED — Capstone 1 doesn't split org contact into first/last name]
+        first_name=payload.contact_person,  # capped at 50 chars in the schema
+        last_name="",                        # manuscript doesn't split org contact name
         email=payload.contact_email,
         password_hash=hash_password(payload.password),
         contact_number=payload.contact_number,
         role_id=org_role.role_id,
         organization_id=new_org.organization_id,
+        must_change_password=False,
     )
     db.add(new_user)
-    db.commit()
+    # Login stays blocked by authenticate_user() until the admin approves the org.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Email or registration number already exists")
     db.refresh(new_org)
     return new_org

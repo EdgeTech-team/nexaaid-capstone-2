@@ -40,6 +40,8 @@ def user_payload(user: User) -> dict:
         "role_name": user.role.role_name,
         "organization_id": user.organization_id,
         "assigned_barangay_id": user.assigned_barangay_id,
+        "employee_id": user.employee_id,
+        "must_change_password": user.must_change_password,
     }
 
 
@@ -71,11 +73,16 @@ def build_login_response(user: User) -> dict:
         "access_token": token,
         "token_type": "bearer",
         "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "must_change_password": user.must_change_password,
         "user": user_payload(user),
     }
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_current_user_allow_temp(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+) -> User:
+    """Identifies the user from the token. Does NOT block users who still have a
+    temporary password. Use ONLY for /auth/me and /auth/change-password."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials (invalid or expired token)",
@@ -98,6 +105,17 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     return user
 
 
+def get_current_user(user: User = Depends(get_current_user_allow_temp)) -> User:
+    """Default for every protected route. Blocks users who still have the emailed
+    temporary password until they change it."""
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password change required. Call POST /auth/change-password first.",
+        )
+    return user
+
+
 # Same token URL, but auto_error=False so a missing token doesn't raise 401
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
@@ -115,6 +133,7 @@ def get_current_user_optional(
     except JWTError:
         return None
     return db.query(User).filter(User.email == email).first()
+
 
 def _norm_role(name) -> str:
     """'CSWS Main Office' / 'csws_main_office' -> 'csws_main_office'"""
@@ -158,6 +177,7 @@ def barangay_scope(user: User):
     return barangay_id
 
 def require_role(*allowed_roles):
+    # Depends on get_current_user, which already blocks temp-password users.
     def role_checker(user: User = Depends(get_current_user)):
         if not has_role(user, *allowed_roles):
             raise HTTPException(status_code=403, detail="You do not have permission to access this resource")
