@@ -12,3 +12,4 @@ qrcode[pil]
 email-validator
 pytest
 httpx
+Pillow
