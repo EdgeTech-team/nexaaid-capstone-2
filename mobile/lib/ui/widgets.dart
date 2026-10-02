@@ -1,22 +1,28 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../design/design.dart';
+
+// Screens that import widgets.dart also get the design system.
+export '../design/design.dart';
 
 final api = Api.instance;
 
 // ---------------------------------------------------------------------------
-// Brand colors
+// Brand colors (old names, kept so existing screens compile).
+// New code: use Theme.of(context).colorScheme, or the design system in
+// lib/design/. These fixed colors do not adapt to dark mode, so replace
+// Brand.ink / Brand.muted with colorScheme.onSurface / onSurfaceVariant
+// when you restyle your screens.
 // ---------------------------------------------------------------------------
 class Brand {
-  // Teal palette (the earlier prototype theme). The names are kept from the
-  // wireframe version so every screen picks the colors up from one place.
-  static const pink = Color(0xFF00695C); // primary: buttons, bars, logo
-  static const pinkDark = Color(0xFF004D40);
-  static const pinkSoft = Color(0xFFB2DFDB); // tints and highlights
-  static const ink = Color(0xFF1F2937); // headings
+  static const pink = AppColors.harbor; // primary: buttons, bars, logo
+  static const pinkDark = AppColors.harborDeep;
+  static const pinkSoft = AppColors.harborMist; // tints and highlights
+  static const ink = AppColors.ink; // headings
   static const muted = Color(0xFF6B7280); // secondary text
   static const line = Color(0xFFE0E0E0); // borders
-  static const page = Color(0xFFF5F7F6); // page background
+  static const page = AppColors.paper; // page background
 }
 
 /// Pink rounded "N" square used as the NexaAid logo in the wireframes.
@@ -46,7 +52,7 @@ class NexaLogo extends StatelessWidget {
   }
 }
 
-/// Page title + subtitle, as at the top of every wireframe dashboard.
+/// Page title + subtitle at the top of a screen.
 class PageHeader extends StatelessWidget {
   final String title;
   final String? subtitle;
@@ -54,22 +60,20 @@ class PageHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: Space.md),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-              color: Brand.ink,
-            ),
-          ),
+          Semantics(header: true, child: Text(title, style: t.headlineSmall)),
           if (subtitle != null) ...[
-            const SizedBox(height: 4),
-            Text(subtitle!, style: const TextStyle(color: Brand.muted)),
+            Gaps.v4,
+            Text(
+              subtitle!,
+              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
           ],
         ],
       ),
@@ -84,79 +88,59 @@ String roleLine() {
 }
 
 // ---------------------------------------------------------------------------
-// Colors for statuses and priority levels
+// Colors for statuses and priority levels: one fixed color per status,
+// defined in lib/design/status.dart.
 // ---------------------------------------------------------------------------
-Color statusTone(String? s) {
-  switch (s) {
-    case 'Validated':
-    case 'Confirmed':
-    case 'Accepted':
-    case 'Complete':
-      return const Color(0xFF2E7D32);
-    case 'Received':
-    case 'In Transit':
-    case 'Partial':
-      return const Color(0xFF1565C0);
-    case 'Delivered':
-      return const Color(0xFF00838F);
-    case 'Preparing':
-    case 'On Hold':
-    case 'Pending Review':
-      return const Color(0xFFEF6C00);
-    case 'Rejected':
-    case 'Declined':
-      return const Color(0xFFC62828);
-    default:
-      return const Color(0xFF616161); // Pending, Not Started, unknown
-  }
-}
+Color statusTone(String? s) => StatusColors.base(s);
 
-Color priorityTone(String? p) {
-  switch (p) {
-    case 'Critical':
-      return const Color(0xFFB71C1C);
-    case 'High':
-      return const Color(0xFFE65100);
-    case 'Medium':
-      return const Color(0xFFF9A825);
-    case 'Low':
-      return const Color(0xFF2E7D32);
-    default:
-      return const Color(0xFF757575);
-  }
-}
+Color priorityTone(String? p) => PriorityColors.base(p);
 
+/// Old pill widget. New code: use StatusChip / PriorityChip.
 class Badge2 extends StatelessWidget {
   final String text;
   final Color color;
   final IconData? icon;
-  const Badge2(this.text, this.color, {super.key, this.icon});
+  final String? _status;
+  final String? _priority;
+  const Badge2(this.text, this.color, {super.key, this.icon})
+    : _status = null,
+      _priority = null;
+  const Badge2._(this.text, this.color, this._status, this._priority)
+    : icon = null;
 
-  factory Badge2.status(String? s) => Badge2(s ?? '-', statusTone(s));
+  factory Badge2.status(String? s) =>
+      Badge2._(s ?? '-', statusTone(s), s ?? '-', null);
   factory Badge2.priority(String? p) =>
-      Badge2(p ?? 'No priority', priorityTone(p));
+      Badge2._(p ?? 'No priority', priorityTone(p), null, p);
 
   @override
   Widget build(BuildContext context) {
+    if (_status != null) return StatusChip(_status);
+    if (_priority != null || text == 'No priority') {
+      return PriorityChip(_priority);
+    }
+    final tone = ToneStyle.from(
+      color,
+      icon ?? Icons.circle,
+      Theme.of(context).brightness,
+    );
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
+        color: tone.bg,
+        borderRadius: BorderRadius.circular(Radii.pill),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (icon != null) ...[
-            Icon(icon, size: 13, color: color),
-            const SizedBox(width: 3),
-          ],
-          Text(
-            text,
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+          if (icon != null) ...[Icon(icon, size: 14, color: tone.fg), Gaps.h4],
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium
+                  ?.copyWith(color: tone.fg, fontWeight: FontWeight.w700),
             ),
           ),
         ],
@@ -165,7 +149,7 @@ class Badge2 extends StatelessWidget {
   }
 }
 
-/// Fulfillment progress: label and % on top, pink bar, "x of y" below.
+/// Old name for FulfillmentBar.
 class Progress extends StatelessWidget {
   final num delivered;
   final num needed;
@@ -178,40 +162,15 @@ class Progress extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final pct = (percent ?? (needed > 0 ? delivered * 100 / needed : 0))
-        .toDouble();
-    const small = TextStyle(fontSize: 12, color: Brand.muted);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Expanded(child: Text('Fulfillment Progress', style: small)),
-            Text(
-              '${pct.toStringAsFixed(0)}%',
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(6),
-          child: LinearProgressIndicator(
-            value: (pct / 100).clamp(0, 1),
-            minHeight: 8,
-            color: Brand.pink,
-            backgroundColor: const Color(0xFFEEF0F3),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text('$delivered of $needed delivered', style: small),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => FulfillmentBar(
+    delivered: delivered,
+    needed: needed,
+    percent: percent,
+    label: 'Fulfillment progress',
+  );
 }
 
-/// Wireframe stat card: label, big number, note; tinted icon box top right.
+/// Old name for StatCard.
 class StatTile extends StatelessWidget {
   final String label;
   final String value;
@@ -228,77 +187,22 @@ class StatTile extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final c = color ?? Brand.pink;
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(fontSize: 13, color: Brand.muted),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    value,
-                    style: const TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      color: Brand.ink,
-                    ),
-                  ),
-                  if (note != null)
-                    Text(
-                      note!,
-                      style: const TextStyle(fontSize: 11, color: Brand.muted),
-                    ),
-                ],
-              ),
-            ),
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: c.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, color: c, size: 20),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => StatCard(
+    label: label,
+    value: value,
+    icon: icon,
+    color: color,
+    note: note,
+  );
 }
 
-/// Grid of stat tiles: 2 per row on phones, up to 4 on wide screens.
+/// Old name for StatCardGrid.
 class StatGrid extends StatelessWidget {
   final List<StatTile> tiles;
   const StatGrid(this.tiles, {super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, c) {
-        final cols = c.maxWidth >= 900 ? 4 : (c.maxWidth >= 600 ? 3 : 2);
-        final w = (c.maxWidth - 12 * (cols - 1)) / cols;
-        return Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [for (final t in tiles) SizedBox(width: w, child: t)],
-        );
-      },
-    );
-  }
+  Widget build(BuildContext context) => StatCardGrid(tiles);
 }
 
 class SectionTitle extends StatelessWidget {
@@ -326,28 +230,16 @@ class SectionTitle extends StatelessWidget {
   }
 }
 
+/// Old one-line empty state. New code: use EmptyView with a title, a
+/// message saying what will appear, and an action.
 class EmptyState extends StatelessWidget {
   final String text;
   final IconData icon;
   const EmptyState(this.text, {super.key, this.icon = Icons.inbox_outlined});
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 32),
-      child: Column(
-        children: [
-          Icon(icon, size: 44, color: Colors.grey),
-          const SizedBox(height: 8),
-          Text(
-            text,
-            textAlign: TextAlign.center,
-            style: const TextStyle(color: Colors.grey),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) =>
+      EmptyView(title: text, icon: icon, compact: true);
 }
 
 /// Loads data from the API and rebuilds with it. Pull down to refresh.
@@ -395,33 +287,16 @@ class _LoaderState extends State<Loader> {
       child: FutureBuilder<List<ApiResult>>(
         future: _future,
         builder: (context, snap) {
-          if (!snap.hasData) {
-            return ListView(
-              children: const [
-                Padding(
-                  padding: EdgeInsets.all(40),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              ],
-            );
-          }
+          if (!snap.hasData) return const SkeletonList();
           final bad = snap.data!.where((r) => !r.ok).toList();
           if (bad.isNotEmpty) {
             return ListView(
-              padding: const EdgeInsets.all(16),
+              physics: const AlwaysScrollableScrollPhysics(),
               children: [
-                EmptyState(
-                  bad.first.status == 0
-                      ? 'Cannot reach the server.\nIs uvicorn running?'
-                      : 'Error ${bad.first.status}: ${bad.first.errorText}',
-                  icon: Icons.cloud_off_outlined,
-                ),
-                Center(
-                  child: OutlinedButton.icon(
-                    onPressed: _reload,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Try again'),
-                  ),
+                ErrorView.forStatus(
+                  bad.first.status,
+                  bad.first.errorText,
+                  onRetry: _reload,
                 ),
               ],
             );
@@ -448,7 +323,7 @@ Future<ApiResult> act(
   messenger.hideCurrentSnackBar();
   messenger.showSnackBar(
     SnackBar(
-      backgroundColor: r.ok ? const Color(0xFF2E7D32) : const Color(0xFFC62828),
+      backgroundColor: r.ok ? AppColors.success : AppColors.danger,
       content: Text(
         r.ok
             ? success
