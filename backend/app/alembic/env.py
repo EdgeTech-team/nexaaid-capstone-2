@@ -19,6 +19,7 @@ from models.barangay_model import Barangay
 from models.disaster_type_model import DisasterType
 from models.sitio_model import Sitio
 from models.guest_donor_model import GuestDonor
+from models.upload_model import Upload
 
 
 # this is the Alembic Config object, which provides
