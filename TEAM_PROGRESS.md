@@ -119,3 +119,57 @@ dashboard/report work also modified — diff this file carefully before merging.
 - Run `uvicorn main:app --reload` and test all 5 endpoints against the
   test admin account
 - Confirm empty-table case doesn't error (should return zeros)
+
+---
+
+## Fernandez — UI/UX lead: Sprint 0 design system + app shell, Item 8 landing page
+
+**Status:** Ready for review (branch `feat/0-design-system`)
+**Last updated:** Oct 1, 2026
+
+- **Design system** in `mobile/lib/design/`: light and dark themes, Lexend +
+  Source Sans 3 type, 8-pt spacing, radius scale, one fixed color per status
+  and priority, and components (`AppButton`, `AppTextField` with password eye
+  toggle, `AppCard`, `StatCard`, `StatusChip`, `PriorityChip`,
+  `FulfillmentBar`, `StatusTimeline`, skeletons, `EmptyView`, `ErrorView`).
+  Rules: `docs/design/DESIGN_SYSTEM.md`.
+- **Everyone's screens restyled for free:** `ui/widgets.dart` now draws the
+  old `Badge2`, `StatTile`, `Progress`, `EmptyState`, `PageHeader` and
+  `Loader` with the new components, and re-exports the design system.
+  No screen code changed.
+- **App shell:** new app bar, bottom bar on phones and side rail on
+  tablets/Chrome, Appearance setting (System / Light / Dark) in Profile,
+  `_shellActions` slot in `ui/home.dart` for the notification bell.
+- **Component gallery:** Profile > Developer tools > Design system gallery,
+  with dark-mode and 100/130/200% text switches.
+- **Landing page (Item 8)** in `ui/landing/`: shown when signed out. Hero
+  with the most urgent report, live stats, how it works, report feed with
+  priority filter, Donate as guest / Log in / Create account.
+- **Team tooling:** `docs/setup/EMULATOR.md`, `.github/pull_request_template.md`
+  (UI review gate checklist).
+- Tests: `test/design_system_test.dart`; `test/widget_test.dart` updated for
+  the landing page.
+
+**For Mariquit (Item 8 data):** the landing page already calls
+`GET /public/reports` and `GET /public/stats` and falls back to
+`/lookups` while they return 404. Shapes it expects:
+- `/public/reports`: list of validated reports with the same keys as
+  `/lookups` `validated_reports` (`id` or `report_id`, `disaster`,
+  `barangay`, `sitio`, `priority_level`, `assistance_needed`,
+  `affected_families`, `description`, `total_items_needed`,
+  `total_items_delivered`, `fulfillment_percentage`). No reporter info.
+- `/public/stats`: `{active_reports, families_affected, urgent_reports,
+  barangays, donations_received, deliveries_completed}`. Any missing key
+  is computed from the reports instead.
+
+**For Mariquit (privacy):** `/lookups` is public and its
+`pending_donations` / `received_donations` include QR references. Worth
+moving those lists behind auth when you build `/public/*`.
+
+**For everyone:** when you restyle your screens, replace `Brand.ink` /
+`Brand.muted` with `colorScheme.onSurface` / `onSurfaceVariant` so they
+work in dark mode.
+
+**Next:** Item 10 donor/org dashboards (stat cards, `StatusTimeline` per
+donation, supported-report progress, optional self-declared financial log),
+then Module 8 delivery screens.
