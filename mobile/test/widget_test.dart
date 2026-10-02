@@ -2,25 +2,42 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/checks_tab.dart';
+import 'package:mobile/design/design.dart';
 import 'package:mobile/dev_console.dart';
 import 'package:mobile/main.dart';
 import 'package:mobile/modules.dart';
 
 void main() {
-  testWidgets('App starts on the login screen', (tester) async {
+  // Tests cannot download fonts.
+  setUpAll(() => AppTheme.useGoogleFonts = false);
+
+  testWidgets('App starts on the landing page', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
     expect(find.text('NexaAid'), findsOneWidget);
     expect(find.text('Log in'), findsOneWidget);
+    expect(find.text('Create account'), findsOneWidget);
     expect(find.text('Donate as guest'), findsOneWidget);
+    expect(find.text('How it works', skipOffstage: false), findsOneWidget);
+  });
+
+  testWidgets('Log in on the landing page opens the login screen', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const NexaAidApp());
+    await tester.tap(find.text('Log in'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('Email'), findsOneWidget);
+    expect(find.text('Password'), findsOneWidget);
   });
 
   testWidgets('Guest lands on the donate tab', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
     await tester.tap(find.text('Donate as guest'));
     await tester.pump();
-    expect(find.text('· Guest'), findsOneWidget);
-    expect(find.text('Donate'), findsWidgets);
-    expect(find.text('Profile'), findsOneWidget);
+    expect(find.text('Guest'), findsOneWidget);
+    expect(find.byTooltip('Donate'), findsWidgets);
+    expect(find.byTooltip('Profile'), findsOneWidget);
     Api.instance.logout();
   });
 
@@ -33,7 +50,7 @@ void main() {
       await tester.pumpWidget(const NexaAidApp());
       await tester.pump();
       for (final l in labels) {
-        expect(find.text(l), findsWidgets, reason: '$role: $l');
+        expect(find.byTooltip(l), findsWidgets, reason: '$role: $l');
       }
     }
 
