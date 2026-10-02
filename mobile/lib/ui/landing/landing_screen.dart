@@ -6,6 +6,9 @@ import '../donor_screens.dart' show DonateScreen;
 import '../login_screen.dart';
 import '../register_screen.dart';
 import '../widgets.dart' show api, formDialog, DialogField, Names;
+import 'landing_extras.dart';
+import 'about_section.dart';
+import 'mission_section.dart';
 import 'public_data.dart';
 
 /// First screen for anyone not signed in (adviser item 8): what NexaAid
@@ -23,7 +26,9 @@ class _LandingScreenState extends State<LandingScreen> {
   String? _priority; // null = all
 
   Future<void> _reload() async {
-    setState(() => _future = loadPublicData(api));
+    setState(() {
+      _future = loadPublicData(api);
+    });
     try {
       await _future;
     } catch (_) {
@@ -307,6 +312,17 @@ class _LandingScreenState extends State<LandingScreen> {
             _ReportCard(report: r, onDonate: () => _donate(r)),
             Gaps.v12,
           ],
+        if (data != null) ImpactSection(stats: data.stats, asOf: data.loadedAt),
+        const RecentDeliveriesSection(),
+        const MissionSection(),
+        WaysToHelpSection(
+          onDonate: api.continueAsGuest,
+          onRegister: (org) => Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => RegisterScreen(org: org))),
+        ),
+        const AboutSection(),
+        const CredentialsCard(),
         Gaps.v24,
         Text(
           'Built for the relief offices of Mandaue City: CSWS, CMO and DRRMO.',
