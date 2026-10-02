@@ -42,3 +42,5 @@ mobile/.packages
 Thumbs.db
 
 backend/app/var/
+.neon/
+.neon
