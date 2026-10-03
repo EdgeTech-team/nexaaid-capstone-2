@@ -50,8 +50,9 @@ class Upload(Base):
     # the account exists, so they start ownerless with a claim token.
     
     owner_user_id = Column(
+        "owner_user_id",  # explicit name, so it always matches the database column
         Integer,
-        ForeignKey("users.user_id", ondelete="SET NULL"), name = "fk_uploads_owner_user_id",
+        ForeignKey("users.user_id", ondelete="SET NULL", name="fk_uploads_owner_user_id"),
         nullable=True,
         index=True,
     )
