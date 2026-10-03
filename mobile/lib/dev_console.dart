@@ -41,7 +41,12 @@ class _DevConsoleState extends State<DevConsole> {
       ),
       body: IndexedStack(
         index: index,
-        children: const [AccountTab(), ModulesTab(), ChecksTab(), UploadDemoTab()],
+        children: const [
+          AccountTab(),
+          ModulesTab(),
+          ChecksTab(),
+          UploadDemoTab(),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
@@ -58,7 +63,7 @@ class _DevConsoleState extends State<DevConsole> {
           NavigationDestination(
             icon: Icon(Icons.fact_check_outlined),
             label: 'Checks',
-          ),       
+          ),
           NavigationDestination(
             icon: Icon(Icons.upload_file_outlined),
             label: 'Uploads',
