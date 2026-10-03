@@ -143,7 +143,7 @@ class Api extends ChangeNotifier {
   Future<ApiResult> patch(String path, {Map<String, dynamic>? body}) =>
       send('PATCH', path, body: body ?? {});
 
-    /// POST /uploads as multipart form data (purpose + file).
+  /// POST /uploads as multipart form data (purpose + file).
   /// Sends bytes instead of a file path, so it works on Android and Chrome.
   Future<ApiResult> upload({
     required String purpose,

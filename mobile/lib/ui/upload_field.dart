@@ -4,7 +4,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../api.dart';
+import '../api.dart';
+import '../design/design.dart';
 
 /// What POST /uploads sent back for one file
 /// (backend: api/v1/upload_routes.py).
@@ -40,7 +41,7 @@ enum _Status { empty, uploading, done, failed }
 /// Uploads it right away and shows a preview.
 ///
 /// [purpose] must match one in backend core/uploads.py PURPOSES:
-/// id_front, id_back, legitimacy_document, barangay_donation_qr.
+/// id_front, id_back, legitimacy_document, barangay_donation_qr, ...
 ///
 /// [onChanged] gets the uploaded file, or null while nothing valid is
 /// attached (empty, uploading, failed, or removed). A form should only
@@ -55,6 +56,10 @@ class UploadField extends StatefulWidget {
   final bool allowPdf;
   final String? helperText;
 
+  /// Shown in red under the field, e.g. "Required" when the form is
+  /// submitted without a file. The upload's own errors are shown inside.
+  final String? errorText;
+
   const UploadField({
     super.key,
     required this.label,
@@ -62,6 +67,7 @@ class UploadField extends StatefulWidget {
     required this.onChanged,
     this.allowPdf = true,
     this.helperText,
+    this.errorText,
   });
 
   @override
@@ -199,27 +205,27 @@ class _UploadFieldState extends State<UploadField> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final failed = _status == _Status.failed;
+    final failed = _status == _Status.failed || widget.errorText != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(widget.label, style: text.labelLarge),
-        const SizedBox(height: 6),
+        Gaps.v8,
         Semantics(
           button: _status == _Status.empty,
           label: widget.label,
           child: Material(
             color: cs.surfaceContainerHighest,
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
+              borderRadius: BorderRadius.circular(Radii.md),
               side: BorderSide(color: failed ? cs.error : cs.outlineVariant),
             ),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
               onTap: _status == _Status.empty ? _choose : null,
               child: Padding(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(Space.sm),
                 child: _status == _Status.empty
                     ? _emptyContent(cs, text)
                     : _fileContent(cs, text),
@@ -227,8 +233,14 @@ class _UploadFieldState extends State<UploadField> {
             ),
           ),
         ),
-        if (widget.helperText != null) ...[
-          const SizedBox(height: 4),
+        if (widget.errorText != null) ...[
+          Gaps.v4,
+          Text(
+            widget.errorText!,
+            style: text.bodySmall?.copyWith(color: cs.error),
+          ),
+        ] else if (widget.helperText != null) ...[
+          Gaps.v4,
           Text(
             widget.helperText!,
             style: text.bodySmall?.copyWith(color: cs.onSurfaceVariant),
@@ -242,13 +254,15 @@ class _UploadFieldState extends State<UploadField> {
     return Row(
       children: [
         Icon(Icons.upload_file_outlined, size: 32, color: cs.primary),
-        const SizedBox(width: 12),
+        Gaps.h12,
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                widget.allowPdf ? 'Tap to add a photo or PDF' : 'Tap to add a photo',
+                widget.allowPdf
+                    ? 'Tap to add a photo or PDF'
+                    : 'Tap to add a photo',
                 style: text.bodyLarge,
               ),
               Text(
@@ -266,7 +280,7 @@ class _UploadFieldState extends State<UploadField> {
 
   Widget _fileContent(ColorScheme cs, TextTheme text) {
     final preview = ClipRRect(
-      borderRadius: BorderRadius.circular(8),
+      borderRadius: BorderRadius.circular(Radii.sm),
       child: SizedBox(
         width: 64,
         height: 64,
@@ -281,13 +295,13 @@ class _UploadFieldState extends State<UploadField> {
 
     final Widget statusLine = switch (_status) {
       _Status.uploading => const Padding(
-        padding: EdgeInsets.only(top: 8),
+        padding: EdgeInsets.only(top: Space.xs),
         child: LinearProgressIndicator(),
       ),
       _Status.done => Row(
         children: [
           Icon(Icons.check_circle, size: 16, color: cs.primary),
-          const SizedBox(width: 4),
+          Gaps.h4,
           Text('Uploaded', style: text.bodySmall?.copyWith(color: cs.primary)),
         ],
       ),
@@ -297,13 +311,13 @@ class _UploadFieldState extends State<UploadField> {
     return Row(
       children: [
         preview,
-        const SizedBox(width: 12),
+        Gaps.h12,
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(_name, maxLines: 1, overflow: TextOverflow.ellipsis),
-              const SizedBox(height: 2),
+              Gaps.v4,
               statusLine,
             ],
           ),

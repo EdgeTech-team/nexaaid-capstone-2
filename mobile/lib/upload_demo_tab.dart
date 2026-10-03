@@ -49,8 +49,7 @@ class _UploadDemoTabState extends State<UploadDemoTab> {
           label: 'Barangay donation QR',
           purpose: 'barangay_donation_qr',
           allowPdf: false,
-          helperText:
-              'Public. Only the barangay rep, Disaster Unit or Admin may upload.',
+          helperText: 'Public. Only the barangay rep, Disaster Unit or Admin may upload.',
           onChanged: (f) => _show('barangay_donation_qr', f),
         ),
         const SizedBox(height: 24),
