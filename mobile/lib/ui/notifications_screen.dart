@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../report_detail_screen.dart';
 import '../report_model.dart';
+import 'donor_screens.dart';
 import 'widgets.dart';
 
 /// Where each notification type opens. Every module owner adds their own entry
@@ -29,6 +30,16 @@ final Map<String, EntityOpener> notificationDestinations = {
       ),
     );
   },
+  // DonorDashboard is a tab body (no Scaffold), so wrap it to get an app bar
+  // and a back button. It lists all of the donor's own donations.
+  'donation': (c, id) => Navigator.of(c).push(
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: const Text('My donations')),
+        body: const DonorDashboard(),
+      ),
+    ),
+  ),
   // 'donation_batch': (c, id) => ...,
   // 'logistics_request': (c, id) => ...,
   // 'delivery': (c, id) => ...,
@@ -112,7 +123,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Future<void> _open(BuildContext context, Map<String, dynamic> n) async {
-        if (n['is_read'] != true) {
+    if (n['is_read'] != true) {
       await api.post('/notifications/${n['notification_id']}/read');
       _refreshList();
     }
@@ -196,3 +207,4 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 }
+  
