@@ -20,6 +20,7 @@ from models.disaster_type_model import DisasterType
 from models.sitio_model import Sitio
 from models.guest_donor_model import GuestDonor
 from models.upload_model import Upload
+from models.donation_info_model import BarangayDonationInfo, ReportDonationInfo
 
 
 # this is the Alembic Config object, which provides
