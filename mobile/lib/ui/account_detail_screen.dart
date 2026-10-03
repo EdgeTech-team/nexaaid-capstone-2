@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show Roles;
+import 'account_form.dart' show AccountEditScreen;
 import 'private_file_view.dart';
 import 'widgets.dart';
 
@@ -133,6 +134,8 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
               row('Role', u['role']),
               row('Email', u['email']),
               row('Mobile', u['contact_number']),
+              if (u['employee_id'] != null)
+                row('Employee ID', u['employee_id']),
               if (u['assigned_barangay'] != null)
                 row('Barangay', u['assigned_barangay']),
               if (u['organization'] != null)
@@ -190,6 +193,19 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
               ),
         ],
         Gaps.v16,
+        // UC-A1 step 5: update details (primary) or status.
+        AppButton(
+          'Edit details',
+          key: const ValueKey('edit-account'),
+          icon: Icons.edit_outlined,
+          expand: true,
+          onPressed: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => AccountEditScreen(userId: widget.userId),
+            ),
+          ),
+        ),
+        Gaps.v8,
         if (u['user_id'] != null)
           AppButton(
             active ? 'Deactivate account' : 'Activate account',
@@ -197,7 +213,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
             icon: active ? Icons.person_off_outlined : Icons.person_outline,
             variant: active
                 ? AppButtonVariant.danger
-                : AppButtonVariant.primary,
+                : AppButtonVariant.secondary,
             loading: busy,
             expand: true,
             onPressed: () => _setActive(u, !active),
