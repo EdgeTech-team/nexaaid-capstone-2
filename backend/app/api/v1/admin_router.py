@@ -4,35 +4,56 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from core.database import get_db
-from core.auth import hash_password, require_role      # [NOT SPECIFIED — confirm exact signature]
+from core.auth import hash_password, require_role
+from core.uploads import transfer_upload
 from models.user_rbac_model import User
 from models.role_model import Role
 from models.organization_model import Organization
 from models.barangay_model import Barangay
 from models.audit_log_model import AuditLog
 from core.audit import log_action
-from schemas.user_schema import InternalAccountCreateRequest, UserResponse, INTERNAL_ROLES
+from schemas.user_schema import (
+    AccountUpdateRequest, BARANGAY_REP, INTERNAL_ROLES, InternalAccountCreateRequest, UserResponse,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+def _email_in_use(db: Session, email: str, except_user_id: Optional[int] = None) -> bool:
+    q = db.query(User).filter(func.lower(User.email) == email.lower())
+    if except_user_id is not None:
+        q = q.filter(User.user_id != except_user_id)
+    return q.first() is not None
+
+
+def _employee_id_in_use(db: Session, employee_id: str, except_user_id: Optional[int] = None) -> bool:
+    q = db.query(User).filter(User.employee_id == employee_id)
+    if except_user_id is not None:
+        q = q.filter(User.user_id != except_user_id)
+    return q.first() is not None
+
+
+def _check_barangay(db: Session, barangay_id: int) -> None:
+    if db.get(Barangay, barangay_id) is None:
+        raise HTTPException(status_code=422, detail="Barangay not found")
+
 
 @router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_internal_account(
     payload: InternalAccountCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("Administrator")),
 ):
-    if payload.role_name not in INTERNAL_ROLES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"role_name must be one of: {', '.join(sorted(INTERNAL_ROLES))}")
-
-    if payload.role_name == "Barangay Receiving Representative" and payload.assigned_barangay_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-            detail="assigned_barangay_id is required for this role")
-
-    if db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    """UC-A1 step 4. Role, barangay and password rules are in the schema."""
+    if payload.assigned_barangay_id is not None:
+        _check_barangay(db, payload.assigned_barangay_id)
+    if _email_in_use(db, payload.email):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
+    if _employee_id_in_use(db, payload.employee_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Employee ID already in use")
 
     role = db.query(Role).filter(Role.role_name == payload.role_name).first()
     if role is None:
@@ -42,13 +63,21 @@ def create_internal_account(
         first_name=payload.first_name, last_name=payload.last_name,
         email=payload.email, password_hash=hash_password(payload.password),
         contact_number=payload.contact_number, role_id=role.role_id,
-        assigned_barangay_id=payload.assigned_barangay_id,   # works now — the model actually declares this column
+        assigned_barangay_id=payload.assigned_barangay_id,
+        employee_id=payload.employee_id,
     )
     db.add(new_user)
     db.flush()
+    # The card was uploaded by this Administrator; the staff member owns it now.
+    card = transfer_upload(db, payload.employee_id_card.file_id, current_user, new_user,
+                           "employee_id_card")
     log_action(db, current_user, "CREATE ACCOUNT", "users", new_user.user_id,
-               new={"email": new_user.email, "role": payload.role_name})
-    db.commit()
+               new={"email": new_user.email, "role": payload.role_name,
+                    "employee_id": new_user.employee_id,
+                    "assigned_barangay_id": new_user.assigned_barangay_id,
+                    "employee_id_card": card.file_id},
+               request=request)
+    db.flush()
     db.refresh(new_user)
     return new_user
 
@@ -68,6 +97,7 @@ def _user_row(u: User, orgs: dict, barangays: dict) -> dict:
         "organization_status": org.status if org else None,
         "assigned_barangay_id": u.assigned_barangay_id,
         "assigned_barangay": barangays.get(u.assigned_barangay_id),
+        "employee_id": u.employee_id,
         "is_active": u.is_active,
         "created_at": u.created_at,
     }
@@ -94,39 +124,106 @@ def list_users(
     return [_user_row(u, orgs, barangays) for u in query.order_by(User.user_id).all()]
 
 
-class UserUpdate(BaseModel):
-    is_active: Optional[bool] = None
-    first_name: Optional[str] = Field(default=None, min_length=1, max_length=50)
-    last_name: Optional[str] = Field(default=None, min_length=1, max_length=50)
-    contact_number: Optional[str] = Field(default=None, min_length=7, max_length=15)
-    assigned_barangay_id: Optional[int] = None
+def _active_admins(db: Session) -> int:
+    # Counted in Python: there are only a few admins, and it reads is_active
+    # the same way on Postgres and on the SQLite test database.
+    admins = db.query(User).join(Role, Role.role_id == User.role_id).filter(Role.role_name == ADMIN)
+    return sum(1 for u in admins if u.is_active)
 
 
 @router.patch("/users/{user_id}")
 def update_user(
     user_id: int,
-    payload: UserUpdate,
+    payload: AccountUpdateRequest,
     request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
+    """UC-A1 step 5: update account details or status, with the same rules
+    as account creation. Alt 3a: unknown account -> 404. Alt 5a: invalid
+    changes -> 422 (409 when the email / employee ID belongs to someone else)."""
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Account not found")  # UC-A1 3a
     changes = payload.model_dump(exclude_unset=True)
-    if changes.get("is_active") is False and user.user_id == current_user.user_id:
-        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
-    if "assigned_barangay_id" in changes and changes["assigned_barangay_id"] is not None \
-            and db.get(Barangay, changes["assigned_barangay_id"]) is None:
-        raise HTTPException(status_code=400, detail="Barangay not found")
-    old = {k: getattr(user, k) for k in changes}
+    card = changes.pop("employee_id_card", None)
+    for key in ("first_name", "last_name", "email", "contact_number", "role_name", "is_active"):
+        if key in changes and changes[key] is None:
+            raise HTTPException(status_code=422, detail=f"{key.replace('_', ' ').capitalize()} cannot be empty")
+
+    current_role = user.role.role_name if user.role else None
+    is_self = user.user_id == current_user.user_id
+    is_admin = current_role == ADMIN
+    is_internal = current_role in INTERNAL_ROLES
+    staff = is_internal or is_admin
+
+    # --- self-protection and "never zero active Administrators" -----------
+    if changes.get("is_active") is False:
+        if is_self:
+            raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+        if is_admin and user.is_active and _active_admins(db) <= 1:
+            raise HTTPException(status_code=400, detail="At least one active Administrator must remain")
+    new_role = changes.get("role_name")
+    if new_role is not None and new_role != current_role:
+        if is_self:
+            raise HTTPException(status_code=400, detail="You cannot change your own role")
+        if is_admin:
+            raise HTTPException(status_code=422, detail="Administrator accounts keep their role")
+        if not is_internal:
+            raise HTTPException(status_code=422,
+                                detail="Only internal accounts can have their role changed")
+    if not staff and ({"employee_id", "assigned_barangay_id"} & set(changes) or card):
+        raise HTTPException(status_code=422,
+                            detail="Employee ID, barangay and ID card are only for internal accounts")
+
+    # --- final values, checked as a whole ---------------------------------
+    final_role = new_role or current_role
+    if final_role == BARANGAY_REP:
+        final_brgy = changes.get("assigned_barangay_id", user.assigned_barangay_id)
+        if final_brgy is None:
+            raise HTTPException(status_code=422,
+                                detail="Choose the assigned barangay for a Barangay Receiving Representative")
+        _check_barangay(db, final_brgy)
+    elif staff:
+        if changes.get("assigned_barangay_id") is not None:
+            raise HTTPException(status_code=422,
+                                detail="Only a Barangay Receiving Representative has an assigned barangay")
+        if user.assigned_barangay_id is not None:
+            changes["assigned_barangay_id"] = None   # role changed away from barangay rep
+    if final_role in INTERNAL_ROLES and set(changes) - {"is_active"}:
+        # Required for internal accounts. Older accounts without one must get
+        # it on their next edit; turning an account on/off alone is still allowed.
+        if not changes.get("employee_id", user.employee_id):
+            raise HTTPException(status_code=422, detail="Employee ID is required for internal accounts")
+    if "email" in changes and _email_in_use(db, changes["email"], user.user_id):
+        raise HTTPException(status_code=409, detail="Email already in use")
+    if changes.get("employee_id") and _employee_id_in_use(db, changes["employee_id"], user.user_id):
+        raise HTTPException(status_code=409, detail="Employee ID already in use")
+
+    # --- apply ---------------------------------------------------------------
+    old, new = {}, {}
+    if new_role is not None and new_role != current_role:
+        role = db.query(Role).filter(Role.role_name == new_role).first()
+        if role is None:
+            raise HTTPException(status_code=500, detail="Role configuration missing")
+        old["role"], new["role"] = current_role, new_role
+        user.role_id = role.role_id
+    changes.pop("role_name", None)
     for k, v in changes.items():
-        setattr(user, k, v)
-    action = "UPDATE ACCOUNT"
-    if set(changes) == {"is_active"}:
-        action = "ACTIVATE ACCOUNT" if changes["is_active"] else "DEACTIVATE ACCOUNT"
-    log_action(db, current_user, action, "users", user.user_id, old=old, new=changes, request=request)
+        if getattr(user, k) != v:
+            old[k], new[k] = getattr(user, k), v
+            setattr(user, k, v)
+    if card is not None:
+        up = transfer_upload(db, card["file_id"], current_user, user, "employee_id_card")
+        new["employee_id_card"] = up.file_id
+
+    if new:
+        action = "UPDATE ACCOUNT"
+        if set(new) == {"is_active"}:
+            action = "ACTIVATE ACCOUNT" if new["is_active"] else "DEACTIVATE ACCOUNT"
+        log_action(db, current_user, action, "users", user.user_id, old=old, new=new, request=request)
     db.flush()
+    db.refresh(user)
     orgs = {o.organization_id: o for o in db.query(Organization).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     return _user_row(user, orgs, barangays)

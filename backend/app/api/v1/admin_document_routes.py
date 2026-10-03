@@ -68,6 +68,7 @@ def get_user_detail(
         "is_active": u.is_active,
         "created_at": u.created_at,
         "id_type": u.id_type,
+        "employee_id": u.employee_id,
         "organization_id": u.organization_id,
         "organization": org.org_name if org else None,
         "organization_status": org.status if org else None,
