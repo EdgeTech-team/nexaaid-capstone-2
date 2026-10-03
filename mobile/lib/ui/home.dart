@@ -5,6 +5,7 @@ import '../design/gallery_screen.dart';
 import '../dev_console.dart';
 import 'admin_screens.dart';
 import 'csws_screens.dart';
+import 'donor_dashboard.dart';
 import 'donor_screens.dart';
 import 'ops_screens.dart';
 import 'records_screens.dart';
