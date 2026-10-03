@@ -13,6 +13,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.2.0
   mobile_scanner: ^7.4.2
+  image_picker: ^1.2.3
+  file_picker: ^13.1.0
   # Design system type: Lexend (headings) + Source Sans 3 (body).
   google_fonts: ^6.2.1
 
