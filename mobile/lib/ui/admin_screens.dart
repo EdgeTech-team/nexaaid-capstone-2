@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import 'account_detail_screen.dart';
 import 'csws_screens.dart' show ActivityList;
+import 'private_file_view.dart';
 import 'report_screens.dart' show AccountsScreen;
 import 'widgets.dart';
 
@@ -245,6 +247,12 @@ class _UsersScreenState extends State<UsersScreen> {
                     '${u['organization'] != null ? ' · ${u['organization']} (${u['organization_status']})' : ''}',
                   ),
                   isThreeLine: true,
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          AccountDetailScreen(userId: u['user_id'] as int),
+                    ),
+                  ),
                   trailing: PopupMenuButton<String>(
                     tooltip: 'Actions',
                     onSelected: (a) =>
@@ -339,22 +347,21 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                       Text(
                         'Contact: ${o['contact_person']} · ${o['contact_email']}',
                       ),
-                      const SizedBox(height: 6),
-                      if (o['document_missing'] == true)
-                        const Badge2(
-                          'Supporting document missing',
-                          Color(0xFFC62828),
-                          icon: Icons.flag_outlined,
-                        )
-                      else
-                        SelectableText(
-                          'Document: ${o['legitimacy_document_url']}',
-                          style: const TextStyle(fontSize: 12),
+                      Gaps.v12,
+                      // UC-A2 step 4: the supporting document; alt 4a flags.
+                      _OrgDocument(o['organization_id'] as int),
+                      if (o['decision_reason'] != null) ...[
+                        Gaps.v8,
+                        Text(
+                          'Last reason: ${o['decision_reason']}',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
+                      ],
                       const SizedBox(height: 8),
                       Wrap(
                         alignment: WrapAlignment.end,
-                        spacing: 8,
+                        spacing: Space.xs,
+                        runSpacing: Space.xs,
                         children: [
                           for (final d in const [
                             ['Rejected', 'Reject'],
@@ -376,23 +383,113 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
   }
 }
 
+/// Approve, Hold or Reject (UC-A2 steps 5-6). Hold and Reject ask for a
+/// reason (alt 6a); the backend refuses them without one.
 Widget _decisionButton(
   BuildContext context,
   Map o,
   String decision,
   String label,
 ) {
-  void onPressed() => act(
-    context,
-    () => api.post(
-      '/admin/organizations/${o['organization_id']}/decision',
-      body: {'decision': decision},
-    ),
-    success: '${o['org_name']}: $decision',
+  Future<void> onPressed() async {
+    String? reason;
+    if (decision != 'Approved') {
+      final v = await formDialog(
+        context,
+        title: '$label ${o['org_name']}?',
+        message: decision == 'Rejected'
+            ? 'The organization stays inactive. Say what is wrong so they can fix it.'
+            : 'The application stays pending. Say what you are waiting for.',
+        fields: const [DialogField('reason', 'Reason', multiline: true)],
+        confirm: label,
+      );
+      if (v == null || !context.mounted) return;
+      reason = v['reason'];
+    }
+    await act(
+      context,
+      () => api.post(
+        '/admin/organizations/${o['organization_id']}/decision',
+        body: {'decision': decision, 'reason': ?reason},
+      ),
+      success: '${o['org_name']}: $decision',
+    );
+  }
+
+  return AppButton(
+    label,
+    onPressed: onPressed,
+    variant: switch (decision) {
+      'Approved' => AppButtonVariant.tonal,
+      'Rejected' => AppButtonVariant.danger,
+      _ => AppButtonVariant.secondary,
+    },
   );
-  return decision == 'Approved'
-      ? FilledButton(onPressed: onPressed, child: Text(label))
-      : OutlinedButton(onPressed: onPressed, child: Text(label));
+}
+
+/// The organization's supporting document, or a flag when it is missing,
+/// unreadable, or an old unverified link (UC-A2 alt 4a).
+class _OrgDocument extends StatelessWidget {
+  final int organizationId;
+  const _OrgDocument(this.organizationId);
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<ApiResult>(
+      future: api.get('/admin/organizations/$organizationId/document'),
+      builder: (context, snap) {
+        if (!snap.hasData) return const Skeleton(height: 56);
+        final r = snap.data!;
+        if (!r.ok) {
+          return _flag(context, 'Could not check the document: ${r.errorText}');
+        }
+        final d = Map<String, dynamic>.from(r.json as Map);
+        return switch (d['status']) {
+          'ok' => PrivateFileTile(
+            label: 'Supporting document',
+            url: '${d['url']}',
+            contentType: '${d['content_type']}',
+          ),
+          'missing' => _flag(context, 'Supporting document missing'),
+          'unreadable' => _flag(
+            context,
+            'Supporting document unreadable (the file is gone). Ask for a re-upload.',
+          ),
+          _ => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _flag(
+                context,
+                'Old link, not an uploaded file. Check it manually.',
+              ),
+              Gaps.v4,
+              SelectableText(
+                '${d['url']}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        };
+      },
+    );
+  }
+
+  Widget _flag(BuildContext context, String text) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Icon(Icons.flag_outlined, color: cs.error, size: 20),
+        Gaps.h8,
+        Expanded(
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.bodyMedium
+                ?.copyWith(color: cs.error),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from core.database import get_db
 from core.auth import hash_password, require_role      # [NOT SPECIFIED — confirm exact signature]
@@ -142,6 +142,14 @@ def list_organizations(
     query = db.query(Organization)
     if status_filter:
         query = query.filter(Organization.status == status_filter)
+    # Latest Hold/Reject reason per organization (kept in audit_logs, no column).
+    reasons = {}
+    for log in (db.query(AuditLog)
+                .filter(AuditLog.entity_type == "organizations",
+                        AuditLog.action.in_(["HOLD ORGANIZATION", "REJECT ORGANIZATION",
+                                             "APPROVE ORGANIZATION"]))
+                .order_by(AuditLog.log_id)):
+        reasons[log.entity_id] = (log.new_value or {}).get("reason")
     rows = []
     for o in query.order_by(Organization.created_at.desc()).all():
         rows.append({
@@ -156,6 +164,7 @@ def list_organizations(
             # UC-A2 alt 4a: flag applications with a missing document
             "document_missing": not (o.legitimacy_document_url or "").strip(),
             "status": o.status,
+            "decision_reason": reasons.get(o.organization_id),
             "approved_at": o.approved_at,
             "created_at": o.created_at,
         })
@@ -163,8 +172,17 @@ def list_organizations(
 
 
 class OrganizationDecision(BaseModel):
-    # Approved activates the account; Pending = hold; Rejected keeps it inactive.
+    # Approved activates the account; Pending = hold; Rejected keeps it inactive (UC-A2 6a).
     decision: Literal["Approved", "Pending", "Rejected"]
+    # Required for Hold and Reject so the organization can be told why.
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _reason_required(self):
+        self.reason = (self.reason or "").strip() or None
+        if self.decision != "Approved" and self.reason is None:
+            raise ValueError("Give a reason when you hold or reject an organization")
+        return self
 
 
 @router.post("/organizations/{organization_id}/decision")
@@ -186,9 +204,10 @@ def decide_organization(
     action = {"Approved": "APPROVE ORGANIZATION", "Pending": "HOLD ORGANIZATION",
               "Rejected": "REJECT ORGANIZATION"}[payload.decision]
     log_action(db, current_user, action, "organizations", org.organization_id,
-               old=old, new={"status": org.status}, request=request)
+               old=old, new={"status": org.status, "reason": payload.reason}, request=request)
     db.flush()
-    return {"organization_id": org.organization_id, "org_name": org.org_name, "status": org.status}
+    return {"organization_id": org.organization_id, "org_name": org.org_name,
+            "status": org.status, "reason": payload.reason}
 
 
 # UC-A4 Monitor System Records: read-only activity logs

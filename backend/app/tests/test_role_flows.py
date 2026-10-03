@@ -29,6 +29,7 @@ from models.barangay_model import Barangay
 from models.sitio_model import Sitio
 from models.disaster_type_model import DisasterType
 from models.item_model import Item
+from tests.reg_helpers import STRONG_PASSWORD, donor_payload
 
 PASSWORD = "testpass123"
 
@@ -122,11 +123,8 @@ def test_full_relief_chain_across_all_roles(api):
     client, t = api
 
     # --- 3.3 donor self-registration + login -----------------------------
-    ok(client.post("/auth/register/donor", json={
-        "first_name": "New", "last_name": "Donor", "email": "new.donor@example.com",
-        "password": PASSWORD, "contact_number": "09171234567",
-    }), 201)
-    ok(client.post("/token", data={"username": "new.donor@example.com", "password": PASSWORD}))
+    ok(client.post("/auth/register/donor", json=donor_payload(client, "new.donor@example.com")), 201)
+    ok(client.post("/token", data={"username": "new.donor@example.com", "password": STRONG_PASSWORD}))
 
     # --- 3.3 admin creates an internal account ---------------------------
     ok(client.post("/admin/users", headers=t["admin"], json={

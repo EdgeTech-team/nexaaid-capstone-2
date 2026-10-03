@@ -4,7 +4,7 @@ registration attaches a file to a new account.
  
 Used by:
   - api/v1/upload_routes.py   (POST/GET /uploads)
-  - Hoyohoy, registration (adviser items 2 and 2.1): claim_upload()
+  - registration (adviser items 2 and 2.1): claim_registration_files()
   - Mariquit, barangay donation QR (adviser item 7): purpose "barangay_donation_qr"
 """
 
@@ -158,6 +158,27 @@ def claim_upload(
     return up
  
  
+def claim_registration_files(db: Session, user, refs: dict) -> dict:
+    """Claim every file of one registration for the new account.
+
+    refs maps the expected purpose to the UploadRef the app sent, e.g.
+    {"id_front": ref, "id_back": ref} (UC-D1) or {"legitimacy_document": ref}
+    (UC-A2). Each file must have exactly that purpose, so a front photo
+    can't be sent as the back. Raises on the first failure; the caller
+    lets get_db roll back, so the account is not created either.
+    """
+    ids = [ref.file_id for ref in refs.values()]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Each document must be a separate upload. Upload the back of your ID separately.",
+        )
+    return {
+        purpose: claim_upload(db, ref.file_id, ref.claim_token, user, [purpose])
+        for purpose, ref in refs.items()
+    }
+
+
 def purge_unclaimed(db: Session, older_than: timedelta = UNCLAIMED_TTL) -> int:
     """Delete ownerless files older than the TTL: abandoned registrations,
     and files whose account was deleted (RA 10173: don't keep personal
