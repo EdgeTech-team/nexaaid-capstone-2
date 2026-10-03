@@ -44,3 +44,4 @@ Thumbs.db
 backend/app/var/
 .neon/
 .neon
+.env.*

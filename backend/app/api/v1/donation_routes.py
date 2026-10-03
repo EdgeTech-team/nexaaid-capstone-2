@@ -8,7 +8,9 @@ confirmation, inventory and deliveries keep working per item.
 import base64
 import io
 import os
+import time
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -29,15 +31,21 @@ from schemas.physical_donation_schema import (
     DonationBatchCreate,
     PhysicalDonationCreate,
     PhysicalDonationResponse,
+    pickup_rules,
 )
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
 CSWS_ROLES = ("CSWS Main Office", "Administrator")
 
-# Cebu City centre, used to bias address search toward the service area.
-CEBU_CITY = {"latitude": 10.3157, "longitude": 123.8854}
-SEARCH_RADIUS_M = 25000.0
+# Address search (UC-D2 alt 7c) uses OpenStreetMap data through Photon:
+# free, no API key, no billing. GEOCODER_URL can point to a self-hosted
+# Photon server later without any app change.
+SEARCH_CENTER = (10.3300, 123.9300)             # (lat, lng) Mandaue City centre: results near here rank first
+SEARCH_BBOX = "123.25,9.40,124.10,11.30"        # minLon,minLat,maxLon,maxLat: all of Cebu province
+_GEO_CACHE: dict = {}
+_GEO_CACHE_TTL = 24 * 3600                      # seconds
+_GEO_CACHE_MAX = 1000
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +63,15 @@ def _qr_b64(text: str) -> str:
 
 def _num(v) -> Optional[float]:
     return float(v) if v is not None else None
+
+
+def _iso(v: Optional[datetime]) -> Optional[str]:
+    """Datetime as ISO 8601 with a timezone (stored times are UTC)."""
+    if v is None:
+        return None
+    if v.tzinfo is None:
+        v = v.replace(tzinfo=timezone.utc)
+    return v.isoformat()
 
 
 def _get_report(db: Session, report_id: int, require_validated: bool) -> DisasterReport:
@@ -116,20 +133,26 @@ def _report_label(db: Session, report_id: int) -> Optional[str]:
 
 
 def _donor_info(db: Session, d: PhysicalDonation) -> dict:
+    """Who donated and how to reach them. Staff-only (CSWS / Admin)."""
     if d.user_id:
         u = db.get(User, d.user_id)
         if u is None:
-            return {"donor": "Donor", "donor_contact": None}
+            return {"donor": "Donor", "donor_type": "Registered",
+                    "donor_contact": None, "donor_email": None}
         org = db.get(Organization, u.organization_id) if u.organization_id else None
         name = f"{u.first_name} {u.last_name}".strip()
         return {
             "donor": f"{name} ({org.org_name})" if org else name,
+            "donor_type": "Organization" if org else "Registered",
             "donor_contact": u.contact_number,
+            "donor_email": u.email,
         }
     g = db.get(GuestDonor, d.guest_donor_id) if d.guest_donor_id else None
     return {
         "donor": f"{g.full_name} (guest)" if g else "Guest",
+        "donor_type": "Guest",
         "donor_contact": g.contact_number if g else None,
+        "donor_email": g.email if g else None,
     }
 
 
@@ -181,6 +204,7 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         "pickup_lat": _num(first.pickup_lat),
         "pickup_lng": _num(first.pickup_lng),
         "pickup_landmark": first.pickup_landmark,
+        "preferred_pickup_at": _iso(first.preferred_pickup_at),
         "created_at": first.created_at,
         "total_items": len(rows),
         "items": [
@@ -234,6 +258,7 @@ def create_donation_batch(
             pickup_lat=payload.pickup_lat,
             pickup_lng=payload.pickup_lng,
             pickup_landmark=payload.pickup_landmark,
+            preferred_pickup_at=payload.preferred_pickup_at,
             qr_reference=f"{batch_reference}-{n}",
             batch_reference=batch_reference,
             status="Pending",
@@ -271,6 +296,7 @@ def create_donation(
         pickup_lat=payload.pickup_lat,
         pickup_lng=payload.pickup_lng,
         pickup_landmark=payload.pickup_landmark,
+        preferred_pickup_at=payload.preferred_pickup_at,
         qr_reference=reference,
         batch_reference=reference,
         status="Pending",
@@ -322,6 +348,80 @@ def find_by_batch(
 
 
 # ---------------------------------------------------------------------------
+# Door to Door pickup board (Phase 1): every donation that still has goods
+# waiting to be collected, soonest preferred pickup first. Lets CSWS plan
+# pickups without opening each donation (UC-CM1 for Door to Door).
+# ---------------------------------------------------------------------------
+@router.get("/pickups")
+def door_to_door_pickups(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(*CSWS_ROLES)),
+):
+    waiting = (
+        db.query(PhysicalDonation.batch_reference)
+        .filter(
+            PhysicalDonation.handover_method == "Door to Door",
+            PhysicalDonation.status == "Pending",
+        )
+        .distinct()
+        .all()
+    )
+    refs = [r[0] for r in waiting]
+    if not refs:
+        return []
+
+    rows = (
+        db.query(PhysicalDonation)
+        .filter(PhysicalDonation.batch_reference.in_(refs))
+        .order_by(PhysicalDonation.donation_id)
+        .all()
+    )
+    by_ref: dict = {}
+    for r in rows:
+        by_ref.setdefault(r.batch_reference, []).append(r)
+    items = {
+        i.item_id: i
+        for i in db.query(Item).filter(Item.item_id.in_({r.item_id for r in rows})).all()
+    }
+    labels: dict = {}
+
+    out = []
+    for ref, lines in by_ref.items():
+        first = lines[0]
+        if first.report_id not in labels:
+            labels[first.report_id] = _report_label(db, first.report_id)
+        pending = [l for l in lines if l.status == "Pending"]
+        summary = []
+        for l in lines:
+            it = items.get(l.item_id)
+            unit = it.unit_of_measure if it else ""
+            name = it.item_name if it else "Item"
+            summary.append(f"{l.quantity} {unit} {name}".replace("  ", " ").strip())
+        out.append({
+            "batch_reference": ref,
+            "status": _batch_status({l.status for l in lines}),
+            "preferred_pickup_at": _iso(first.preferred_pickup_at),
+            "pickup_address": first.pickup_address,
+            "pickup_lat": _num(first.pickup_lat),
+            "pickup_lng": _num(first.pickup_lng),
+            "pickup_notes": first.pickup_landmark,
+            "report_id": first.report_id,
+            "report_label": labels[first.report_id],
+            "total_items": len(lines),
+            "pending_items": len(pending),
+            "items_summary": summary,
+            "created_at": first.created_at,
+            **_donor_info(db, first),
+        })
+
+    # Soonest preferred time first; donations without a time go last.
+    out.sort(key=lambda b: (b["preferred_pickup_at"] is None,
+                            b["preferred_pickup_at"] or "",
+                            str(b["created_at"])))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # UC-D2 alt 7b: storage address and drop-off instructions
 # ---------------------------------------------------------------------------
 @router.get("/drop-off-info")
@@ -337,8 +437,8 @@ def drop_off_info():
     if lat is None or lng is None:
         lat = lng = None
     return {
-        "name": os.getenv("DROPOFF_NAME", "CSWS Main Office"),
-        "address": os.getenv("DROPOFF_ADDRESS", "CSWS Main Office, Cebu City"),
+        "name": os.getenv("DROPOFF_NAME", "City of Mandaue City Social Services (CSWS)"),
+        "address": os.getenv("DROPOFF_ADDRESS", "City of Mandaue City Social Services (CSWS), Mandaue City"),
         "hours": os.getenv("DROPOFF_HOURS", "Monday to Friday, 8:00 AM to 5:00 PM"),
         "instructions": os.getenv(
             "DROPOFF_INSTRUCTIONS",
@@ -351,85 +451,99 @@ def drop_off_info():
 
 
 # ---------------------------------------------------------------------------
-# UC-D2 alt 7c: address search and map pin for Door to Door pickups.
-# Google is called from here so the API key never ships inside the app.
-# Public because guest donors use the form too.
+# UC-D2 alt 7c: when CSWS does Door to Door pickups (the app's date picker
+# only offers these days and hours; the server checks them again).
 # ---------------------------------------------------------------------------
-def _maps_key() -> str:
-    key = os.getenv("GOOGLE_MAPS_SERVER_KEY")
-    if not key:
-        raise HTTPException(
-            status_code=503,
-            detail="Address search is not set up. Type the address instead.",
-        )
-    return key
+@router.get("/pickup-rules")
+def get_pickup_rules():
+    return pickup_rules()
 
 
-def _google(method: str, url: str, **kwargs) -> dict:
+# ---------------------------------------------------------------------------
+# UC-D2 alt 7c: address suggestions for Door to Door pickups.
+# OpenStreetMap data via Photon. Called from the backend so results can be
+# cached (fair use of the free public server) and the provider can be
+# swapped by changing GEOCODER_URL only. Public because guests donate too.
+# ---------------------------------------------------------------------------
+def _geocoder(path: str, params: dict) -> dict:
+    base = os.getenv("GEOCODER_URL", "https://photon.komoot.io").rstrip("/")
+    agent = os.getenv("GEOCODER_USER_AGENT", "NexaAid/1.0 (Mandaue City disaster relief system)")
+    key = (base, path, tuple(sorted(params.items())))
+    now = time.time()
+    hit = _GEO_CACHE.get(key)
+    if hit and now - hit[0] < _GEO_CACHE_TTL:
+        return hit[1]
     try:
-        r = httpx.request(method, url, timeout=8.0, **kwargs)
+        r = httpx.request(
+            "GET", f"{base}{path}", params=params,
+            headers={"User-Agent": agent}, timeout=8.0,
+        )
     except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="Map service unreachable. Type the address instead.")
+        raise HTTPException(
+            status_code=502,
+            detail="Address suggestions are unavailable right now. Type the full address yourself.",
+        )
     if r.status_code != 200:
-        raise HTTPException(status_code=502, detail="Map service error. Type the address instead.")
-    return r.json()
+        raise HTTPException(
+            status_code=502,
+            detail="Address suggestions are unavailable right now. Type the full address yourself.",
+        )
+    data = r.json()
+    if len(_GEO_CACHE) >= _GEO_CACHE_MAX:
+        _GEO_CACHE.pop(next(iter(_GEO_CACHE)))
+    _GEO_CACHE[key] = (now, data)
+    return data
+
+
+def _describe(props: dict) -> tuple:
+    """(main, secondary, full address) from a Photon feature's properties."""
+    street = " ".join(p for p in (props.get("housenumber"), props.get("street")) if p)
+    name = props.get("name")
+    main = name or street or props.get("district") or props.get("city") or "Unnamed place"
+    parts = []
+    for part in (
+        street if name else None,
+        props.get("locality"),
+        props.get("district"),
+        props.get("city"),
+        props.get("county"),
+        props.get("state"),
+    ):
+        if part and part != main and part not in parts:
+            parts.append(part)
+    secondary = ", ".join(parts)
+    return main, secondary, ", ".join([main] + parts)
 
 
 @router.get("/location/autocomplete")
-def location_autocomplete(
-    q: str = Query(min_length=2, max_length=200),
-    session: Optional[str] = Query(default=None, max_length=64),
-):
-    body = {
-        "input": q,
-        "includedRegionCodes": ["ph"],
-        "locationBias": {"circle": {"center": CEBU_CITY, "radius": SEARCH_RADIUS_M}},
-    }
-    if session:
-        body["sessionToken"] = session
-    data = _google(
-        "POST",
-        "https://places.googleapis.com/v1/places:autocomplete",
-        json=body,
-        headers={"X-Goog-Api-Key": _maps_key()},
-    )
+def location_autocomplete(q: str = Query(min_length=2, max_length=200)):
+    data = _geocoder("/api", {
+        "q": q.strip(),
+        "limit": 8,
+        "lat": SEARCH_CENTER[0],
+        "lon": SEARCH_CENTER[1],
+        "bbox": SEARCH_BBOX,
+    })
     out = []
-    for s in data.get("suggestions", []):
-        p = s.get("placePrediction")
-        if not p:
+    seen = set()
+    for f in data.get("features", []):
+        coords = (f.get("geometry") or {}).get("coordinates") or []
+        if len(coords) < 2:
             continue
-        fmt = p.get("structuredFormat", {})
+        props = f.get("properties") or {}
+        main, secondary, full = _describe(props)
+        if full.lower() in seen:
+            continue  # OSM can store one place as both a point and a building
+        seen.add(full.lower())
         out.append({
-            "place_id": p.get("placeId"),
-            "main": fmt.get("mainText", {}).get("text") or p.get("text", {}).get("text", ""),
-            "secondary": fmt.get("secondaryText", {}).get("text", ""),
+            "place_id": f"{props.get('osm_type', '')}{props.get('osm_id', '')}",
+            "main": main,
+            "secondary": secondary,
+            "address": full,
+            "lat": coords[1],
+            "lng": coords[0],
         })
     return out
-
-
-@router.get("/location/place/{place_id}")
-def location_place(
-    place_id: str,
-    session: Optional[str] = Query(default=None, max_length=64),
-):
-    data = _google(
-        "GET",
-        f"https://places.googleapis.com/v1/places/{place_id}",
-        params={"sessionToken": session} if session else None,
-        headers={
-            "X-Goog-Api-Key": _maps_key(),
-            "X-Goog-FieldMask": "displayName,formattedAddress,location",
-        },
-    )
-    loc = data.get("location")
-    if not loc:
-        raise HTTPException(status_code=404, detail="Place not found")
-    return {
-        "name": data.get("displayName", {}).get("text"),
-        "address": data.get("formattedAddress"),
-        "lat": loc["latitude"],
-        "lng": loc["longitude"],
-    }
 
 
 @router.get("/location/reverse")
@@ -437,15 +551,10 @@ def location_reverse(
     lat: float = Query(ge=-90, le=90),
     lng: float = Query(ge=-180, le=180),
 ):
-    data = _google(
-        "GET",
-        "https://maps.googleapis.com/maps/api/geocode/json",
-        params={"latlng": f"{lat},{lng}", "key": _maps_key(), "region": "ph"},
-    )
-    if data.get("status") not in ("OK", "ZERO_RESULTS"):
-        raise HTTPException(status_code=502, detail="Map service error. Type the address instead.")
-    results = data.get("results") or []
-    address = results[0].get("formatted_address") if results else None
+    # Rounded to ~1 m so tiny pin jitters share a cache entry.
+    data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
+    features = data.get("features") or []
+    address = _describe(features[0].get("properties") or {})[2] if features else None
     return {"address": address or f"{lat:.5f}, {lng:.5f}", "lat": lat, "lng": lng}
 
 
@@ -523,6 +632,7 @@ def my_donations(
                 "handover_method": d.handover_method,
                 "pickup_address": d.pickup_address,
                 "pickup_landmark": d.pickup_landmark,
+                "preferred_pickup_at": _iso(d.preferred_pickup_at),
                 "status": d.status,
                 "created_at": d.created_at,
                 "report": report_info(reports[d.report_id]) if d.report_id in reports else None,
