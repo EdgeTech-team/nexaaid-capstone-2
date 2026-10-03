@@ -7,6 +7,7 @@ import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_screens.dart';
 import 'ops_screens.dart';
+import 'pickup_board.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
 import 'widgets.dart';
@@ -70,6 +71,11 @@ List<_Tab> _tabsFor(String? role) {
           Icons.qr_code_scanner,
           ReceiveScreen(),
         ), // Module 5, 4.4
+        _Tab(
+          'Pickups',
+          Icons.door_front_door_outlined,
+          PickupBoardScreen(),
+        ), // Door to Door pickups (UC-CM1)
         _Tab(
           'Deliveries',
           Icons.local_shipping_outlined,
