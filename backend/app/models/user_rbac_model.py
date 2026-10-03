@@ -20,6 +20,11 @@ class User(Base):
     # Kind of valid ID (schemas/user_schema.ID_TYPES). Donors only; migration f3dd12dbc3d7.
     id_type = Column(String(40), nullable=True)
     is_active = Column(Boolean, server_default="true", nullable=False)
+    # Government employee number issued by the office (NOT user_id). Required for
+    # internal accounts (UC-A1). Already in Neon: migration da126cd397f0.
+    employee_id = Column(String(30), unique=True, nullable=True)
+    # True while the user still has a temporary password (adviser item 3, da126cd397f0).
+    must_change_password = Column(Boolean, server_default="false", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     role = relationship("Role")

@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 from core.names import capitalize_words
 from core.passwords import validate_password_strength
-from core.validators import clean_email, clean_person_name, clean_ph_mobile
+from core.validators import clean_email, clean_employee_id, clean_person_name, clean_ph_mobile
 from schemas.upload_schema import UploadRef
 
 # UC-D1 step 3: kinds of valid ID a donor may upload (stored in users.id_type).
@@ -80,6 +80,7 @@ class UserResponse(BaseModel):
     email: str
     role_id: int
     is_active: bool
+    employee_id: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -91,14 +92,96 @@ INTERNAL_ROLES = {
 }
 
 
+BARANGAY_REP = "Barangay Receiving Representative"
+
+
 class InternalAccountCreateRequest(BaseModel):
-    first_name: str = Field(..., min_length=1, max_length=50)
-    last_name: str = Field(..., min_length=1, max_length=50)
-    email: EmailStr = Field(..., max_length=150)
-    password: str = Field(..., min_length=8, max_length=128)
-    contact_number: str = Field(..., min_length=7, max_length=20)
+    """UC-A1 step 4: the Administrator creates an office-based account.
+    Same name / phone / email rules as registration."""
+    first_name: str
+    last_name: str
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=64)  # temporary password
+    contact_number: str
     role_name: str
-    assigned_barangay_id: Optional[int] = None
+    assigned_barangay_id: Optional[int] = Field(default=None, gt=0)
+    employee_id: str
+    # Uploaded first by the Administrator (purpose employee_id_card).
+    employee_id_card: UploadRef
+
+    @field_validator("first_name")
+    @classmethod
+    def _fn(cls, v): return clean_name(v, "First name")
+
+    @field_validator("last_name")
+    @classmethod
+    def _ln(cls, v): return clean_name(v, "Last name")
+
+    @field_validator("email")
+    @classmethod
+    def _em(cls, v): return clean_email(str(v))
+
+    @field_validator("contact_number")
+    @classmethod
+    def _cn(cls, v): return clean_ph_mobile(v)
+
+    @field_validator("employee_id")
+    @classmethod
+    def _emp(cls, v): return clean_employee_id(v)  # 4-20 letters/numbers/hyphens, upper case
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.role_name not in INTERNAL_ROLES:
+            raise ValueError(f"Role must be one of: {', '.join(sorted(INTERNAL_ROLES))}")
+        if self.role_name == BARANGAY_REP and self.assigned_barangay_id is None:
+            raise ValueError("Choose the assigned barangay for a Barangay Receiving Representative")
+        if self.role_name != BARANGAY_REP:
+            self.assigned_barangay_id = None
+        validate_password_strength(
+            self.password, email=self.email, names=(self.first_name, self.last_name))
+        return self
+
+
+class AccountUpdateRequest(BaseModel):
+    """UC-A1 step 5: the Administrator updates account details or status.
+    Every field is optional (PATCH); invalid changes are rejected with 422
+    (alt 5a). Role, barangay and employee fields are for internal accounts."""
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    contact_number: Optional[str] = None
+    role_name: Optional[str] = None
+    assigned_barangay_id: Optional[int] = Field(default=None, gt=0)
+    employee_id: Optional[str] = None
+    employee_id_card: Optional[UploadRef] = None  # replaces the current card
+    is_active: Optional[bool] = None
+
+    @field_validator("first_name")
+    @classmethod
+    def _fn(cls, v): return None if v is None else clean_name(v, "First name")
+
+    @field_validator("last_name")
+    @classmethod
+    def _ln(cls, v): return None if v is None else clean_name(v, "Last name")
+
+    @field_validator("email")
+    @classmethod
+    def _em(cls, v): return None if v is None else clean_email(str(v))
+
+    @field_validator("contact_number")
+    @classmethod
+    def _cn(cls, v): return None if v is None else clean_ph_mobile(v)
+
+    @field_validator("employee_id")
+    @classmethod
+    def _emp(cls, v): return None if v is None else clean_employee_id(v)
+
+    @field_validator("role_name")
+    @classmethod
+    def _role(cls, v):
+        if v is not None and v not in INTERNAL_ROLES:
+            raise ValueError(f"Role must be one of: {', '.join(sorted(INTERNAL_ROLES))}")
+        return v
 
 
 class LoginRequest(BaseModel):
