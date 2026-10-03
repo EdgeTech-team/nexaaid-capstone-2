@@ -6,6 +6,7 @@ import '../dev_console.dart';
 import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_screens.dart';
+import 'notifications_screen.dart';
 import 'ops_screens.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
@@ -196,7 +197,7 @@ class _RoleHomeState extends State<RoleHome> {
             ),
           ],
         ),
-        actions: [..._shellActions(context), Gaps.h8],
+          actions: [const NotificationBell(), ..._shellActions(context), Gaps.h8],
       ),
       body: wide
           ? Row(
