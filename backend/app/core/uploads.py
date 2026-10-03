@@ -49,6 +49,10 @@ PURPOSES = {
     "id_back": Purpose("private", DOCS, None),
     #UC-R1 / UC-A2 alt 4a: organization legitimacy documents 
     "legitimacy_document": Purpose ("private", DOCS, None),
+    #UC-A1: staff member's employee ID card. Uploaded by the Administrator,
+    #then handed to the new account (transfer_upload) so the staff member
+    #and Administrators can view it.
+    "employee_id_card": Purpose("private", DOCS, ("Administrator",)),
     #Barangay Ewallet QR shown to donors. DISPLAY ONLY;
     #NexaAid never processes money (manucsript limitation)
     "barangay_donation_qr": Purpose(
@@ -177,6 +181,41 @@ def claim_registration_files(db: Session, user, refs: dict) -> dict:
         purpose: claim_upload(db, ref.file_id, ref.claim_token, user, [purpose])
         for purpose, ref in refs.items()
     }
+
+
+def transfer_upload(db: Session, file_id: str, from_user, to_user, purpose: str) -> Upload:
+    """Hand a file the caller uploaded while logged in to another account
+    (UC-A1: the Administrator uploads a staff member's employee ID card).
+
+    Only the uploader can hand it over, and only a file of that purpose.
+    Older files of the same purpose owned by to_user are deleted, so a
+    replaced card is not kept (RA 10173: no personal data longer than needed).
+    """
+    not_found = HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        "The uploaded file was not found. Please upload it again.",
+    )
+    up = db.query(Upload).filter(Upload.file_id == file_id).first()
+    if up is None or up.purpose != purpose:
+        raise not_found
+    if up.owner_user_id not in (from_user.user_id, to_user.user_id):
+        raise not_found
+    up.owner_user_id = to_user.user_id
+    up.claim_token_hash = None
+    up.claimed_at = datetime.now(timezone.utc)
+    older = (
+        db.query(Upload)
+        .filter(Upload.owner_user_id == to_user.user_id, Upload.purpose == purpose,
+                Upload.upload_id != up.upload_id)
+        .all()
+    )
+    keys = [row.storage_key for row in older]
+    for row in older:
+        db.delete(row)
+    db.flush()  # rows gone first; a file is never deleted while its row remains
+    for key in keys:
+        get_storage().delete(key)
+    return up
 
 
 def purge_unclaimed(db: Session, older_than: timedelta = UNCLAIMED_TTL) -> int:
