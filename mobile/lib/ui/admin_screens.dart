@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import 'account_detail_screen.dart';
+import 'account_form.dart' show AccountsScreen;
 import 'csws_screens.dart' show ActivityList;
 import 'private_file_view.dart';
-import 'report_screens.dart' show AccountsScreen;
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -120,56 +120,6 @@ class _UsersScreenState extends State<UsersScreen> {
   String role = '';
   String q = '';
 
-  Future<void> _toggle(Map u) async {
-    final activate = u['is_active'] != true;
-    await act(
-      context,
-      () => api.patch(
-        '/admin/users/${u['user_id']}',
-        body: {'is_active': activate},
-      ),
-      success: activate
-          ? '${u['email']} activated'
-          : '${u['email']} deactivated (can no longer log in)',
-    );
-  }
-
-  Future<void> _edit(Map u, Names names) async {
-    final brgys = names.rows('barangays');
-    final isRep = u['role'] == Roles.barangay;
-    final v = await formDialog(
-      context,
-      title: 'Edit ${u['email']}',
-      fields: [
-        DialogField(
-          'contact',
-          'Contact number',
-          initial: '${u['contact_number']}',
-        ),
-        if (isRep && brgys.isNotEmpty)
-          DialogField(
-            'brgy',
-            'Assigned barangay',
-            initial: '${u['assigned_barangay'] ?? brgys.first['name']}',
-            options: [for (final b in brgys) '${b['name']}'],
-          ),
-      ],
-    );
-    if (v == null || !mounted) return;
-    int? brgyId;
-    if (v['brgy'] != null) {
-      brgyId = brgys.firstWhere((b) => b['name'] == v['brgy'])['id'] as int;
-    }
-    await act(
-      context,
-      () => api.patch(
-        '/admin/users/${u['user_id']}',
-        body: {'contact_number': v['contact'], 'assigned_barangay_id': ?brgyId},
-      ),
-      success: 'Account updated',
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Loader(
@@ -178,18 +128,16 @@ class _UsersScreenState extends State<UsersScreen> {
           '/admin/users',
           query: {if (role.isNotEmpty) 'role': role, if (q.isNotEmpty) 'q': q},
         ),
-        api.lookupsResult,
       ],
       key: ValueKey('$role|$q'),
       builder: (context, data) {
         final users = (data[0] as List).cast<Map>();
-        final names = Names(Map<String, dynamic>.from(data[1] as Map));
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
             const PageHeader(
               'User Management',
-              subtitle: 'View accounts and roles, activate or deactivate them.',
+              subtitle: 'Tap an account to see its details, edit it, or deactivate it.',
             ),
             TextField(
               decoration: const InputDecoration(
@@ -253,20 +201,9 @@ class _UsersScreenState extends State<UsersScreen> {
                           AccountDetailScreen(userId: u['user_id'] as int),
                     ),
                   ),
-                  trailing: PopupMenuButton<String>(
-                    tooltip: 'Actions',
-                    onSelected: (a) =>
-                        a == 'toggle' ? _toggle(u) : _edit(u, names),
-                    itemBuilder: (_) => [
-                      PopupMenuItem(
-                        value: 'toggle',
-                        child: Text(
-                          u['is_active'] == true ? 'Deactivate' : 'Activate',
-                        ),
-                      ),
-                      const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                    ],
-                  ),
+                  // UC-A1: tap the row for details, Edit details and
+                  // Deactivate (account_detail_screen.dart).
+                  trailing: const Icon(Icons.chevron_right),
                 ),
               ),
           ],
