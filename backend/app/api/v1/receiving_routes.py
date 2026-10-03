@@ -9,6 +9,7 @@ from schemas.physical_donation_schema import PhysicalDonationResponse
 from models.user_rbac_model import User
 from models.inventory_model import Inventory
 from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResponse
+from core.notifications import notify
 
 from typing import Optional
 from pydantic import BaseModel
@@ -166,6 +167,11 @@ def receive_donation(
                old={"status": "Pending"},
                new={"status": "Received", "declared": donation.quantity,
                     "actual_quantity": payload.actual_quantity})
+    if donation.user_id:
+        notify(db, donation.user_id, "donation_received",
+               title=f"Donation #{donation.donation_id} received",
+               body="Your donation arrived and is being checked.",
+               entity_type="donation", entity_id=donation.donation_id)
     db.commit()
     db.refresh(receipt)
     return receipt
@@ -188,6 +194,11 @@ def confirm_donation(
         )
 
     donation.status = "Confirmed"
+    if donation.user_id:  # guest donors have no account
+        notify(db, donation.user_id, "donation_confirmed",
+               title=f"Donation #{donation.donation_id} confirmed",
+               body="Your donation was received and confirmed. Thank you!",
+               entity_type="donation", entity_id=donation.donation_id)
     db.commit()
     db.refresh(donation)
     return donation
