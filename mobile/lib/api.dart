@@ -34,6 +34,13 @@ class ApiResult {
     if (json is Map && json['detail'] != null) {
       final d = json['detail'];
       if (d is String) return d;
+      // 422 from FastAPI: a list of {loc, msg, ...}. Show just the messages.
+      if (d is List && d.every((e) => e is Map && e['msg'] is String)) {
+        return d
+            .map((e) => (e['msg'] as String).replaceFirst('Value error, ', ''))
+            .toSet()
+            .join('\n');
+      }
       return const JsonEncoder.withIndent('  ').convert(d);
     }
     return raw;
@@ -168,6 +175,23 @@ class Api extends ChangeNotifier {
       return ApiResult(res.statusCode, decoded, res.body);
     } catch (e) {
       return ApiResult(0, null, 'Network error: $e');
+    }
+  }
+
+  /// Downloads a file the server only gives to allowed users (private
+  /// uploads: GET /uploads/{file_id} checks owner / Administrator).
+  /// Returns (status, bytes); status 0 means the server was not reached.
+  Future<(int, Uint8List?)> download(String path) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$baseUrl$path'),
+            headers: {if (token != null) 'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 60));
+      return (res.statusCode, res.statusCode == 200 ? res.bodyBytes : null);
+    } catch (_) {
+      return (0, null);
     }
   }
 
