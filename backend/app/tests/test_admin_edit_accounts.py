@@ -176,6 +176,7 @@ def test_edit_rules_and_errors(api):
 
     # alt 5a: invalid values.
     for body in ({"contact_number": "0917"}, {"first_name": ""}, {"first_name": None},
+                 {"last_name": ""}, {"first_name": "Maria Santos", "last_name": ""},
                  {"email": "not-an-email"}, {"role_name": "Administrator"},
                  {"role_name": "Individual Donor"}, {"employee_id": "@@"},
                  {"assigned_barangay_id": 1},            # staff is not a barangay rep
@@ -199,6 +200,30 @@ def test_edit_rules_and_errors(api):
 
     # Only the Administrator.
     assert patch(staff, {"first_name": "Hacked"}, who="csws").status_code == 403
+
+
+def test_old_account_with_empty_last_name(api):
+    """Accounts made before the name split have last_name = "" (e.g. org
+    contacts). Saving an empty last name is refused (422); turning the
+    account on/off still works; saving a split name fixes it."""
+    client, t = api
+    db = database.SessionLocal()
+    try:
+        db.add(User(first_name="Maria Santos", last_name="", email="old.donor@test.ph",
+                    contact_number="09170000010", password_hash=hash_password(PASSWORD), role_id=2))
+        db.commit()
+    finally:
+        db.close()
+    uid = _id(client, t, "old.donor@test.ph")
+    r = client.patch(f"/admin/users/{uid}", headers=t["admin"],
+                     json={"first_name": "Maria Santos", "last_name": ""})
+    assert r.status_code == 422 and "Last name must be 2-50 characters" in r.text
+    ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={"is_active": False}))
+    row = ok(client.patch(f"/admin/users/{uid}", headers=t["admin"],
+                          json={"first_name": "Maria", "last_name": "Santos", "is_active": True}))
+    assert row["name"] == "Maria Santos"
+    detail = ok(client.get(f"/admin/users/{uid}", headers=t["admin"]))
+    assert (detail["first_name"], detail["last_name"]) == ("Maria", "Santos")
 
 
 def test_replacing_the_card_deletes_the_old_one(api):

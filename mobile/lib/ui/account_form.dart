@@ -23,6 +23,18 @@ const internalRoles = [
   Roles.barangay,
 ];
 
+/// Accounts made before first/last names were split (e.g. organization
+/// contacts) have the whole name in first_name and an empty last_name:
+/// "Maria Santos" / "". The edit form then starts with first = everything
+/// except the last word, last = the last word. Only the form is pre-filled;
+/// nothing changes in the database until the Administrator taps Save.
+(String, String) splitLegacyName(String first, String last) {
+  final f = first.trim().replaceAll(RegExp(r'\s+'), ' ');
+  if (last.trim().isNotEmpty || !f.contains(' ')) return (first, last);
+  final i = f.lastIndexOf(' ');
+  return (f.substring(0, i), f.substring(i + 1));
+}
+
 /// Same rule as backend core/validators.clean_employee_id.
 String? employeeIdRule(String? v) {
   final s = (v ?? '').trim().toUpperCase();
@@ -115,9 +127,13 @@ class AccountFormState extends State<AccountForm> {
   @override
   void initState() {
     super.initState();
+    final name = splitLegacyName(
+      '${u?['first_name'] ?? ''}',
+      '${u?['last_name'] ?? ''}',
+    );
     c = {
-      'first': TextEditingController(text: u?['first_name'] ?? ''),
-      'last': TextEditingController(text: u?['last_name'] ?? ''),
+      'first': TextEditingController(text: name.$1),
+      'last': TextEditingController(text: name.$2),
       'email': TextEditingController(text: u?['email'] ?? ''),
       'phone': TextEditingController(text: u?['contact_number'] ?? ''),
       'employee': TextEditingController(text: u?['employee_id'] ?? ''),
@@ -237,7 +253,7 @@ class AccountFormState extends State<AccountForm> {
             )
           else
             Text(
-              'Editing ${u!['first_name']} ${u!['last_name']} · $currentRole',
+              'Editing ${'${u!['first_name']} ${u!['last_name']}'.trim()} · $currentRole',
               style: t.titleMedium,
             ),
           Gaps.v16,

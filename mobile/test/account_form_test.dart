@@ -48,6 +48,44 @@ void main() {
     expect(employeeIdRule('CSWS 0042'), isNotNull);
   });
 
+  test('Old full names are split only when the last name is empty', () {
+    expect(splitLegacyName('Maria Santos', ''), ('Maria', 'Santos'));
+    expect(splitLegacyName('Juan  Dela   Cruz', ''), (
+      'Juan Dela',
+      'Cruz',
+    )); // last word
+    expect(splitLegacyName('Maria', ''), ('Maria', '')); // one word: unchanged
+    expect(splitLegacyName('Maria Clara', 'Santos'), (
+      'Maria Clara',
+      'Santos',
+    )); // already split
+  });
+
+  testWidgets('Edit: old account "Maria Santos" / "" is pre-filled split', (
+    tester,
+  ) async {
+    final old = _user(Roles.donor)
+      ..['first_name'] = 'Maria Santos'
+      ..['last_name'] = '';
+    await _pump(tester, AccountForm(user: old, names: _names));
+    String field(String key) => tester
+        .widget<EditableText>(
+          find.descendant(
+            of: find.byKey(ValueKey('account-$key')),
+            matching: find.byType(EditableText),
+          ),
+        )
+        .controller
+        .text;
+    expect(field('first'), 'Maria');
+    expect(field('last'), 'Santos');
+    // The header still shows the saved name: nothing is saved until Save.
+    expect(
+      find.text('Editing Maria Santos · Individual Donor'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('Create: employee ID and card are required', (tester) async {
     await _pump(tester, AccountForm(names: _names));
     expect(find.text('Employee ID'), findsOneWidget);
