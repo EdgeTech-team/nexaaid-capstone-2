@@ -6,12 +6,13 @@ barangay/sitio with an Item row (for delivery_items) and a validated
 report (needed before any delivery/fulfillment logic can run).
 """
 import pytest
-from models.delivery import Item
+from models.item_model import Item
+from models.inventory_model import Inventory
 
 
 @pytest.fixture()
 def validated_report_with_item(db_session, seed, admin_client, reporter_client):
-    item = Item(item_id=1, name="Rice sack (25kg)")
+    item = Item(item_id=1, item_name="Rice sack (25kg)", category="Food", unit_of_measure="sack")
     db_session.add(item)
     db_session.commit()
 
@@ -29,6 +30,10 @@ def validated_report_with_item(db_session, seed, admin_client, reporter_client):
 
     validate_resp = admin_client.post(f"/reports/{report_id}/validate", json={})
     assert validate_resp.status_code == 200
+
+    # Deliveries now draw from the report's inventory, so stock it first.
+    db_session.add(Inventory(item_id=item.item_id, report_id=report_id, quantity=1000))
+    db_session.commit()
 
     return {"report_id": report_id, "item_id": item.item_id}
 

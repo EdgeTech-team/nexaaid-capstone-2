@@ -8,7 +8,7 @@
 - Neon Postgres connected (pooled + direct URLs configured)
 - Real schema discovered mid-build — DB already had full production tables,
   models rewritten to match (User: user_id/password_hash, normalized Role
-  via role_id, not an enum)
+  via role_id, not an enum) 
 - Alembic baselined safely (schema-drop near-miss caught before running)
 - core/auth.py: JWT login, password hashing, require_role() dependency
 - /health, /health/secure, throwaway /token all tested working end-to-end
@@ -60,17 +60,32 @@ dashboard/report work also modified — diff this file carefully before merging.
 - Extended validate_report (3.4) to auto-create a report_fulfillments row,
   since 3.10/3.11 both depend on it existing.
 
+- **3.7 Needs Monitoring**: added priority_level filter to GET /reports/,
+  plus new GET /reports/monitoring endpoint joining disaster_reports with
+  report_fulfillments (joinedload, avoids N+1) — returns fulfillment
+  status/percentage/items alongside each report for staff/admin/barangay
+  official roles.
+- **3.11 AI-Assisted Priority Level Assignment**: rule-based scoring
+  (core/priority_engine.py) triggered on report validation — factors in
+  affected_families, estimated_quantity, disaster type severity, and
+  current fulfillment status. Handles the manuscript's alt flows:
+  insufficient data → "Needs Review", missing fulfillment record →
+  scored as max unmet need, out-of-range score → "Review Required"
+  safety fallback. Scoring weights/thresholds are a team-agreed rule,
+  not manuscript-specified (manuscript intentionally leaves the formula
+  open — see UC spec p.93-94).
 ### Still open / needs team input
 
-- Real RBAC role names are placeholders in code (e.g. "admin", "csws_main_office",
-  "barangay_receiving_rep") — need actual values from roles table once decided.
-- No way yet to check a Barangay Rep's own barangay_id when confirming receipt
-  (user_rbac_model has no such column) — the check is written but not enforced.
-- Missing: photo/evidence upload field on disaster_reports (FR 2.1 gap).
-- 3.11 (AI-Assisted Priority Level Assignment) and 3.12 (SMS-Based Alternative
-  Reporting) — not started; 3.12 partially covered by existing SMS ingestion.
-- 3.7 (Needs Monitoring) — not started; mostly extends existing GET /reports/.
-
+- DisasterType stub currently only has 1 real row ("Flood") in the actual
+  Neon DB — Typhoon/Fire/Earthquake severities in priority_engine.py's
+  DISASTER_SEVERITY map are unreachable until whoever owns reference
+  tables actually seeds those rows.
+- Found a real mismatch: models/report.py's DisasterType stub maps the
+  column as `name`, but the actual Postgres column is `type_name` — hasn't
+  broken anything yet since nothing reads it, but will the moment code
+  (like priority_engine.py) starts using report.disaster_type.name.
+  Flagging for whoever owns reference/lookup tables.
+  
 ## Fernandez — Dashboard (3.13)
 
 **Status:** In progress — core endpoints built, pending final verification
@@ -104,3 +119,57 @@ dashboard/report work also modified — diff this file carefully before merging.
 - Run `uvicorn main:app --reload` and test all 5 endpoints against the
   test admin account
 - Confirm empty-table case doesn't error (should return zeros)
+
+---
+
+## Fernandez — UI/UX lead: Sprint 0 design system + app shell, Item 8 landing page
+
+**Status:** Ready for review (branch `feat/0-design-system`)
+**Last updated:** Oct 1, 2026
+
+- **Design system** in `mobile/lib/design/`: light and dark themes, Lexend +
+  Source Sans 3 type, 8-pt spacing, radius scale, one fixed color per status
+  and priority, and components (`AppButton`, `AppTextField` with password eye
+  toggle, `AppCard`, `StatCard`, `StatusChip`, `PriorityChip`,
+  `FulfillmentBar`, `StatusTimeline`, skeletons, `EmptyView`, `ErrorView`).
+  Rules: `docs/design/DESIGN_SYSTEM.md`.
+- **Everyone's screens restyled for free:** `ui/widgets.dart` now draws the
+  old `Badge2`, `StatTile`, `Progress`, `EmptyState`, `PageHeader` and
+  `Loader` with the new components, and re-exports the design system.
+  No screen code changed.
+- **App shell:** new app bar, bottom bar on phones and side rail on
+  tablets/Chrome, Appearance setting (System / Light / Dark) in Profile,
+  `_shellActions` slot in `ui/home.dart` for the notification bell.
+- **Component gallery:** Profile > Developer tools > Design system gallery,
+  with dark-mode and 100/130/200% text switches.
+- **Landing page (Item 8)** in `ui/landing/`: shown when signed out. Hero
+  with the most urgent report, live stats, how it works, report feed with
+  priority filter, Donate as guest / Log in / Create account.
+- **Team tooling:** `docs/setup/EMULATOR.md`, `.github/pull_request_template.md`
+  (UI review gate checklist).
+- Tests: `test/design_system_test.dart`; `test/widget_test.dart` updated for
+  the landing page.
+
+**For Mariquit (Item 8 data):** the landing page already calls
+`GET /public/reports` and `GET /public/stats` and falls back to
+`/lookups` while they return 404. Shapes it expects:
+- `/public/reports`: list of validated reports with the same keys as
+  `/lookups` `validated_reports` (`id` or `report_id`, `disaster`,
+  `barangay`, `sitio`, `priority_level`, `assistance_needed`,
+  `affected_families`, `description`, `total_items_needed`,
+  `total_items_delivered`, `fulfillment_percentage`). No reporter info.
+- `/public/stats`: `{active_reports, families_affected, urgent_reports,
+  barangays, donations_received, deliveries_completed}`. Any missing key
+  is computed from the reports instead.
+
+**For Mariquit (privacy):** `/lookups` is public and its
+`pending_donations` / `received_donations` include QR references. Worth
+moving those lists behind auth when you build `/public/*`.
+
+**For everyone:** when you restyle your screens, replace `Brand.ink` /
+`Brand.muted` with `colorScheme.onSurface` / `onSurfaceVariant` so they
+work in dark mode.
+
+**Next:** Item 10 donor/org dashboards (stat cards, `StatusTimeline` per
+donation, supported-report progress, optional self-declared financial log),
+then Module 8 delivery screens.

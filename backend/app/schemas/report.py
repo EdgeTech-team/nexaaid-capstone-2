@@ -17,9 +17,13 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SourceType = Literal["web", "mobile", "sms"]
+from models.report import canonical_source
+
+# Stored exactly as the live DB constraint expects; any casing is accepted
+# on input ("web", "WEB", ...) and normalised.
+SourceType = Literal["Web", "Mobile", "SMS"]
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +38,12 @@ class DisasterReportCreate(BaseModel):
     affected_families: Optional[int] = Field(default=None, ge=0)
     assistance_needed: Optional[str] = None
     estimated_quantity: Optional[int] = Field(default=None, ge=0)
-    source: SourceType = "web"
+    source: SourceType = "Web"
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _canonical_source(cls, v):
+        return canonical_source(v)
 
 
 class DisasterReportUpdate(BaseModel):
@@ -77,6 +86,11 @@ class DisasterReportResponse(BaseModel):
     rejection_reason: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _canonical_source(cls, v):
+        return canonical_source(v)
 
 
 # ---------------------------------------------------------------------------
@@ -131,3 +145,10 @@ class SmsReportMetadataResponse(BaseModel):
 class SmsReportIngestResponse(BaseModel):
     report: DisasterReportResponse
     sms_metadata: SmsReportMetadataResponse
+
+class ReportMonitoringResponse (DisasterReportResponse):
+    fulfillment_status: Optional[str] = None
+    fulfillment_percentage: Optional[Decimal] = None
+    total_items_needed: Optional[int] = None
+    total_items_delivered: Optional[int] = None
+    

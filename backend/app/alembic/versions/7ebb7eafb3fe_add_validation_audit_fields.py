@@ -36,4 +36,3 @@ def downgrade() -> None:
     """Downgrade schema."""
     op.drop_column("disaster_reports", "rejection_reason")
     op.drop_column("disaster_reports", "validated_by")
-

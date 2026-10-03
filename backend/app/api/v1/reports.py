@@ -29,10 +29,15 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload
+from datetime import datetime, timezone
+from core.priority_engine import compute_priority
 
 from core.database import get_db
-from core.auth import get_current_user, require_role  # see note above
-from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment
+from core.notifications import notify
+from core.auth import get_current_user, require_role, has_role, barangay_scope
+from core.audit import log_action  # see note above
+from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from schemas.report import (
     DisasterReportCreate,
     DisasterReportUpdate,
@@ -42,6 +47,7 @@ from schemas.report import (
     SmsReportMetadataResponse,
     ReportValidate,
     ReportReject,
+    ReportMonitoringResponse,
 )
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -72,12 +78,18 @@ def list_reports(
     barangay_id: Optional[int] = Query(default=None),
     disaster_type_id: Optional[int] = Query(default=None),
     source: Optional[str] = Query(default=None),
+    priority_level: Optional[str] = Query(default=None), # 3.7
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
     query = db.query(DisasterReport)
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+        query = query.filter(DisasterReport.barangay_id == own_barangay)
+
+   
     if status_filter:
         query = query.filter(DisasterReport.status == status_filter)
     if barangay_id:
@@ -85,14 +97,91 @@ def list_reports(
     if disaster_type_id:
         query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
     if source:
-        query = query.filter(DisasterReport.source == source)
+        query = query.filter(DisasterReport.source == canonical_source(source))
+    if priority_level:
+        query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
+    
     return (
         query.order_by(DisasterReport.created_at.desc())
         .offset(skip)
         .limit(limit)
         .all()
     )
+
+@router.get("/monitoring",
+            response_model=List[ReportMonitoringResponse],)
+def list_report_monitoring(
+    barangay_id: Optional[int] = Query(default=None),
+    disaster_type_id: Optional[int] = Query(default=None),
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    source: Optional[str] = Query(default=None),
+    priority_level: Optional[str] = Query(default=None), # 3.7
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),    
+):
+    query = db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+        query = query.filter(DisasterReport.barangay_id == own_barangay)
+
+    if status_filter:
+            query = query.filter(DisasterReport.status == status_filter)
+    if barangay_id:
+            query = query.filter(DisasterReport.barangay_id == barangay_id)
+    if disaster_type_id:
+            query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
+    if source:
+            query = query.filter(DisasterReport.source == canonical_source(source))
+    if priority_level:
+            query = query.filter(DisasterReport.priority_level == priority_level) #3.7
+
+    return _monitoring_rows(query, skip, limit)
+
+def _monitoring_rows(query, skip: int, limit: int):
+    results = []
+    for report in (
+        query.order_by(DisasterReport.created_at.desc()).offset(skip).limit(limit).all()
+    ):
+        fulfillment = report.fulfillment
+        results.append(ReportMonitoringResponse(
+            **DisasterReportResponse.model_validate(report).model_dump(),
+            fulfillment_status=fulfillment.verification_status if fulfillment else None,
+            fulfillment_percentage=fulfillment.fulfillment_percentage if fulfillment else None,
+            total_items_needed=fulfillment.total_items_needed if fulfillment else None,
+            total_items_delivered=fulfillment.total_items_delivered if fulfillment else None,
+        ))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Appendix H, Module 2.4 / 3.3: every logged-in role views validated reports,
+# filtered by priority level where the role has priority-based filtering.
+# ---------------------------------------------------------------------------
+@router.get("/validated", response_model=List[ReportMonitoringResponse])
+def list_validated_reports(
+    barangay_id: Optional[int] = Query(default=None),
+    disaster_type_id: Optional[int] = Query(default=None),
+    priority_level: Optional[str] = Query(default=None),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    query = (
+        db.query(DisasterReport)
+        .options(joinedload(DisasterReport.fulfillment))
+        .filter(DisasterReport.status == "Validated")
+    )
+    if barangay_id:
+        query = query.filter(DisasterReport.barangay_id == barangay_id)
+    if disaster_type_id:
+        query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
+    if priority_level:
+        query = query.filter(DisasterReport.priority_level == priority_level)
+    return _monitoring_rows(query, skip, limit)
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +199,7 @@ def get_report(
 
     # Reporters can see their own report; staff can see any.
     is_owner = report.user_id == current_user.user_id
-    is_staff = getattr(current_user, "role", None) in ("csws_staff", "admin", "barangay_official")
+    is_staff = has_role(current_user, "csws_staff", "admin", "barangay_official")
     if not (is_owner or is_staff):
         raise HTTPException(status_code=403, detail="Not authorized to view this report")
 
@@ -143,10 +232,11 @@ def update_report(
 # ---------------------------------------------------------------------------
 # Validate — UC-02 step 6: admin approves, report becomes visible to donors
 # ---------------------------------------------------------------------------
+
 @router.post("/{report_id}/validate", response_model=DisasterReportResponse)
 def validate_report(
     report_id: int,
-    payload: ReportValidate,
+    payload: Optional[ReportValidate] = None,
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
@@ -158,26 +248,52 @@ def validate_report(
 
     report.status = "Validated"
     report.validated_by = current_user.user_id
-    report.rejection_reason = None  # clear any prior rejection on re-approval
-    existing_fulfillment =(
+    report.rejection_reason = None
+
+    existing_fulfillment = (
         db.query(ReportFulfillment)
         .filter(ReportFulfillment.report_id == report_id)
         .first()
     )
-    if not existing_fulfillment: 
+
+    if not existing_fulfillment:
         db.add(
             ReportFulfillment(
-                report_id = report_id,
-                total_items_needed= report.estimated_quantity or 0,
+                report_id=report_id,
+                total_items_needed=report.estimated_quantity or 0,
             )
         )
-    
+
+    # Flush so the newly-created fulfillment row is available
+    # through report.fulfillment before priority is computed.
     db.flush()
     db.refresh(report)
 
-    # TODO: notify the submitting Barangay Representative + publish to
-    # donor/org-facing GET endpoint, per UC-02 step 7 / SD4 Phase 3.
+    priority_result = compute_priority(report)
+
+    VALID_LEVELS = ("Low", "Medium", "High", "Critical")
+    level = priority_result["priority_level"]
+
+    report.ai_priority_score = priority_result["score"]
+    # "Needs Review" / "Review Required" violate chk_disaster_reports_priority,
+    # so store NULL and keep the reason in ai_recommendation.
+    report.priority_level = level if level in VALID_LEVELS else None
+    report.ai_recommendation = priority_result["recommendation"]
+    report.ai_processed_at = datetime.now(timezone.utc)
+    log_action(db, current_user, "VALIDATE REPORT", "disaster_reports", report.report_id,
+               old={"status": "Pending"},
+               new={"status": "Validated", "priority_level": report.priority_level})
+
+    notify(db, report.user_id, "report_validated",
+           title=f"Report #{report.report_id} validated",
+           body="Your report was approved and is now visible to donors.",
+           entity_type="report", entity_id=report.report_id)
+
+    db.flush()
+    db.refresh(report)
     return report
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -197,11 +313,16 @@ def reject_report(
     report.status = "Rejected"
     report.validated_by = current_user.user_id  # who made the rejection call
     report.rejection_reason = payload.rejection_reason
+    log_action(db, current_user, "REJECT REPORT", "disaster_reports", report.report_id,
+               new={"status": "Rejected", "reason": payload.rejection_reason})
+
+    notify(db, report.user_id, "report_rejected",
+           title=f"Report #{report.report_id} needs changes",
+           body=f"Your report was rejected: {payload.rejection_reason}",
+           entity_type="report", entity_id=report.report_id)
 
     db.flush()
     db.refresh(report)
-    # TODO: notify the submitting Barangay Representative with
-    # rejection_reason so they can correct and resubmit (UC-02 5a).
     return report
 
 
@@ -232,10 +353,12 @@ def delete_report(
 def ingest_sms_report(
     payload: SmsReportIngest,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin")),
+    # Appendix H, Module 2.2: SMS-based alternative reporting is the
+    # CSWS Disaster Unit's function.
+    current_user=Depends(require_role("csws_disaster_unit")),
 ):
     report_fields = payload.model_dump(exclude={"contact_number", "raw_message"})
-    report = DisasterReport(**report_fields, user_id=current_user.user_id, source="sms")
+    report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")
     db.add(report)
     db.flush()  # need report.report_id for the metadata FK
 
@@ -260,7 +383,7 @@ def ingest_sms_report(
 def get_sms_metadata(
     report_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin")),
+    current_user=Depends(require_role("csws_disaster_unit", "admin")),
 ):
     meta = (
         db.query(SmsReportMetadata)

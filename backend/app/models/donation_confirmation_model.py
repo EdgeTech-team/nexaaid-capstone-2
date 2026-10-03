@@ -1,4 +1,4 @@
-from sqlaclhemy import Column, Integer, String, DateTime ,ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime ,ForeignKey
 from sqlalchemy.sql import func
 from core.database import Base
 
@@ -11,4 +11,4 @@ class DonationConfirmation(Base):
     confirmed_by_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     status = Column(String(20), nullable=False)
     notes = Column(String(200), nullable=True)
-    confrimed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    confirmed_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
