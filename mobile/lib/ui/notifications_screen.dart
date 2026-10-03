@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../report_detail_screen.dart';
+import '../report_model.dart';
 import 'widgets.dart';
 
 /// Where each notification type opens. Every module owner adds their own entry
@@ -13,7 +15,20 @@ import 'widgets.dart';
 /// Unknown entity types simply mark the notification read and stay on the inbox.
 typedef EntityOpener = void Function(BuildContext context, int entityId);
 final Map<String, EntityOpener> notificationDestinations = {
-  // 'report': (c, id) => ...,
+  // ReportDetailScreen needs a full Report, and a notification only carries
+  // the id, so fetch the report first, then open the screen.
+  'report': (c, id) async {
+    final r = await api.get('/reports/$id');
+    if (!r.ok || r.json is! Map) return;
+    if (!c.mounted) return;
+    Navigator.of(c).push(
+      MaterialPageRoute(
+        builder: (_) => ReportDetailScreen(
+          report: Report.fromJson(Map<String, dynamic>.from(r.json as Map)),
+        ),
+      ),
+    );
+  },
   // 'donation_batch': (c, id) => ...,
   // 'logistics_request': (c, id) => ...,
   // 'delivery': (c, id) => ...,
@@ -97,7 +112,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   Future<void> _open(BuildContext context, Map<String, dynamic> n) async {
-    if (n['is_read'] != true) {
+        if (n['is_read'] != true) {
       await api.post('/notifications/${n['notification_id']}/read');
       _refreshList();
     }

@@ -271,8 +271,13 @@ def validate_report(
 
     priority_result = compute_priority(report)
 
+    VALID_LEVELS = ("Low", "Medium", "High", "Critical")
+    level = priority_result["priority_level"]
+
     report.ai_priority_score = priority_result["score"]
-    report.priority_level = priority_result["priority_level"]
+    # "Needs Review" / "Review Required" violate chk_disaster_reports_priority,
+    # so store NULL and keep the reason in ai_recommendation.
+    report.priority_level = level if level in VALID_LEVELS else None
     report.ai_recommendation = priority_result["recommendation"]
     report.ai_processed_at = datetime.now(timezone.utc)
     log_action(db, current_user, "VALIDATE REPORT", "disaster_reports", report.report_id,
