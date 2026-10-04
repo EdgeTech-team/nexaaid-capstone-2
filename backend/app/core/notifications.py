@@ -16,7 +16,6 @@ from typing import Iterable, Optional
 from sqlalchemy.orm import Session
 
 from models.notification import Notification
-
 # event -> (title, message template). Missing {placeholders} render as "".
 EVENTS: dict[str, tuple[str, str]] = {
     # Organizations
@@ -118,3 +117,22 @@ def notify_event_many(
 ) -> int:
     title, body = render_event(event, **ctx)
     return notify_many(db, user_ids, event, title, body, entity_type, entity_id)
+
+def user_ids_with_role(
+    db: Session,
+    role_names: Iterable[str],
+    exclude_user_id: Optional[int] = None,
+    barangay_id: Optional[int] = None,
+) -> list[int]:
+    """Ids of active users whose role_name is in role_names."""
+    from models.role_model import Role  # local import avoids circular imports
+    from models.user_rbac_model import User
+
+    q = (
+        db.query(User.user_id)
+        .join(Role, Role.role_id == User.role_id)
+        .filter(Role.role_name.in_(list(role_names)), User.is_active.is_(True))
+    )
+    if barangay_id is not None:
+        q = q.filter(User.assigned_barangay_id == barangay_id)
+    return [uid for (uid,) in q.all() if uid != exclude_user_id]

@@ -9,7 +9,8 @@ from schemas.physical_donation_schema import PhysicalDonationResponse
 from models.user_rbac_model import User
 from models.inventory_model import Inventory
 from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResponse
-from core.notifications import notify
+from core.notifications import notify, notify_many, user_ids_with_role
+
 
 from typing import Optional
 from pydantic import BaseModel
@@ -143,6 +144,9 @@ def receive_donation(
         received_by_user_id=current_user.user_id,
         notes=payload.notes,
     )
+    notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
+                "donation_awaiting_confirmation", "Donation awaiting confirmation",
+                f"Donation #{donation.donation_id} was received by CSWS and needs a decision.")
     db.add(receipt)
 
     donation.status = "Received"

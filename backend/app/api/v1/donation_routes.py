@@ -14,6 +14,7 @@ from models.item_model import Item
 from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
 from schemas.physical_donation_schema import PhysicalDonationCreate, PhysicalDonationResponse
+from core.notifications import notify_event, notify_event_many, user_ids_with_role
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
@@ -74,6 +75,14 @@ def create_donation(
         status="Pending",
     )
     db.add(donation)
+    db.flush()  # assigns donation_id for the notifications
+
+    if current_user:  # guest donors have no account
+        notify_event(db, current_user.user_id, "donation_submitted_confirm",
+                     "donation", donation.donation_id, batch_no=donation.donation_id)
+    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]),
+                      "donation_submitted", None, None, batch_no=donation.donation_id)
+
     db.commit()
     db.refresh(donation)
     return donation
@@ -167,4 +176,4 @@ def my_donations(
             for d in donations
         ],
         "supported_reports": [report_info(r) for r in reports.values()],
-    }
+}
