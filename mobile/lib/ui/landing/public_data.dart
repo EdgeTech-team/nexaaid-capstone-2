@@ -1,12 +1,19 @@
 import '../../api.dart';
 import '../../design/status.dart';
 
+/// True while the database holds seeded test data. The landing page then
+/// labels its numbers "Demo data" so nobody mistakes them for real impact.
+/// For a real deployment run: flutter run --dart-define=NEXAAID_DEMO_DATA=false
+const kDemoData = bool.fromEnvironment('NEXAAID_DEMO_DATA', defaultValue: true);
+
 /// Numbers for the "Right now in Mandaue" strip on the landing page.
 class PublicStats {
   final int activeReports;
   final int familiesAffected;
   final int urgentReports; // Critical + High
   final int barangays;
+  final int itemsDelivered; // relief items already delivered
+  final int barangaysReached; // barangays that received at least one item
   final int? donationsReceived; // only from /public/stats
   final int? deliveriesCompleted; // only from /public/stats
 
@@ -15,6 +22,8 @@ class PublicStats {
     required this.familiesAffected,
     required this.urgentReports,
     required this.barangays,
+    required this.itemsDelivered,
+    required this.barangaysReached,
     this.donationsReceived,
     this.deliveriesCompleted,
   });
@@ -32,11 +41,21 @@ class PublicStats {
           )
           .length,
       barangays: reports.map((r) => r['barangay']).toSet().length,
+      itemsDelivered: reports.fold<int>(
+        0,
+        (s, r) => s + ((r['total_items_delivered'] as num?)?.toInt() ?? 0),
+      ),
+      barangaysReached: reports
+          .where((r) => ((r['total_items_delivered'] as num?) ?? 0) > 0)
+          .map((r) => r['barangay'])
+          .toSet()
+          .length,
     );
   }
 
   /// Agreed shape of GET /public/stats (Mariquit, Item 8):
   /// {active_reports, families_affected, urgent_reports, barangays,
+  ///  items_delivered, barangays_reached,
   ///  donations_received, deliveries_completed}
   factory PublicStats.fromJson(
     Map<String, dynamic> j,
@@ -49,6 +68,8 @@ class PublicStats {
       familiesAffected: n('families_affected') ?? fallback.familiesAffected,
       urgentReports: n('urgent_reports') ?? fallback.urgentReports,
       barangays: n('barangays') ?? fallback.barangays,
+      itemsDelivered: n('items_delivered') ?? fallback.itemsDelivered,
+      barangaysReached: n('barangays_reached') ?? fallback.barangaysReached,
       donationsReceived: n('donations_received'),
       deliveriesCompleted: n('deliveries_completed'),
     );
@@ -58,7 +79,8 @@ class PublicStats {
 class PublicSnapshot {
   final List<Map<String, dynamic>> reports; // sorted, most urgent first
   final PublicStats stats;
-  const PublicSnapshot(this.reports, this.stats);
+  final DateTime loadedAt; // shown as "as of ..." on the landing page
+  PublicSnapshot(this.reports, this.stats) : loadedAt = DateTime.now();
 }
 
 class PublicDataError implements Exception {
@@ -127,3 +149,25 @@ List<Map<String, dynamic>> _normalize(List raw) => [
         'id': r['id'] ?? r['report_id'],
       },
 ];
+
+/// "Oct 2, 2026, 3:45 PM"
+String formatAsOf(DateTime d) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  final h = d.hour % 12 == 0 ? 12 : d.hour % 12;
+  final m = d.minute.toString().padLeft(2, '0');
+  final ampm = d.hour < 12 ? 'AM' : 'PM';
+  return '${months[d.month - 1]} ${d.day}, ${d.year}, $h:$m $ampm';
+}
