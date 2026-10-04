@@ -17,8 +17,12 @@ from api.v1.logistics_router import router as logistics_router
 from api.v1.drrmo_router import router as drrmo_router
 from api.v1.lookup_routes import router as lookup_router
 from api.v1.upload_routes import router as upload_router
+feat/public-endpoints
+from api.v1.public_routes import router as public_router
+
 from api.v1.admin_document_routes import router as admin_document_router
 from api.v1.donation_info_routes import router as donation_info_router
+ develop
 
 app = FastAPI()
 
@@ -62,5 +66,9 @@ app.include_router(logistics_router)
 app.include_router(drrmo_router)
 app.include_router(lookup_router)
 app.include_router(upload_router)
+ feat/public-endpoints
+app.include_router(public_router)
+=======
 app.include_router(admin_document_router)
 app.include_router(donation_info_router)
+develop
