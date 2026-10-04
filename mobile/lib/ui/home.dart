@@ -6,7 +6,9 @@ import '../dev_console.dart';
 import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_dashboard.dart';
+import 'donation_info.dart';
 import 'donor_screens.dart';
+import 'notifications_screen.dart';
 import 'ops_screens.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
@@ -109,6 +111,11 @@ List<_Tab> _tabsFor(String? role) {
         ), // 8.2-8.5
         _Tab('Overview', Icons.dashboard_outlined, BarangayDashboard()), // 9.7
         reports, // 2.4
+        _Tab(
+          'Donation info',
+          Icons.account_balance_wallet_outlined,
+          BarangayDonationInfoScreen(),
+        ), // adviser item 7
       ];
     case Roles.donor:
     case Roles.org:
@@ -197,7 +204,7 @@ class _RoleHomeState extends State<RoleHome> {
             ),
           ],
         ),
-        actions: [..._shellActions(context), Gaps.h8],
+          actions: [const NotificationBell(), ..._shellActions(context), Gaps.h8],
       ),
       body: wide
           ? Row(

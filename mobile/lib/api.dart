@@ -34,6 +34,13 @@ class ApiResult {
     if (json is Map && json['detail'] != null) {
       final d = json['detail'];
       if (d is String) return d;
+      // 422 from FastAPI: a list of {loc, msg, ...}. Show just the messages.
+      if (d is List && d.every((e) => e is Map && e['msg'] is String)) {
+        return d
+            .map((e) => (e['msg'] as String).replaceFirst('Value error, ', ''))
+            .toSet()
+            .join('\n');
+      }
       return const JsonEncoder.withIndent('  ').convert(d);
     }
     return raw;
@@ -142,6 +149,51 @@ class Api extends ChangeNotifier {
       send('POST', path, body: body ?? {});
   Future<ApiResult> patch(String path, {Map<String, dynamic>? body}) =>
       send('PATCH', path, body: body ?? {});
+
+  /// POST /uploads as multipart form data (purpose + file).
+  /// Sends bytes instead of a file path, so it works on Android and Chrome.
+  Future<ApiResult> upload({
+    required String purpose,
+    required List<int> bytes,
+    required String filename,
+  }) async {
+    try {
+      final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/uploads'));
+      if (token != null) req.headers['Authorization'] = 'Bearer $token';
+      req.fields['purpose'] = purpose;
+      req.files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: filename),
+      );
+      final streamed = await req.send().timeout(const Duration(seconds: 60));
+      final res = await http.Response.fromStream(streamed);
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(res.body);
+      } catch (_) {
+        decoded = null;
+      }
+      return ApiResult(res.statusCode, decoded, res.body);
+    } catch (e) {
+      return ApiResult(0, null, 'Network error: $e');
+    }
+  }
+
+  /// Downloads a file the server only gives to allowed users (private
+  /// uploads: GET /uploads/{file_id} checks owner / Administrator).
+  /// Returns (status, bytes); status 0 means the server was not reached.
+  Future<(int, Uint8List?)> download(String path) async {
+    try {
+      final res = await http
+          .get(
+            Uri.parse('$baseUrl$path'),
+            headers: {if (token != null) 'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 60));
+      return (res.statusCode, res.statusCode == 200 ? res.bodyBytes : null);
+    } catch (_) {
+      return (0, null);
+    }
+  }
 
   // ---- auth ----
   Future<ApiResult> login(String emailIn, String password) async {

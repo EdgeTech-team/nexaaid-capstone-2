@@ -4,6 +4,7 @@ import 'account_tab.dart';
 import 'api.dart';
 import 'checks_tab.dart';
 import 'modules.dart';
+import 'upload_demo_tab.dart';
 
 /// The original testing console (raw API forms + role checks), kept under
 /// Profile > Developer tools.
@@ -40,7 +41,12 @@ class _DevConsoleState extends State<DevConsole> {
       ),
       body: IndexedStack(
         index: index,
-        children: const [AccountTab(), ModulesTab(), ChecksTab()],
+        children: const [
+          AccountTab(),
+          ModulesTab(),
+          ChecksTab(),
+          UploadDemoTab(),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
@@ -57,6 +63,10 @@ class _DevConsoleState extends State<DevConsole> {
           NavigationDestination(
             icon: Icon(Icons.fact_check_outlined),
             label: 'Checks',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.upload_file_outlined),
+            label: 'Uploads',
           ),
         ],
       ),

@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from core.priority_engine import compute_priority
 
 from core.database import get_db
+from core.notifications import notify
 from core.auth import get_current_user, require_role, has_role, barangay_scope
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
@@ -235,7 +236,7 @@ def update_report(
 @router.post("/{report_id}/validate", response_model=DisasterReportResponse)
 def validate_report(
     report_id: int,
-    payload: ReportValidate,
+    payload: Optional[ReportValidate] = None,
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
@@ -270,19 +271,26 @@ def validate_report(
 
     priority_result = compute_priority(report)
 
+    VALID_LEVELS = ("Low", "Medium", "High", "Critical")
+    level = priority_result["priority_level"]
+
     report.ai_priority_score = priority_result["score"]
-    report.priority_level = priority_result["priority_level"]
+    # "Needs Review" / "Review Required" violate chk_disaster_reports_priority,
+    # so store NULL and keep the reason in ai_recommendation.
+    report.priority_level = level if level in VALID_LEVELS else None
     report.ai_recommendation = priority_result["recommendation"]
     report.ai_processed_at = datetime.now(timezone.utc)
     log_action(db, current_user, "VALIDATE REPORT", "disaster_reports", report.report_id,
                old={"status": "Pending"},
                new={"status": "Validated", "priority_level": report.priority_level})
 
+    notify(db, report.user_id, "report_validated",
+           title=f"Report #{report.report_id} validated",
+           body="Your report was approved and is now visible to donors.",
+           entity_type="report", entity_id=report.report_id)
+
     db.flush()
     db.refresh(report)
-
-    # TODO: notify the submitting Barangay Representative + publish to
-    # donor/org-facing GET endpoint, per UC-02 step 7 / SD4 Phase 3.
     return report
 
 
@@ -308,10 +316,13 @@ def reject_report(
     log_action(db, current_user, "REJECT REPORT", "disaster_reports", report.report_id,
                new={"status": "Rejected", "reason": payload.rejection_reason})
 
+    notify(db, report.user_id, "report_rejected",
+           title=f"Report #{report.report_id} needs changes",
+           body=f"Your report was rejected: {payload.rejection_reason}",
+           entity_type="report", entity_id=report.report_id)
+
     db.flush()
     db.refresh(report)
-    # TODO: notify the submitting Barangay Representative with
-    # rejection_reason so they can correct and resubmit (UC-02 5a).
     return report
 
 

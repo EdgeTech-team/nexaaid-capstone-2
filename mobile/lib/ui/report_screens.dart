@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import 'donation_info.dart'
+    show NewReportDonationInfo, NewReportDonationInfoState;
 import 'widgets.dart';
 
 /// Card for one disaster report (with fulfillment if available).
@@ -154,6 +156,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
   final smsSender = TextEditingController();
   final smsText = TextEditingController();
   final needs = <_Need>[_Need()];
+  final _donationInfo = GlobalKey<NewReportDonationInfoState>();
   bool busy = false;
 
   /// true when encoding a report that arrived by SMS (Appendix H, 2.2).
@@ -174,7 +177,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
   }
 
   Future<void> _submit(Names names) async {
-    if (!_form.currentState!.validate()) return;
+    final infoError = _donationInfo.currentState?.check();
+    if (!_form.currentState!.validate() || infoError != null) return;
     setState(() => busy = true);
     // The report table has one text field for the needs and one total
     // quantity, so the list is stored as "Rice: 50 kg, Drinking Water: 20 gallons".
@@ -215,6 +219,25 @@ class _NewReportScreenState extends State<NewReportScreen> {
           : 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
+    if (r.ok) {
+      // UC-CD1: donation info override for this report only, if entered.
+      final report = sms ? r.json['report'] : r.json;
+      final saved = await _donationInfo.currentState?.saveFor(
+        report['report_id'] as int,
+      );
+      if (!mounted) return;
+      if (saved != null && !saved.ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: AppColors.danger,
+            content: Text(
+              'Report saved, but the donation info was not: ${saved.errorText}',
+            ),
+          ),
+        );
+      }
+      _donationInfo.currentState?.reset();
+    }
     setState(() {
       busy = false;
       if (r.ok) {
@@ -421,6 +444,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   helperText: brgyId == null ? 'Choose a barangay first' : null,
                 ),
               ),
+              const SectionTitle('Donation info'),
+              NewReportDonationInfo(key: _donationInfo, barangayId: brgyId),
               const SectionTitle('Situation (DROMIC)'),
               TextFormField(
                 controller: desc,
@@ -765,133 +790,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// UC-A1 Manage internal accounts (Administrator)
-// ---------------------------------------------------------------------------
-class AccountsScreen extends StatefulWidget {
-  const AccountsScreen({super.key});
-
-  @override
-  State<AccountsScreen> createState() => _AccountsScreenState();
-}
-
-class _AccountsScreenState extends State<AccountsScreen> {
-  final _form = GlobalKey<FormState>();
-  final c = {
-    for (final k in const ['first', 'last', 'email', 'phone', 'password'])
-      k: TextEditingController(),
-  };
-  String role = Roles.cswsMain;
-  String? brgyId;
-  bool busy = false;
-
-  Future<void> _submit() async {
-    if (!_form.currentState!.validate()) return;
-    setState(() => busy = true);
-    final r = await act(
-      context,
-      () => api.post(
-        '/admin/users',
-        body: {
-          'first_name': c['first']!.text.trim(),
-          'last_name': c['last']!.text.trim(),
-          'email': c['email']!.text.trim(),
-          'contact_number': c['phone']!.text.trim(),
-          'password': c['password']!.text,
-          'role_name': role,
-          'assigned_barangay_id': role == Roles.barangay && brgyId != null
-              ? int.parse(brgyId!)
-              : null,
-        },
-      ),
-      success: 'Account created for ${c['email']!.text.trim()}',
-    );
-    if (!mounted) return;
-    setState(() => busy = false);
-    if (r.ok) {
-      for (final t in c.values) {
-        t.clear();
-      }
-    }
-  }
-
-  Widget _f(String k, String label, {bool obscure = false, int min = 1}) =>
-      Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: TextFormField(
-          controller: c[k],
-          obscureText: obscure,
-          decoration: InputDecoration(labelText: label),
-          validator: (v) =>
-              (v ?? '').trim().length < min ? 'At least $min characters' : null,
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>>(
-      future: api.lookups(),
-      builder: (context, snap) {
-        final names = Names(snap.data ?? const {});
-        return Form(
-          key: _form,
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              PageHeader(
-                'User Management',
-                subtitle:
-                    'Create internal accounts for office-based roles (UC-A1) • ${roleLine()}',
-              ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: role,
-                isExpanded: true,
-                items: [
-                  for (final r in const [
-                    Roles.cswsUnit,
-                    Roles.cswsMain,
-                    Roles.cmo,
-                    Roles.drrmo,
-                    Roles.barangay,
-                  ])
-                    DropdownMenuItem(value: r, child: Text(r)),
-                ],
-                onChanged: (v) => setState(() => role = v!),
-                decoration: const InputDecoration(labelText: 'Role'),
-              ),
-              const SizedBox(height: 12),
-              if (role == Roles.barangay) ...[
-                LookupDropdown(
-                  list: 'barangays',
-                  label: 'Assigned barangay',
-                  value: brgyId,
-                  names: names,
-                  onChanged: (v) => setState(() => brgyId = v),
-                ),
-                const SizedBox(height: 12),
-              ],
-              _f('first', 'First name'),
-              _f('last', 'Last name'),
-              _f('email', 'Email'),
-              _f('phone', 'Contact number', min: 7),
-              _f('password', 'Temporary password', obscure: true, min: 8),
-              const SizedBox(height: 8),
-              FilledButton.icon(
-                onPressed: busy ? null : _submit,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                icon: const Icon(Icons.person_add_alt),
-                label: const Text('Create account'),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
+// UC-A1 account creation moved to account_form.dart (AccountsScreen).
 
 // ---------------------------------------------------------------------------
 // Dashboards (UC-A4, UC-CD2, UC-CM3, UC-B2)

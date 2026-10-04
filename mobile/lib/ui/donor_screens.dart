@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
+import 'donation_info.dart' show ReportDonationInfo;
 import 'widgets.dart';
 
 /// UC-D2 / UC-R2 step 1-3: browse validated reports and pick one to
@@ -606,6 +607,8 @@ class _DonateScreenState extends State<DonateScreen> {
                 trailing: Badge2.priority(r['priority_level'] as String?),
               ),
             ),
+            // Adviser item 7 / UC-D2: where to send money (display only).
+            ReportDonationInfo(reportId: r['id'] as int),
             SectionTitle(
               'What are you donating?',
               trailing: TextButton.icon(
