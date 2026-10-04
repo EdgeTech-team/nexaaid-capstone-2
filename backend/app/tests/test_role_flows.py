@@ -29,6 +29,7 @@ from models.barangay_model import Barangay
 from models.sitio_model import Sitio
 from models.disaster_type_model import DisasterType
 from models.item_model import Item
+from tests.reg_helpers import STRONG_PASSWORD, donor_payload, upload
 
 PASSWORD = "testpass123"
 
@@ -122,17 +123,16 @@ def test_full_relief_chain_across_all_roles(api):
     client, t = api
 
     # --- 3.3 donor self-registration + login -----------------------------
-    ok(client.post("/auth/register/donor", json={
-        "first_name": "New", "last_name": "Donor", "email": "new.donor@example.com",
-        "password": PASSWORD, "contact_number": "09171234567",
-    }), 201)
-    ok(client.post("/token", data={"username": "new.donor@example.com", "password": PASSWORD}))
+    ok(client.post("/auth/register/donor", json=donor_payload(client, "new.donor@example.com")), 201)
+    ok(client.post("/token", data={"username": "new.donor@example.com", "password": STRONG_PASSWORD}))
 
     # --- 3.3 admin creates an internal account ---------------------------
+    card = upload(client, "employee_id_card", headers=t["admin"])
     ok(client.post("/admin/users", headers=t["admin"], json={
         "first_name": "New", "last_name": "Staff", "email": "new.staff@example.com",
-        "password": PASSWORD, "contact_number": "09171234567",
-        "role_name": "CSWS Main Office",
+        "password": STRONG_PASSWORD, "contact_number": "09171234567",
+        "role_name": "CSWS Main Office", "employee_id": "CSWS-0101",
+        "employee_id_card": {"file_id": card["file_id"]},
     }), 201)
     assert client.post("/admin/users", headers=t["csws"], json={}).status_code in (403, 422)
 
