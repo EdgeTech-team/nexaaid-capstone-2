@@ -224,3 +224,16 @@ def unit_client(db_session, seed):
     yield make_client(db_session, user)
     app.dependency_overrides.clear()
     _fake_users_by_id.clear()
+
+
+# ---------------------------------------------------------------------------
+# Uploaded files go to a temp folder in every test, never backend/app/var/.
+# ---------------------------------------------------------------------------
+from core.storage import LocalStorage, set_storage  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _temp_upload_storage(tmp_path):
+    previous = set_storage(LocalStorage(tmp_path / "uploads"))
+    yield
+    set_storage(previous)
