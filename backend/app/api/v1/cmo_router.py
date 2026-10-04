@@ -11,6 +11,8 @@ from models.physical_donation_model import PhysicalDonation
 from models.donation_confirmation_model import DonationConfirmation
 from models.report import DisasterReport, DisasterType, Barangay
 from schemas.donation_confirmation_schema import ConfirmDonationRequest, DonationConfirmationResponse
+from core.notifications import notify_event
+
 
 router = APIRouter(prefix="/cmo", tags=["cmo"])
 
@@ -104,6 +106,13 @@ def confirm_donation(
     log_action(db, current_user, f"CMO {payload.status.upper()}", "physical_donations", donation_id,
                old={"status": "Received"}, new={"status": donation.status, "decision": payload.status,
                                                "notes": payload.notes})
+    if donation.user_id:  # guests have no account
+        if payload.status == "Confirmed":
+            notify_event(db, donation.user_id, "donation_confirmed", "donation",
+                         donation_id, batch_no=donation_id)
+        elif payload.status == "On Hold":
+            notify_event(db, donation.user_id, "donation_held", "donation",
+                         donation_id, batch_no=donation_id, reason=payload.notes or "")
     db.commit()
     db.refresh(confirmation)
     return confirmation
@@ -192,4 +201,4 @@ def cmo_dashboard(
         "pending_review": sum(1 for d in pending if decisions.get(d.donation_id) and decisions[d.donation_id].status == "Pending Review"),
         "confirmed": len(confirmed),
         "per_report": per_report,
-    }
+}
