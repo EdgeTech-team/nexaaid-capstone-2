@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import 'account_detail_screen.dart';
+import 'account_form.dart' show AccountsScreen;
 import 'csws_screens.dart' show ActivityList;
-import 'report_screens.dart' show AccountsScreen;
+import 'donation_info.dart' show BarangayDonationInfoScreen;
+import 'private_file_view.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -21,6 +24,25 @@ class AdminDashboard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: [
             PageHeader('Administrator Dashboard', subtitle: roleLine()),
+            // Adviser item 7: any barangay's donation-sending info.
+            AppCard(
+              margin: const EdgeInsets.only(bottom: Space.md),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      const BarangayDonationInfoScreen(standalone: true),
+                ),
+              ),
+              child: const ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.account_balance_wallet_outlined),
+                title: Text('Barangay donation info'),
+                subtitle: Text(
+                  'Edit where donors can send money to a barangay',
+                ),
+                trailing: Icon(Icons.chevron_right),
+              ),
+            ),
             StatGrid([
               StatTile(
                 'Active users',
@@ -118,56 +140,6 @@ class _UsersScreenState extends State<UsersScreen> {
   String role = '';
   String q = '';
 
-  Future<void> _toggle(Map u) async {
-    final activate = u['is_active'] != true;
-    await act(
-      context,
-      () => api.patch(
-        '/admin/users/${u['user_id']}',
-        body: {'is_active': activate},
-      ),
-      success: activate
-          ? '${u['email']} activated'
-          : '${u['email']} deactivated (can no longer log in)',
-    );
-  }
-
-  Future<void> _edit(Map u, Names names) async {
-    final brgys = names.rows('barangays');
-    final isRep = u['role'] == Roles.barangay;
-    final v = await formDialog(
-      context,
-      title: 'Edit ${u['email']}',
-      fields: [
-        DialogField(
-          'contact',
-          'Contact number',
-          initial: '${u['contact_number']}',
-        ),
-        if (isRep && brgys.isNotEmpty)
-          DialogField(
-            'brgy',
-            'Assigned barangay',
-            initial: '${u['assigned_barangay'] ?? brgys.first['name']}',
-            options: [for (final b in brgys) '${b['name']}'],
-          ),
-      ],
-    );
-    if (v == null || !mounted) return;
-    int? brgyId;
-    if (v['brgy'] != null) {
-      brgyId = brgys.firstWhere((b) => b['name'] == v['brgy'])['id'] as int;
-    }
-    await act(
-      context,
-      () => api.patch(
-        '/admin/users/${u['user_id']}',
-        body: {'contact_number': v['contact'], 'assigned_barangay_id': ?brgyId},
-      ),
-      success: 'Account updated',
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Loader(
@@ -176,18 +148,16 @@ class _UsersScreenState extends State<UsersScreen> {
           '/admin/users',
           query: {if (role.isNotEmpty) 'role': role, if (q.isNotEmpty) 'q': q},
         ),
-        api.lookupsResult,
       ],
       key: ValueKey('$role|$q'),
       builder: (context, data) {
         final users = (data[0] as List).cast<Map>();
-        final names = Names(Map<String, dynamic>.from(data[1] as Map));
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
             const PageHeader(
               'User Management',
-              subtitle: 'View accounts and roles, activate or deactivate them.',
+              subtitle: 'Tap an account to see its details, edit it, or deactivate it.',
             ),
             TextField(
               decoration: const InputDecoration(
@@ -245,20 +215,15 @@ class _UsersScreenState extends State<UsersScreen> {
                     '${u['organization'] != null ? ' · ${u['organization']} (${u['organization_status']})' : ''}',
                   ),
                   isThreeLine: true,
-                  trailing: PopupMenuButton<String>(
-                    tooltip: 'Actions',
-                    onSelected: (a) =>
-                        a == 'toggle' ? _toggle(u) : _edit(u, names),
-                    itemBuilder: (_) => [
-                      PopupMenuItem(
-                        value: 'toggle',
-                        child: Text(
-                          u['is_active'] == true ? 'Deactivate' : 'Activate',
-                        ),
-                      ),
-                      const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                    ],
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          AccountDetailScreen(userId: u['user_id'] as int),
+                    ),
                   ),
+                  // UC-A1: tap the row for details, Edit details and
+                  // Deactivate (account_detail_screen.dart).
+                  trailing: const Icon(Icons.chevron_right),
                 ),
               ),
           ],
@@ -339,22 +304,21 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                       Text(
                         'Contact: ${o['contact_person']} · ${o['contact_email']}',
                       ),
-                      const SizedBox(height: 6),
-                      if (o['document_missing'] == true)
-                        const Badge2(
-                          'Supporting document missing',
-                          Color(0xFFC62828),
-                          icon: Icons.flag_outlined,
-                        )
-                      else
-                        SelectableText(
-                          'Document: ${o['legitimacy_document_url']}',
-                          style: const TextStyle(fontSize: 12),
+                      Gaps.v12,
+                      // UC-A2 step 4: the supporting document; alt 4a flags.
+                      _OrgDocument(o['organization_id'] as int),
+                      if (o['decision_reason'] != null) ...[
+                        Gaps.v8,
+                        Text(
+                          'Last reason: ${o['decision_reason']}',
+                          style: Theme.of(context).textTheme.bodySmall,
                         ),
+                      ],
                       const SizedBox(height: 8),
                       Wrap(
                         alignment: WrapAlignment.end,
-                        spacing: 8,
+                        spacing: Space.xs,
+                        runSpacing: Space.xs,
                         children: [
                           for (final d in const [
                             ['Rejected', 'Reject'],
@@ -376,23 +340,113 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
   }
 }
 
+/// Approve, Hold or Reject (UC-A2 steps 5-6). Hold and Reject ask for a
+/// reason (alt 6a); the backend refuses them without one.
 Widget _decisionButton(
   BuildContext context,
   Map o,
   String decision,
   String label,
 ) {
-  void onPressed() => act(
-    context,
-    () => api.post(
-      '/admin/organizations/${o['organization_id']}/decision',
-      body: {'decision': decision},
-    ),
-    success: '${o['org_name']}: $decision',
+  Future<void> onPressed() async {
+    String? reason;
+    if (decision != 'Approved') {
+      final v = await formDialog(
+        context,
+        title: '$label ${o['org_name']}?',
+        message: decision == 'Rejected'
+            ? 'The organization stays inactive. Say what is wrong so they can fix it.'
+            : 'The application stays pending. Say what you are waiting for.',
+        fields: const [DialogField('reason', 'Reason', multiline: true)],
+        confirm: label,
+      );
+      if (v == null || !context.mounted) return;
+      reason = v['reason'];
+    }
+    await act(
+      context,
+      () => api.post(
+        '/admin/organizations/${o['organization_id']}/decision',
+        body: {'decision': decision, 'reason': ?reason},
+      ),
+      success: '${o['org_name']}: $decision',
+    );
+  }
+
+  return AppButton(
+    label,
+    onPressed: onPressed,
+    variant: switch (decision) {
+      'Approved' => AppButtonVariant.tonal,
+      'Rejected' => AppButtonVariant.danger,
+      _ => AppButtonVariant.secondary,
+    },
   );
-  return decision == 'Approved'
-      ? FilledButton(onPressed: onPressed, child: Text(label))
-      : OutlinedButton(onPressed: onPressed, child: Text(label));
+}
+
+/// The organization's supporting document, or a flag when it is missing,
+/// unreadable, or an old unverified link (UC-A2 alt 4a).
+class _OrgDocument extends StatelessWidget {
+  final int organizationId;
+  const _OrgDocument(this.organizationId);
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<ApiResult>(
+      future: api.get('/admin/organizations/$organizationId/document'),
+      builder: (context, snap) {
+        if (!snap.hasData) return const Skeleton(height: 56);
+        final r = snap.data!;
+        if (!r.ok) {
+          return _flag(context, 'Could not check the document: ${r.errorText}');
+        }
+        final d = Map<String, dynamic>.from(r.json as Map);
+        return switch (d['status']) {
+          'ok' => PrivateFileTile(
+            label: 'Supporting document',
+            url: '${d['url']}',
+            contentType: '${d['content_type']}',
+          ),
+          'missing' => _flag(context, 'Supporting document missing'),
+          'unreadable' => _flag(
+            context,
+            'Supporting document unreadable (the file is gone). Ask for a re-upload.',
+          ),
+          _ => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _flag(
+                context,
+                'Old link, not an uploaded file. Check it manually.',
+              ),
+              Gaps.v4,
+              SelectableText(
+                '${d['url']}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        };
+      },
+    );
+  }
+
+  Widget _flag(BuildContext context, String text) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        Icon(Icons.flag_outlined, color: cs.error, size: 20),
+        Gaps.h8,
+        Expanded(
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.bodyMedium
+                ?.copyWith(color: cs.error),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

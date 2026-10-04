@@ -4,6 +4,7 @@ Checks the functions added to match the manuscript use cases
 dashboards). Uses the same real-auth fixture as test_role_flows.
 """
 from tests.test_role_flows import api, ok, PASSWORD  # noqa: F401  (fixture)
+from tests.reg_helpers import STRONG_PASSWORD, org_payload
 
 
 def _validated_report_with_stock(client, t, qty=100):
@@ -32,17 +33,15 @@ def test_admin_accounts_orgs_and_logs(api):
     ok(client.post("/token", data={"username": "donor.test@example.com", "password": PASSWORD}))
 
     # UC-A2: organization is Pending until approved
-    org = ok(client.post("/auth/register/organization", json={
-        "org_name": "Relief PH", "organization_type": "NGO", "address": "Tipolo, Mandaue",
-        "contact_person": "Jo", "registration_no": "REG-9", "contact_email": "jo@relief.ph",
-        "password": PASSWORD, "contact_number": "09171234567"}), 201)
-    r = client.post("/token", data={"username": "jo@relief.ph", "password": PASSWORD})
+    org = ok(client.post("/auth/register/organization",
+                         json=org_payload(client, "jo@relief.ph")), 201)
+    r = client.post("/token", data={"username": "jo@relief.ph", "password": STRONG_PASSWORD})
     assert r.status_code == 403 and "Pending" in r.json()["detail"]
     pending = ok(client.get("/admin/organizations?status=Pending", headers=t["admin"]))
-    assert pending[0]["document_missing"] is True          # UC-A2 alt 4a flag
+    assert pending[0]["document_missing"] is False         # uploaded at registration
     ok(client.post(f"/admin/organizations/{org['organization_id']}/decision",
                    headers=t["admin"], json={"decision": "Approved"}))
-    ok(client.post("/token", data={"username": "jo@relief.ph", "password": PASSWORD}))
+    ok(client.post("/token", data={"username": "jo@relief.ph", "password": STRONG_PASSWORD}))
 
     # UC-A4: activity logs, read-only, admin only
     actions = [l["action"] for l in ok(client.get("/admin/audit-logs", headers=t["admin"]))]
