@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../report_detail_screen.dart';
 import '../report_model.dart';
-import 'donor_screens.dart';
+import 'donor_dashboard.dart';
 import 'widgets.dart';
 
 /// Where each notification type opens. Every module owner adds their own entry
