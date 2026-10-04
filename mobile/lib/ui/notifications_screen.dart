@@ -2,9 +2,12 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../api.dart';
 import '../report_detail_screen.dart';
 import '../report_model.dart';
+import 'admin_screens.dart';
 import 'donor_dashboard.dart';
+import 'ops_screens.dart';
 import 'widgets.dart';
 
 /// Where each notification type opens. Every module owner adds their own entry
@@ -15,20 +18,39 @@ import 'widgets.dart';
 ///
 /// Unknown entity types simply mark the notification read and stay on the inbox.
 typedef EntityOpener = void Function(BuildContext context, int entityId);
+
+/// Tab-body screens have no Scaffold of their own, so wrap them to get an app
+/// bar and a back button when they are pushed from the inbox.
+Widget _withAppBar(String title, Widget body) => Scaffold(
+  appBar: AppBar(title: Text(title)),
+  body: body,
+);
+
+void _push(BuildContext c, Widget screen) {
+  Navigator.of(c).push(MaterialPageRoute(builder: (_) => screen));
+}
+
 final Map<String, EntityOpener> notificationDestinations = {
   // ReportDetailScreen needs a full Report, and a notification only carries
-  // the id, so fetch the report first, then open the screen.
+  // the id, so fetch the report first, then open the screen. Failures print
+  // to the console and show a snackbar instead of failing silently.
   'report': (c, id) async {
     final r = await api.get('/reports/$id');
-    if (!r.ok || r.json is! Map) return;
+    if (!r.ok || r.json is! Map) {
+      if (c.mounted) {
+        ScaffoldMessenger.of(c).showSnackBar(
+          SnackBar(content: Text('Could not open report #$id (${r.status})')),
+        );
+      }
+      return;
+    }
     if (!c.mounted) return;
-    Navigator.of(c).push(
-      MaterialPageRoute(
-        builder: (_) => ReportDetailScreen(
-          report: Report.fromJson(Map<String, dynamic>.from(r.json as Map)),
-        ),
-      ),
-    );
+    try {
+      final report = Report.fromJson(Map<String, dynamic>.from(r.json as Map));
+      Navigator.of(c).push(
+        MaterialPageRoute(builder: (_) => ReportDetailScreen(report: report)),
+      );
+    } catch (e) {}
   },
   // DonorDashboard is a tab body (no Scaffold), so wrap it to get an app bar
   // and a back button. It lists all of the donor's own donations.
@@ -40,9 +62,56 @@ final Map<String, EntityOpener> notificationDestinations = {
       ),
     ),
   ),
+  // delivery_status_changed goes to the barangay representative and the
+  // reporter; delivery_receipt_confirmed goes to CSWS Main Office and the
+  // reporter. Only the barangay representative and CSWS Main Office have a
+  // deliveries screen in the app. Every other role (the Administrator, or a
+  // donor or CSWS Disaster Unit user who filed the report) stays on the
+  // inbox, since the Administrator has no deliveries tab to land on and the
+  // reporter would get a 403 from the delivery routes.
+  'delivery': (c, id) {
+    final Widget? screen;
+    switch (api.role) {
+      case Roles.barangay:
+        screen = _withAppBar(
+          'Incoming aid',
+          const DeliveriesScreen(barangay: true),
+        );
+        break;
+      case Roles.cswsMain:
+        screen = _withAppBar('Deliveries', const DeliveriesScreen());
+        break;
+      default:
+        screen = null;
+    }
+    if (screen != null) _push(c, screen);
+  },
+  // logistics_requested goes to DRRMO; logistics_scheduled and
+  // logistics_declined go back to the CSWS Main Office user who asked.
+
+  'logistics_request': (c, id) {
+    final Widget? screen;
+    switch (api.role) {
+      case Roles.drrmo:
+        screen = _withAppBar('Logistics requests', const DrrmoScreen());
+        break;
+      case Roles.cswsMain:
+        screen = _withAppBar('Deliveries', const DeliveriesScreen());
+        break;
+      default:
+        screen = null;
+    }
+    if (screen != null) _push(c, screen);
+  },
+  // org_registered goes to every Administrator. org_approved and org_rejected
+  // go to the organization's own account, which has no screen for this, so it
+  // stays on the inbox.
+  'organization': (c, id) {
+    if (api.role == Roles.admin) {
+      _push(c, _withAppBar('Organizations', const OrganizationsReview()));
+    }
+  },
   // 'donation_batch': (c, id) => ...,
-  // 'logistics_request': (c, id) => ...,
-  // 'delivery': (c, id) => ...,
 };
 
 /// Bell icon with an unread badge. Refreshes every 30 s, after any action
@@ -207,4 +276,3 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 }
-  
