@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'api.dart';
@@ -7,6 +8,23 @@ import 'ui/landing/landing_screen.dart';
 
 void main() {
   runApp(const NexaAidApp());
+}
+
+/// Lets every scrollable list be dragged with a mouse or touchpad too, not
+/// only with a finger. Flutter allows only touch dragging by default, which
+/// makes long screens hard to scroll on laptops (Chrome, Windows).
+class AppScrollBehavior extends MaterialScrollBehavior {
+  const AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => const {
+    PointerDeviceKind.touch,
+    PointerDeviceKind.mouse,
+    PointerDeviceKind.trackpad,
+    PointerDeviceKind.stylus,
+    PointerDeviceKind.invertedStylus,
+    PointerDeviceKind.unknown,
+  };
 }
 
 class NexaAidApp extends StatefulWidget {
@@ -60,6 +78,7 @@ class _NexaAidAppState extends State<NexaAidApp> {
         theme: AppTheme.light(),
         darkTheme: AppTheme.dark(),
         themeMode: mode,
+        scrollBehavior: const AppScrollBehavior(),
         // Signed out: landing page (adviser item 8). Signed in or guest:
         // the role's home screen.
         home: ListenableBuilder(
