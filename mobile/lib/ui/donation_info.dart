@@ -599,6 +599,7 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
 
 /// UC-CD1: inside New report. Shows the chosen barangay's info and lets
 /// the CSWS Disaster Unit use different info for this report only.
+/// UC-CD1: inside New report. Shows the chosen barangay's donation info.
 class NewReportDonationInfo extends StatefulWidget {
   final String? barangayId;
   const NewReportDonationInfo({super.key, required this.barangayId});
@@ -608,9 +609,6 @@ class NewReportDonationInfo extends StatefulWidget {
 }
 
 class NewReportDonationInfoState extends State<NewReportDonationInfo> {
-  final c = DonationInfoController();
-  bool useOverride = false;
-  bool tried = false;
   Future<ApiResult>? _load;
 
   @override
@@ -628,38 +626,7 @@ class NewReportDonationInfoState extends State<NewReportDonationInfo> {
   void _fetch() {
     final id = widget.barangayId;
     _load = id == null ? null : api.get('/barangays/$id/donation-info');
-    useOverride = false;
-    c.load(null);
   }
-
-  @override
-  void dispose() {
-    c.dispose();
-    super.dispose();
-  }
-
-  /// Called by the form before submitting: an error to show, or null.
-  String? check() {
-    if (!useOverride) return null;
-    setState(() => tried = true);
-    return c.missing;
-  }
-
-  /// After the report is created: save the override, if one was entered.
-  Future<ApiResult?> saveFor(int reportId) async {
-    if (!useOverride) return null;
-    return api.send(
-      'PUT',
-      '/reports/$reportId/donation-info',
-      body: c.toJson(),
-    );
-  }
-
-  void reset() => setState(() {
-    useOverride = false;
-    tried = false;
-    c.load(null);
-  });
 
   @override
   Widget build(BuildContext context) {
@@ -676,25 +643,9 @@ class NewReportDonationInfoState extends State<NewReportDonationInfo> {
         if (!snap.hasData) return const Skeleton(height: 96);
         final r = snap.data!;
         final info = r.ok ? r.json['info'] as Map? : null;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            DonationInfoCard(
-              info: info,
-              title: 'Barangay ${r.ok ? r.json['barangay_name'] : ''} default',
-            ),
-            SwitchListTile(
-              key: const ValueKey('override-donation-info'),
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Use different donation info for this report'),
-              value: useOverride,
-              onChanged: (v) => setState(() {
-                useOverride = v;
-                if (v) c.load(info); // start from the barangay's info
-              }),
-            ),
-            if (useOverride) DonationInfoFields(c: c, showMissing: tried),
-          ],
+        return DonationInfoCard(
+          info: info,
+          title: 'Barangay ${r.ok ? r.json['barangay_name'] : ''} default',
         );
       },
     );
