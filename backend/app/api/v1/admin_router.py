@@ -78,6 +78,7 @@ def create_internal_account(
                     "assigned_barangay_id": new_user.assigned_barangay_id,
                     "employee_id_card": card.file_id},
                request=request)
+    notify_event(db, new_user.user_id, "account_created", "user", new_user.user_id)
     db.flush()
     db.refresh(new_user)
     return new_user
