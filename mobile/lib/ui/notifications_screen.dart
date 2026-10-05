@@ -34,7 +34,13 @@ final Map<String, EntityOpener> notificationDestinations = {
   // ReportDetailScreen needs a full Report, and a notification only carries
   // the id, so fetch the report first, then open the screen. Failures print
   // to the console and show a snackbar instead of failing silently.
-  'report': (c, id) async {
+   'report': (c, id) async {
+    ScaffoldMessenger.of(c).showSnackBar(
+      const SnackBar(
+        content: Text('Opening report…'),
+        duration: Duration(seconds: 2),
+      ),
+    );
     final r = await api.get('/reports/$id');
     if (!r.ok || r.json is! Map) {
       if (c.mounted) {
