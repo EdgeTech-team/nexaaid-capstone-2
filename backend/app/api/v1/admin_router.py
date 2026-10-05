@@ -2,10 +2,11 @@
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from core import email as mail_service
 from core.database import get_db
 from core.auth import hash_password, require_role
 from core.uploads import transfer_upload
@@ -21,6 +22,15 @@ from schemas.user_schema import (
 from core.notifications import notify_event
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def _queue_email(background_tasks: BackgroundTasks, to: Optional[str], subject: str, body: str) -> None:
+    """Send after the response, so a slow Gmail connection never delays the
+    request. Only plain strings are passed (never the db session), and
+    send_email() never raises or logs the body."""
+    if to:
+        background_tasks.add_task(mail_service.send_email, to, subject, body)
+
 
 def _email_in_use(db: Session, email: str, except_user_id: Optional[int] = None) -> bool:
     q = db.query(User).filter(func.lower(User.email) == email.lower())
@@ -45,6 +55,7 @@ def _check_barangay(db: Session, barangay_id: int) -> None:
 def create_internal_account(
     payload: InternalAccountCreateRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("Administrator")),
 ):
@@ -79,6 +90,18 @@ def create_internal_account(
                     "employee_id_card": card.file_id},
                request=request)
     notify_event(db, new_user.user_id, "account_created", "user", new_user.user_id)
+
+    # The new staff member gets their login details by email.
+    _queue_email(
+        background_tasks, new_user.email,
+        "Your NexaAid account is ready",
+        f"Hello {payload.first_name},\n\n"
+        f"An administrator created your NexaAid account ({payload.role_name}).\n\n"
+        f"Login email: {payload.email}\n"
+        f"Temporary password: {payload.password}\n\n"
+        "Please sign in and change your password right away.\n\n"
+        "NexaAid",
+    )
     db.flush()
     db.refresh(new_user)
     return new_user
@@ -289,6 +312,7 @@ def decide_organization(
     organization_id: int,
     payload: OrganizationDecision,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
@@ -307,11 +331,31 @@ def decide_organization(
 
     if payload.decision in ("Approved", "Rejected"):
         event = "org_approved" if payload.decision == "Approved" else "org_rejected"
-        org_user_ids = [uid for (uid,) in db.query(User.user_id)
-                        .filter(User.organization_id == org.organization_id).all()]
-        for uid in org_user_ids:
+        org_users = db.query(User.user_id, User.email).filter(
+            User.organization_id == org.organization_id).all()
+        for uid, _ in org_users:
             notify_event(db, uid, event, "organization", org.organization_id,
                          reason=payload.reason or "Please contact the administrator for details.")
+
+        # Email the same decision to the organization (one message per address).
+        recipients = {}
+        for addr in [org.contact_email] + [email for _, email in org_users]:
+            if addr:
+                recipients.setdefault(addr.lower(), addr)
+        greeting = org.contact_person or org.org_name
+        if payload.decision == "Approved":
+            subject = "Your NexaAid organization was approved"
+            text = (f"Hello {greeting},\n\n"
+                    f"Your organization, {org.org_name}, was approved. "
+                    "You can now sign in to NexaAid and start donating.\n\nNexaAid")
+        else:
+            subject = "Your NexaAid organization registration was not approved"
+            text = (f"Hello {greeting},\n\n"
+                    f"Your registration for {org.org_name} was not approved.\n"
+                    f"Reason: {payload.reason or 'Please contact the administrator for details.'}\n\n"
+                    "NexaAid")
+        for addr in recipients.values():
+            _queue_email(background_tasks, addr, subject, text)
     db.flush()
     return {"organization_id": org.organization_id, "org_name": org.org_name,
             "status": org.status, "reason": payload.reason}

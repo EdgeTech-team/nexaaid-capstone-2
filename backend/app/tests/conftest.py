@@ -237,3 +237,19 @@ def _temp_upload_storage(tmp_path):
     previous = set_storage(LocalStorage(tmp_path / "uploads"))
     yield
     set_storage(previous)
+
+
+@pytest.fixture(autouse=True)
+def sent_emails(request, monkeypatch):
+    """Block real email in every test; tests can read what would have been sent.
+    The email unit tests exercise the real send_email(), so they are left alone."""
+    sent = []
+    if request.module.__name__.endswith("test_notifications_unit"):
+        return sent
+
+    def fake_send_email(to, subject, body):
+        sent.append({"to": to, "subject": subject, "body": body})
+        return True
+
+    monkeypatch.setattr("core.email.send_email", fake_send_email)
+    return sent
