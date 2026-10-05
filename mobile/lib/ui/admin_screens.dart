@@ -24,25 +24,6 @@ class AdminDashboard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: [
             PageHeader('Administrator Dashboard', subtitle: roleLine()),
-            // Adviser item 7: any barangay's donation-sending info.
-            AppCard(
-              margin: const EdgeInsets.only(bottom: Space.md),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) =>
-                      const BarangayDonationInfoScreen(standalone: true),
-                ),
-              ),
-              child: const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.account_balance_wallet_outlined),
-                title: Text('Barangay donation info'),
-                subtitle: Text(
-                  'Edit where donors can send money to a barangay',
-                ),
-                trailing: Icon(Icons.chevron_right),
-              ),
-            ),
             StatGrid([
               StatTile(
                 'Active users',
@@ -99,32 +80,35 @@ class AccountsHub extends StatefulWidget {
 }
 
 class _AccountsHubState extends State<AccountsHub> {
-  String view = 'users';
+  String view = 'active';
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
+        // Scrolls sideways on narrow phones instead of overflowing.
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                   child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SegmentedButton<String>(
-              showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(value: 'active', label: Text('Active')),
-                ButtonSegment(value: 'deactivated', label: Text('Deactivated')),
-                ButtonSegment(value: 'orgs', label: Text('Organizations')),
-                ButtonSegment(value: 'new', label: Text('New account')),
-              ],
-              selected: {view},
-              onSelectionChanged: (s) => setState(() => view = s.first),
-            ),
+          child: SegmentedButton<String>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: 'active', label: Text('Active')),
+              ButtonSegment(value: 'deactivated', label: Text('Deactivated')),
+              ButtonSegment(value: 'orgs', label: Text('Organizations')),
+              // Adviser item 7: any barangay's donation-sending info, e.g.
+              // a barangay without a representative yet, or a wrong number.
+              ButtonSegment(value: 'donation', label: Text('Donation info')),
+              ButtonSegment(value: 'new', label: Text('New account')),
+            ],
+            selected: {view},
+            onSelectionChanged: (s) => setState(() => view = s.first),
           ),
         ),
         Expanded(
           child: switch (view) {
             'orgs' => const OrganizationsReview(),
+            'donation' => const BarangayDonationInfoScreen(),
             'new' => const AccountsScreen(),
             'deactivated' => const UsersScreen(
               key: ValueKey('deactivated'),
