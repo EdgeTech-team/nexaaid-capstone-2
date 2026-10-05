@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
-import '../design/gallery_screen.dart';
-import '../dev_console.dart';
 import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_dashboard.dart';
@@ -10,6 +8,7 @@ import 'donation_info.dart';
 import 'donor_screens.dart';
 import 'notifications_screen.dart';
 import 'ops_screens.dart';
+import 'profile_screen.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
 import 'widgets.dart';
@@ -204,7 +203,7 @@ class _RoleHomeState extends State<RoleHome> {
             ),
           ],
         ),
-          actions: [const NotificationBell(), ..._shellActions(context), Gaps.h8],
+        actions: [const NotificationBell(), ..._shellActions(context), Gaps.h8],
       ),
       body: wide
           ? Row(
@@ -235,112 +234,6 @@ class _RoleHomeState extends State<RoleHome> {
                 for (final tab in tabs) FloatingNavItem(tab.icon, tab.label),
               ],
             ),
-    );
-  }
-}
-
-class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    void open(Widget page) =>
-        Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
-
-    return ListView(
-      padding: Space.page,
-      children: [
-        AppCard(
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: 26,
-                backgroundColor: cs.primaryContainer,
-                child: Icon(Icons.person, color: cs.onPrimaryContainer),
-              ),
-              Gaps.h16,
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(api.email ?? 'Guest donor', style: t.titleMedium),
-                    Text(
-                      api.role ?? 'Not logged in',
-                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SectionHeader('Appearance'),
-        ValueListenableBuilder<ThemeMode>(
-          valueListenable: AppTheme.mode,
-          builder: (context, mode, _) => SegmentedButton<ThemeMode>(
-            segments: const [
-              ButtonSegment(
-                value: ThemeMode.system,
-                icon: Icon(Icons.brightness_auto_outlined),
-                label: Text('System'),
-              ),
-              ButtonSegment(
-                value: ThemeMode.light,
-                icon: Icon(Icons.light_mode_outlined),
-                label: Text('Light'),
-              ),
-              ButtonSegment(
-                value: ThemeMode.dark,
-                icon: Icon(Icons.dark_mode_outlined),
-                label: Text('Dark'),
-              ),
-            ],
-            selected: {mode},
-            onSelectionChanged: (s) => AppTheme.mode.value = s.first,
-          ),
-        ),
-        const SectionHeader('Developer tools'),
-        AppCard(
-          padding: EdgeInsets.zero,
-          child: Column(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.dns_outlined),
-                title: const Text('Server'),
-                subtitle: Text(api.baseUrl),
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.developer_mode),
-                title: const Text('API console'),
-                subtitle: const Text('Raw API forms and role checks'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => open(const DevConsole()),
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.palette_outlined),
-                title: const Text('Design system gallery'),
-                subtitle: const Text(
-                  'Every component, in dark mode and large text',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => open(const DesignGalleryScreen()),
-              ),
-            ],
-          ),
-        ),
-        Gaps.v24,
-        AppButton(
-          api.loggedIn ? 'Log out' : 'Back to start',
-          icon: Icons.logout,
-          variant: AppButtonVariant.secondary,
-          expand: true,
-          onPressed: api.logout,
-        ),
-      ],
     );
   }
 }
