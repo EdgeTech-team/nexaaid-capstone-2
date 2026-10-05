@@ -152,7 +152,9 @@ class StatCardGrid extends StatelessWidget {
             : c.maxWidth >= Breakpoints.medium
             ? 3
             : 2;
-        final w = (c.maxWidth - Space.sm * (cols - 1)) / cols;
+        final w = ((c.maxWidth - Space.sm * (cols - 1)) / cols)
+            .clamp(0.0, double.infinity)
+            .toDouble();
         return Wrap(
           spacing: Space.sm,
           runSpacing: Space.sm,
