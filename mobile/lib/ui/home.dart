@@ -13,6 +13,7 @@ import 'profile_screen.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
 import 'widgets.dart';
+import 'change_password_screen.dart';
 
 class _Tab {
   final String label;
@@ -155,6 +156,23 @@ class RoleHome extends StatefulWidget {
 
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
+
+    @override
+  void initState() {
+    super.initState();
+    // I1: a temporary password must be changed first.
+    if (api.mustChangePassword) {
+      index = _tabsFor(api.role).length; // Profile is the last tab
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !api.mustChangePassword) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const ChangePasswordScreen(forced: true),
+          ),
+        );
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
