@@ -307,7 +307,7 @@ class DeliveriesScreen extends StatelessWidget {
                     const Icon(Icons.fire_truck_outlined, size: 16),
                     const SizedBox(width: 4),
                     const Text('DRRMO: ', style: TextStyle(fontSize: 12)),
-                    Badge2.status(reqStage == 'Pending' ? 'Pending' : reqStage),
+                    Badge2.status(reqStage ?? 'Pending'),
                     if (request['scheduled_date'] != null) ...[
                       const SizedBox(width: 6),
                       Text(
@@ -773,6 +773,11 @@ class _CmoScreenState extends State<CmoScreen> {
                         '${r['report_label']}',
                         style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
+                      if (r['priority_level'] != null)
+                        Text(
+                          'Priority: ${r['priority_level']}',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
                       const SizedBox(height: 4),
                       Text(
                         '${r['confirmed_count']} confirmed '
