@@ -36,6 +36,8 @@ class OrganizationRegisterRequest(BaseModel):
     legitimacy_document: UploadRef
     # RA 10173 (Data Privacy Act)
     consent: bool
+    # D3: Terms and Conditions agreement. The server stores when it was accepted.
+    accepted_terms: bool
 
     @field_validator("org_name")
     @classmethod
@@ -70,6 +72,13 @@ class OrganizationRegisterRequest(BaseModel):
     def _consent(cls, v):
         if v is not True:
             raise ValueError("You must agree to the processing of your personal data (RA 10173)")
+        return v
+
+    @field_validator("accepted_terms")
+    @classmethod
+    def _terms(cls, v):
+        if v is not True:
+            raise ValueError("You must accept the Terms and Conditions")
         return v
 
     @model_validator(mode="after")
