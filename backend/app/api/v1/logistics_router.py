@@ -7,6 +7,7 @@ from models.user_rbac_model import User
 from models.delivery import Delivery
 from models.logistics_request_model import LogisticsRequest
 from schemas.logistics_request_schema import SubmitLogisticsRequest, LogisticsRequestResponse
+from core.notifications import notify_event_many, user_ids_with_role
 
 router = APIRouter(prefix="/logistics", tags=["logistics"])
 
@@ -42,6 +43,9 @@ def submit_logistics_request(
     db.flush()
     log_action(db, current_user, "REQUEST LOGISTICS SUPPORT", "logistics_requests",
                logistics_request.request_id, new={"delivery_id": delivery.delivery_id})
+    notify_event_many(db, user_ids_with_role(db, ["DRRMO Logistics Support"]),
+                      "logistics_requested", "logistics_request",
+                      logistics_request.request_id, title=f"delivery #{delivery.delivery_id}")
 
     db.commit()
     db.refresh(logistics_request)

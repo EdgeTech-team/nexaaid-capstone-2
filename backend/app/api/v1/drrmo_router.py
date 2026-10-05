@@ -14,6 +14,7 @@ from models.logistics_request_model import LogisticsRequest
 from models.delivery import Delivery
 from models.item_model import Item
 from models.report import DisasterReport, DisasterType, Barangay
+from core.notifications import notify_event
 from schemas.logistics_request_schema import (
     AcceptLogisticsRequest, DeclineLogisticsRequest, LogisticsRequestResponse
 )
@@ -97,6 +98,10 @@ def accept_request(
     log_action(db, current_user, "ACCEPT LOGISTICS REQUEST", "logistics_requests", request_id,
                old={"status": "Pending"},
                new={"status": "Accepted", "scheduled_date": payload.scheduled_date.isoformat()})
+    notify_event(db, req.requested_by_user_id, "logistics_scheduled",
+                 "logistics_request", request_id,
+                 title=f"delivery #{req.delivery_id}",
+                 schedule=payload.scheduled_date.isoformat())
 
     db.commit()
     db.refresh(req)
@@ -121,6 +126,8 @@ def decline_request(
     req.notes = payload.notes
     log_action(db, current_user, "DECLINE LOGISTICS REQUEST", "logistics_requests", request_id,
                old={"status": "Pending"}, new={"status": "Declined", "reason": payload.notes})
+    notify_event(db, req.requested_by_user_id, "logistics_declined",
+                 "logistics_request", request_id, reason=payload.notes or "")
 
     db.commit()
     db.refresh(req)

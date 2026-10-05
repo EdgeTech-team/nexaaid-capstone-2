@@ -18,6 +18,7 @@ from core.audit import log_action
 from schemas.user_schema import (
     AccountUpdateRequest, BARANGAY_REP, INTERNAL_ROLES, InternalAccountCreateRequest, UserResponse,
 )
+from core.notifications import notify_event
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -302,6 +303,14 @@ def decide_organization(
               "Rejected": "REJECT ORGANIZATION"}[payload.decision]
     log_action(db, current_user, action, "organizations", org.organization_id,
                old=old, new={"status": org.status, "reason": payload.reason}, request=request)
+
+    if payload.decision in ("Approved", "Rejected"):
+        event = "org_approved" if payload.decision == "Approved" else "org_rejected"
+        org_user_ids = [uid for (uid,) in db.query(User.user_id)
+                        .filter(User.organization_id == org.organization_id).all()]
+        for uid in org_user_ids:
+            notify_event(db, uid, event, "organization", org.organization_id,
+                         reason=payload.reason or "Please contact the administrator for details.")
     db.flush()
     return {"organization_id": org.organization_id, "org_name": org.org_name,
             "status": org.status, "reason": payload.reason}

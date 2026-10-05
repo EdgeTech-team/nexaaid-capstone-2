@@ -34,10 +34,10 @@ from datetime import datetime, timezone
 from core.priority_engine import compute_priority
 
 from core.database import get_db
-from core.notifications import notify
 from core.auth import get_current_user, require_role, has_role, barangay_scope
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
+from core.notifications import notify, notify_event_many, user_ids_with_role    
 from schemas.report import (
     DisasterReportCreate,
     DisasterReportUpdate,
@@ -66,6 +66,14 @@ def create_report(
     db.add(report)
     db.flush()   # get report.report_id before commit (commit happens in get_db)
     db.refresh(report)
+
+    notify_event_many(
+        db,
+        user_ids_with_role(db, ["CSWS Main Office", "CSWS Disaster Unit"],
+                           exclude_user_id=current_user.user_id),
+        "report_submitted", "report", report.report_id,
+        title=f"Report #{report.report_id}",
+    )
     return report
 
 
