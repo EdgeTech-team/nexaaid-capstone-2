@@ -118,6 +118,82 @@ class _LandingScreenState extends State<LandingScreen> {
     );
   }
 
+  /// Public detail view of one validated report: needs, fulfillment progress
+  /// and priority guidance, no login. Reporter details are never shown.
+  void _openReport(Map<String, dynamic> r) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx).textTheme;
+        final cs = Theme.of(ctx).colorScheme;
+        final guidance = (r['priority_guidance'] ?? '').toString();
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${r['disaster'] ?? 'Disaster'} in Barangay ${r['barangay'] ?? '-'}',
+                        style: t.titleLarge,
+                      ),
+                    ),
+                    Gaps.h8,
+                    PriorityChip(r['priority_level'] as String?),
+                  ],
+                ),
+                Gaps.v8,
+                Text(
+                  [
+                    if (r['sitio'] != null) 'Sitio ${r['sitio']}',
+                    if (r['affected_families'] != null)
+                      '${r['affected_families']} families affected',
+                  ].join(' · '),
+                  style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                ),
+                Gaps.v16,
+                Text('Reported needs', style: t.titleSmall),
+                Gaps.v8,
+                _NeedChips(r['assistance_needed']),
+                Gaps.v16,
+                Text('Fulfillment progress', style: t.titleSmall),
+                Gaps.v8,
+                FulfillmentBar(
+                  delivered: r['total_items_delivered'] as num? ?? 0,
+                  needed: r['total_items_needed'] as num? ?? 0,
+                  percent: r['fulfillment_percentage'] as num?,
+                ),
+                if (guidance.isNotEmpty) ...[
+                  Gaps.v16,
+                  Text('Priority guidance', style: t.titleSmall),
+                  Gaps.v8,
+                  Text(guidance, style: t.bodyMedium),
+                ],
+                Gaps.v24,
+                AppButton(
+                  'Donate to this report',
+                  icon: Icons.volunteer_activism_outlined,
+                  variant: AppButtonVariant.donate,
+                  expand: true,
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _donate(r);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -262,6 +338,7 @@ class _LandingScreenState extends State<LandingScreen> {
               ]),
         const SectionHeader('How it works'),
         const _Steps(),
+        const _PriorityGuide(),
         SectionHeader(
           'Reports that need help',
           subtitle: 'Most urgent first.',
@@ -309,7 +386,11 @@ class _LandingScreenState extends State<LandingScreen> {
           )
         else
           for (final r in shown) ...[
-            _ReportCard(report: r, onDonate: () => _donate(r)),
+            _ReportCard(
+              report: r,
+              onDonate: () => _donate(r),
+              onOpen: () => _openReport(r),
+            ),
             Gaps.v12,
           ],
         if (data != null) ImpactSection(stats: data.stats, asOf: data.loadedAt),
@@ -688,7 +769,12 @@ class _Steps extends StatelessWidget {
 class _ReportCard extends StatelessWidget {
   final Map<String, dynamic> report;
   final VoidCallback onDonate;
-  const _ReportCard({required this.report, required this.onDonate});
+  final VoidCallback onOpen;
+  const _ReportCard({
+    required this.report,
+    required this.onDonate,
+    required this.onOpen,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -739,13 +825,17 @@ class _ReportCard extends StatelessWidget {
                 ),
             ],
           ),
-          if ((r['assistance_needed'] ?? '').toString().isNotEmpty) ...[
+          if (_splitNeeds(r['assistance_needed']).isNotEmpty) ...[
+            Gaps.v8,
+            _NeedChips(r['assistance_needed']),
+          ],
+          if ((r['priority_guidance'] ?? '').toString().isNotEmpty) ...[
             Gaps.v8,
             Text(
-              'Needs: ${r['assistance_needed']}',
+              r['priority_guidance'].toString(),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: t.bodyMedium,
+              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
           ],
           Gaps.v12,
@@ -755,15 +845,106 @@ class _ReportCard extends StatelessWidget {
             percent: r['fulfillment_percentage'] as num?,
           ),
           Gaps.v12,
-          AppButton(
-            'Donate',
-            icon: Icons.volunteer_activism_outlined,
-            variant: AppButtonVariant.donate,
-            expand: true,
-            onPressed: onDonate,
+          Row(
+            children: [
+              Expanded(
+                child: AppButton(
+                  'Donate',
+                  icon: Icons.volunteer_activism_outlined,
+                  variant: AppButtonVariant.donate,
+                  expand: true,
+                  onPressed: onDonate,
+                ),
+              ),
+              Gaps.h8,
+              OutlinedButton(onPressed: onOpen, child: const Text('Details')),
+            ],
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Same split as Report.needs in report_model.dart:
+/// "Water, ready-to-eat food" -> ['Water', 'ready-to-eat food']
+List<String> _splitNeeds(Object? raw) => (raw ?? '')
+    .toString()
+    .split(',')
+    .map((s) => s.trim())
+    .where((s) => s.isNotEmpty)
+    .toList();
+
+class _NeedChips extends StatelessWidget {
+  final Object? raw;
+  const _NeedChips(this.raw);
+
+  @override
+  Widget build(BuildContext context) {
+    final needs = _splitNeeds(raw);
+    if (needs.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: Space.xs,
+      runSpacing: Space.xs,
+      children: [
+        for (final n in needs)
+          Chip(label: Text(n), visualDensity: VisualDensity.compact),
+      ],
+    );
+  }
+}
+
+/// "How priority works": mirrors core/priority_engine.py. If the weights or
+/// thresholds change there, update this too.
+class _PriorityGuide extends StatelessWidget {
+  const _PriorityGuide();
+
+  static const _levels = [
+    ('Critical', 'Score 80 to 100', 'Needs help immediately.'),
+    ('High', 'Score 60 to 79', 'Needs help soon.'),
+    ('Medium', 'Score 35 to 59', 'Needs help, but is less urgent.'),
+    ('Low', 'Score below 35', 'Lower urgency. Cover other reports first.'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SectionHeader(
+          'How priority works',
+          subtitle: 'AI-assisted guidance for where help is needed first.',
+        ),
+        AppCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Each validated report is scored from four things: families '
+                'affected (30%), how much is needed (20%), the severity of '
+                'the disaster (25%), and how much is still undelivered (25%).',
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v12,
+              for (final l in _levels) ...[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    SizedBox(width: 92, child: PriorityChip(l.$1)),
+                    Gaps.h12,
+                    Expanded(
+                      child: Text('${l.$2}. ${l.$3}', style: t.bodyMedium),
+                    ),
+                  ],
+                ),
+                Gaps.v8,
+              ],
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
