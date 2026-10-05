@@ -271,14 +271,15 @@ def list_organizations(
     query = db.query(Organization)
     if status_filter:
         query = query.filter(Organization.status == status_filter)
-    # Latest Hold/Reject reason per organization (kept in audit_logs, no column).
-    reasons = {}
+    # Latest Hold/Reject reason and decision time per organization (audit_logs).
+    reasons, decided = {}, {}
     for log in (db.query(AuditLog)
                 .filter(AuditLog.entity_type == "organizations",
                         AuditLog.action.in_(["HOLD ORGANIZATION", "REJECT ORGANIZATION",
                                              "APPROVE ORGANIZATION"]))
                 .order_by(AuditLog.log_id)):
         reasons[log.entity_id] = (log.new_value or {}).get("reason")
+        decided[log.entity_id] = log.timestamp
     rows = []
     for o in query.order_by(Organization.created_at.desc()).all():
         rows.append({
@@ -293,7 +294,10 @@ def list_organizations(
             # UC-A2 alt 4a: flag applications with a missing document
             "document_missing": not (o.legitimacy_document_url or "").strip(),
             "status": o.status,
-            "decision_reason": reasons.get(o.organization_id),
+            # I3 / D6: the saved rejection reason (older rows fall back to the audit log)
+            "rejection_reason": o.rejection_reason,
+            "decision_reason": o.rejection_reason or reasons.get(o.organization_id),
+            "decided_at": decided.get(o.organization_id),
             "approved_at": o.approved_at,
             "created_at": o.created_at,
         })
@@ -328,6 +332,7 @@ def decide_organization(
         raise HTTPException(status_code=404, detail="Organization not found")
     old = {"status": org.status}
     org.status = payload.decision
+    org.rejection_reason = payload.reason if payload.decision == "Rejected" else None
     if payload.decision == "Approved":
         org.approved_by_user_id = current_user.user_id
         org.approved_at = datetime.now(timezone.utc)
