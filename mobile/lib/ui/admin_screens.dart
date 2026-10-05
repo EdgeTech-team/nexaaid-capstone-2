@@ -123,7 +123,7 @@ class _AccountsHubState extends State<AccountsHub> {
 }
 
 class UsersScreen extends StatefulWidget {
-    /// I2: true = Active section, false = Deactivated section.
+  /// I2: true = Active section, false = Deactivated section.
   final bool active;
   const UsersScreen({super.key, this.active = true});
 
@@ -139,7 +139,7 @@ class _UsersScreenState extends State<UsersScreen> {
   Widget build(BuildContext context) {
     return Loader(
       load: [
-                () => api.get(
+        () => api.get(
           '/admin/users',
           query: {
             'active': '${widget.active}',
@@ -154,7 +154,7 @@ class _UsersScreenState extends State<UsersScreen> {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-                        PageHeader(
+            PageHeader(
               widget.active ? 'User Management' : 'Deactivated accounts',
               subtitle: widget.active
                   ? 'Tap an account to see its details, edit it, or deactivate it.'
@@ -190,7 +190,7 @@ class _UsersScreenState extends State<UsersScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-           '${users.length} ${widget.active ? 'active' : 'deactivated'} accounts',
+              '${users.length} ${widget.active ? 'active' : 'deactivated'} accounts',
               style: const TextStyle(color: Brand.muted),
             ),
             const SizedBox(height: 6),
@@ -269,6 +269,14 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
               selected: {status},
               onSelectionChanged: (s) => setState(() => status = s.first),
             ),
+            // I3: the organization sees the same reason at login (D6).
+            if (status == 'Rejected') ...[
+              Gaps.v8,
+              Text(
+                'Rejected organizations see this reason when they try to log in.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 12),
             if (orgs.isEmpty)
               EmptyState('No ${status.toLowerCase()} organizations.'),
@@ -299,7 +307,7 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                         ],
                       ),
                       Text(
-                        '${o['organization_type']} · Reg. no. ${o['registration_no']}',
+                        '${o['organization_type']} · Reg. no. ${o['registration_no'] ?? 'not given'}',
                       ),
                       Text('${o['address']}'),
                       Text(
@@ -308,7 +316,13 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                       Gaps.v12,
                       // UC-A2 step 4: the supporting document; alt 4a flags.
                       _OrgDocument(o['organization_id'] as int),
-                      if (o['decision_reason'] != null) ...[
+                      if (o['status'] == 'Rejected') ...[
+                        Gaps.v8,
+                        _RejectionReason(
+                          reason: o['rejection_reason'] ?? o['decision_reason'],
+                          at: o['decided_at'],
+                        ),
+                      ] else if (o['decision_reason'] != null) ...[
                         Gaps.v8,
                         Text(
                           'Last reason: ${o['decision_reason']}',
@@ -337,6 +351,42 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
           ],
         );
       },
+    );
+  }
+}
+
+/// I3: why an organization was rejected. The organization sees the same
+/// reason when it tries to log in (D6).
+class _RejectionReason extends StatelessWidget {
+  final dynamic reason;
+  final dynamic at;
+  const _RejectionReason({required this.reason, this.at});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(Space.md),
+      decoration: BoxDecoration(
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            at == null ? 'Rejection reason' : 'Rejected ${niceDate(at)}',
+            style: t.labelLarge?.copyWith(color: cs.onErrorContainer),
+          ),
+          Gaps.v8,
+          Text(
+            '${reason ?? 'No reason was recorded.'}',
+            style: t.bodyMedium?.copyWith(color: cs.onErrorContainer),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -450,9 +500,6 @@ class _OrgDocument extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
-// ---------------------------------------------------------------------------
 class BarangayDashboard extends StatelessWidget {
   const BarangayDashboard({super.key});
 
