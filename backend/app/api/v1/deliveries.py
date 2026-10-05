@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from core.database import get_db
+from core.notifications import notify_event_many, user_ids_with_role
+from models.report import DisasterReport
 from core.auth import get_current_user, require_role, barangay_scope
 from core.audit import log_action
 from models.inventory_model import Inventory
@@ -208,6 +210,16 @@ def advance_delivery(
     # Timestamped status history (UC-CM2 / delivery module step 3)
     log_action(db, current_user, "UPDATE DELIVERY STATUS", "deliveries", delivery.delivery_id,
                old={"status": old_status}, new={"status": delivery.status})
+   
+    report = db.get(DisasterReport, delivery.report_id)
+    recipients = set(user_ids_with_role(
+        db, ["Barangay Receiving Representative"],
+        barangay_id=delivery.destination_barangay_id))
+    if report and report.user_id != current_user.user_id:
+        recipients.add(report.user_id)
+    notify_event_many(db, recipients, "delivery_status_changed", "delivery",
+                      delivery.delivery_id,
+                      title=f"Delivery #{delivery.delivery_id}", status=delivery.status)
 
     db.flush()
     db.refresh(delivery)
@@ -267,6 +279,14 @@ def confirm_receipt(
     delivery.status = "Confirmed"
     log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
                old={"status": "Delivered"}, new={"status": "Confirmed", "remarks": payload.remarks})
+    
+    report = db.get(DisasterReport, delivery.report_id)
+    recipients = set(user_ids_with_role(db, ["CSWS Main Office"],
+                                        exclude_user_id=current_user.user_id))
+    if report and report.user_id != current_user.user_id:
+        recipients.add(report.user_id)
+    notify_event_many(db, recipients, "delivery_receipt_confirmed", "delivery",
+                      delivery.delivery_id, title=f"Delivery #{delivery.delivery_id}")
     db.flush()
 
     fulfillment = _recalculate_fulfillment (

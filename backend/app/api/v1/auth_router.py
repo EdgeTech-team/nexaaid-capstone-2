@@ -13,6 +13,7 @@ from models.role_model import Role
 from models.organization_model import Organization
 from schemas.user_schema import DonorRegisterRequest, UserResponse
 from schemas.organization_schema import OrganizationRegisterRequest, OrganizationResponse
+from core.notifications import notify_event_many, user_ids_with_role
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -124,6 +125,10 @@ def register_organization(payload: OrganizationRegisterRequest, request: Request
         "email": new_user.email,
         "consent_ra10173": True,
     }, request=request)
+
+    notify_event_many(db, user_ids_with_role(db, ["Administrator"]),
+                      "org_registered", "organization", new_org.organization_id,
+                      name=new_org.org_name)
     # Login stays blocked by authenticate_user() until the admin approves the org.
     db.flush()
     db.refresh(new_org)
