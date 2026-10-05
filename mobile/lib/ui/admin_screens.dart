@@ -80,7 +80,7 @@ class AccountsHub extends StatefulWidget {
 }
 
 class _AccountsHubState extends State<AccountsHub> {
-  String view = 'users';
+  String view = 'active';
 
   @override
   Widget build(BuildContext context) {
@@ -91,8 +91,10 @@ class _AccountsHubState extends State<AccountsHub> {
           scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child: SegmentedButton<String>(
+            showSelectedIcon: false,
             segments: const [
-              ButtonSegment(value: 'users', label: Text('Accounts')),
+              ButtonSegment(value: 'active', label: Text('Active')),
+              ButtonSegment(value: 'deactivated', label: Text('Deactivated')),
               ButtonSegment(value: 'orgs', label: Text('Organizations')),
               // Adviser item 7: any barangay's donation-sending info, e.g.
               // a barangay without a representative yet, or a wrong number.
@@ -108,7 +110,11 @@ class _AccountsHubState extends State<AccountsHub> {
             'orgs' => const OrganizationsReview(),
             'donation' => const BarangayDonationInfoScreen(),
             'new' => const AccountsScreen(),
-            _ => const UsersScreen(),
+            'deactivated' => const UsersScreen(
+              key: ValueKey('deactivated'),
+              active: false,
+            ),
+            _ => const UsersScreen(key: ValueKey('active')),
           },
         ),
       ],
@@ -117,7 +123,9 @@ class _AccountsHubState extends State<AccountsHub> {
 }
 
 class UsersScreen extends StatefulWidget {
-  const UsersScreen({super.key});
+    /// I2: true = Active section, false = Deactivated section.
+  final bool active;
+  const UsersScreen({super.key, this.active = true});
 
   @override
   State<UsersScreen> createState() => _UsersScreenState();
@@ -131,20 +139,26 @@ class _UsersScreenState extends State<UsersScreen> {
   Widget build(BuildContext context) {
     return Loader(
       load: [
-        () => api.get(
+                () => api.get(
           '/admin/users',
-          query: {if (role.isNotEmpty) 'role': role, if (q.isNotEmpty) 'q': q},
+          query: {
+            'active': '${widget.active}',
+            if (role.isNotEmpty) 'role': role,
+            if (q.isNotEmpty) 'q': q,
+          },
         ),
       ],
-      key: ValueKey('$role|$q'),
+      key: ValueKey('${widget.active}|$role|$q'),
       builder: (context, data) {
         final users = (data[0] as List).cast<Map>();
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const PageHeader(
-              'User Management',
-              subtitle: 'Tap an account to see its details, edit it, or deactivate it.',
+                        PageHeader(
+              widget.active ? 'User Management' : 'Deactivated accounts',
+              subtitle: widget.active
+                  ? 'Tap an account to see its details, edit it, or deactivate it.'
+                  : 'These accounts can\'t log in. Tap one to review it or activate it again.',
             ),
             TextField(
               decoration: const InputDecoration(
@@ -176,7 +190,7 @@ class _UsersScreenState extends State<UsersScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              '${users.length} accounts',
+           '${users.length} ${widget.active ? 'active' : 'deactivated'} accounts',
               style: const TextStyle(color: Brand.muted),
             ),
             const SizedBox(height: 6),

@@ -104,17 +104,30 @@ class DeliveriesScreen extends StatelessWidget {
     this.readOnly = false,
   });
 
-  Future<void> _requestTransport(BuildContext context, Map d) async {
+   Future<void> _requestTransport(BuildContext context, Map d) async {
+    // I4: pick the numbers, no typing.
     final v = await formDialog(
       context,
       title: 'Request DRRMO logistics support',
-      message: 'For delivery #${d['delivery_id']}.',
-      fields: const [
+      message: 'For delivery #${d['delivery_id']}. Choose what is needed.',
+      fields: [
         DialogField(
-          'notes',
-          'What is needed',
-          hint: 'e.g. 1 truck, 2 volunteers',
-          required: false,
+          'trucks',
+          'Trucks needed',
+          initial: '1',
+          options: [for (var i = 1; i <= 10; i++) '$i'],
+        ),
+        DialogField(
+          'drivers',
+          'Drivers needed',
+          initial: '1',
+          options: [for (var i = 0; i <= 10; i++) '$i'],
+        ),
+        DialogField(
+          'volunteers',
+          'Volunteers needed',
+          initial: '0',
+          options: [for (var i = 0; i <= 20; i++) '$i'],
         ),
       ],
       confirm: 'Send request',
@@ -126,7 +139,9 @@ class DeliveriesScreen extends StatelessWidget {
         '/logistics/requests',
         body: {
           'delivery_id': d['delivery_id'],
-          'notes': v['notes']!.isEmpty ? null : v['notes'],
+          'trucks': int.parse(v['trucks']!),
+          'drivers': int.parse(v['drivers']!),
+          'volunteers': int.parse(v['volunteers']!),
         },
       ),
       success: 'Logistics request sent to DRRMO',
@@ -810,33 +825,21 @@ class DrrmoScreen extends StatefulWidget {
 class _DrrmoScreenState extends State<DrrmoScreen> {
   String stage = 'Pending';
 
-  Future<void> _accept(Map r) async {
-    final date = await pickDateTime(context);
-    if (date == null || !mounted) return;
+   Future<void> _accept(Map r) async {
     final v = await formDialog(
       context,
-      title: 'Logistics details',
-      fields: const [
-        DialogField(
-          'notes',
-          'Vehicle / team (optional)',
-          hint: 'e.g. Truck 2, 3 personnel',
-          required: false,
-        ),
-      ],
-      confirm: 'Schedule',
+      title: 'Accept request #${r['request_id']}?',
+      message:
+          '${r['notes'] ?? 'No details'}\n'
+          'Destination: ${r['destination'] ?? '-'}',
+      fields: const [],
+      confirm: 'Accept',
     );
     if (v == null || !mounted) return;
     await act(
       context,
-      () => api.patch(
-        '/drrmo/requests/${r['request_id']}/accept',
-        body: {
-          'scheduled_date': date,
-          if (v['notes']!.isNotEmpty) 'notes': v['notes'],
-        },
-      ),
-      success: 'Scheduled for ${niceDate(date)}',
+      () => api.patch('/drrmo/requests/${r['request_id']}/accept'),
+      success: 'Request accepted',
     );
   }
 
@@ -900,7 +903,7 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
         final rows = all.where((r) => r['stage'] == stage).toList();
         const stages = {
           'Pending': 'New',
-          'Accepted': 'Scheduled',
+          'Accepted': 'Accepted',
           'In Transit': 'In transit',
           'Completed': 'Completed',
           'Declined': 'Declined',
@@ -917,8 +920,8 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
                 color: const Color(0xFFEF6C00),
               ),
               StatTile(
-                'Scheduled',
-                '${dash['scheduled']}',
+                'Accepted',
+                '${dash['Scheduled']}',
                 Icons.event_available,
               ),
               StatTile(
@@ -1005,8 +1008,8 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
                             const SizedBox(width: 8),
                             FilledButton.icon(
                               onPressed: () => _accept(r),
-                              icon: const Icon(Icons.event),
-                              label: const Text('Accept & schedule'),
+                              icon: const Icon(Icons.check),
+                              label: const Text('Accept'),
                             ),
                           ],
                           if (r['stage'] == 'Accepted' ||

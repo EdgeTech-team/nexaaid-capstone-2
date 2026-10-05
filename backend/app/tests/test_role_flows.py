@@ -212,7 +212,7 @@ def test_full_relief_chain_across_all_roles(api):
     assert ok(client.get(f"/deliveries/{did}", headers=t["brgy"]))["status"] == "Preparing"
 
     # --- 3.9 logistics request for that delivery (UC-CM2 3a / UC-DR1) ----
-    req = {"delivery_id": did, "notes": "Need a truck"}
+    req = {"delivery_id": did, "trucks": 1, "drivers": 1, "volunteers": 0}
     lr1 = ok(client.post("/logistics/requests", headers=t["csws"], json=req), 201)
     assert lr1["delivery_id"] == did                          # no new empty delivery
     assert client.post("/logistics/requests", headers=t["csws"], json=req).status_code == 409
@@ -222,8 +222,7 @@ def test_full_relief_chain_across_all_roles(api):
                           json={"notes": "No truck available"}))
     assert dec["status"] == "Declined"
     lr2 = ok(client.post("/logistics/requests", headers=t["csws"], json=req), 201)  # ask again
-    acc = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/accept", headers=t["drrmo"],
-                          json={"scheduled_date": "2026-10-02T08:00:00"}))
+    acc = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/accept", headers=t["drrmo"], json={}))
     assert acc["status"] == "Accepted"
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["scheduled"] == 1
 

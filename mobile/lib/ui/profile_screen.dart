@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../design/gallery_screen.dart';
 import '../dev_console.dart';
 import 'widgets.dart';
+import 'change_password_screen.dart';
 
 /// Profile tab for every role: who you are, appearance, log out.
 ///
@@ -56,7 +57,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (context, devTools, _) => ListView(
         padding: Space.page,
         children: [
-          header,
+                    header,
+          if (api.loggedIn) ...[
+            const SectionHeader('Security'),
+            const _SecurityCard(),
+          ],
           const SectionHeader('Appearance'),
           const _ThemePicker(),
           const SectionHeader('About'),
@@ -75,6 +80,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           if (devTools) ...[
             const SectionHeader('Developer tools'),
             const _DevTools(),
+
+            
           ],
           Gaps.v24,
           AppButton(
@@ -292,3 +299,84 @@ class _DevTools extends StatelessWidget {
     );
   }
 }
+
+/// I1 (Module 1.2): change password. Shows a warning while the account
+/// still has the temporary password the Administrator gave it.
+class _SecurityCard extends StatelessWidget {
+  const _SecurityCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: ListenableBuilder(
+        listenable: api,
+        builder: (context, _) => ListTile(
+          key: const ValueKey('change-password'),
+          leading: Icon(
+            api.mustChangePassword
+                ? Icons.warning_amber_rounded
+                : Icons.lock_reset,
+            color: api.mustChangePassword ? cs.error : null,
+          ),
+          title: const Text('Change password'),
+          subtitle: Text(
+            api.mustChangePassword
+                ? 'Required: you are still using a temporary password'
+                : 'Change the password you log in with',
+          ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) =>
+                  ChangePasswordScreen(forced: api.mustChangePassword),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+  @override
+  Widget build(BuildContext context) {
+    void open(Widget page) =>
+        Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.dns_outlined),
+            title: const Text('Server'),
+            subtitle: Text(api.baseUrl),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.developer_mode),
+            title: const Text('API console'),
+            subtitle: const Text('Raw API forms and role checks'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => open(const DevConsole()),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('Design system gallery'),
+            subtitle: const Text(
+              'Every component, in dark mode and large text',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => open(const DesignGalleryScreen()),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.visibility_off_outlined),
+            title: const Text('Hide developer tools'),
+            onTap: () => ProfileScreen.devToolsShown.value = false,
+          ),
+        ],
+      ),
+    );
+  }

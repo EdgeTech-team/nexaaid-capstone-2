@@ -1,18 +1,32 @@
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
 from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+
+def _count(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
 class SubmitLogisticsRequest(BaseModel):
-    """CSWS submits this for a delivery it is preparing, when it needs
-    DRRMO transport (manuscript UC-CM2 alt flow 3a)."""
+    """CSWS Main Office asks DRRMO for transport (UC-CM2 alt 3a).
+    I4: CSWS picks how many trucks, drivers and volunteers; no typing."""
     delivery_id: int
-    notes: Optional[str] = Field(default=None, max_length=1000)
+    trucks: int = Field(..., ge=1, le=10)
+    drivers: int = Field(..., ge=0, le=10)
+    volunteers: int = Field(..., ge=0, le=20)
+
+    def needs_text(self) -> str:
+        parts = [_count(self.trucks, "truck")]
+        if self.drivers:
+            parts.append(_count(self.drivers, "driver"))
+        if self.volunteers:
+            parts.append(_count(self.volunteers, "volunteer"))
+        return "Needs " + ", ".join(parts)
 
 
 class AcceptLogisticsRequest(BaseModel):
-    """DRRMO uses this to accept and schedule."""
-    scheduled_date: datetime
+    """DRRMO just accepts. No schedule (I4)."""
     notes: Optional[str] = Field(default=None, max_length=1000)
 
 

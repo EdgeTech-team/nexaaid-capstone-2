@@ -499,18 +499,25 @@ class LogisticsPage extends StatelessWidget {
               'Delivery needing transport',
               lookup: 'open_deliveries',
             ),
-            F('notes', 'What is needed (optional)'),
+            F('trucks', 'Trucks needed', initial: '1'),
+            F('drivers', 'Drivers needed', initial: '1'),
+            F('volunteers', 'Volunteers needed', initial: '0'),
           ],
           button: 'Submit request',
           onSubmit: (v) => _api.post(
             '/logistics/requests',
-            body: {'delivery_id': v.i('delivery_id'), 'notes': v.s('notes')},
+                       body: {
+              'delivery_id': v.i('delivery_id'),
+              'trucks': v.i('trucks'),
+              'drivers': v.i('drivers'),
+              'volunteers': v.i('volunteers'),
+            },
           ),
         ),
         ApiForm(
           title: 'Pending requests (DRRMO)',
           subtitle: 'GET /drrmo/requests',
-          button: 'Load',
+          button: 'Load', 
           onSubmit: (_) => _api.get('/drrmo/requests'),
         ),
         ApiForm(
