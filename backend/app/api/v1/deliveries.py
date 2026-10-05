@@ -29,6 +29,7 @@ from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
+from api.v1.drrmo_router import DRRMO
 from schemas.delivery import (
     DeliveryCreate,
     DeliveryResponse,
@@ -149,8 +150,7 @@ def list_deliveries(
 def get_delivery(
    delivery_id: int,
    db: Session= Depends(get_db),
-   current_user= Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep")),
-):
+    current_user= Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep", "DRRMO Logistics Support")),):
   delivery =(
      db.query(Delivery)
      .options(joinedload(Delivery.items))
