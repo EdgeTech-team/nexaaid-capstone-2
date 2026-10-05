@@ -591,6 +591,12 @@ def my_donations(
         .order_by(PhysicalDonation.donation_id.desc())
         .all()
     )
+    # 6.2: the CMO's latest decision per donation, so the donor can see an
+    # "On Hold" status and the reason the CMO gave. Imported here (not at the
+    # top of the file) to avoid a circular import between the two routers.
+    from api.v1.cmo_router import _latest_decisions
+    decisions = _latest_decisions(db, [d.donation_id for d in donations])
+
     items = {i.item_id: i for i in db.query(Item).all()}
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
@@ -650,6 +656,13 @@ def my_donations(
                 "pickup_landmark": d.pickup_landmark,
                 "preferred_pickup_at": _iso(d.preferred_pickup_at),
                 "status": d.status,
+                # 6.2: latest CMO decision, and the reason only while it is On Hold
+                "cmo_decision": decisions[d.donation_id].status if d.donation_id in decisions else None,
+                "hold_reason": (
+                    decisions[d.donation_id].notes
+                    if d.donation_id in decisions and decisions[d.donation_id].status == "On Hold"
+                    else None
+                ),
                 "created_at": d.created_at,
                 "report": report_info(reports[d.report_id]) if d.report_id in reports else None,
             }
