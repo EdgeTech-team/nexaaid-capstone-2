@@ -9,6 +9,9 @@ from core.validators import clean_email, clean_employee_id, clean_person_name, c
 from schemas.upload_schema import UploadRef
 
 # UC-D1 step 3: kinds of valid ID a donor may upload (stored in users.id_type).
+# D1: the ID type is no longer asked during registration. The list and the
+# database column are kept (admin screens show "Not given" when it is empty),
+# but the field is optional and the app does not send it any more.
 ID_TYPES = (
     "PhilSys National ID", "Driver's License", "Passport", "UMID", "Postal ID",
     "Voter's ID", "PRC ID", "School ID", "Other",
@@ -29,14 +32,19 @@ class DonorRegisterRequest(BaseModel):
     email: EmailStr
     contact_number: str
     # Donors choose their own password (staff get one from the Administrator).
+    # The strength rules are in core/passwords.py (validate_password_strength).
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
+    # D1: optional and no longer sent by the app. Kept so old clients and the
+    # existing users.id_type column keep working.
+    id_type: Optional[IdType] = None
     # Step 3: valid ID, front and back, uploaded first with POST /uploads.
-    id_type: IdType
     id_front: UploadRef
     id_back: UploadRef
     # RA 10173 (Data Privacy Act): the ID photos are sensitive personal information.
     consent: bool
+    # D3: Terms and Conditions agreement. The server stores when it was accepted.
+    accepted_terms: bool
 
     @field_validator("first_name")
     @classmethod
@@ -59,6 +67,13 @@ class DonorRegisterRequest(BaseModel):
     def _consent(cls, v):
         if v is not True:
             raise ValueError("You must agree to the processing of your personal data (RA 10173)")
+        return v
+
+    @field_validator("accepted_terms")
+    @classmethod
+    def _terms(cls, v):
+        if v is not True:
+            raise ValueError("You must accept the Terms and Conditions")
         return v
 
     @model_validator(mode="after")
