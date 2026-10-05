@@ -215,6 +215,10 @@ def advance_delivery(
     recipients = set(user_ids_with_role(
         db, ["Barangay Receiving Representative"],
         barangay_id=delivery.destination_barangay_id))
+    # 7.5: DRRMO is notified whenever a delivery is advanced
+    recipients |= set(user_ids_with_role(
+        db, ["DRRMO Logistics Support"],
+        exclude_user_id=current_user.user_id))
     if report and report.user_id != current_user.user_id:
         recipients.add(report.user_id)
     notify_event_many(db, recipients, "delivery_status_changed", "delivery",
