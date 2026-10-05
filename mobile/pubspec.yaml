@@ -18,6 +18,9 @@ dependencies:
   # Design system type: Lexend (headings) + Source Sans 3 (body).
   google_fonts: ^6.2.1
   pdfrx: ^2.6.5
+  url_launcher: ^6.3.3
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
 
 dev_dependencies:
   flutter_test:

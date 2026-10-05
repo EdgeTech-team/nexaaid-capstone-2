@@ -3,6 +3,8 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
+import 'batch_sheet.dart';
+export 'batch_sheet.dart' show openDonationByQr, BatchSheet;
 
 /// Camera QR scanner. Returns the scanned text (e.g. DON-1A2B3C...).
 class ScannerPage extends StatefulWidget {
@@ -59,29 +61,6 @@ class _ScannerPageState extends State<ScannerPage> {
       ),
     );
   }
-}
-
-/// Opens the donation found by QR reference and lets CSWS receive it.
-Future<void> openDonationByQr(BuildContext context, String reference) async {
-  final ref = reference.trim();
-  if (ref.isEmpty) return;
-  final r = await api.get('/donations/by-qr/${Uri.encodeComponent(ref)}');
-  if (!context.mounted) return;
-  if (!r.ok) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: const Color(0xFFC62828),
-        content: Text(r.status == 0 ? 'Cannot reach the server' : r.errorText),
-      ),
-    );
-    return;
-  }
-  await showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (_) => DonationSheet(Map<String, dynamic>.from(r.json as Map)),
-  );
 }
 
 /// Donation details as declared by the donor, plus the Receive action.
