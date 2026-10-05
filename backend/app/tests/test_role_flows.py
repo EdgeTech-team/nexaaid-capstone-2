@@ -231,6 +231,8 @@ def test_full_relief_chain_across_all_roles(api):
     assert client.post(f"/deliveries/{did}/advance", headers=t["brgy"]).status_code == 403
     assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "In Transit"
     assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "Delivered"
+    # public feed (Item 8): nothing is listed until the barangay confirms
+    assert ok(client.get("/public/recent-deliveries")) == []
     assert client.post(f"/deliveries/{did}/confirm-receipt", headers=t["csws"], json={}).status_code == 403
     # Each Barangay Rep only sees / confirms aid for their assigned barangay (UC-B1 3a)
     assert ok(client.get("/deliveries/", headers=t["brgy2"])) == []
@@ -243,6 +245,11 @@ def test_full_relief_chain_across_all_roles(api):
     assert receipt["delivery"]["status"] == "Confirmed"
     assert receipt["fulfillment"]["fulfillment_percentage"] == "50.00"
     assert receipt["fulfillment"]["verification_status"] == "Partial"
+    feed = ok(client.get("/public/recent-deliveries"))          # no login needed
+    assert len(feed) == 1
+    assert set(feed[0]) == {"summary", "barangay", "confirmed_at"}
+    assert feed[0]["barangay"] and feed[0]["confirmed_at"]
+    assert "Received complete" not in str(feed)                 # remarks stay private
 
     # --- 3.12 dashboards --------------------------------------------------
     for who in ("admin", "csws", "unit", "brgy"):
