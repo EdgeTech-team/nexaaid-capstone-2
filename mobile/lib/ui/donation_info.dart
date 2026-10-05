@@ -121,8 +121,45 @@ class DonationInfoCard extends StatelessWidget {
   }
 }
 
-/// UC-D2: the report's donation info (override or barangay default), for
-/// donors and guests. Shows nothing when the barangay hasn't added any.
+/// Several ways to give (J3): one card per payment method, oldest first.
+/// With no methods it shows the empty card.
+class DonationMethodsList extends StatelessWidget {
+  final List methods;
+  final String? heading;
+  const DonationMethodsList({super.key, required this.methods, this.heading});
+
+  static String titleOf(Map m) {
+    if (m['provider'] != null) return '${m['provider']}';
+    return m['qr_url'] != null ? 'Donation QR' : 'Instructions';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (methods.isEmpty) {
+      return DonationInfoCard(
+        info: null,
+        title: heading ?? 'Send money directly to the barangay',
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (heading != null) ...[
+          Text(heading!, style: Theme.of(context).textTheme.titleMedium),
+          Gaps.v8,
+        ],
+        for (final m in methods)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Space.md),
+            child: DonationInfoCard(info: m as Map, title: titleOf(m)),
+          ),
+      ],
+    );
+  }
+}
+
+/// UC-D2: the report's donation info (its override, else all of the
+/// barangay's methods), for donors and guests. Shows nothing when there is none.
 class ReportDonationInfo extends StatelessWidget {
   final int reportId;
   const ReportDonationInfo({super.key, required this.reportId});
@@ -134,10 +171,18 @@ class ReportDonationInfo extends StatelessWidget {
       builder: (context, snap) {
         if (!snap.hasData) return const Skeleton(height: 96);
         final r = snap.data!;
-        if (!r.ok || r.json['info'] == null) return const SizedBox.shrink();
+        if (!r.ok) return const SizedBox.shrink();
+        final methods = (r.json['methods'] as List?) ?? const [];
+        final info = r.json['info'];
+        // A report override replaces the list (the server sends methods: []).
+        final shown = methods.isNotEmpty ? methods : [?info];
+        if (shown.isEmpty) return const SizedBox.shrink();
         return Padding(
           padding: const EdgeInsets.only(bottom: Space.md),
-          child: DonationInfoCard(info: r.json['info'] as Map),
+          child: DonationMethodsList(
+            methods: shown,
+            heading: 'Send money directly to the barangay',
+          ),
         );
       },
     );
@@ -453,60 +498,39 @@ class _BarangayInfoEditor extends StatefulWidget {
 }
 
 class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
-  final _form = GlobalKey<FormState>();
-  final c = DonationInfoController();
   late Future<ApiResult> _load = _fetch();
-  Map? saved;
-  bool busy = false;
-  bool tried = false;
+  List methods = [];
 
   Future<ApiResult> _fetch() async {
     final r = await api.get('/barangays/${widget.barangayId}/donation-info');
-    if (r.ok) {
-      saved = r.json['info'] as Map?;
-      c.load(saved);
-    }
+    if (r.ok) methods = (r.json['methods'] as List?) ?? [];
     return r;
   }
 
-  @override
-  void dispose() {
-    c.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    setState(() => tried = true);
-    if (!_form.currentState!.validate() || c.missing != null) return;
-    setState(() => busy = true);
-    final r = await act(
-      context,
-      () => api.send(
-        'PUT',
-        '/barangays/${widget.barangayId}/donation-info',
-        body: c.toJson(),
-      ),
-      success:
-          'Donation info saved. Donors see it on this barangay\'s reports.',
-    );
-    if (!mounted) return;
+  void _reload() {
     setState(() {
-      busy = false;
-      if (r.ok) {
-        saved = r.json['info'] as Map?;
-        c.load(saved);
-        tried = false;
-      }
+      _load = _fetch();
     });
   }
 
-  Future<void> _remove() async {
+  Future<void> _openForm([Map? method]) async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) =>
+            _MethodFormPage(barangayId: widget.barangayId, method: method),
+      ),
+    );
+    if (saved == true && mounted) _reload();
+  }
+
+  Future<void> _remove(Map m) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove donation info?'),
-        content: const Text(
-          'Donors will no longer see where to send money for this barangay.',
+        title: const Text('Remove this payment method?'),
+        content: Text(
+          'Donors will no longer see ${DonationMethodsList.titleOf(m)} '
+          'for this barangay.',
         ),
         actions: [
           AppButton(
@@ -525,15 +549,13 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
     if (ok != true || !mounted) return;
     final r = await act(
       context,
-      () => api.send('DELETE', '/barangays/${widget.barangayId}/donation-info'),
-      success: 'Donation info removed',
+      () => api.send(
+        'DELETE',
+        '/barangays/${widget.barangayId}/donation-info/methods/${m['method_id']}',
+      ),
+      success: 'Payment method removed',
     );
-    if (r.ok && mounted) {
-      setState(() {
-        saved = null;
-        c.load(null);
-      });
-    }
+    if (r.ok && mounted) _reload();
   }
 
   @override
@@ -547,7 +569,7 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
           return ErrorView.forStatus(
             r.status,
             r.errorText,
-            onRetry: () => setState(() => _load = _fetch()),
+            onRetry: _reload,
           );
         }
         final children = [
@@ -555,35 +577,45 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
             PageHeader(
               'Donation info: ${r.json['barangay_name']}',
               subtitle:
-                  'Where donors can send money directly to your barangay. '
-                  'NexaAid only shows it; it never handles the money.',
+                  'Ways donors can send money directly to your barangay. '
+                  'Add one entry per GCash, Maya or bank account. '
+                  'NexaAid only shows them; it never handles the money.',
             ),
-          SectionHeader('What donors see'),
-          DonationInfoCard(info: saved),
-          SectionHeader('Edit'),
-          Form(
-            key: _form,
-            autovalidateMode: AutovalidateMode.onUserInteraction,
-            child: DonationInfoFields(c: c, showMissing: tried),
-          ),
-          Gaps.v16,
+          SectionHeader('Payment methods'),
+          if (methods.isEmpty)
+            const DonationInfoCard(info: null, title: 'No payment methods yet')
+          else
+            for (final m in methods) ...[
+              DonationInfoCard(
+                info: m as Map,
+                title: DonationMethodsList.titleOf(m),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  AppButton(
+                    'Edit',
+                    variant: AppButtonVariant.text,
+                    onPressed: () => _openForm(m),
+                  ),
+                  Gaps.h8,
+                  AppButton(
+                    'Remove',
+                    variant: AppButtonVariant.text,
+                    onPressed: () => _remove(m),
+                  ),
+                ],
+              ),
+              Gaps.v8,
+            ],
+          Gaps.v8,
           AppButton(
-            'Save donation info',
-            key: const ValueKey('save-donation-info'),
-            icon: Icons.save_outlined,
-            loading: busy,
+            'Add payment method',
+            key: const ValueKey('add-donation-method'),
+            icon: Icons.add,
             expand: true,
-            onPressed: _save,
+            onPressed: () => _openForm(),
           ),
-          if (saved != null) ...[
-            Gaps.v8,
-            AppButton(
-              'Remove donation info',
-              variant: AppButtonVariant.text,
-              expand: true,
-              onPressed: _remove,
-            ),
-          ],
           Gaps.v24,
         ];
         return widget.embedded
@@ -597,8 +629,86 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
   }
 }
 
-/// UC-CD1: inside New report. Shows the chosen barangay's info and lets
-/// the CSWS Disaster Unit use different info for this report only.
+/// Add or edit one payment method (J3).
+class _MethodFormPage extends StatefulWidget {
+  final int barangayId;
+  final Map? method; // null = add a new one
+  const _MethodFormPage({required this.barangayId, this.method});
+
+  @override
+  State<_MethodFormPage> createState() => _MethodFormPageState();
+}
+
+class _MethodFormPageState extends State<_MethodFormPage> {
+  final _form = GlobalKey<FormState>();
+  final c = DonationInfoController();
+  bool busy = false;
+  bool tried = false;
+
+  @override
+  void initState() {
+    super.initState();
+    c.load(widget.method);
+  }
+
+  @override
+  void dispose() {
+    c.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    setState(() => tried = true);
+    if (!_form.currentState!.validate() || c.missing != null) return;
+    setState(() => busy = true);
+    final base = '/barangays/${widget.barangayId}/donation-info/methods';
+    final editing = widget.method != null;
+    final r = await act(
+      context,
+      () => api.send(
+        editing ? 'PUT' : 'POST',
+        editing ? '$base/${widget.method!['method_id']}' : base,
+        body: c.toJson(),
+      ),
+      success: editing ? 'Payment method updated' : 'Payment method added',
+    );
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (r.ok) Navigator.of(context).pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          widget.method == null ? 'Add payment method' : 'Edit payment method',
+        ),
+      ),
+      body: ListView(
+        padding: Space.page,
+        children: [
+          Form(
+            key: _form,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
+            child: DonationInfoFields(c: c, showMissing: tried),
+          ),
+          Gaps.v16,
+          AppButton(
+            'Save',
+            key: const ValueKey('save-donation-info'),
+            icon: Icons.save_outlined,
+            loading: busy,
+            expand: true,
+            onPressed: _save,
+          ),
+          Gaps.v24,
+        ],
+      ),
+    );
+  }
+}
+
 /// UC-CD1: inside New report. Shows the chosen barangay's donation info.
 class NewReportDonationInfo extends StatefulWidget {
   final String? barangayId;
@@ -642,10 +752,11 @@ class NewReportDonationInfoState extends State<NewReportDonationInfo> {
       builder: (context, snap) {
         if (!snap.hasData) return const Skeleton(height: 96);
         final r = snap.data!;
-        final info = r.ok ? r.json['info'] as Map? : null;
-        return DonationInfoCard(
-          info: info,
-          title: 'Barangay ${r.ok ? r.json['barangay_name'] : ''} default',
+        final methods = r.ok ? ((r.json['methods'] as List?) ?? const []) : const [];
+        return DonationMethodsList(
+          methods: methods,
+          heading:
+              'Barangay ${r.ok ? r.json['barangay_name'] : ''} donation info',
         );
       },
     );
