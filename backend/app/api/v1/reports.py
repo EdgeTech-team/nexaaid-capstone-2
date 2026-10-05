@@ -37,7 +37,7 @@ from core.database import get_db
 from core.auth import get_current_user, require_role, has_role, barangay_scope
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
-from core.notifications import notify, notify_event_many, user_ids_with_role    
+from core.notifications import notify, notify_event_many, user_ids_with_role
 from schemas.report import (
     DisasterReportCreate,
     DisasterReportUpdate,
@@ -54,6 +54,24 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 
 
 # ---------------------------------------------------------------------------
+# Shared by create_report and ingest_sms_report (J1): tell everyone who has to
+# act on a new report. The Administrator is included because only admins can
+# validate or reject; the submitter is excluded so they don't notify themselves.
+# ---------------------------------------------------------------------------
+def _notify_new_report(db: Session, report: DisasterReport, exclude_user_id: int) -> None:
+    notify_event_many(
+        db,
+        user_ids_with_role(
+            db,
+            ["Administrator", "CSWS Main Office", "CSWS Disaster Unit"],
+            exclude_user_id=exclude_user_id,
+        ),
+        "report_submitted", "report", report.report_id,
+        title=f"Report #{report.report_id}",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Create — any authenticated reporter (citizen / barangay official / staff)
 # ---------------------------------------------------------------------------
 @router.post("/", response_model=DisasterReportResponse, status_code=status.HTTP_201_CREATED)
@@ -67,13 +85,7 @@ def create_report(
     db.flush()   # get report.report_id before commit (commit happens in get_db)
     db.refresh(report)
 
-    notify_event_many(
-        db,
-        user_ids_with_role(db, ["CSWS Main Office", "CSWS Disaster Unit"],
-                           exclude_user_id=current_user.user_id),
-        "report_submitted", "report", report.report_id,
-        title=f"Report #{report.report_id}",
-    )
+    _notify_new_report(db, report, current_user.user_id)
     return report
 
 
@@ -97,7 +109,7 @@ def list_reports(
     if own_barangay is not None:
         query = query.filter(DisasterReport.barangay_id == own_barangay)
 
-   
+
     if status_filter:
         query = query.filter(DisasterReport.status == status_filter)
     if barangay_id:
@@ -109,7 +121,7 @@ def list_reports(
     if priority_level:
         query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
-    
+
     return (
         query.order_by(DisasterReport.created_at.desc())
         .offset(skip)
@@ -128,7 +140,7 @@ def list_report_monitoring(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),    
+    current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
     query = db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
     own_barangay = barangay_scope(current_user)
@@ -302,8 +314,6 @@ def validate_report(
     return report
 
 
-
-
 # ---------------------------------------------------------------------------
 # Reject — UC-02 extension 5a: admin rejects, rep gets specific feedback
 # ---------------------------------------------------------------------------
@@ -380,6 +390,8 @@ def ingest_sms_report(
     db.flush()
     db.refresh(report)
     db.refresh(sms_meta)
+
+    _notify_new_report(db, report, current_user.user_id)
 
     return SmsReportIngestResponse(report=report, sms_metadata=sms_meta)
 

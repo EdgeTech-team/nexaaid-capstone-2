@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
-import 'donation_info.dart'
-    show NewReportDonationInfo, NewReportDonationInfoState;
+import 'donation_info.dart' show NewReportDonationInfo;
 import 'widgets.dart';
 
 /// Card for one disaster report (with fulfillment if available).
@@ -156,7 +155,6 @@ class _NewReportScreenState extends State<NewReportScreen> {
   final smsSender = TextEditingController();
   final smsText = TextEditingController();
   final needs = <_Need>[_Need()];
-  final _donationInfo = GlobalKey<NewReportDonationInfoState>();
   bool busy = false;
 
   /// true when encoding a report that arrived by SMS (Appendix H, 2.2).
@@ -177,8 +175,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
   }
 
   Future<void> _submit(Names names) async {
-    final infoError = _donationInfo.currentState?.check();
-    if (!_form.currentState!.validate() || infoError != null) return;
+    if (!_form.currentState!.validate()) return;
     setState(() => busy = true);
     // The report table has one text field for the needs and one total
     // quantity, so the list is stored as "Rice: 50 kg, Drinking Water: 20 gallons".
@@ -219,25 +216,6 @@ class _NewReportScreenState extends State<NewReportScreen> {
           : 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
-    if (r.ok) {
-      // UC-CD1: donation info override for this report only, if entered.
-      final report = sms ? r.json['report'] : r.json;
-      final saved = await _donationInfo.currentState?.saveFor(
-        report['report_id'] as int,
-      );
-      if (!mounted) return;
-      if (saved != null && !saved.ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: AppColors.danger,
-            content: Text(
-              'Report saved, but the donation info was not: ${saved.errorText}',
-            ),
-          ),
-        );
-      }
-      _donationInfo.currentState?.reset();
-    }
     setState(() {
       busy = false;
       if (r.ok) {
@@ -445,7 +423,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 ),
               ),
               const SectionTitle('Donation info'),
-              NewReportDonationInfo(key: _donationInfo, barangayId: brgyId),
+              NewReportDonationInfo(barangayId: brgyId),
               const SectionTitle('Situation (DROMIC)'),
               TextFormField(
                 controller: desc,
