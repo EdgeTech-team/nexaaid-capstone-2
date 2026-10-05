@@ -10,6 +10,8 @@ import 'package:http/testing.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/account_detail_screen.dart';
 import 'package:mobile/ui/admin_screens.dart';
+import 'package:mobile/ui/donation_info.dart' show BarangayDonationInfoScreen;
+import 'package:mobile/api.dart';
 
 /// Answers the few API calls these screens make, without a server.
 final _server = MockClient((req) async {
@@ -37,6 +39,11 @@ final _server = MockClient((req) async {
       'created_at': '2026-09-01T08:00:00',
     },
     '/admin/users/7/documents' => <Object>[],
+    '/lookups' => {
+      'barangays': [
+        {'id': 1, 'name': 'Tipolo'},
+      ],
+    },
     _ => {'detail': 'not mocked: ${req.url.path}'},
   };
   return http.Response(jsonEncode(body), 200);
@@ -72,6 +79,30 @@ void main() {
       expect(find.byType(AccountDetailScreen), findsOneWidget);
       expect(find.text('Edit details'), findsOneWidget);
       expect(find.text('Deactivate account'), findsOneWidget);
+    }, () => _server);
+  });
+
+  testWidgets('Accounts has a Donation info section (adviser item 7)', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 2000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    Api.instance.role = Roles.admin;
+    addTearDown(() => Api.instance.role = null);
+
+    await http.runWithClient(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: const Scaffold(body: AccountsHub()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Donation info'));
+      await tester.pumpAndSettle();
+      expect(find.byType(BarangayDonationInfoScreen), findsOneWidget);
+      expect(find.text('Choose a barangay'), findsOneWidget);
     }, () => _server);
   });
 }
