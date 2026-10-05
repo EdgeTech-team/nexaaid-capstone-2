@@ -86,7 +86,10 @@ class DisasterReportResponse(BaseModel):
     rejection_reason: Optional[str]
     created_at: datetime
     updated_at: datetime
-
+    disaster_type_name: Optional[str] = None
+    barangay_name: Optional[str] = None
+    priority_guidance: Optional[str] = None
+    
     @field_validator("source", mode="before")
     @classmethod
     def _canonical_source(cls, v):
