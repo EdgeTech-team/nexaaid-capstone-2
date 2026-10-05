@@ -91,17 +91,14 @@ def accept_request(
         raise HTTPException(status_code=400, detail=f"Request is already {req.status}, cannot accept")
 
     req.status = "Accepted"
-    req.scheduled_date = payload.scheduled_date
     req.assigned_to_user_id = current_user.user_id
-    if payload.notes:
-        req.notes = payload.notes
+    if payload.notes:  # keep what CSWS asked for
+        req.notes = f"{req.notes}\nDRRMO: {payload.notes}" if req.notes else f"DRRMO: {payload.notes}"
     log_action(db, current_user, "ACCEPT LOGISTICS REQUEST", "logistics_requests", request_id,
-               old={"status": "Pending"},
-               new={"status": "Accepted", "scheduled_date": payload.scheduled_date.isoformat()})
-    notify_event(db, req.requested_by_user_id, "logistics_scheduled",
+               old={"status": "Pending"}, new={"status": "Accepted"})
+    notify_event(db, req.requested_by_user_id, "logistics_accepted",
                  "logistics_request", request_id,
-                 title=f"delivery #{req.delivery_id}",
-                 schedule=payload.scheduled_date.isoformat())
+                 title=f"delivery #{req.delivery_id}")
 
     db.commit()
     db.refresh(req)

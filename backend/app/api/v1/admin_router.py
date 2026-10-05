@@ -76,6 +76,7 @@ def create_internal_account(
         email=payload.email, password_hash=hash_password(payload.password),
         contact_number=payload.contact_number, role_id=role.role_id,
         assigned_barangay_id=payload.assigned_barangay_id,
+        must_change_password=True, 
         employee_id=payload.employee_id,
     )
     db.add(new_user)
@@ -133,6 +134,7 @@ def _user_row(u: User, orgs: dict, barangays: dict) -> dict:
 def list_users(
     role: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None, description="search name or email"),
+    active: Optional[bool] = Query(default=None, description="true = Active, false = Deactivated (I2)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
@@ -146,7 +148,12 @@ def list_users(
         )
     orgs = {o.organization_id: o for o in db.query(Organization).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
-    return [_user_row(u, orgs, barangays) for u in query.order_by(User.user_id).all()]
+    users = query.order_by(User.user_id).all()
+    if active is not None:
+        # I2. Filtered in Python so it reads is_active the same way on Postgres
+        # and on the SQLite test database (like _active_admins below).
+        users = [u for u in users if bool(u.is_active) == active]
+    return [_user_row(u, orgs, barangays) for u in users]
 
 
 def _active_admins(db: Session) -> int:

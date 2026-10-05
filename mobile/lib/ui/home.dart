@@ -14,6 +14,7 @@ import 'pickup_board.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
 import 'widgets.dart';
+import 'change_password_screen.dart';
 
 class _Tab {
   final String label;
@@ -157,6 +158,23 @@ class RoleHome extends StatefulWidget {
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
 
+    @override
+  void initState() {
+    super.initState();
+    // I1: a temporary password must be changed first.
+    if (api.mustChangePassword) {
+      index = _tabsFor(api.role).length; // Profile is the last tab
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !api.mustChangePassword) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const ChangePasswordScreen(forced: true),
+          ),
+        );
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tabs = [
@@ -282,6 +300,34 @@ class ProfileScreen extends StatelessWidget {
             ],
           ),
         ),
+                if (api.loggedIn) ...[
+          const SectionHeader('Security'),
+          AppCard(
+            padding: EdgeInsets.zero,
+            child: ListenableBuilder(
+              listenable: api,
+              builder: (context, _) => ListTile(
+                key: const ValueKey('change-password'),
+                leading: Icon(
+                  api.mustChangePassword
+                      ? Icons.warning_amber_rounded
+                      : Icons.lock_reset,
+                  color: api.mustChangePassword ? cs.error : null,
+                ),
+                title: const Text('Change password'),
+                subtitle: Text(
+                  api.mustChangePassword
+                      ? 'Required: you are still using a temporary password'
+                      : 'Change the password you log in with',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => open(
+                  ChangePasswordScreen(forced: api.mustChangePassword),
+                ),
+              ),
+            ),
+          ),
+        ],
         const SectionHeader('Appearance'),
         ValueListenableBuilder<ThemeMode>(
           valueListenable: AppTheme.mode,
