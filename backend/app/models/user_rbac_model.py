@@ -24,7 +24,7 @@ class User(Base):
     # internal accounts (UC-A1). Already in Neon: migration da126cd397f0.
     employee_id = Column(String(30), unique=True, nullable=True)
     # True while the user still has a temporary password (adviser item 3, da126cd397f0).
-    must_change_password = Column(Boolean, server_default="false", nullable=False)
+    must_change_password = Column(Boolean, default=False, server_default="false", nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     role = relationship("Role")
