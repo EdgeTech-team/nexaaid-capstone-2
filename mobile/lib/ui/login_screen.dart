@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../account_tab.dart' show testAccounts;
 import 'register_screen.dart';
 import 'widgets.dart';
 
@@ -174,44 +173,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 18),
-                // Demo helper: one tap fills a test account for each role.
-                // TEST ONLY - remove before the real demo.
-                Card(
-                  color: cs.surfaceContainerHighest,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Demo accounts (password: testpass123)',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            for (final e in testAccounts.entries)
-                              ActionChip(
-                                label: Text(
-                                  e.value,
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                                onPressed: () {
-                                  emailC.text = e.key;
-                                  passC.text = 'testpass123';
-                                  _login();
-                                },
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+                              ],
             ),
           ),
         ),
@@ -219,3 +181,4 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
+    
