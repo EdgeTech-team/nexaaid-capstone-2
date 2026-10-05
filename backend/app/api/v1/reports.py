@@ -72,6 +72,48 @@ def _notify_new_report(db: Session, report: DisasterReport, exclude_user_id: int
 
 
 # ---------------------------------------------------------------------------
+# Used by validate_report: once a report is validated, tell everyone affected.
+#   - officials: CMO and both CSWS offices
+#   - barangay representative(s) of the affected barangay only
+#   - donors (individual and organization), because the report is now open
+#     for donations
+# The reporter gets their own message in validate_report, and the validating
+# admin is skipped. Every recipient gets exactly one notification.
+#
+# The role_name strings below match the roles table exactly. If a role is
+# ever renamed, update them here: a wrong name notifies nobody, silently.
+# ---------------------------------------------------------------------------
+def _notify_report_validated(db: Session, report: DisasterReport, validator_id: int) -> None:
+    skip = {report.user_id, validator_id}
+
+    officials = set(user_ids_with_role(
+        db, ["CMO Representative", "CSWS Main Office", "CSWS Disaster Unit"]
+    )) - skip
+
+    donors = set(user_ids_with_role(
+        db, ["Individual Donor", "Relief Organization"]
+    )) - skip
+
+    # Never fall back to "all barangays": with no barangay on the report,
+    # user_ids_with_role would skip the filter and notify every representative.
+    brgy_reps: set[int] = set()
+    if report.barangay_id is not None:
+        brgy_reps = set(user_ids_with_role(
+            db, ["Barangay Receiving Representative"], barangay_id=report.barangay_id
+        )) - skip
+
+    title = f"Report #{report.report_id}"
+    notify_event_many(
+        db, officials | brgy_reps, "report_validated",
+        "report", report.report_id, title=title,
+    )
+    notify_event_many(
+        db, donors, "report_open_for_donations",
+        "report", report.report_id, title=title,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Create — any authenticated reporter (citizen / barangay official / staff)
 # ---------------------------------------------------------------------------
 @router.post("/", response_model=DisasterReportResponse, status_code=status.HTTP_201_CREATED)
@@ -217,10 +259,13 @@ def get_report(
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    # Reporters can see their own report; staff can see any.
+    # Reporters can see their own report; staff can see any; every logged-in
+    # role can open a validated report (same rule as GET /reports/validated),
+    # so donors, the CMO and others can open it from their notification.
     is_owner = report.user_id == current_user.user_id
     is_staff = has_role(current_user, "csws_staff", "admin", "barangay_official")
-    if not (is_owner or is_staff):
+    is_validated = report.status == "Validated"
+    if not (is_owner or is_staff or is_validated):
         raise HTTPException(status_code=403, detail="Not authorized to view this report")
 
     return report
@@ -304,10 +349,15 @@ def validate_report(
                old={"status": "Pending"},
                new={"status": "Validated", "priority_level": report.priority_level})
 
+    # The reporter gets a personal message...
     notify(db, report.user_id, "report_validated",
            title=f"Report #{report.report_id} validated",
            body="Your report was approved and is now visible to donors.",
            entity_type="report", entity_id=report.report_id)
+
+    # ...and everyone else affected: CMO, both CSWS offices, the barangay
+    # representative of the affected barangay, and the donors.
+    _notify_report_validated(db, report, current_user.user_id)
 
     db.flush()
     db.refresh(report)
