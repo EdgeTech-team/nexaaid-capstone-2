@@ -33,6 +33,7 @@ class ReportApi {
         assistanceNeeded: '${j['assistance_needed'] ?? ''}',
         priorityLevel: '${j['priority_level'] ?? ''}',
         aiRecommendation: j['ai_recommendation'] as String?,
+        priorityGuidance: j['priority_guidance'] as String?,
         createdAt:
             DateTime.tryParse('${j['created_at'] ?? ''}') ?? DateTime.now(),
         fulfillmentPercentage:
