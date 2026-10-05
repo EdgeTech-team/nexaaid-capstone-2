@@ -5,11 +5,11 @@ Only validated reports are exposed, and never who reported them
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from core.database import get_db
 from models.report import DisasterReport, DisasterType, Barangay, Sitio
-from models.delivery import Delivery
+from models.delivery import Delivery, DeliveryItem, Receipt
 from models.physical_donation_model import PhysicalDonation
 
 router = APIRouter(prefix="/public", tags=["public"])
@@ -79,3 +79,38 @@ def public_stats(db: Session = Depends(get_db)):
         "donations_received": donations,
         "deliveries_completed": delivered,
     }
+
+@router.get("/recent-deliveries")
+def public_recent_deliveries(db: Session = Depends(get_db)):
+    """Latest deliveries the barangay has confirmed, newest first (max 5).
+    Only the goods, the barangay and the confirmation time: no donor,
+    handler, receiver or remarks."""
+    rows = (
+        db.query(Delivery)
+        .join(Receipt, Receipt.delivery_id == Delivery.delivery_id)
+        .options(
+            selectinload(Delivery.items).selectinload(DeliveryItem.item),
+            joinedload(Delivery.destination_barangay),
+            joinedload(Delivery.receipt),
+        )
+        .filter(Delivery.status == "Confirmed")
+        .order_by(Receipt.received_at.desc())
+        .limit(5)
+        .all()
+    )
+
+    out = []
+    for d in rows:
+        names = [i.item.item_name for i in d.items if i.item is not None]
+        if not names:
+            summary = "Relief goods"
+        elif len(names) == 1:
+            summary = names[0]
+        else:
+            summary = f"{names[0]} and {len(names) - 1} more"
+        out.append({
+            "summary": summary,
+            "barangay": d.destination_barangay.barangay_name if d.destination_barangay else None,
+            "confirmed_at": d.receipt.received_at.isoformat() if d.receipt else None,
+        })
+    return out
