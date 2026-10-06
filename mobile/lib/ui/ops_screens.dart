@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show Roles;
-import 'records_screens.dart' show SupportRecordsScreen;
+import 'records_screens.dart' show DonationRecordsScreen, SupportRecordsScreen;
 import 'widgets.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
@@ -796,6 +796,22 @@ class _CmoScreenState extends State<CmoScreen> {
           padding: const EdgeInsets.all(16),
           children: [
             PageHeader('City Donation Confirmation', subtitle: roleLine()),
+            // Appendix H 4.4 / 4.5: the CMO also views donation records.
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: const Text('Donation records')),
+                      body: const DonationRecordsScreen(header: false),
+                    ),
+                  ),
+                ),
+                icon: const Icon(Icons.folder_open_outlined),
+                label: const Text('All donation records'),
+              ),
+            ),
             StatGrid([
               StatTile(
                 'Pending city confirmation',

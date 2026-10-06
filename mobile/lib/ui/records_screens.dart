@@ -1,86 +1,39 @@
 import 'package:flutter/material.dart';
 
+import 'donation_entries_view.dart';
 import 'ops_screens.dart' show DeliveriesScreen;
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
 // Appendix H 4.4 View donation records / 4.5 Monitor donation status
-// (Administrator, CSWS Main Office, CMO).
+// (Administrator, CSWS Main Office, CMO). One record per donation entry
+// (one QR), with its items, filters and sorting.
 // ---------------------------------------------------------------------------
-class DonationRecordsScreen extends StatefulWidget {
+class DonationRecordsScreen extends StatelessWidget {
   final bool header;
   const DonationRecordsScreen({super.key, this.header = true});
 
   @override
-  State<DonationRecordsScreen> createState() => _DonationRecordsScreenState();
-}
-
-class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
-  String status = '';
-
-  @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey(status),
-      load: [
-        () => api.get(
-          '/donations/records',
-          query: {if (status.isNotEmpty) 'status': status},
-        ),
-      ],
+      load: [() => api.get('/donations/records')],
       builder: (context, data) {
-        final rows = (data[0] as List).cast<Map>();
+        final entries = (data[0] as List).cast<Map>();
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            if (widget.header)
+            if (header)
               const PageHeader(
                 'Donation Records',
-                subtitle: 'Every donation and where it is in the process.',
+                subtitle:
+                    'Every donation entry and where it is in the process.',
               ),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final s in const [
-                    '',
-                    'Pending',
-                    'Received',
-                    'Confirmed',
-                  ])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        label: Text(s.isEmpty ? 'All' : s),
-                        selected: status == s,
-                        onSelected: (_) => setState(() => status = s),
-                      ),
-                    ),
-                ],
-              ),
+            DonationEntriesView(
+              entries: entries,
+              emptyTitle: 'No donations to show.',
+              emptyMessage:
+                  'Donation entries appear here once donors submit them.',
             ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty) const EmptyState('No donations to show.'),
-            for (final d in rows)
-              Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: ListTile(
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.volunteer_activism_outlined),
-                  ),
-                  title: Text(
-                    '${d['quantity']} ${d['unit'] ?? ''} ${d['item_name']}',
-                  ),
-                  subtitle: Text(
-                    '${d['donor']} · ${d['handover_method']}\n'
-                    '${d['report_label'] ?? 'Report #${d['report_id']}'} · '
-                    '${d['qr_reference']}'
-                    '${d['cmo_decision'] != null && d['status'] != 'Confirmed' ? '\nCMO: ${d['cmo_decision']}' : ''}',
-                  ),
-                  isThreeLine: true,
-                  trailing: Badge2.status('${d['status']}'),
-                ),
-              ),
           ],
         );
       },
