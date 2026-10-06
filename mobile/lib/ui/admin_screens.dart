@@ -712,7 +712,6 @@ class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
 // ---------------------------------------------------------------------------
 // UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
-
 class BarangayDashboard extends StatelessWidget {
   const BarangayDashboard({super.key});
 
