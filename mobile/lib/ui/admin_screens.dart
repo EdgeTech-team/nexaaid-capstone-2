@@ -501,7 +501,6 @@ class _OrgDocument extends StatelessWidget {
   }
 }
 
-feat/login-landing-ui
 // ---------------------------------------------------------------------------
 // Appendix H 2.2: barangay reps see the CSWS Disaster Unit's phone number so
 // they can send the emergency SMS report.
@@ -610,7 +609,6 @@ class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
 // ---------------------------------------------------------------------------
 // UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
- develop
 class BarangayDashboard extends StatelessWidget {
   const BarangayDashboard({super.key});
 
