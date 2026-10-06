@@ -14,7 +14,7 @@ from services.inventory import add_received_stock
 
 
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from models.item_model import Item
 from datetime import datetime
 from core.audit import log_action
@@ -125,6 +125,31 @@ def find_by_qr(
     }
 
 
+def _receive_line(db: Session, current_user: User, donation: PhysicalDonation,
+                  actual_quantity: int, notes: Optional[str]) -> ReceivedGoods:
+    """UC-CM1 steps 3-8 for one item: record the actual quantity accepted
+    (alt 4a: may be less than declared), mark it Received and add it to the
+    report's inventory. Single receive and entry receive both use this.
+    Does not commit."""
+    if donation.status != "Pending":
+        raise HTTPException(status_code=400, detail=f"Donation is already '{donation.status}', cannot receive again")
+    receipt = ReceivedGoods(
+        donation_id=donation.donation_id,
+        actual_quantity=actual_quantity,
+        received_by_user_id=current_user.user_id,
+        notes=notes,
+    )
+    db.add(receipt)
+    donation.status = "Received"
+    # Same transaction as the receipt and the status change (5.1.3).
+    add_received_stock(db, donation.item_id, donation.report_id, actual_quantity)
+    log_action(db, current_user, "RECEIVE DONATION", "physical_donations", donation.donation_id,
+               old={"status": "Pending"},
+               new={"status": "Received", "declared": donation.quantity,
+                    "actual_quantity": actual_quantity})
+    return receipt
+
+
 @router.post("/receive", response_model=ReceivedGoodsResponse)
 def receive_donation(
     payload: ReceivedGoodsCreate,
@@ -136,27 +161,11 @@ def receive_donation(
     ).first()
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found")
-    if donation.status != "Pending":
-        raise HTTPException(status_code=400, detail=f"Donation is already '{donation.status}', cannot receive again")
 
-    receipt = ReceivedGoods(
-        donation_id=payload.donation_id,
-        actual_quantity=payload.actual_quantity,
-        received_by_user_id=current_user.user_id,
-        notes=payload.notes,
-    )
+    receipt = _receive_line(db, current_user, donation, payload.actual_quantity, payload.notes)
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
                 "donation_awaiting_confirmation", "Donation awaiting confirmation",
                 f"Donation #{donation.donation_id} was received by CSWS and needs a decision.")
-    db.add(receipt)
-
-    donation.status = "Received"
-    # Same transaction as the receipt and the status change (5.1.3).
-    add_received_stock(db, donation.item_id, donation.report_id, payload.actual_quantity)
-    log_action(db, current_user, "RECEIVE DONATION", "physical_donations", donation.donation_id,
-               old={"status": "Pending"},
-               new={"status": "Received", "declared": donation.quantity,
-                    "actual_quantity": payload.actual_quantity})
     if donation.user_id:
         notify(db, donation.user_id, "donation_received",
                title=f"Donation #{donation.donation_id} received",
@@ -165,6 +174,65 @@ def receive_donation(
     db.commit()
     db.refresh(receipt)
     return receipt
+
+
+class EntryReceiveLine(BaseModel):
+    donation_id: int
+    actual_quantity: int = Field(gt=0)
+
+
+class EntryReceive(BaseModel):
+    items: list[EntryReceiveLine] = Field(min_length=1)
+    notes: Optional[str] = None
+
+
+# UC-CM1 for a whole entry (one QR = one batch_reference): every listed item
+# is received with its actual quantity in one transaction, so either all of
+# them reach the inventory or none do. Items left out stay Pending
+# (alt 4b: not accepted).
+@router.post("/entries/{batch_reference}/receive")
+def receive_entry(
+    batch_reference: str,
+    payload: EntryReceive,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
+):
+    ref = batch_reference.strip().upper()
+    rows = {
+        d.donation_id: d
+        for d in db.query(PhysicalDonation).filter(PhysicalDonation.batch_reference == ref).all()
+    }
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No donation entry {batch_reference}")
+    ids = [line.donation_id for line in payload.items]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(status_code=400, detail="Each item can be listed only once")
+    for donation_id in ids:
+        if donation_id not in rows:
+            raise HTTPException(status_code=400, detail=f"Donation #{donation_id} is not part of entry {ref}")
+
+    for line in payload.items:
+        _receive_line(db, current_user, rows[line.donation_id], line.actual_quantity, payload.notes)
+
+    first = next(iter(rows.values()))
+    notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
+                "donation_awaiting_confirmation", "Donation awaiting confirmation",
+                f"Donation {ref} ({len(ids)} item(s)) was received by CSWS and needs a decision.")
+    if first.user_id:
+        notify(db, first.user_id, "donation_received",
+               title=f"Donation {ref} received",
+               body="Your donation arrived and is being checked.",
+               entity_type="donation", entity_id=ids[0])
+    db.commit()
+    still_pending = sum(1 for d in rows.values() if d.status == "Pending")
+    return {
+        "batch_reference": ref,
+        "received": [
+            {"donation_id": line.donation_id, "actual_quantity": line.actual_quantity}
+            for line in payload.items
+        ],
+        "pending_items": still_pending,
+    }
 
 
 # NOTE (6.1): the old POST /donations/{donation_id}/confirm route was removed.
