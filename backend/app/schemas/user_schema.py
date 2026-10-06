@@ -31,7 +31,7 @@ class DonorRegisterRequest(BaseModel):
     last_name: str
     email: EmailStr
     contact_number: str
-    # Donors choose their own password (staff get one from the Administrator).
+    # Donors choose their own password (staff get a temporary one by email).
     # The strength rules are in core/passwords.py (validate_password_strength).
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
@@ -112,11 +112,15 @@ BARANGAY_REP = "Barangay Receiving Representative"
 
 class InternalAccountCreateRequest(BaseModel):
     """UC-A1 step 4: the Administrator creates an office-based account.
-    Same name / phone / email rules as registration."""
+    Same name / phone / email rules as registration.
+
+    There is no password field: the server generates a temporary password
+    (core/temp_password.py) and emails it to the staff member. The account
+    is flagged must_change_password, so they replace it at first login.
+    This applies to staff accounts only; donors choose their own password."""
     first_name: str
     last_name: str
     email: EmailStr
-    password: str = Field(..., min_length=8, max_length=64)  # temporary password
     contact_number: str
     role_name: str
     assigned_barangay_id: Optional[int] = Field(default=None, gt=0)
@@ -152,8 +156,6 @@ class InternalAccountCreateRequest(BaseModel):
             raise ValueError("Choose the assigned barangay for a Barangay Receiving Representative")
         if self.role_name != BARANGAY_REP:
             self.assigned_barangay_id = None
-        validate_password_strength(
-            self.password, email=self.email, names=(self.first_name, self.last_name))
         return self
 
 

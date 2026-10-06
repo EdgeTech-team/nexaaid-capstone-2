@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from core import email as mail_service
 from core.database import get_db
 from core.auth import hash_password, require_role
+from core.temp_password import generate_temp_password
 from core.uploads import transfer_upload
 from models.user_rbac_model import User
 from models.role_model import Role
@@ -59,7 +60,18 @@ def create_internal_account(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("Administrator")),
 ):
-    """UC-A1 step 4. Role, barangay and password rules are in the schema."""
+    """UC-A1 step 4 (staff accounts only). Role and barangay rules are in the
+    schema. The Administrator does not choose a password: the server makes a
+    temporary one, stores only its hash, and emails it to the staff member,
+    who must change it at first login (must_change_password)."""
+    # Fail before anything is saved: without working email nobody would ever
+    # learn the temporary password, and the account would be unusable.
+    if not mail_service.email_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email is not set up on the server, so the temporary password "
+                   "cannot be sent. Set SMTP_USER and SMTP_PASSWORD.",
+        )
     if payload.assigned_barangay_id is not None:
         _check_barangay(db, payload.assigned_barangay_id)
     if _email_in_use(db, payload.email):
@@ -71,12 +83,14 @@ def create_internal_account(
     if role is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Role configuration missing")
 
+    temp_password = generate_temp_password()
+
     new_user = User(
         first_name=payload.first_name, last_name=payload.last_name,
-        email=payload.email, password_hash=hash_password(payload.password),
+        email=payload.email, password_hash=hash_password(temp_password),
         contact_number=payload.contact_number, role_id=role.role_id,
         assigned_barangay_id=payload.assigned_barangay_id,
-        must_change_password=True, 
+        must_change_password=True,
         employee_id=payload.employee_id,
     )
     db.add(new_user)
@@ -84,6 +98,7 @@ def create_internal_account(
     # The card was uploaded by this Administrator; the staff member owns it now.
     card = transfer_upload(db, payload.employee_id_card.file_id, current_user, new_user,
                            "employee_id_card")
+    # The audit log never contains the password, only that the account was made.
     log_action(db, current_user, "CREATE ACCOUNT", "users", new_user.user_id,
                new={"email": new_user.email, "role": payload.role_name,
                     "employee_id": new_user.employee_id,
@@ -99,8 +114,9 @@ def create_internal_account(
         f"Hello {payload.first_name},\n\n"
         f"An administrator created your NexaAid account ({payload.role_name}).\n\n"
         f"Login email: {payload.email}\n"
-        f"Temporary password: {payload.password}\n\n"
-        "Please sign in and change your password right away.\n\n"
+        f"Temporary password: {temp_password}\n\n"
+        "Sign in with this temporary password, then change it right away. "
+        "Do not share it with anyone.\n\n"
         "NexaAid",
     )
     db.flush()
