@@ -7,6 +7,7 @@ import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
 import 'widgets.dart';
+import 'donation_entries_view.dart';
 
 // ---------------------------------------------------------------------------
 // UC-A4 / manuscript 7.7 Administrator dashboard
@@ -14,12 +15,26 @@ import 'widgets.dart';
 class AdminDashboard extends StatelessWidget {
   const AdminDashboard({super.key});
 
+  /// 5.1: open the details behind a tile on its own page with a back arrow.
+  void _open(BuildContext context, String title, Widget child) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            Scaffold(appBar: AppBar(title: Text(title)), body: child),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Loader(
-      load: [() => api.get('/dashboard/admin')],
+  return Loader(
+      load: [
+        () => api.get('/dashboard/admin'),
+        () => api.get('/donations/entries'),
+      ],
       builder: (context, data) {
         final m = data[0] as Map;
+        final entries = data[1] as Map;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -29,39 +44,127 @@ class AdminDashboard extends StatelessWidget {
                 'Active users',
                 '${m['active_users']} / ${m['total_users']}',
                 Icons.people_outline,
+                onTap: () => _open(
+                  context,
+                  'Active accounts',
+                  const UsersScreen(key: ValueKey('active')),
+                ),
               ),
               StatTile(
                 'Organizations to approve',
                 '${m['pending_organizations']}',
                 Icons.apartment_outlined,
                 color: const Color(0xFFEF6C00),
+                onTap: () =>
+                    _open(context, 'Organizations', const OrganizationsReview()),
               ),
               StatTile(
                 'Reports to validate',
                 '${m['pending_validations']}',
                 Icons.fact_check_outlined,
                 color: const Color(0xFFEF6C00),
+                onTap: () => _open(
+                  context,
+                  'Reports to validate',
+                  const DashboardReportsList(status: 'Pending'),
+                ),
               ),
               StatTile(
                 'Validated reports',
                 '${m['validated_reports']}',
                 Icons.verified_outlined,
                 color: const Color(0xFF2E7D32),
+                onTap: () => _open(
+                  context,
+                  'Validated reports',
+                  const DashboardReportsList(status: 'Validated'),
+                ),
               ),
+              // Team rule: count ENTRIES (one per donor submission), not rows.
               StatTile(
-                'Donations tracked',
-                '${m['total_donations']}',
+                'Donation entries',
+                '${entries['total_entries']}',
                 Icons.volunteer_activism_outlined,
+                note: '${m['total_donations']} items · tap to view',
+                onTap: () =>
+                    openDonationEntries(context, title: 'All donation entries'),
               ),
               StatTile(
                 'Held donations',
                 '${m['held_donations']}',
                 Icons.pause_circle_outline,
                 color: const Color(0xFFC62828),
+                onTap: () => openHeldDonations(context),
               ),
             ]),
+            const SectionTitle('Donation entries per report'),
+            EntrySummaryList(entries),
             const SectionTitle('System activity log'),
             ActivityList((m['recent_activity'] as List).cast<Map>()),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 5.1: the reports behind a dashboard number, filtered by status.
+class DashboardReportsList extends StatelessWidget {
+  final String status;
+  const DashboardReportsList({super.key, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    return Loader(
+      load: [
+        () => api.get('/dashboard/admin/reports', query: {'status': status}),
+      ],
+      builder: (context, data) {
+        final reports = (data[0] as List).cast<Map>();
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text(
+              '${reports.length} ${status.toLowerCase()} report(s)',
+              style: const TextStyle(color: Brand.muted),
+            ),
+            const SizedBox(height: 8),
+            if (reports.isEmpty)
+              EmptyState('No ${status.toLowerCase()} reports.'),
+            for (final r in reports)
+              Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${r['report_label'] ?? 'Report #${r['report_id']}'}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Badge2.status('${r['status']}'),
+                        ],
+                      ),
+                      Text('Priority: ${r['priority_level'] ?? '-'}'),
+                      if (status != 'Pending') ...[
+                        const SizedBox(height: 8),
+                        Progress(
+                          delivered: 0,
+                          needed: 0,
+                          percent: r['fulfillment_percentage'] as num,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
           ],
         );
       },
