@@ -323,7 +323,7 @@ class DeliveriesScreen extends StatelessWidget {
                     const Icon(Icons.fire_truck_outlined, size: 16),
                     const SizedBox(width: 4),
                     const Text('DRRMO: ', style: TextStyle(fontSize: 12)),
-                    Badge2.status(reqStage == 'Pending' ? 'Pending' : reqStage),
+                    Badge2.status(reqStage ?? 'Pending'),
                     if (request['scheduled_date'] != null) ...[
                       const SizedBox(width: 6),
                       Text(
@@ -744,6 +744,7 @@ class _CmoScreenState extends State<CmoScreen> {
         final dash = data[0] as Map;
         final pending = (data[1] as List).cast<Map>();
         final confirmed = (data[2] as List).cast<Map>();
+        final perReport = (dash['per_report'] as List).cast<Map>();
         final rows = view == 'pending'
             ? pending
                   .where(
@@ -823,6 +824,42 @@ class _CmoScreenState extends State<CmoScreen> {
             for (final d in rows) _donationCard(d),
             const SectionTitle('Donation entries per report'),
             EntrySummaryList(data[3] as Map),
+            const SectionTitle('City confirmation per report'),
+            if (perReport.isEmpty) const EmptyState('No donations yet.'),
+            for (final r in perReport)
+              Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${r['report_label']}',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      if (r['priority_level'] != null)
+                        Text(
+                          'Priority: ${r['priority_level']}',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${r['confirmed_count']} confirmed '
+                        '(${r['confirmed_quantity']} units'
+                        '${(r['confirmed_value'] as num) > 0 ? ', PHP ${(r['confirmed_value'] as num).toStringAsFixed(0)}' : ''}'
+                        ') · ${r['pending_count']} pending',
+                      ),
+                      const SizedBox(height: 8),
+                      Progress(
+                        delivered: 0,
+                        needed: 0,
+                        percent: r['fulfillment_percentage'] as num,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
           ],
         );
       },
