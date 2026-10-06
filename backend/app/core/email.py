@@ -17,6 +17,15 @@ from email.message import EmailMessage
 log = logging.getLogger("uvicorn.error")
 
 
+def email_configured() -> bool:
+    """True when SMTP credentials are present. Checked before creating a staff
+    account, because the temporary password is only ever delivered by email."""
+    return bool(
+        os.getenv("SMTP_USER")
+        and (os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_APP_PASSWORD"))
+    )
+
+
 def send_email(to: str, subject: str, body: str) -> bool:
     host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     port = int(os.getenv("SMTP_PORT", "587"))
