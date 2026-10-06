@@ -23,6 +23,15 @@ router = APIRouter(prefix="/drrmo", tags=["drrmo"])
 
 DRRMO = "DRRMO Logistics Support"
 
+# 3.11 levels, most urgent first. Reports the engine couldn't score
+# ("Needs Review" is stored as NULL) go last.
+PRIORITY_RANK = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+
+
+def priority_sort_key(row: dict):
+    """Most urgent report first. Within the same level, the oldest request first."""
+    return (PRIORITY_RANK.get(row.get("priority_level"), len(PRIORITY_RANK)), row["request_id"])
+
 
 def request_rows(db: Session, requests) -> list:
     """Requests with their delivery details, used by DRRMO and CSWS screens."""
@@ -56,6 +65,10 @@ def request_rows(db: Session, requests) -> list:
             "destination": brgys.get(d.destination_barangay_id) if d else None,
             "report_label": (f"#{rep.report_id} {types.get(rep.disaster_type_id, 'Disaster')} - "
                              f"{brgys.get(rep.barangay_id, 'Barangay')}") if rep else None,
+            "report_id": rep.report_id if rep else None,
+            "priority_level": rep.priority_level if rep else None,
+            "ai_priority_score": (float(rep.ai_priority_score)
+                                  if rep and rep.ai_priority_score is not None else None),
             "goods": [
                 f"{i.quantity} {items[i.item_id].unit_of_measure} {items[i.item_id].item_name}"
                 if i.item_id in items else f"{i.quantity} item(s)"
@@ -68,13 +81,19 @@ def request_rows(db: Session, requests) -> list:
 @router.get("/requests")
 def list_requests(
     status: Optional[str] = Query(default=None, description="Pending / Accepted / Declined / Completed"),
+    priority_level: Optional[str] = Query(default=None, description="Critical / High / Medium / Low"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(DRRMO)),
 ):
+    """UC-DR1 step 1: DRRMO sees requests ordered by the linked report's
+    3.11 priority, so the most urgent deliveries get scheduled first."""
     query = db.query(LogisticsRequest)
     if status:
         query = query.filter(LogisticsRequest.status == status)
-    return request_rows(db, query.order_by(LogisticsRequest.request_id.desc()).all())
+    rows = request_rows(db, query.all())
+    if priority_level:
+        rows = [r for r in rows if r["priority_level"] == priority_level]
+    return sorted(rows, key=priority_sort_key)
 
 
 @router.patch("/requests/{request_id}/accept", response_model=LogisticsRequestResponse)

@@ -166,32 +166,12 @@ def receive_donation(
     db.refresh(receipt)
     return receipt
 
-@router.post("/{donation_id}/confirm", response_model=PhysicalDonationResponse)
-def confirm_donation(
-    donation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
-):
-    donation = db.query(PhysicalDonation).filter(
-        PhysicalDonation.donation_id == donation_id
-    ).first()
-    if not donation:
-        raise HTTPException(status_code=404, detail="Donation not found")
-    if donation.status != "Received":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Donation must be 'Received' before it can be confirmed (currently '{donation.status}')",
-        )
 
-    donation.status = "Confirmed"
-    if donation.user_id:  # guest donors have no account
-        notify(db, donation.user_id, "donation_confirmed",
-               title=f"Donation #{donation.donation_id} confirmed",
-               body="Your donation was received and confirmed. Thank you!",
-               entity_type="donation", entity_id=donation.donation_id)
-    db.commit()
-    db.refresh(donation)
-    return donation
+# NOTE (6.1): the old POST /donations/{donation_id}/confirm route was removed.
+# Official recognition ("Confirmed") belongs ONLY to the CMO, via
+# POST /cmo/donations/{donation_id}/confirm in cmo_router.py (manuscript Fig. 14).
+# CSWS receiving ends at status "Received".
+
 
 @router.get("/records")
 def donation_records(

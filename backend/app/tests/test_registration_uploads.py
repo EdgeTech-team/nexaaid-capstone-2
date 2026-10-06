@@ -69,17 +69,28 @@ def test_donor_registers_with_id_front_and_back(api):
     assert client.get(created_url).status_code == 404
 
 
+def test_donor_registers_without_id_type(api):
+    """D1: the app no longer asks for the ID type. The field is optional."""
+    client, t = api
+    body = donor_payload(client, "noidtype@example.com")
+    assert "id_type" not in body
+    ok(client.post("/auth/register/donor", json=body), 201)
+    u = _user("noidtype@example.com")
+    assert u is not None and u.id_type is None
+
+
 def test_donor_registration_requires_both_sides_consent_and_rules(api):
     client, t = api
     base = donor_payload(client, "rules@example.com")
     cases = {
         "id_back": None,                                   # back missing
         "consent": False,                                  # RA 10173 consent
+        "accepted_terms": False,                           # D3: Terms and Conditions
         "contact_number": "0917123456",                    # 10 digits
         "id_type": "Barangay Clearance",                   # not in the list
         "first_name": "J0hn",                              # digits in a name
         "confirm_password": "Different#2026",
-        "password": "testpass123",                         # no upper case / symbol
+        "password": "onlyletters",                         # D2: no number
     }
     for field, value in cases.items():
         body = dict(base)
@@ -96,6 +107,41 @@ def test_donor_registration_requires_both_sides_consent_and_rules(api):
     r = client.post("/auth/register/donor", json=same)
     assert r.status_code == 422 and "separate" in _detail(r)
     assert _user("rules@example.com") is None
+
+
+def test_donor_terms_are_required(api):
+    """D3: no account without the Terms and Conditions checkbox."""
+    client, t = api
+    base = donor_payload(client, "terms@example.com")
+
+    missing = dict(base)
+    missing.pop("accepted_terms")
+    assert client.post("/auth/register/donor", json=missing).status_code == 422
+
+    refused = dict(base, accepted_terms=False)
+    r = client.post("/auth/register/donor", json=refused)
+    assert r.status_code == 422 and "Terms" in r.text
+    assert _user("terms@example.com") is None
+
+    # With the box ticked the same request works.
+    ok(client.post("/auth/register/donor", json=base), 201)
+    assert _user("terms@example.com") is not None
+
+
+def test_relaxed_password_rule(api):
+    """D2: 8-64 characters with at least one letter and one number."""
+    client, t = api
+    base = donor_payload(client, "pw@example.com")
+
+    for weak in ("abcdefgh", "12345678", "short1"):
+        body = dict(base, password=weak, confirm_password=weak)
+        r = client.post("/auth/register/donor", json=body)
+        assert r.status_code == 422, weak
+
+    easy = "abc12345"                                      # no capital, no symbol: allowed now
+    body = dict(base, password=easy, confirm_password=easy)
+    ok(client.post("/auth/register/donor", json=body), 201)
+    ok(client.post("/token", data={"username": "pw@example.com", "password": easy}))
 
 
 def test_failed_claim_creates_nothing(api):
@@ -183,6 +229,21 @@ def test_organization_document_and_type_are_required(api):
         assert db.query(Organization).filter(Organization.contact_email == "nodoc@relief.ph").count() == 0
     finally:
         db.close()
+
+
+def test_organization_terms_are_required(api):
+    """D3: organizations must also accept the Terms and Conditions."""
+    client, t = api
+    body = org_payload(client, "orgterms@relief.ph")
+
+    missing = dict(body)
+    missing.pop("accepted_terms")
+    assert client.post("/auth/register/organization", json=missing).status_code == 422
+
+    refused = dict(body, accepted_terms=False)
+    r = client.post("/auth/register/organization", json=refused)
+    assert r.status_code == 422 and "Terms" in r.text
+    assert _user("orgterms@relief.ph") is None
 
 
 # ------------------------------------------------------ Administrator review

@@ -69,6 +69,7 @@ def _rows(db: Session, donations) -> list:
             # Official recognition tag, or the CMO's last decision if not confirmed
             "cmo_decision": dec.status if dec else None,
             "cmo_notes": dec.notes if dec else None,
+            "hold_reason": dec.notes if dec and dec.status == "On Hold" else None, 
             "officially_recognized": d.status == "Confirmed",
         })
     return out
