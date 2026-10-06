@@ -11,6 +11,7 @@ from core.database import get_db
 from models.report import DisasterReport, DisasterType, Barangay, Sitio
 from models.delivery import Delivery, DeliveryItem, Receipt
 from models.physical_donation_model import PhysicalDonation
+from core.priority_engine import explain_priority
 
 router = APIRouter(prefix="/public", tags=["public"])
 
@@ -27,7 +28,10 @@ def public_reports(db: Session = Depends(get_db)):
 
     rows = (
         db.query(DisasterReport)
-        .options(joinedload(DisasterReport.fulfillment))
+        .options(
+            joinedload(DisasterReport.fulfillment),
+            joinedload(DisasterReport.disaster_type),
+        )
         .filter(DisasterReport.status == "Validated")
         .order_by(DisasterReport.report_id.desc())
         .limit(200)
@@ -44,6 +48,7 @@ def public_reports(db: Session = Depends(get_db)):
             "barangay": barangays.get(r.barangay_id, "Barangay"),
             "sitio": sitios.get(r.sitio_id),
             "priority_level": r.priority_level,
+            "priority_guidance": explain_priority(r),
             "assistance_needed": r.assistance_needed,
             "affected_families": r.affected_families,
             "description": r.description,

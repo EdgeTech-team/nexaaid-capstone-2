@@ -72,7 +72,8 @@ class ReportCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            if (showPriority && r['ai_recommendation'] != null)
+            if (showPriority &&
+                (r['priority_guidance'] ?? r['ai_recommendation']) != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
                 child: Row(
@@ -86,7 +87,7 @@ class ReportCard extends StatelessWidget {
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        'AI guidance: ${r['ai_recommendation']}',
+                        'AI guidance: ${r['priority_guidance'] ?? r['ai_recommendation']}',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
