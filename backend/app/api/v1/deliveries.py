@@ -29,6 +29,7 @@ from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
+from api.v1.drrmo_router import DRRMO
 from schemas.delivery import (
     DeliveryCreate,
     DeliveryResponse,
@@ -149,8 +150,7 @@ def list_deliveries(
 def get_delivery(
    delivery_id: int,
    db: Session= Depends(get_db),
-   current_user= Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep")),
-):
+    current_user= Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep", "DRRMO Logistics Support")),):
   delivery =(
      db.query(Delivery)
      .options(joinedload(Delivery.items))
@@ -215,6 +215,10 @@ def advance_delivery(
     recipients = set(user_ids_with_role(
         db, ["Barangay Receiving Representative"],
         barangay_id=delivery.destination_barangay_id))
+    # 7.5: DRRMO is notified whenever a delivery is advanced
+    recipients |= set(user_ids_with_role(
+        db, ["DRRMO Logistics Support"],
+        exclude_user_id=current_user.user_id))
     if report and report.user_id != current_user.user_id:
         recipients.add(report.user_id)
     notify_event_many(db, recipients, "delivery_status_changed", "delivery",

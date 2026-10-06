@@ -4,6 +4,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
 import 'batch_sheet.dart';
+import 'inventory_view.dart';
 export 'batch_sheet.dart' show openDonationByQr, BatchSheet;
 
 /// Camera QR scanner. Returns the scanned text (e.g. DON-1A2B3C...).
@@ -213,15 +214,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             .toList();
         final inventory = (data[1] as List).cast<Map>();
         // Inventory is linked to specific reports (Inventory module rules).
-        final byReport = <String, List<Map>>{};
-        for (final i in inventory) {
-          byReport
-              .putIfAbsent(
-                '${i['report_label'] ?? 'Report #${i['report_id']}'}',
-                () => [],
-              )
-              .add(i);
-        }
+        final reportCount = inventory.map((i) => i['report_id']).toSet().length;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -285,7 +278,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 ),
                 ButtonSegment(
                   value: 'inventory',
-                  label: Text('Inventory (${byReport.length})'),
+                  label: Text('Inventory ($reportCount)'),
                 ),
               ],
               selected: {view},
@@ -317,47 +310,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                         openDonationByQr(context, '${d['qr_reference']}'),
                   ),
                 ),
-            ] else ...[
-              if (byReport.isEmpty) const EmptyState('Inventory is empty.'),
-              for (final e in byReport.entries)
-                Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          e.key,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const Divider(),
-                        for (final i in e.value)
-                          Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 3),
-                            child: Row(
-                              children: [
-                                const Icon(
-                                  Icons.warehouse_outlined,
-                                  size: 18,
-                                  color: Brand.muted,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(child: Text('${i['item_name']}')),
-                                Text(
-                                  '${i['quantity']} ${i['unit'] ?? ''}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
+            ] else
+              InventoryView(rows: inventory),
           ],
         );
       },

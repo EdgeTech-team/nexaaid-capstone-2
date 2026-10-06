@@ -143,6 +143,24 @@ class DisasterReport(Base):
         cascade="all, delete-orphan",
     )
 
+    # Display names for the mobile app (Report.fromJson reads
+    # disaster_type_name / barangay_name). Plain properties built from the
+    # relationships above: no new columns, no migration. They reach the API
+    # only if the response schema declares them (see DisasterReportResponse).
+    @property
+    def disaster_type_name(self):
+        return self.disaster_type.type_name if self.disaster_type else None
+
+    @property
+    def barangay_name(self):
+        return self.barangay.barangay_name if self.barangay else None
+
+    @property
+    def priority_guidance(self):
+        # Imported here to avoid a circular import at module load.
+        from core.priority_engine import explain_priority
+        return explain_priority(self)
+    
 class SmsReportMetadata(Base):
     __tablename__ = "sms_report_metadata"
 
