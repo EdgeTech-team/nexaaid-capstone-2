@@ -670,8 +670,6 @@ def my_donations(
             for d in donations
         ],
         "supported_reports": [report_info(r) for r in reports.values()],
-test/develop-merge
-    }
     }
     # ---------------------------------------------------------------------------
 # Entry-based view: Report -> Entries (one per QR) -> Items.
