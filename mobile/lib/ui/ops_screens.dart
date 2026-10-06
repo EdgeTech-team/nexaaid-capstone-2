@@ -417,19 +417,36 @@ class NewDeliveryScreen extends StatefulWidget {
   State<NewDeliveryScreen> createState() => _NewDeliveryScreenState();
 }
 
+/// One item line of a delivery: an item from the report's stock + quantity.
+class _DeliveryLine {
+  String? itemId;
+  final qty = TextEditingController();
+}
+
 class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   final _form = GlobalKey<FormState>();
-  String? reportId, brgyId, itemId;
+  String? reportId, brgyId;
   List<Map> stock = const [];
   bool loadingStock = false;
-  final qty = TextEditingController();
+  // 5.1.4: several item lines, each any item with stock in this report.
+  final List<_DeliveryLine> lines = [_DeliveryLine()];
   String? date;
   bool busy = false;
+
+  @override
+  void dispose() {
+    for (final l in lines) {
+      l.qty.dispose();
+    }
+    super.dispose();
+  }
 
   Future<void> _loadStock(String? rid, Names names) async {
     setState(() {
       reportId = rid;
-      itemId = null;
+      for (final l in lines) {
+        l.itemId = null;
+      }
       stock = const [];
       loadingStock = true;
       // The report's own barangay is the usual destination.
@@ -453,7 +470,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
     });
   }
 
-  Map? get _chosen {
+  Map? _stockOf(String? itemId) {
     for (final s in stock) {
       if ('${s['item_id']}' == itemId) return s;
     }
@@ -477,7 +494,11 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           'destination_barangay_id': int.parse(brgyId!),
           'delivery_date': date,
           'items': [
-            {'item_id': int.parse(itemId!), 'quantity': int.parse(qty.text)},
+            for (final l in lines)
+              {
+                'item_id': int.parse(l.itemId!),
+                'quantity': int.parse(l.qty.text.trim()),
+              },
           ],
         },
       ),
@@ -486,6 +507,84 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
     if (!mounted) return;
     setState(() => busy = false);
     if (r.ok) Navigator.pop(context);
+  }
+
+  Widget _lineFields(int i) {
+    final line = lines[i];
+    final chosen = _stockOf(line.itemId);
+    // An item already picked on another line is not offered again.
+    final taken = {
+      for (final l in lines)
+        if (l != line && l.itemId != null) l.itemId,
+    };
+    return Padding(
+      key: ObjectKey(line),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 3,
+            child: DropdownButtonFormField<String>(
+              key: ValueKey(
+                'stock-$reportId-${stock.length}-$i-${lines.length}',
+              ),
+              initialValue: line.itemId,
+              isExpanded: true,
+              items: [
+                for (final s in stock)
+                  if (!taken.contains('${s['item_id']}'))
+                    DropdownMenuItem(
+                      value: '${s['item_id']}',
+                      child: Text(
+                        '${s['item_name']} (${s['quantity']} ${s['unit'] ?? ''} available)',
+                      ),
+                    ),
+              ],
+              onChanged: (v) => setState(() => line.itemId = v),
+              validator: (v) => v == null ? 'Choose an item' : null,
+              decoration: InputDecoration(
+                labelText: i == 0
+                    ? 'Item from this report\'s inventory'
+                    : 'Item ${i + 1}',
+                helperText:
+                    i == 0 && reportId != null && !loadingStock && stock.isEmpty
+                    ? 'No stock for this report yet. Receive donations first.'
+                    : null,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 2,
+            child: TextFormField(
+              controller: line.qty,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: 'Quantity',
+                suffixText: chosen?['unit'] as String?,
+              ),
+              validator: (v) {
+                final n = int.tryParse(v?.trim() ?? '') ?? 0;
+                if (n <= 0) return 'Enter a number above 0';
+                if (chosen != null && n > (chosen['quantity'] as num)) {
+                  return 'Only ${chosen['quantity']} available';
+                }
+                return null;
+              },
+            ),
+          ),
+          if (lines.length > 1)
+            IconButton(
+              tooltip: 'Remove item',
+              onPressed: () => setState(() {
+                lines.removeAt(i).qty.dispose();
+              }),
+              icon: const Icon(Icons.remove_circle_outline),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -499,7 +598,6 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           final names = Names(snap.data!);
-          final chosen = _chosen;
           return Form(
             key: _form,
             child: ListView(
@@ -523,45 +621,16 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                 ),
                 const SizedBox(height: 12),
                 if (loadingStock) const LinearProgressIndicator(),
-                DropdownButtonFormField<String>(
-                  key: ValueKey('stock-$reportId-${stock.length}'),
-                  initialValue: itemId,
-                  isExpanded: true,
-                  items: [
-                    for (final s in stock)
-                      DropdownMenuItem(
-                        value: '${s['item_id']}',
-                        child: Text(
-                          '${s['item_name']} (${s['quantity']} ${s['unit'] ?? ''} available)',
-                        ),
-                      ),
-                  ],
-                  onChanged: (v) => setState(() => itemId = v),
-                  validator: (v) => v == null ? 'Choose an item' : null,
-                  decoration: InputDecoration(
-                    labelText: 'Item from this report\'s inventory',
-                    helperText:
-                        reportId != null && !loadingStock && stock.isEmpty
-                        ? 'No stock for this report yet. Receive donations first.'
-                        : null,
+                for (var i = 0; i < lines.length; i++) _lineFields(i),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: reportId == null || lines.length >= stock.length
+                        ? null
+                        : () => setState(() => lines.add(_DeliveryLine())),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add item'),
                   ),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: qty,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: 'Quantity',
-                    suffixText: chosen?['unit'] as String?,
-                  ),
-                  validator: (v) {
-                    final n = int.tryParse(v?.trim() ?? '') ?? 0;
-                    if (n <= 0) return 'Enter a number above 0';
-                    if (chosen != null && n > (chosen['quantity'] as num)) {
-                      return 'Only ${chosen['quantity']} available';
-                    }
-                    return null;
-                  },
                 ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
@@ -830,7 +899,7 @@ class DrrmoScreen extends StatefulWidget {
 class _DrrmoScreenState extends State<DrrmoScreen> {
   String stage = 'Pending';
 
-   Future<void> _accept(Map r) async {
+  Future<void> _accept(Map r) async {
     final v = await formDialog(
       context,
       title: 'Accept request #${r['request_id']}?',
