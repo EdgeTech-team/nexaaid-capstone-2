@@ -40,6 +40,7 @@ def user_payload(user: User) -> dict:
         "role_name": user.role.role_name,
         "organization_id": user.organization_id,
         "assigned_barangay_id": user.assigned_barangay_id,
+        "must_change_password": user.must_change_password in (True, 1, "1", "true"),
     }
 
 

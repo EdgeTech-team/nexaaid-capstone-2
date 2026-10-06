@@ -10,6 +10,7 @@ from models.user_rbac_model import User
 from models.inventory_model import Inventory
 from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResponse
 from core.notifications import notify, notify_many, user_ids_with_role
+from services.inventory import add_received_stock
 
 
 from typing import Optional
@@ -150,23 +151,8 @@ def receive_donation(
     db.add(receipt)
 
     donation.status = "Received"
-
-    inventory_item = db.query(Inventory).filter(
-        Inventory.item_id == donation.item_id,
-        Inventory.report_id == donation.report_id,
-    ).first()
-
-    if inventory_item:
-        inventory_item.quantity += payload.actual_quantity
-    else:
-        inventory_item = Inventory(
-            item_id=donation.item_id,
-            report_id=donation.report_id,
-            quantity=payload.actual_quantity,
-        )
-        db.add(inventory_item)
-
-    db.flush()
+    # Same transaction as the receipt and the status change (5.1.3).
+    add_received_stock(db, donation.item_id, donation.report_id, payload.actual_quantity)
     log_action(db, current_user, "RECEIVE DONATION", "physical_donations", donation.donation_id,
                old={"status": "Pending"},
                new={"status": "Received", "declared": donation.quantity,

@@ -22,6 +22,7 @@ from api.v1.contacts import router as contacts_router
 from api.v1.public_routes import router as public_router
 from api.v1.admin_document_routes import router as admin_document_router
 from api.v1.donation_info_routes import router as donation_info_router
+from api.v1.account_router import router as account_router
 
 app = FastAPI()
 
@@ -69,4 +70,7 @@ app.include_router(notifications_router)
 app.include_router(public_router)
 app.include_router(admin_document_router)
 app.include_router(donation_info_router)
+feat/login-landing-ui
 app.include_router(contacts_router)
+app.include_router(account_router)
+develop

@@ -25,25 +25,6 @@ class AdminDashboard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: [
             PageHeader('Administrator Dashboard', subtitle: roleLine()),
-            // Adviser item 7: any barangay's donation-sending info.
-            AppCard(
-              margin: const EdgeInsets.only(bottom: Space.md),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) =>
-                      const BarangayDonationInfoScreen(standalone: true),
-                ),
-              ),
-              child: const ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(Icons.account_balance_wallet_outlined),
-                title: Text('Barangay donation info'),
-                subtitle: Text(
-                  'Edit where donors can send money to a barangay',
-                ),
-                trailing: Icon(Icons.chevron_right),
-              ),
-            ),
             StatGrid([
               StatTile(
                 'Active users',
@@ -100,18 +81,25 @@ class AccountsHub extends StatefulWidget {
 }
 
 class _AccountsHubState extends State<AccountsHub> {
-  String view = 'users';
+  String view = 'active';
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Padding(
+        // Scrolls sideways on narrow phones instead of overflowing.
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child: SegmentedButton<String>(
+            showSelectedIcon: false,
             segments: const [
-              ButtonSegment(value: 'users', label: Text('Accounts')),
+              ButtonSegment(value: 'active', label: Text('Active')),
+              ButtonSegment(value: 'deactivated', label: Text('Deactivated')),
               ButtonSegment(value: 'orgs', label: Text('Organizations')),
+              // Adviser item 7: any barangay's donation-sending info, e.g.
+              // a barangay without a representative yet, or a wrong number.
+              ButtonSegment(value: 'donation', label: Text('Donation info')),
               ButtonSegment(value: 'new', label: Text('New account')),
             ],
             selected: {view},
@@ -121,8 +109,13 @@ class _AccountsHubState extends State<AccountsHub> {
         Expanded(
           child: switch (view) {
             'orgs' => const OrganizationsReview(),
+            'donation' => const BarangayDonationInfoScreen(),
             'new' => const AccountsScreen(),
-            _ => const UsersScreen(),
+            'deactivated' => const UsersScreen(
+              key: ValueKey('deactivated'),
+              active: false,
+            ),
+            _ => const UsersScreen(key: ValueKey('active')),
           },
         ),
       ],
@@ -131,7 +124,9 @@ class _AccountsHubState extends State<AccountsHub> {
 }
 
 class UsersScreen extends StatefulWidget {
-  const UsersScreen({super.key});
+  /// I2: true = Active section, false = Deactivated section.
+  final bool active;
+  const UsersScreen({super.key, this.active = true});
 
   @override
   State<UsersScreen> createState() => _UsersScreenState();
@@ -147,18 +142,24 @@ class _UsersScreenState extends State<UsersScreen> {
       load: [
         () => api.get(
           '/admin/users',
-          query: {if (role.isNotEmpty) 'role': role, if (q.isNotEmpty) 'q': q},
+          query: {
+            'active': '${widget.active}',
+            if (role.isNotEmpty) 'role': role,
+            if (q.isNotEmpty) 'q': q,
+          },
         ),
       ],
-      key: ValueKey('$role|$q'),
+      key: ValueKey('${widget.active}|$role|$q'),
       builder: (context, data) {
         final users = (data[0] as List).cast<Map>();
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const PageHeader(
-              'User Management',
-              subtitle: 'Tap an account to see its details, edit it, or deactivate it.',
+            PageHeader(
+              widget.active ? 'User Management' : 'Deactivated accounts',
+              subtitle: widget.active
+                  ? 'Tap an account to see its details, edit it, or deactivate it.'
+                  : 'These accounts can\'t log in. Tap one to review it or activate it again.',
             ),
             TextField(
               decoration: const InputDecoration(
@@ -190,7 +191,7 @@ class _UsersScreenState extends State<UsersScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              '${users.length} accounts',
+              '${users.length} ${widget.active ? 'active' : 'deactivated'} accounts',
               style: const TextStyle(color: Brand.muted),
             ),
             const SizedBox(height: 6),
@@ -269,6 +270,14 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
               selected: {status},
               onSelectionChanged: (s) => setState(() => status = s.first),
             ),
+            // I3: the organization sees the same reason at login (D6).
+            if (status == 'Rejected') ...[
+              Gaps.v8,
+              Text(
+                'Rejected organizations see this reason when they try to log in.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             const SizedBox(height: 12),
             if (orgs.isEmpty)
               EmptyState('No ${status.toLowerCase()} organizations.'),
@@ -299,7 +308,7 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                         ],
                       ),
                       Text(
-                        '${o['organization_type']} · Reg. no. ${o['registration_no']}',
+                        '${o['organization_type']} · Reg. no. ${o['registration_no'] ?? 'not given'}',
                       ),
                       Text('${o['address']}'),
                       Text(
@@ -308,7 +317,13 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                       Gaps.v12,
                       // UC-A2 step 4: the supporting document; alt 4a flags.
                       _OrgDocument(o['organization_id'] as int),
-                      if (o['decision_reason'] != null) ...[
+                      if (o['status'] == 'Rejected') ...[
+                        Gaps.v8,
+                        _RejectionReason(
+                          reason: o['rejection_reason'] ?? o['decision_reason'],
+                          at: o['decided_at'],
+                        ),
+                      ] else if (o['decision_reason'] != null) ...[
                         Gaps.v8,
                         Text(
                           'Last reason: ${o['decision_reason']}',
@@ -337,6 +352,42 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
           ],
         );
       },
+    );
+  }
+}
+
+/// I3: why an organization was rejected. The organization sees the same
+/// reason when it tries to log in (D6).
+class _RejectionReason extends StatelessWidget {
+  final dynamic reason;
+  final dynamic at;
+  const _RejectionReason({required this.reason, this.at});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(Space.md),
+      decoration: BoxDecoration(
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            at == null ? 'Rejection reason' : 'Rejected ${niceDate(at)}',
+            style: t.labelLarge?.copyWith(color: cs.onErrorContainer),
+          ),
+          Gaps.v8,
+          Text(
+            '${reason ?? 'No reason was recorded.'}',
+            style: t.bodyMedium?.copyWith(color: cs.onErrorContainer),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -450,6 +501,7 @@ class _OrgDocument extends StatelessWidget {
   }
 }
 
+feat/login-landing-ui
 // ---------------------------------------------------------------------------
 // Appendix H 2.2: barangay reps see the CSWS Disaster Unit's phone number so
 // they can send the emergency SMS report.
@@ -558,6 +610,7 @@ class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
 // ---------------------------------------------------------------------------
 // UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
+ develop
 class BarangayDashboard extends StatelessWidget {
   const BarangayDashboard({super.key});
 
