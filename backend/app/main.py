@@ -70,6 +70,5 @@ app.include_router(notifications_router)
 app.include_router(public_router)
 app.include_router(admin_document_router)
 app.include_router(donation_info_router)
-feat/login-landing-ui
 app.include_router(contacts_router)
 app.include_router(account_router)
