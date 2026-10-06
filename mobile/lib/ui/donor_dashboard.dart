@@ -40,6 +40,21 @@ class DonorDashboard extends StatefulWidget {
 
 class _DonorDashboardState extends State<DonorDashboard> {
   String? _filter; // null = all
+  final _listKey = GlobalKey();
+
+  /// 5.1: a number card was tapped. Filter the list and scroll to it.
+  void _showStatus(String? s) {
+    setState(() => _filter = s);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _listKey.currentContext;
+      if (c != null) {
+        Scrollable.ensureVisible(
+          c,
+          duration: const Duration(milliseconds: 300),
+        );
+      }
+    });
+  }
 
   void _openFeed() => Navigator.of(context).push(
     MaterialPageRoute(
@@ -64,15 +79,11 @@ class _DonorDashboardState extends State<DonorDashboard> {
         final supported = (m['supported_reports'] as List).cast<Map>();
         final isOrg = profile['organization'] != null;
 
-        final needHelp =
-            names.rows('validated_reports').cast<Map>().toList()..sort(
-              (a, b) =>
-                  PriorityColors.rank(
-                    a['priority_level'] as String?,
-                  ).compareTo(
-                    PriorityColors.rank(b['priority_level'] as String?),
-                  ),
-            );
+        final needHelp = names.rows('validated_reports').cast<Map>().toList()
+          ..sort(
+            (a, b) => PriorityColors.rank(a['priority_level'] as String?)
+                .compareTo(PriorityColors.rank(b['priority_level'] as String?)),
+          );
 
         const statuses = ['Pending', 'Received', 'Confirmed'];
         int count(String s) => donations.where((d) => d['status'] == s).length;
@@ -90,44 +101,50 @@ class _DonorDashboardState extends State<DonorDashboard> {
           children: [
             _Welcome(profile: profile, isOrg: isOrg),
             const SectionHeader('Your giving'),
-            StatCardGrid([
-              StatCard(
-                label: 'Donations made',
-                value: '${sum['total_donations']}',
-                icon: Icons.volunteer_activism_outlined,
+            StatGrid([
+              StatTile(
+                'Donations made',
+                '${sum['total_donations']}',
+                Icons.volunteer_activism_outlined,
+                onTap: () => _showStatus(null),
               ),
-              StatCard(
-                label: 'Items given',
-                value: '${sum['total_quantity']}',
-                icon: Icons.inventory_outlined,
+              StatTile(
+                'Items given',
+                '${sum['total_quantity']}',
+                Icons.inventory_outlined,
+                onTap: () => _showStatus(null),
               ),
-              StatCard(
-                label: 'Reports supported',
-                value: '${sum['supported_reports']}',
-                icon: Icons.campaign_outlined,
+              StatTile(
+                'Reports supported',
+                '${sum['supported_reports']}',
+                Icons.campaign_outlined,
               ),
-              StatCard(
-                label: 'Waiting for drop-off or pickup',
-                value: '${sum['pending']}',
-                icon: Icons.schedule,
+              StatTile(
+                'Waiting for drop-off or pickup',
+                '${sum['pending']}',
+                Icons.schedule,
                 color: StatusColors.base('Pending'),
+                onTap: () => _showStatus('Pending'),
               ),
-              StatCard(
-                label: 'Received by CSWS',
-                value: '${sum['received']}',
-                icon: Icons.inventory_2_outlined,
+              StatTile(
+                'Received by CSWS',
+                '${sum['received']}',
+                Icons.inventory_2_outlined,
                 color: StatusColors.base('Received'),
+                onTap: () => _showStatus('Received'),
               ),
-              StatCard(
-                label: 'Confirmed by the City',
-                value: '${sum['confirmed']}',
-                icon: Icons.verified_outlined,
+              StatTile(
+                'Confirmed by the City',
+                '${sum['confirmed']}',
+                Icons.verified_outlined,
                 color: StatusColors.base('Confirmed'),
+                onTap: () => _showStatus('Confirmed'),
               ),
             ]),
 
             // ---- Donations ------------------------------------------------
-            const SectionHeader(
+            SectionHeader(
+              key: _listKey,
               'Your donations',
               subtitle: 'Tap a donation to see its QR code and full timeline.',
             ),
@@ -334,9 +351,8 @@ class _Notice extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: s.fg),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(color: s.fg),
             ),
           ),
         ],
@@ -421,9 +437,8 @@ class _Meta extends StatelessWidget {
         Flexible(
           child: Text(
             text,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: cs.onSurfaceVariant),
           ),
         ),
       ],
@@ -491,8 +506,7 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
     final muted = t.bodyMedium?.copyWith(color: cs.onSurfaceVariant);
     final report = d['report'] as Map?;
 
-    Widget row(String label, Object? value) => value == null ||
-            '$value'.isEmpty
+    Widget row(String label, Object? value) => value == null || '$value'.isEmpty
         ? const SizedBox.shrink()
         : Padding(
             padding: const EdgeInsets.only(bottom: Space.xs),
@@ -546,9 +560,7 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
               future: _qr,
               builder: (context, snap) {
                 if (!snap.hasData) {
-                  return const Center(
-                    child: Skeleton(width: 220, height: 220),
-                  );
+                  return const Center(child: Skeleton(width: 220, height: 220));
                 }
                 final r = snap.data!;
                 final b64 = r.ok && r.json is Map
