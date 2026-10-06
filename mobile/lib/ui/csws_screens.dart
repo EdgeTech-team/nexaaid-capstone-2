@@ -190,28 +190,50 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   final searchC = TextEditingController();
   String search = '';
   String view = 'pending';
+  int _loads = 0;
+
+  /// Opens an entry; when its sheet closes, the pending list and the
+  /// inventory reload (after a receive they have changed).
+  Future<void> _open(String reference) async {
+    await openDonationByQr(context, reference);
+    if (mounted) setState(() => _loads++);
+  }
 
   Future<void> _scan() async {
     final code = await Navigator.of(context)
         .push<String>(MaterialPageRoute(builder: (_) => const ScannerPage()));
-    if (code != null && mounted) await openDonationByQr(context, code);
+    if (code != null && mounted) await _open(code);
   }
 
   @override
   Widget build(BuildContext context) {
     return Loader(
+      key: ValueKey(_loads),
       load: [
-        () => api.get('/donations/pending'),
+        () => api.get('/donations/entries', query: {'pending_only': 'true'}),
         () => api.get('/donations/inventory'),
-        api.lookupsResult,
       ],
       builder: (context, data) {
-        final names = Names(Map<String, dynamic>.from(data[2] as Map));
         final q = search.toLowerCase();
-        final pending = (data[0] as List)
-            .cast<Map>()
-            .where((d) => '${d['qr_reference']}'.toLowerCase().contains(q))
-            .toList();
+        // Report -> its pending entries (one per QR / batch_reference).
+        final reports = [
+          for (final r in ((data[0] as Map)['reports'] as List).cast<Map>())
+            {
+              ...r,
+              'entries': (r['entries'] as List)
+                  .cast<Map>()
+                  .where(
+                    (e) =>
+                        '${e['batch_reference']}'.toLowerCase().contains(q) ||
+                        '${e['donor'] ?? ''}'.toLowerCase().contains(q),
+                  )
+                  .toList(),
+            },
+        ].where((r) => (r['entries'] as List).isNotEmpty).toList();
+        final pendingCount = reports.fold<int>(
+          0,
+          (n, r) => n + (r['entries'] as List).length,
+        );
         final inventory = (data[1] as List).cast<Map>();
         // Inventory is linked to specific reports (Inventory module rules).
         final reportCount = inventory.map((i) => i['report_id']).toSet().length;
@@ -259,12 +281,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                       hintText: 'DON-...',
                     ),
                     onChanged: (v) => setState(() => search = v.trim()),
-                    onSubmitted: (v) => openDonationByQr(context, v),
+                    onSubmitted: _open,
                   ),
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton(
-                  onPressed: () => openDonationByQr(context, searchC.text),
+                  onPressed: () => _open(searchC.text),
                   child: const Text('Find'),
                 ),
               ],
@@ -274,7 +296,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
               segments: [
                 ButtonSegment(
                   value: 'pending',
-                  label: Text('Pending (${pending.length})'),
+                  label: Text('Pending ($pendingCount)'),
                 ),
                 ButtonSegment(
                   value: 'inventory',
@@ -286,35 +308,70 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             ),
             const SizedBox(height: 12),
             if (view == 'pending') ...[
-              if (pending.isEmpty)
+              if (reports.isEmpty)
                 const EmptyState('Nothing waiting to be received.'),
-              for (final d in pending)
-                Card(
-                  margin: const EdgeInsets.only(bottom: 10),
-                  child: ListTile(
-                    leading: const CircleAvatar(
-                      child: Icon(Icons.inventory_2_outlined),
-                    ),
-                    title: Text(
-                      '${d['quantity']} × '
-                      '${names.of('items', d['item_id'], fallback: 'item')}',
-                    ),
-                    subtitle: Text(
-                      '${d['qr_reference']} · ${d['packaging']} · '
-                      '${d['handover_method']}'
-                      '${d['pickup_address'] != null ? '\nPickup: ${d['pickup_address']}' : ''}',
-                    ),
-                    isThreeLine: d['pickup_address'] != null,
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () =>
-                        openDonationByQr(context, '${d['qr_reference']}'),
-                  ),
-                ),
+              for (final r in reports)
+                PendingReportCard(report: r, onOpen: _open),
             ] else
               InventoryView(rows: inventory),
           ],
         );
       },
+    );
+  }
+}
+
+/// One report on the Pending tab with its pending donation entries
+/// ("Donation 1 · 3 items · donor · handover"). Tapping an entry opens it.
+class PendingReportCard extends StatelessWidget {
+  final Map report;
+  final Future<void> Function(String batchReference) onOpen;
+  const PendingReportCard({
+    super.key,
+    required this.report,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = (report['entries'] as List).cast<Map>();
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            leading: const CircleAvatar(child: Icon(Icons.assignment_outlined)),
+            title: Text(
+              '${report['report_label'] ?? 'Report #${report['report_id']}'}',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            subtitle: Text(
+              '${entries.length} '
+              '${entries.length == 1 ? 'entry' : 'entries'} waiting',
+            ),
+          ),
+          const Divider(height: 1),
+          for (final e in entries)
+            ListTile(
+              leading: const Icon(Icons.inventory_2_outlined),
+              title: Text(
+                'Donation ${e['entry_no']} · ${e['total_items']} '
+                '${e['total_items'] == 1 ? 'item' : 'items'}',
+              ),
+              subtitle: Text(
+                [
+                  if (e['donor'] != null) '${e['donor']}',
+                  '${e['handover_method']}',
+                  if (e['pending_items'] != e['total_items'])
+                    '${e['pending_items']} still pending',
+                ].join(' · '),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => onOpen('${e['batch_reference']}'),
+            ),
+        ],
+      ),
     );
   }
 }
