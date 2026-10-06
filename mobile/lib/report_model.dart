@@ -11,6 +11,7 @@ class Report {
   final int? affectedFamilies;
   final String? priorityLevel; // 3.11
   final String? aiRecommendation; // 3.11
+  final String? priorityGuidance;
   final DateTime? createdAt;
   final double fulfillmentPercentage; // 0-100, 0 when no fulfillment row yet
 
@@ -23,6 +24,7 @@ class Report {
     this.affectedFamilies,
     this.priorityLevel,
     this.aiRecommendation,
+    this.priorityGuidance,
     this.createdAt,
     required this.fulfillmentPercentage,
   });
@@ -47,6 +49,7 @@ class Report {
       affectedFamilies: j['affected_families'] as int?,
       priorityLevel: j['priority_level'] as String?,
       aiRecommendation: j['ai_recommendation'] as String?,
+      priorityGuidance: j['priority_guidance'] as String?,
       createdAt: DateTime.tryParse((j['created_at'] ?? '') as String),
       // Pydantic serializes Decimal as a STRING ("75.00"), so parse both.
       fulfillmentPercentage: _toDouble(j['fulfillment_percentage']) ?? 0,
