@@ -626,8 +626,6 @@ class _DonateScreenState extends State<DonateScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 _reportSummary(),
-                // Adviser item 7 / UC-D2: where to send money (display only).
-                ReportDonationInfo(reportId: widget.report['id'] as int),
 
                 const _StepHeader(
                   number: 1,
@@ -642,6 +640,10 @@ class _DonateScreenState extends State<DonateScreen> {
                   expand: true,
                   onPressed: _addItem,
                 ),
+
+                // 4.1: the items come first; the monetary donation info is
+                // shown below them (adviser item 7 / UC-D2, display only).
+                ReportDonationInfo(reportId: widget.report['id'] as int),
 
                 const _StepHeader(
                   number: 2,

@@ -211,7 +211,8 @@ def test_full_relief_chain_across_all_roles(api):
     assert mine_row["hold_reason"] == "Need proof of delivery receipt"
     assert mine_row["status"] == "Received"          # a hold is not an official confirmation
     recs = ok(client.get("/donations/records", headers=t["csws"]))
-    assert next(r for r in recs if r["donation_id"] == d1_id)["hold_reason"] == "Need proof of delivery receipt"
+    rec_items = [i for e in recs for i in e["items"]]
+    assert next(i for i in rec_items if i["donation_id"] == d1_id)["hold_reason"] == "Need proof of delivery receipt"
 
     # the CMO then confirms d1; the hold reason disappears once it is confirmed
     conf = ok(client.post(f"/cmo/donations/{d1_id}/confirm", headers=t["cmo"],

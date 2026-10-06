@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult;
+import 'donation_entries_view.dart';
 import 'donor_screens.dart' show DonateScreen, ReportsFeed;
 import 'widgets.dart';
 
@@ -10,7 +11,8 @@ import 'widgets.dart';
 // Adviser item 10 / Module 9: donor and relief organization dashboard
 // (UC-D3, UC-D4, UC-R3, UC-R4).
 //
-// Data: GET /donations/mine (profile, summary, donations, supported_reports).
+// Data: GET /donations/mine (profile, summary, entries, supported_reports).
+// Donations are shown per entry (one QR), Appendix H 4.4 / 4.5.
 //
 // Timeline note: a donation's own status goes Pending -> Received ->
 // Confirmed. The last three steps (In transit, Delivered, Acknowledged)
@@ -19,9 +21,12 @@ import 'widgets.dart';
 // in _lifecycleStatus and _stepDates below; nothing else needs to change.
 // ---------------------------------------------------------------------------
 
-/// The step to show on the timeline for a donation.
-String _lifecycleStatus(Map d) =>
-    '${d['lifecycle_status'] ?? d['status'] ?? 'Pending'}';
+/// The step to show on the timeline for a donation entry. A Partly
+/// Received entry still has goods waiting, so it stays on the first step.
+String _lifecycleStatus(Map d) {
+  final s = '${d['lifecycle_status'] ?? d['status'] ?? 'Pending'}';
+  return s == 'Partly Received' ? 'Pending' : s;
+}
 
 /// Known dates per step, already formatted, for the detail timeline.
 Map<String, String> _stepDates(Map d) => {
@@ -39,8 +44,6 @@ class DonorDashboard extends StatefulWidget {
 }
 
 class _DonorDashboardState extends State<DonorDashboard> {
-  String? _filter; // null = all
-
   void _openFeed() => Navigator.of(context).push(
     MaterialPageRoute(
       builder: (_) => Scaffold(
@@ -60,25 +63,17 @@ class _DonorDashboardState extends State<DonorDashboard> {
         final names = Names(lookups);
         final profile = m['profile'] as Map;
         final sum = m['summary'] as Map;
-        final donations = (m['donations'] as List).cast<Map>();
+        final entries = (m['entries'] as List).cast<Map>();
         final supported = (m['supported_reports'] as List).cast<Map>();
         final isOrg = profile['organization'] != null;
 
-        final needHelp =
-            names.rows('validated_reports').cast<Map>().toList()..sort(
-              (a, b) =>
-                  PriorityColors.rank(
-                    a['priority_level'] as String?,
-                  ).compareTo(
-                    PriorityColors.rank(b['priority_level'] as String?),
-                  ),
-            );
+        final needHelp = names.rows('validated_reports').cast<Map>().toList()
+          ..sort(
+            (a, b) => PriorityColors.rank(a['priority_level'] as String?)
+                .compareTo(PriorityColors.rank(b['priority_level'] as String?)),
+          );
 
-        const statuses = ['Pending', 'Received', 'Confirmed'];
-        int count(String s) => donations.where((d) => d['status'] == s).length;
-        final shown = donations
-            .where((d) => _filter == null || d['status'] == _filter)
-            .toList();
+        int count(String s) => entries.where((e) => e['status'] == s).length;
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(
@@ -93,7 +88,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
             StatCardGrid([
               StatCard(
                 label: 'Donations made',
-                value: '${sum['total_donations']}',
+                value: '${sum['total_entries']}',
                 icon: Icons.volunteer_activism_outlined,
               ),
               StatCard(
@@ -108,30 +103,31 @@ class _DonorDashboardState extends State<DonorDashboard> {
               ),
               StatCard(
                 label: 'Waiting for drop-off or pickup',
-                value: '${sum['pending']}',
+                value:
+                    '${entries.where((e) => (e['pending_items'] as num) > 0).length}',
                 icon: Icons.schedule,
                 color: StatusColors.base('Pending'),
               ),
               StatCard(
                 label: 'Received by CSWS',
-                value: '${sum['received']}',
+                value: '${count('Received')}',
                 icon: Icons.inventory_2_outlined,
                 color: StatusColors.base('Received'),
               ),
               StatCard(
                 label: 'Confirmed by the City',
-                value: '${sum['confirmed']}',
+                value: '${count('Confirmed')}',
                 icon: Icons.verified_outlined,
                 color: StatusColors.base('Confirmed'),
               ),
             ]),
 
-            // ---- Donations ------------------------------------------------
+            // ---- Donations (one card per entry, 4.4 / 4.5) ------------------
             const SectionHeader(
               'Your donations',
               subtitle: 'Tap a donation to see its QR code and full timeline.',
             ),
-            if (donations.isEmpty)
+            if (entries.isEmpty)
               AppCard(
                 child: EmptyView(
                   compact: true,
@@ -147,49 +143,20 @@ class _DonorDashboardState extends State<DonorDashboard> {
                   ),
                 ),
               )
-            else ...[
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final s in <String?>[null, ...statuses])
-                      Padding(
-                        padding: const EdgeInsets.only(right: Space.xs),
-                        child: ChoiceChip(
-                          label: Text(
-                            s == null
-                                ? 'All (${donations.length})'
-                                : '$s (${count(s)})',
-                          ),
-                          selected: _filter == s,
-                          onSelected: (_) => setState(() => _filter = s),
-                        ),
-                      ),
-                  ],
+            else
+              DonationEntriesView(
+                entries: entries,
+                footer: (e) => StatusTimeline(
+                  steps: donationLifecycle,
+                  labels: donationLifecycleLabels,
+                  current: _lifecycleStatus(e),
+                ),
+                onTap: (e) => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => DonationDetailScreen(entry: e),
+                  ),
                 ),
               ),
-              Gaps.v12,
-              if (shown.isEmpty)
-                AppCard(
-                  child: EmptyView(
-                    compact: true,
-                    icon: Icons.filter_alt_off_outlined,
-                    title: 'No ${_filter?.toLowerCase()} donations',
-                    message: 'Choose another status to see more.',
-                  ),
-                ),
-              for (final d in shown) ...[
-                _DonationCard(
-                  donation: d,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => DonationDetailScreen(donation: d),
-                    ),
-                  ),
-                ),
-                Gaps.v12,
-              ],
-            ],
 
             // ---- Supported reports ---------------------------------------
             const SectionHeader(
@@ -334,99 +301,12 @@ class _Notice extends StatelessWidget {
           Expanded(
             child: Text(
               text,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: s.fg),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(color: s.fg),
             ),
           ),
         ],
       ),
-    );
-  }
-}
-
-class _DonationCard extends StatelessWidget {
-  final Map donation;
-  final VoidCallback onTap;
-  const _DonationCard({required this.donation, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final d = donation;
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    final muted = t.bodySmall?.copyWith(color: cs.onSurfaceVariant);
-    final report = d['report'] as Map?;
-    return AppCard(
-      onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${d['quantity']} ${d['unit'] ?? ''} ${d['item_name']}'
-                          .replaceAll(RegExp(r'\s+'), ' '),
-                      style: t.titleMedium,
-                    ),
-                    if (report != null)
-                      Text('For ${report['label']}', style: muted),
-                  ],
-                ),
-              ),
-              Gaps.h8,
-              StatusChip('${d['status']}'),
-            ],
-          ),
-          Gaps.v8,
-          Wrap(
-            spacing: Space.md,
-            runSpacing: Space.xxs,
-            children: [
-              _Meta(Icons.qr_code_2, '${d['qr_reference']}'),
-              _Meta(Icons.local_shipping_outlined, '${d['handover_method']}'),
-              _Meta(Icons.event_outlined, niceDate(d['created_at'])),
-            ],
-          ),
-          Gaps.v16,
-          StatusTimeline(
-            steps: donationLifecycle,
-            labels: donationLifecycleLabels,
-            current: _lifecycleStatus(d),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Meta extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  const _Meta(this.icon, this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 16, color: cs.onSurfaceVariant),
-        Gaps.h4,
-        Flexible(
-          child: Text(
-            text,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-          ),
-        ),
-      ],
     );
   }
 }
@@ -468,11 +348,12 @@ class _ReportProgress extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// One donation: QR code, details and the full timeline with dates.
+// One donation entry: its QR code (shared by every item), the items, and the
+// full timeline with dates.
 // ---------------------------------------------------------------------------
 class DonationDetailScreen extends StatefulWidget {
-  final Map donation;
-  const DonationDetailScreen({super.key, required this.donation});
+  final Map entry;
+  const DonationDetailScreen({super.key, required this.entry});
 
   @override
   State<DonationDetailScreen> createState() => _DonationDetailScreenState();
@@ -480,19 +361,18 @@ class DonationDetailScreen extends StatefulWidget {
 
 class _DonationDetailScreenState extends State<DonationDetailScreen> {
   late final Future<ApiResult> _qr = api.get(
-    '/donations/${widget.donation['donation_id']}/qr',
+    '/donations/batch/${widget.entry['batch_reference']}/qr',
   );
 
   @override
   Widget build(BuildContext context) {
-    final d = widget.donation;
+    final e = widget.entry;
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     final muted = t.bodyMedium?.copyWith(color: cs.onSurfaceVariant);
-    final report = d['report'] as Map?;
+    final report = e['report'] as Map?;
 
-    Widget row(String label, Object? value) => value == null ||
-            '$value'.isEmpty
+    Widget row(String label, Object? value) => value == null || '$value'.isEmpty
         ? const SizedBox.shrink()
         : Padding(
             padding: const EdgeInsets.only(bottom: Space.xs),
@@ -506,33 +386,19 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
           );
 
     return Scaffold(
-      appBar: AppBar(title: Text('${d['qr_reference'] ?? 'Donation'}')),
+      appBar: AppBar(title: Text('${e['batch_reference'] ?? 'Donation'}')),
       body: ListView(
         padding: Space.page,
         children: [
-          AppCard(
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '${d['quantity']} ${d['unit'] ?? ''} ${d['item_name']}'
-                        .replaceAll(RegExp(r'\s+'), ' '),
-                    style: t.titleLarge,
-                  ),
-                ),
-                Gaps.h8,
-                StatusChip('${d['status']}'),
-              ],
-            ),
-          ),
+          DonationEntryCard(entry: e),
           const SectionHeader('Progress'),
           AppCard(
             child: StatusTimeline(
               steps: donationLifecycle,
               labels: donationLifecycleLabels,
-              current: _lifecycleStatus(d),
+              current: _lifecycleStatus(e),
               axis: Axis.vertical,
-              dates: _stepDates(d),
+              dates: _stepDates(e),
             ),
           ),
           const SectionHeader(
@@ -546,9 +412,7 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
               future: _qr,
               builder: (context, snap) {
                 if (!snap.hasData) {
-                  return const Center(
-                    child: Skeleton(width: 220, height: 220),
-                  );
+                  return const Center(child: Skeleton(width: 220, height: 220));
                 }
                 final r = snap.data!;
                 final b64 = r.ok && r.json is Map
@@ -557,13 +421,13 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                 if (b64 == null) {
                   return Text(
                     'The QR code couldn\'t load. Your reference is '
-                    '${d['qr_reference']}.',
+                    '${e['batch_reference']}.',
                     style: muted,
                   );
                 }
                 return Center(
                   child: Semantics(
-                    label: 'QR code for ${d['qr_reference']}',
+                    label: 'QR code for ${e['batch_reference']}',
                     child: Container(
                       padding: const EdgeInsets.all(Space.sm),
                       color: Colors.white, // QR needs a white background
@@ -582,11 +446,13 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
           AppCard(
             child: Column(
               children: [
-                row('Reference', d['qr_reference']),
-                row('Packaging', d['packaging']),
-                row('Handover', d['handover_method']),
-                row('Pickup address', d['pickup_address']),
-                row('Pledged on', niceDate(d['created_at'])),
+                row('Reference', e['batch_reference']),
+                row('Handover', e['handover_method']),
+                row('Pickup address', e['pickup_address']),
+                row('Notes for pickup', e['pickup_landmark']),
+                if (e['preferred_pickup_at'] != null)
+                  row('Preferred pickup', niceDate(e['preferred_pickup_at'])),
+                row('Pledged on', niceDate(e['created_at'])),
                 row('For report', report?['label']),
               ],
             ),

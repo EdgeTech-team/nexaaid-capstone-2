@@ -39,6 +39,7 @@ abstract final class StatusColors {
     // Donation lifecycle (Item 10 timeline order)
     'pending': (_slate, Icons.schedule),
     'received': (_blue, Icons.inventory_2_outlined),
+    'partly received': (_blue, Icons.timelapse),
     'confirmed': (_teal, Icons.verified_outlined),
     'in transit': (_violet, Icons.local_shipping_outlined),
     'delivered': (_cyan, Icons.where_to_vote_outlined),
