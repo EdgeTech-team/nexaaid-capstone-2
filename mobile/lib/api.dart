@@ -56,6 +56,7 @@ class Api extends ChangeNotifier {
   String? token;
   String? email;
   String? role;
+  bool mustChangePassword = false;
 
   bool get loggedIn => token != null;
 
@@ -195,7 +196,7 @@ class Api extends ChangeNotifier {
     }
   }
 
-  // ---- auth ----
+  //   // ---- auth ----
   Future<ApiResult> login(String emailIn, String password) async {
     final r = await send(
       'POST',
@@ -207,6 +208,8 @@ class Api extends ChangeNotifier {
       email = emailIn.trim();
       role = null;
       guest = false;
+      final user = r.json['user'];
+      mustChangePassword = user is Map && user['must_change_password'] == true;
       final me = await get('/health/secure');
       if (me.ok && me.json is Map) role = me.json['role']?.toString();
       notifyListeners();
@@ -219,6 +222,28 @@ class Api extends ChangeNotifier {
     email = null;
     role = null;
     guest = false;
+    mustChangePassword = false;
     notifyListeners();
+  }
+
+  /// I1: POST /auth/change-password. Clears [mustChangePassword] on success.
+  Future<ApiResult> changePassword(
+    String current,
+    String newPassword,
+    String confirm,
+  ) async {
+    final r = await post(
+      '/auth/change-password',
+      body: {
+        'current_password': current,
+        'new_password': newPassword,
+        'confirm_password': confirm,
+      },
+    );
+    if (r.ok) {
+      mustChangePassword = false;
+      notifyListeners();
+    }
+    return r;
   }
 }

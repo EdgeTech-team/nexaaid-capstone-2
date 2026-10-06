@@ -121,17 +121,17 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     ok(client.post(f"/cmo/donations/{did_}/revert", headers=t["cmo"]))
     assert ok(client.get("/cmo/donations/pending", headers=t["cmo"]))[0]["status"] == "Received"
 
-    # DRRMO: accept -> in transit -> completed with a summary
+       # DRRMO: accept -> in transit -> completed with a summary
     delivery = ok(client.post("/deliveries/", headers=t["csws"], json={
         "report_id": rid, "destination_barangay_id": 1, "delivery_date": "2026-10-01T08:00:00",
         "items": [{"item_id": 1, "quantity": 30}]}), 201)
     req = ok(client.post("/logistics/requests", headers=t["csws"],
-                         json={"delivery_id": delivery["delivery_id"], "notes": "1 truck"}), 201)
+                         json={"delivery_id": delivery["delivery_id"],
+                               "trucks": 1, "drivers": 1, "volunteers": 0}), 201)
     rid_ = req["request_id"]
     assert client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                         json={"summary": "done"}).status_code == 400   # not accepted yet
-    ok(client.patch(f"/drrmo/requests/{rid_}/accept", headers=t["drrmo"],
-                    json={"scheduled_date": "2026-10-02T08:00:00"}))
+    ok(client.patch(f"/drrmo/requests/{rid_}/accept", headers=t["drrmo"], json={}))
     ok(client.post(f"/deliveries/{delivery['delivery_id']}/advance", headers=t["csws"]))
     dash = ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))
     assert (dash["scheduled"], dash["in_transit"]) == (0, 1)

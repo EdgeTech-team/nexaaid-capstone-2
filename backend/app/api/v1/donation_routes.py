@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from core.database import get_db
-from core.auth import get_current_user, get_current_user_optional, require_role
+from core.auth import get_current_user, get_current_user_optional, has_role, require_role
 from models.user_rbac_model import User
 from models.guest_donor_model import GuestDonor
 from models.physical_donation_model import PhysicalDonation
@@ -34,6 +34,7 @@ from schemas.physical_donation_schema import (
     pickup_rules,
 )
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
+from services.donation_entries import build_entries, group_by_report
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
@@ -656,4 +657,33 @@ def my_donations(
             for d in donations
         ],
         "supported_reports": [report_info(r) for r in reports.values()],
+    }
+    # ---------------------------------------------------------------------------
+# Entry-based view: Report -> Entries (one per QR) -> Items.
+# Staff see every entry; donors and relief orgs only their own.
+# ---------------------------------------------------------------------------
+ENTRY_STAFF_ROLES = ("Administrator", "CSWS Main Office", "CMO Representative")
+
+
+@router.get("/entries")
+def donation_entries(
+    report_id: Optional[int] = None,
+    pending_only: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(
+        require_role(*ENTRY_STAFF_ROLES, "Individual Donor", "Relief Organization")
+    ),
+):
+    staff = has_role(current_user, *ENTRY_STAFF_ROLES)
+    query = db.query(PhysicalDonation)
+    if not staff:
+        query = query.filter(PhysicalDonation.user_id == current_user.user_id)
+    if report_id is not None:
+        query = query.filter(PhysicalDonation.report_id == report_id)
+    entries = build_entries(db, query.all(), include_donor=staff)
+    reports = group_by_report(entries, pending_only=pending_only)
+    return {
+        "total_reports": len(reports),
+        "total_entries": sum(r["total_entries"] for r in reports),
+        "reports": reports,
     }
