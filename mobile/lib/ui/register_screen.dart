@@ -19,19 +19,6 @@ class RegisterScreen extends StatefulWidget {
   State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-/// UC-D1 step 3: kinds of valid ID (same list as backend ID_TYPES).
-const idTypes = [
-  'PhilSys National ID',
-  "Driver's License",
-  'Passport',
-  'UMID',
-  'Postal ID',
-  "Voter's ID",
-  'PRC ID',
-  'School ID',
-  'Other',
-];
-
 /// Same list as backend ORGANIZATION_TYPES.
 const organizationTypes = [
   'NGO',
@@ -43,13 +30,33 @@ const organizationTypes = [
   'Other',
 ];
 
+/// D3: Terms and Conditions shown in the dialog. Edit the wording with the
+/// team and the adviser before the consultation.
+const termsAndConditionsText =
+    'By creating a NexaAid account you agree to the following:\n\n'
+    '1. Accurate information. The details, ID photos and documents you '
+    'submit must be true and belong to you or your organization.\n\n'
+    '2. Responsible use. NexaAid is for disaster relief coordination. Do not '
+    'submit false reports or donations, or misuse another person\'s account.\n\n'
+    '3. Verification. The Administrator may review your registration, ID or '
+    'supporting document, and may hold, reject or deactivate an account that '
+    'cannot be verified.\n\n'
+    '4. Donations. NexaAid records and tracks physical donations. It does not '
+    'process money. Official recognition of a donation depends on the '
+    'confirmation of the City Mayor\'s Office.\n\n'
+    '5. Privacy. Your personal data is processed under the Data Privacy Act '
+    'of 2012 (RA 10173) only to verify your registration and coordinate '
+    'relief.\n\n'
+    '6. Account security. Keep your password private. You are responsible '
+    'for activity under your account.';
+
 class _RegisterScreenState extends State<RegisterScreen> {
   final _form = GlobalKey<FormState>();
   final _c = <String, TextEditingController>{};
   bool busy = false;
   bool consent = false;
+  bool acceptedTerms = false;
   bool _triedSubmit = false;
-  String? idType;
   String? orgType;
   UploadedFile? idFront, idBack, legitimacyDoc;
 
@@ -104,9 +111,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   bool get _valid =>
       _rules.values.every((rule) => rule() == null) &&
-      (widget.org ? orgType != null : idType != null) &&
+      (widget.org ? orgType != null : true) &&
       _filesReady &&
-      consent;
+      consent &&
+      acceptedTerms;
 
   void _changed([_]) => setState(() {});
 
@@ -125,6 +133,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       'password': c('password').text,
       'confirm_password': c('confirm_password').text,
       'consent': consent,
+      'accepted_terms': acceptedTerms,
     };
     final r = await act(
       context,
@@ -153,7 +162,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'first_name': v('first_name'),
                 'last_name': v('last_name'),
                 'email': c('email').text.trim(),
-                'id_type': idType,
                 'id_front': _ref(idFront!),
                 'id_back': _ref(idBack!),
               },
@@ -246,6 +254,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  /// D2: shows the relaxed rule (8 to 64 characters, a letter and a number).
   Widget _passwordRules(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
@@ -275,10 +284,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           rule('8 to 64 characters', p.length >= 8 && p.length <= 64),
-          rule('One uppercase letter', RegExp(r'[A-Z]').hasMatch(p)),
-          rule('One lowercase letter', RegExp(r'[a-z]').hasMatch(p)),
-          rule('One number', RegExp(r'\d').hasMatch(p)),
-          rule('One special character', RegExp(r'[^A-Za-z0-9]').hasMatch(p)),
+          rule('At least one letter', RegExp(r'[A-Za-z]').hasMatch(p)),
+          rule('At least one number', RegExp(r'\d').hasMatch(p)),
         ],
       ),
     );
@@ -305,6 +312,58 @@ class _RegisterScreenState extends State<RegisterScreen> {
         subtitle: _triedSubmit && !consent
             ? Text('Required', style: TextStyle(color: cs.error))
             : null,
+      ),
+    );
+  }
+
+  /// D3: opens the Terms and Conditions text in a dialog.
+  void _showTerms() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Terms and Conditions'),
+        content: const SingleChildScrollView(
+          child: Text(termsAndConditionsText),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// D3: Terms and Conditions checkbox. The register button stays disabled
+  /// until it is ticked, and the server refuses the request without it.
+  Widget _terms(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Space.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CheckboxListTile(
+            key: const ValueKey('accepted-terms'),
+            value: acceptedTerms,
+            onChanged: (x) => setState(() => acceptedTerms = x ?? false),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('I agree to the Terms and Conditions.'),
+            subtitle: _triedSubmit && !acceptedTerms
+                ? Text('Required', style: TextStyle(color: cs.error))
+                : null,
+          ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              key: const ValueKey('read-terms'),
+              onPressed: _showTerms,
+              child: const Text('Read the Terms and Conditions'),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -383,7 +442,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ),
             if (!widget.org) ...[
               SectionHeader('Valid ID'),
-              _dropdown('ID type', idType, idTypes, (x) => idType = x),
               _upload(
                 'Valid ID (front)',
                 'id_front',
@@ -405,6 +463,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             _passwordRules(context),
             _text('confirm_password', 'Confirm password', password: true),
             _consent(context),
+            _terms(context),
             AppButton(
               widget.org ? 'Submit registration' : 'Create account',
               key: const ValueKey('register-button'),

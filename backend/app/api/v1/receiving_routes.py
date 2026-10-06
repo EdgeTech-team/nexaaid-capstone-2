@@ -10,6 +10,7 @@ from models.user_rbac_model import User
 from models.inventory_model import Inventory
 from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResponse
 from core.notifications import notify, notify_many, user_ids_with_role
+from services.inventory import add_received_stock
 
 
 from typing import Optional
@@ -150,23 +151,8 @@ def receive_donation(
     db.add(receipt)
 
     donation.status = "Received"
-
-    inventory_item = db.query(Inventory).filter(
-        Inventory.item_id == donation.item_id,
-        Inventory.report_id == donation.report_id,
-    ).first()
-
-    if inventory_item:
-        inventory_item.quantity += payload.actual_quantity
-    else:
-        inventory_item = Inventory(
-            item_id=donation.item_id,
-            report_id=donation.report_id,
-            quantity=payload.actual_quantity,
-        )
-        db.add(inventory_item)
-
-    db.flush()
+    # Same transaction as the receipt and the status change (5.1.3).
+    add_received_stock(db, donation.item_id, donation.report_id, payload.actual_quantity)
     log_action(db, current_user, "RECEIVE DONATION", "physical_donations", donation.donation_id,
                old={"status": "Pending"},
                new={"status": "Received", "declared": donation.quantity,
@@ -180,32 +166,12 @@ def receive_donation(
     db.refresh(receipt)
     return receipt
 
-@router.post("/{donation_id}/confirm", response_model=PhysicalDonationResponse)
-def confirm_donation(
-    donation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
-):
-    donation = db.query(PhysicalDonation).filter(
-        PhysicalDonation.donation_id == donation_id
-    ).first()
-    if not donation:
-        raise HTTPException(status_code=404, detail="Donation not found")
-    if donation.status != "Received":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Donation must be 'Received' before it can be confirmed (currently '{donation.status}')",
-        )
 
-    donation.status = "Confirmed"
-    if donation.user_id:  # guest donors have no account
-        notify(db, donation.user_id, "donation_confirmed",
-               title=f"Donation #{donation.donation_id} confirmed",
-               body="Your donation was received and confirmed. Thank you!",
-               entity_type="donation", entity_id=donation.donation_id)
-    db.commit()
-    db.refresh(donation)
-    return donation
+# NOTE (6.1): the old POST /donations/{donation_id}/confirm route was removed.
+# Official recognition ("Confirmed") belongs ONLY to the CMO, via
+# POST /cmo/donations/{donation_id}/confirm in cmo_router.py (manuscript Fig. 14).
+# CSWS receiving ends at status "Received".
+
 
 @router.get("/records")
 def donation_records(

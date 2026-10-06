@@ -113,3 +113,29 @@ def compute_priority(report):
         "priority_level": priority_level,
         "recommendation": recommendation,
     }
+
+PRIORITY_MEANING = {
+    "Critical": "Needs help immediately. Donations to this report are the most urgent.",
+    "High": "Needs help soon. Donations here are a high priority.",
+    "Medium": "Needs help, but is less urgent than Critical and High reports.",
+    "Low": "Lower urgency. Other reports should be covered first.",
+}
+
+
+def explain_priority(report):
+    """Plain-language guidance for the public landing page.
+    Built from the same factors compute_priority scores; no personal data."""
+    meaning = PRIORITY_MEANING.get(
+        report.priority_level, "The City is still reviewing this report's priority."
+    )
+    reasons = []
+    if report.affected_families:
+        reasons.append(f"{report.affected_families} families affected")
+    if report.disaster_type:
+        reasons.append(f"{report.disaster_type.type_name} severity")
+    f = report.fulfillment
+    if f:
+        reasons.append(f"{float(f.fulfillment_percentage):.0f}% of needs delivered")
+    if reasons:
+        return f"{meaning} Based on: {', '.join(reasons)}."
+    return meaning

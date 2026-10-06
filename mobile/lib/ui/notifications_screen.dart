@@ -34,7 +34,13 @@ final Map<String, EntityOpener> notificationDestinations = {
   // ReportDetailScreen needs a full Report, and a notification only carries
   // the id, so fetch the report first, then open the screen. Failures print
   // to the console and show a snackbar instead of failing silently.
-  'report': (c, id) async {
+   'report': (c, id) async {
+    ScaffoldMessenger.of(c).showSnackBar(
+      const SnackBar(
+        content: Text('Opening report…'),
+        duration: Duration(seconds: 2),
+      ),
+    );
     final r = await api.get('/reports/$id');
     if (!r.ok || r.json is! Map) {
       if (c.mounted) {
@@ -50,7 +56,9 @@ final Map<String, EntityOpener> notificationDestinations = {
       Navigator.of(c).push(
         MaterialPageRoute(builder: (_) => ReportDetailScreen(report: report)),
       );
-    } catch (e) {}
+    } catch (e) {
+      debugPrint('Open report failed: $e');
+    }
   },
   // DonorDashboard is a tab body (no Scaffold), so wrap it to get an app bar
   // and a back button. It lists all of the donor's own donations.
@@ -81,11 +89,16 @@ final Map<String, EntityOpener> notificationDestinations = {
       case Roles.cswsMain:
         screen = _withAppBar('Deliveries', const DeliveriesScreen());
         break;
+      
+      case Roles.drrmo:
+        screen = _withAppBar('Logistics requests', const DrrmoScreen());
+        break;
       default:
         screen = null;
     }
     if (screen != null) _push(c, screen);
   },
+
   // logistics_requested goes to DRRMO; logistics_scheduled and
   // logistics_declined go back to the CSWS Main Office user who asked.
 

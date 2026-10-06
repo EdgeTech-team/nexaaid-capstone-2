@@ -7,7 +7,7 @@ exact role names that exist in the live `roles` table.
 
 Walks the whole relief chain the way the test app does:
   report -> admin validates -> donor/guest donate -> CSWS receives
-  -> CMO / CSWS confirm -> CSWS delivery + logistics request
+  -> CMO confirms (or holds with a reason) -> CSWS delivery + logistics request
   -> DRRMO accepts / declines -> CSWS advances -> Barangay confirms receipt
 and checks each role is blocked from what it shouldn't reach.
 """
@@ -177,6 +177,7 @@ def test_full_relief_chain_across_all_roles(api):
     d1 = ok(client.post("/donations/", headers=t["donor"], json={**base, "quantity": 60}))
     d2 = ok(client.post("/donations/", json={**base, "quantity": 5,
              "guest_donor": {"full_name": "Guest", "contact_number": "0917"}}))
+    # 6.1: a new donation starts Pending; nothing approves it automatically
     assert d1["status"] == d2["status"] == "Pending"
     assert ok(client.get(f"/donations/{d1['donation_id']}/qr"))["qr_image_base64"]
 
@@ -192,13 +193,39 @@ def test_full_relief_chain_across_all_roles(api):
     inv = ok(client.get("/donations/inventory", headers=t["csws"]))
     assert inv[0]["quantity"] == 65
 
-    # --- 3.8 CMO confirms one donation, CSWS confirms the other ----------
+    # --- 3.8 only the CMO confirms or holds donations --------------------
     assert client.get("/cmo/donations/pending", headers=t["csws"]).status_code == 403
     assert len(ok(client.get("/cmo/donations/pending", headers=t["cmo"]))) == 2
-    conf = ok(client.post(f"/cmo/donations/{d1['donation_id']}/confirm", headers=t["cmo"],
+
+    # 6.2: putting a donation On Hold needs a reason; donor and CSWS can see it
+    d1_id = d1["donation_id"]
+    assert client.post(f"/cmo/donations/{d1_id}/confirm", headers=t["cmo"],
+                       json={"status": "On Hold"}).status_code == 422
+    assert client.post(f"/cmo/donations/{d1_id}/confirm", headers=t["cmo"],
+                       json={"status": "On Hold", "notes": "   "}).status_code == 422
+    ok(client.post(f"/cmo/donations/{d1_id}/confirm", headers=t["cmo"],
+                   json={"status": "On Hold", "notes": "Need proof of delivery receipt"}), 201)
+    mine = ok(client.get("/donations/mine", headers=t["donor"]))
+    mine_row = next(d for d in mine["donations"] if d["donation_id"] == d1_id)
+    assert mine_row["cmo_decision"] == "On Hold"
+    assert mine_row["hold_reason"] == "Need proof of delivery receipt"
+    assert mine_row["status"] == "Received"          # a hold is not an official confirmation
+    recs = ok(client.get("/donations/records", headers=t["csws"]))
+    assert next(r for r in recs if r["donation_id"] == d1_id)["hold_reason"] == "Need proof of delivery receipt"
+
+    # the CMO then confirms d1; the hold reason disappears once it is confirmed
+    conf = ok(client.post(f"/cmo/donations/{d1_id}/confirm", headers=t["cmo"],
                           json={"status": "Confirmed", "notes": "ok"}), 201)
     assert conf["status"] == "Confirmed"
-    ok(client.post(f"/donations/{d2['donation_id']}/confirm", headers=t["csws"]))
+    mine = ok(client.get("/donations/mine", headers=t["donor"]))
+    assert next(d for d in mine["donations"] if d["donation_id"] == d1_id)["hold_reason"] is None
+
+    # 6.1: CSWS can no longer confirm; the old route is gone and d2 stays awaiting the CMO
+    assert client.post(f"/donations/{d2['donation_id']}/confirm", headers=t["csws"]).status_code in (404, 405)
+    assert len(ok(client.get("/cmo/donations/pending", headers=t["cmo"]))) == 1
+    ok(client.post(f"/cmo/donations/{d2['donation_id']}/confirm", headers=t["cmo"],
+                   json={"status": "Confirmed"}), 201)
+
     cmo = ok(client.get("/cmo/dashboard", headers=t["cmo"]))
     assert (cmo["pending_confirmation"], cmo["confirmed"]) == (0, 2)
     assert cmo["per_report"][0]["confirmed_quantity"] == 65   # summary per report (UC-C2)
