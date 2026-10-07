@@ -206,3 +206,28 @@ class LoginRequest(BaseModel):
     # "IndentationError: expected an indented block after class definition".
     email: EmailStr
     password: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def _em(cls, v): return clean_email(str(v))
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., pattern=r"^\d{6}$")
+    new_password: str = Field(..., min_length=8, max_length=64)
+    confirm_password: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("email")
+    @classmethod
+    def _em(cls, v): return clean_email(str(v))
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.new_password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        validate_password_strength(self.new_password, email=self.email)
+        return self
