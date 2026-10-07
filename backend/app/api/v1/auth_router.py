@@ -1,4 +1,5 @@
 # routers/auth_router.py
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -80,13 +81,18 @@ def register_donor(payload: DonorRegisterRequest, request: Request, db: Session 
 
 @router.post("/register/organization", response_model=OrganizationResponse, status_code=status.HTTP_201_CREATED)
 def register_organization(payload: OrganizationRegisterRequest, request: Request, db: Session = Depends(get_db)):
-    """UC-A2: the organization registers and waits as Pending for the
-    Administrator's review (adviser item 2.1)."""
+    """UC-A2, changed by concern 1.3: the organization is approved
+    automatically and can log in right away, like an individual donor. The
+    Administrator's view is for review; they can still reject an
+    organization later (UC-A2 6a) if it cannot be verified.
+    Concern 1.1: the registration number and supporting document are optional."""
     if _email_taken(db, payload.contact_email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    if db.query(Organization).filter(Organization.registration_no == payload.registration_no).first():
+    # Only checked when a number was given; organizations without one are fine.
+    if payload.registration_no and db.query(Organization).filter(
+            Organization.registration_no == payload.registration_no).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Registration number already used")
-
+    
     org_role = db.query(Role).filter(Role.role_name == "Relief Organization").first()
     if org_role is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Role configuration missing")
@@ -98,6 +104,9 @@ def register_organization(payload: OrganizationRegisterRequest, request: Request
         contact_person=payload.contact_person,
         registration_no=payload.registration_no,
         contact_email=payload.contact_email,
+        # Concern 1.3: approved automatically (no approving admin).
+        status="Approved",
+        approved_at=datetime.now(timezone.utc),
     )
     db.add(new_org)
     _flush_or_409(db, "Email or registration number already exists")
@@ -114,22 +123,26 @@ def register_organization(payload: OrganizationRegisterRequest, request: Request
     db.add(new_user)
     _flush_or_409(db, "Email already registered")
 
-    # UC-A2 step 4: the supporting document the Administrator reviews.
-    files = claim_registration_files(db, new_user, {
-        "legitimacy_document": payload.legitimacy_document,
-    })
-    new_org.legitimacy_document_url = file_url(files["legitimacy_document"].file_id)
+    # UC-A2 step 4: the supporting document, only when one was uploaded.
+    if payload.legitimacy_document is not None:
+        files = claim_registration_files(db, new_user, {
+            "legitimacy_document": payload.legitimacy_document,
+        })
+        new_org.legitimacy_document_url = file_url(files["legitimacy_document"].file_id)
 
     log_action(db, new_user, "REGISTER ORGANIZATION", "organizations", new_org.organization_id, new={
         "org_name": new_org.org_name,
         "email": new_user.email,
+        "status": "Approved",
+        "auto_approved": True,
+        "has_document": payload.legitimacy_document is not None,
         "consent_ra10173": True,
     }, request=request)
 
+    # The Administrator is told so they can review it.
     notify_event_many(db, user_ids_with_role(db, ["Administrator"]),
                       "org_registered", "organization", new_org.organization_id,
                       name=new_org.org_name)
-    # Login stays blocked by authenticate_user() until the admin approves the org.
     db.flush()
     db.refresh(new_org)
     return new_org

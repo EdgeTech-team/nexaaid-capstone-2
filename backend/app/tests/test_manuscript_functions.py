@@ -32,15 +32,21 @@ def test_admin_accounts_orgs_and_logs(api):
     ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": True}))
     ok(client.post("/token", data={"username": "donor.test@example.com", "password": PASSWORD}))
 
-    # UC-A2: organization is Pending until approved
+        # UC-A2 with concern 1.3: approved automatically, can log in right away.
     org = ok(client.post("/auth/register/organization",
                          json=org_payload(client, "jo@relief.ph")), 201)
+    assert org["status"] == "Approved"
+    ok(client.post("/token", data={"username": "jo@relief.ph", "password": STRONG_PASSWORD}))
+    approved = ok(client.get("/admin/organizations?status=Approved", headers=t["admin"]))
+    row = next(o for o in approved if o["contact_email"] == "jo@relief.ph")
+    assert row["document_missing"] is False                # uploaded at registration
+    # The admin can still reject it after review; then it can't log in.
+    url = f"/admin/organizations/{org['organization_id']}/decision"
+    ok(client.post(url, headers=t["admin"],
+                   json={"decision": "Rejected", "reason": "Could not verify"}))
     r = client.post("/token", data={"username": "jo@relief.ph", "password": STRONG_PASSWORD})
-    assert r.status_code == 403 and "Pending" in r.json()["detail"]
-    pending = ok(client.get("/admin/organizations?status=Pending", headers=t["admin"]))
-    assert pending[0]["document_missing"] is False         # uploaded at registration
-    ok(client.post(f"/admin/organizations/{org['organization_id']}/decision",
-                   headers=t["admin"], json={"decision": "Approved"}))
+    assert r.status_code == 403
+    ok(client.post(url, headers=t["admin"], json={"decision": "Approved"}))
     ok(client.post("/token", data={"username": "jo@relief.ph", "password": STRONG_PASSWORD}))
 
     # UC-A4: activity logs, read-only, admin only

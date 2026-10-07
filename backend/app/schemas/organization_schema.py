@@ -27,13 +27,13 @@ class OrganizationRegisterRequest(BaseModel):
     address: str
     contact_first_name: str
     contact_last_name: str
-    registration_no: str
+    registration_no: Optional[str] = None
     contact_email: EmailStr
     contact_number: str
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
     # Supporting document, uploaded first with POST /uploads (photo or PDF).
-    legitimacy_document: UploadRef
+    legitimacy_document: Optional[UploadRef] = None
     # RA 10173 (Data Privacy Act)
     consent: bool
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
@@ -57,7 +57,11 @@ class OrganizationRegisterRequest(BaseModel):
 
     @field_validator("registration_no")
     @classmethod
-    def _rn(cls, v): return clean_registration_no(v)
+    def _rn(cls, v):
+        # Concern 1.1: empty means "no registration number".
+        if v is None or not str(v).strip():
+            return None
+        return clean_registration_no(v)
 
     @field_validator("contact_email")
     @classmethod

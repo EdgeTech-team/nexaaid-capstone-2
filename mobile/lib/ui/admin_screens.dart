@@ -243,7 +243,7 @@ class OrganizationsReview extends StatefulWidget {
 }
 
 class _OrganizationsReviewState extends State<OrganizationsReview> {
-  String status = 'Pending';
+  String status = 'Approved';
 
   @override
   Widget build(BuildContext context) {
@@ -259,7 +259,9 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
           children: [
             const PageHeader(
               'Organization Registrations',
-              subtitle: 'Relief organizations can only log in after approval (UC-A2).',
+                   subtitle:
+                  'Organizations are approved automatically when they register. '
+                  'Review them here, and reject one if it cannot be verified.',
             ),
             SegmentedButton<String>(
               segments: const [
@@ -459,7 +461,10 @@ class _OrgDocument extends StatelessWidget {
             url: '${d['url']}',
             contentType: '${d['content_type']}',
           ),
-          'missing' => _flag(context, 'Supporting document missing'),
+          'missing' => Text(
+            'No supporting document (optional).',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           'unreadable' => _flag(
             context,
             'Supporting document unreadable (the file is gone). Ask for a re-upload.',

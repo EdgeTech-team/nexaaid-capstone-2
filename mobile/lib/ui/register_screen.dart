@@ -89,8 +89,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Validators.personName(c('first_name').text, label: 'First name'),
       'last_name': () =>
           Validators.personName(c('last_name').text, label: 'Last name'),
-      'registration_no': () =>
-          Validators.registrationNo(c('registration_no').text),
+      'registration_no': () => c('registration_no').text.trim().isEmpty
+          ? null
+          : Validators.registrationNo(c('registration_no').text),
     } else ...{
       'first_name': () =>
           Validators.personName(c('first_name').text, label: 'First name'),
@@ -107,8 +108,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   };
 
   bool get _filesReady =>
-      widget.org ? legitimacyDoc != null : idFront != null && idBack != null;
-
+      widget.org ? true : idFront != null && idBack != null;
   bool get _valid =>
       _rules.values.every((rule) => rule() == null) &&
       (widget.org ? orgType != null : true) &&
@@ -150,9 +150,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'address': v('address'),
                 'contact_first_name': v('first_name'),
                 'contact_last_name': v('last_name'),
-                'registration_no': v('registration_no'),
+                'registration_no': v('registration_no').isEmpty
+                    ? null
+                    : v('registration_no'),
                 'contact_email': c('email').text.trim(),
-                'legitimacy_document': _ref(legitimacyDoc!),
+                'legitimacy_document': legitimacyDoc == null
+                    ? null
+                    : _ref(legitimacyDoc!),
               },
             )
           : api.post(
@@ -167,7 +171,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               },
             ),
       success: widget.org
-          ? 'Registration submitted. You can log in once the Administrator approves your organization.'
+           ? 'Organization registered. You can now log in.'
           : 'Account created. You can now log in.',
     );
     if (!mounted) return;
@@ -248,7 +252,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         label: label,
         purpose: purpose,
         helperText: helper,
-        errorText: _triedSubmit && current == null ? 'Required' : null,
+        errorText: _triedSubmit && current == null && purpose != 'legitimacy_document'
+            ? 'Required'
+            : null,
         onChanged: (f) => setState(() => set(f)),
       ),
     );
@@ -407,10 +413,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 icon: Icons.place_outlined,
                 hint: 'Street, barangay, Mandaue City',
                 maxLines: 2,
-              ),
+              ),  
               _text(
                 'registration_no',
-                'Registration number (SEC, DSWD, CDA...)',
+                'Supporting document (optional, photo or PDF)',
                 icon: Icons.badge_outlined,
               ),
               _upload(

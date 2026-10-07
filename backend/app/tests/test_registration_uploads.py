@@ -181,13 +181,12 @@ def test_duplicate_email_is_rejected_case_insensitively(api):
 
 
 # ---------------------------------------------------------- organization (UC-A2)
-
 def test_organization_registers_with_document_and_split_contact(api):
     client, t = api
     body = org_payload(client, "ops@relief.ph", organization_type="Other",
                        organization_type_other="Cooperative")
     org = ok(client.post("/auth/register/organization", json=body), 201)
-    assert org["status"] == "Pending"
+    assert org["status"] == "Approved"                       # concern 1.3
 
     db = _db()
     try:
@@ -199,29 +198,27 @@ def test_organization_registers_with_document_and_split_contact(api):
         assert o.legitimacy_document_url == f"/uploads/{body['legitimacy_document']['file_id']}"
         up = db.query(Upload).filter(Upload.file_id == body["legitimacy_document"]["file_id"]).one()
         assert up.owner_user_id == u.user_id
+        # Approved automatically: there is a time, but no approving admin.
+        assert o.approved_at is not None and o.approved_by_user_id is None
     finally:
         db.close()
 
-    # Still cannot log in while Pending.
-    r = client.post("/token", data={"username": "ops@relief.ph", "password": STRONG_PASSWORD})
-    assert r.status_code == 403
+    # Concern 1.3: can log in right away, like an individual donor.
+    ok(client.post("/token", data={"username": "ops@relief.ph", "password": STRONG_PASSWORD}))
 
-
-def test_organization_document_and_type_are_required(api):
+def test_organization_type_and_consent_are_required(api):
+    """The supporting document is optional now (concern 1.1); these are not."""
     client, t = api
     body = org_payload(client, "nodoc@relief.ph")
-    for field, value in {"legitimacy_document": None, "organization_type": "Cult",
+    for field, value in {"organization_type": "Cult",
                          "consent": False, "contact_last_name": ""}.items():
         b = dict(body)
-        if value is None:
-            b.pop(field)
-        else:
-            b[field] = value
+        b[field] = value
         assert client.post("/auth/register/organization", json=b).status_code == 422, field
     other = dict(body, organization_type="Other")          # "Other" needs the specify field
     assert client.post("/auth/register/organization", json=other).status_code == 422
 
-    # An ID photo can't be used as a legitimacy document.
+    # If a document is given, it must be a legitimacy document, not an ID photo.
     wrong = dict(body, legitimacy_document=ref(upload(client, "id_front")))
     assert client.post("/auth/register/organization", json=wrong).status_code == 400
     db = _db()
@@ -231,6 +228,42 @@ def test_organization_document_and_type_are_required(api):
         db.close()
 
 
+def test_organization_without_number_or_document_is_approved(api):
+    """Concerns 1.1 + 1.3: a church or small group with no registration number
+    and no supporting document can register and log in right away."""
+    client, t = api
+    body = org_payload(client, "church@relief.ph", organization_type="Religious")
+    body.pop("legitimacy_document")
+    body.pop("registration_no", None)
+    org = ok(client.post("/auth/register/organization", json=body), 201)
+    assert org["status"] == "Approved"
+    db = _db()
+    try:
+        o = db.get(Organization, org["organization_id"])
+        assert o.registration_no is None and o.legitimacy_document_url is None
+    finally:
+        db.close()
+    ok(client.post("/token", data={"username": "church@relief.ph", "password": STRONG_PASSWORD}))
+
+    # A second organization without a number is accepted too ("   " counts as none).
+    second = org_payload(client, "youth@relief.ph")
+    second.pop("legitimacy_document")
+    second["registration_no"] = "   "
+    ok(client.post("/auth/register/organization", json=second), 201)
+
+    # The admin's list shows them, with no red "missing" problem for an optional document.
+    rows = ok(client.get("/admin/organizations?status=Approved", headers=t["admin"]))
+    assert {"church@relief.ph", "youth@relief.ph"} <= {o["contact_email"] for o in rows}
+
+
+def test_registration_number_is_still_unique_when_given(api):
+    client, t = api
+    first = org_payload(client, "first@relief.ph")
+    ok(client.post("/auth/register/organization", json=first), 201)
+    second = org_payload(client, "second@relief.ph")
+    second["registration_no"] = first["registration_no"]
+    assert client.post("/auth/register/organization", json=second).status_code == 409
+    
 def test_organization_terms_are_required(api):
     """D3: organizations must also accept the Terms and Conditions."""
     client, t = api
