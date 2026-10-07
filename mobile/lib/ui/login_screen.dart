@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'register_screen.dart';
 import 'widgets.dart';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -60,8 +62,10 @@ class _LoginScreenState extends State<LoginScreen> {
             child: ListView(
               padding: const EdgeInsets.all(24),
               children: [
-                                // Back to the landing page it was opened from. Hidden when
-                // the login screen is the first page (nothing to go back to).
+                // Back to the landing page it was opened from (hidden when
+                // there is nothing to go back to), and the light/dark toggle
+                // at the far right. The server address stays reachable in
+                // debug builds only, for running on Chrome vs the emulator.
                 Row(
                   children: [
                     if (Navigator.of(context).canPop())
@@ -71,10 +75,29 @@ class _LoginScreenState extends State<LoginScreen> {
                         label: const Text('Back'),
                       ),
                     const Spacer(),
-                    IconButton(
-                      tooltip: 'Server address',
-                      onPressed: _server,
-                      icon: const Icon(Icons.settings_outlined),
+                    if (kDebugMode)
+                      IconButton(
+                        tooltip: 'Server address',
+                        onPressed: _server,
+                        icon: const Icon(Icons.settings_outlined),
+                      ),
+                    ValueListenableBuilder<ThemeMode>(
+                      valueListenable: AppTheme.mode,
+                      builder: (context, mode, _) {
+                        final dark =
+                            Theme.of(context).brightness == Brightness.dark;
+                        return IconButton(
+                          tooltip: dark ? 'Light mode' : 'Dark mode',
+                          onPressed: () => AppTheme.mode.value = dark
+                              ? ThemeMode.light
+                              : ThemeMode.dark,
+                          icon: Icon(
+                            dark
+                                ? Icons.light_mode_outlined
+                                : Icons.dark_mode_outlined,
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -150,40 +173,57 @@ class _LoginScreenState extends State<LoginScreen> {
                         )
                       : const Text('Log in'),
                 ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: api.continueAsGuest,
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
-                  ),
-                  icon: const Icon(Icons.favorite_border),
-                  label: const Text('Donate as guest'),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+                const SizedBox(height: 12),
+                // UI concern: registering comes before guest donation and
+                // stands out more than it.
+                Row(
                   children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const RegisterScreen(org: false),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const RegisterScreen(org: false),
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                        ),
+                        child: const Text(
+                          'Register as donor',
+                          textAlign: TextAlign.center,
                         ),
                       ),
-                      child: const Text('Register as donor'),
                     ),
-                    const Text('·'),
-                    TextButton(
-                      onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const RegisterScreen(org: true),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const RegisterScreen(org: true),
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                        ),
+                        child: const Text(
+                          'Register organization',
+                          textAlign: TextAlign.center,
                         ),
                       ),
-                      child: const Text('Register organization'),
                     ),
                   ],
                 ),
-                              ],
+                const SizedBox(height: 8),
+                // Least highlighted option: plain text, muted color.
+                TextButton.icon(
+                  onPressed: api.continueAsGuest,
+                  style: TextButton.styleFrom(
+                    foregroundColor: cs.onSurfaceVariant,
+                  ),
+                  icon: const Icon(Icons.favorite_border, size: 18),
+                  label: const Text('Donate as guest'),
+                ),
+              ],
             ),
           ),
         ),
@@ -191,4 +231,3 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
-    

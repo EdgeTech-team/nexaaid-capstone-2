@@ -511,36 +511,46 @@ class _Hero extends StatelessWidget {
                 style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
               ),
               Gaps.v24,
-              AppButton(
-                'Donate as guest',
-                icon: Icons.volunteer_activism_outlined,
-                variant: AppButtonVariant.donate,
-                large: true,
-                expand: true,
-                onPressed: onDonateAsGuest,
-              ),
-              Gaps.v12,
+              // UI concern: Log in and Create account come first and stand
+              // out; guest donation is still there, one step down.
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
+                    child: FilledButton(
                       onPressed: onLogIn,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: onHero,
-                        side: const BorderSide(color: AppColors.harborMist),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.vest,
+                        foregroundColor: AppColors.vestInk,
+                        minimumSize: const Size.fromHeight(52),
                       ),
                       child: const Text('Log in'),
                     ),
                   ),
                   Gaps.h12,
                   Expanded(
-                    child: TextButton(
+                    child: OutlinedButton(
                       onPressed: onCreateAccount,
-                      style: TextButton.styleFrom(foregroundColor: onHero),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: onHero,
+                        side: const BorderSide(color: onHero, width: 1.5),
+                        minimumSize: const Size.fromHeight(52),
+                      ),
                       child: const Text('Create account'),
                     ),
                   ),
                 ],
+              ),
+              Gaps.v12,
+          
+              TextButton.icon(
+                onPressed: onDonateAsGuest,
+                style: TextButton.styleFrom(
+                  foregroundColor: onHero,
+                  backgroundColor: Colors.white.withValues(alpha: 0.12),
+                  minimumSize: const Size.fromHeight(44),
+                ),
+                icon: const Icon(Icons.volunteer_activism_outlined),
+                label: const Text('Donate as guest'),
               ),
               if (urgent != null) ...[Gaps.v24, urgent!],
               Gaps.v24,
