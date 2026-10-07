@@ -32,13 +32,13 @@ class OrganizationRegisterRequest(BaseModel):
     address: str
     contact_first_name: str
     contact_last_name: str
-    registration_no: str
+    registration_no: Optional[str] = None
     contact_email: EmailStr
     contact_number: str
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
     # Supporting document, uploaded first with POST /uploads (photo or PDF).
-    legitimacy_document: Optional [UploadRef] = None    
+    legitimacy_document: Optional[UploadRef] = None
     # RA 10173 (Data Privacy Act)
     consent: bool
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
