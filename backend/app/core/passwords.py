@@ -25,17 +25,18 @@ def generate_temp_password(length: int = 12) -> str:
 def validate_password_strength(password: str, email: str | None = None, names: tuple = ()) -> None:
     """Raises ValueError with a user-readable message.
 
-    D2 (relaxed rule): 8-64 characters, at least one letter and one number.
-    The Flutter check (Validators.newPassword in validators.dart) must say
-    the same thing. The email and names arguments are kept so existing
-    callers do not break, but they are no longer used.
+    Rule (D2, plus concern 1.1): 8-64 characters, at least one capital
+    letter and one number. The Flutter check (Validators.newPassword in
+    validators.dart) must say the same thing. The email and names arguments
+    are kept so existing callers do not break, but they are no longer used.
     """
     if not (8 <= len(password) <= 64):
         raise ValueError("Password must be 8-64 characters")
     if not re.fullmatch(r"[\x21-\x7e]+", password):
         raise ValueError("Password may only use standard keyboard characters (no spaces or emojis)")
-    if not re.search(r"[A-Za-z]", password):
-        raise ValueError("Password needs at least one letter")
+    # Concern 1.1: at least one capital letter (this also covers "a letter").
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("Password needs at least one capital letter")
     if not re.search(r"\d", password):
         raise ValueError("Password needs at least one number")
     if password.lower() in _COMMON:

@@ -56,7 +56,11 @@ void main() {
     expect(Validators.phMobile('09171234567'), isNull);
     expect(Validators.phMobile('0917123456'), isNotNull); // 10 digits
     expect(Validators.phMobile('08171234567'), isNotNull); // not 09
-    expect(Validators.newPassword('testpass123'), isNotNull); // no upper/symbol
+    expect(Validators.newPassword('testpass123'), isNotNull); // no capital
+    expect(Validators.newPassword('TestPassword'), isNotNull); // no number
+    expect(Validators.newPassword('Test 1234'), isNotNull); // space
+    expect(Validators.newPassword('Tp12345'), isNotNull); // too short
+    expect(Validators.newPassword('Testpass123'), isNull);
     expect(Validators.newPassword('Relief#2026ok'), isNull);
   });
 
@@ -66,11 +70,10 @@ void main() {
     await _pump(tester, const RegisterScreen(org: false));
     expect(_registerButton(tester).onPressed, isNull);
 
-    // Two required uploads, ID type dropdown and consent are on the form.
     expect(find.byType(UploadField), findsNWidgets(2));
     expect(find.text('Valid ID (front)'), findsOneWidget);
     expect(find.text('Valid ID (back)'), findsOneWidget);
-    expect(find.text('ID type'), findsOneWidget);
+    expect(find.text('ID type'), findsNothing);
     expect(find.byKey(const ValueKey('consent')), findsOneWidget);
 
     // Name is capitalized while typing; the phone stops at 11 digits.
@@ -95,7 +98,10 @@ void main() {
   ) async {
     await _pump(tester, const RegisterScreen(org: false));
     expect(find.byTooltip('Show password'), findsNWidgets(2));
-    expect(find.text('One special character'), findsOneWidget);
+    expect(find.text('8 to 64 characters'), findsOneWidget);
+    expect(find.text('At least one capital letter'), findsOneWidget);
+    expect(find.text('At least one number'), findsOneWidget);
+    expect(find.text('One special character'), findsNothing);
   });
 
   testWidgets('Organization form: document upload and type dropdown', (
@@ -103,14 +109,14 @@ void main() {
   ) async {
     await _pump(tester, const RegisterScreen(org: true));
     expect(find.byType(UploadField), findsOneWidget);
-    expect(find.text('Supporting document (photo or PDF)'), findsOneWidget);
+    expect(find.textContaining('Supporting document'), findsOneWidget);
     expect(find.text('Organization type'), findsOneWidget);
     expect(find.text('Please specify the type'), findsNothing);
     expect(find.text('Contact person'), findsOneWidget);
     expect(_registerButton(tester).onPressed, isNull);
 
     // "Other" asks what kind of organization it is.
-    await tester.tap(find.text('Organization type'));
+    await tester.tap(find.text('Organization type')); 
     await tester.pumpAndSettle();
     await tester.tap(find.text('Other').last);
     await tester.pumpAndSettle();

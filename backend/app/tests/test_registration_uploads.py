@@ -128,22 +128,26 @@ def test_donor_terms_are_required(api):
     assert _user("terms@example.com") is not None
 
 
-def test_relaxed_password_rule(api):
-    """D2: 8-64 characters with at least one letter and one number."""
+def test_password_rule(api):
+    """D2 + concern 1.1: 8-64 characters, at least one capital letter and
+    one number. No symbol needed."""
     client, t = api
     base = donor_payload(client, "pw@example.com")
 
-    for weak in ("abcdefgh", "12345678", "short1"):
+    for weak in ("abcdefgh", "12345678", "Short1", "abc12345", "ABCDEFGH", "Test 1234"):
         body = dict(base, password=weak, confirm_password=weak)
         r = client.post("/auth/register/donor", json=body)
         assert r.status_code == 422, weak
 
-    easy = "abc12345"                                      # no capital, no symbol: allowed now
+    r = client.post("/auth/register/donor",
+                    json=dict(base, password="abc12345", confirm_password="abc12345"))
+    assert "capital letter" in r.text                      # says what is missing
+
+    easy = "Abc12345"                                      # capital + number, no symbol: allowed
     body = dict(base, password=easy, confirm_password=easy)
     ok(client.post("/auth/register/donor", json=body), 201)
     ok(client.post("/token", data={"username": "pw@example.com", "password": easy}))
-
-
+    
 def test_failed_claim_creates_nothing(api):
     client, t = api
     body = donor_payload(client, "rollback@example.com")
