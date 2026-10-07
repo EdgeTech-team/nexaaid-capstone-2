@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from core.database import get_db
@@ -11,6 +11,7 @@ from models.inventory_model import Inventory
 from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResponse
 from core.notifications import notify, notify_many, user_ids_with_role
 from services.inventory import add_received_stock
+from services.donation_entries import ENTRY_SORTS, build_entries, filter_and_sort, group_by_report
 
 
 from typing import Optional
@@ -244,29 +245,23 @@ def receive_entry(
 @router.get("/records")
 def donation_records(
     status: Optional[str] = None,
+    report_id: Optional[int] = None,
+    handover_method: Optional[str] = None,
+    q: Optional[str] = None,
+    sort: str = Query("newest", pattern="^(" + "|".join(ENTRY_SORTS) + ")$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("Administrator", "CSWS Main Office", "CMO Representative")),
 ):
     """Appendix H, Module 4.4 / 4.5: View donation records and monitor
-    donation status (Administrator, CSWS Main Office, CMO)."""
-    from api.v1.cmo_router import _rows
+    donation status (Administrator, CSWS Main Office, CMO).
+
+    One record per donation entry (one QR / batch_reference) with its items.
+    Filters: status (entry status), report_id, handover_method, q (QR
+    reference, donor or item). sort: newest, oldest, most_items, fewest_items.
+    """
     query = db.query(PhysicalDonation)
-    if status:
-        query = query.filter(PhysicalDonation.status == status)
-    donations = query.order_by(PhysicalDonation.donation_id.desc()).limit(300).all()
-    users = {
-        u.user_id: f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
-        for u in db.query(User).filter(User.user_id.in_({d.user_id for d in donations if d.user_id})).all()
-    }
-    guests = {
-        g.guest_donor_id: g.full_name
-        for g in db.query(GuestDonor).filter(
-            GuestDonor.guest_donor_id.in_({d.guest_donor_id for d in donations if d.guest_donor_id})
-        ).all()
-    }
-    rows = _rows(db, donations)
-    for row, d in zip(rows, donations):
-        row["donor"] = users.get(d.user_id) if d.user_id else f"{guests.get(d.guest_donor_id, 'Guest')} (guest)"
-        row["handover_method"] = d.handover_method
-        row["created_at"] = d.created_at
-    return rows
+    if report_id is not None:
+        query = query.filter(PhysicalDonation.report_id == report_id)
+    entries = build_entries(db, query.all(), include_donor=True, include_cmo=True)
+    group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
+    return filter_and_sort(entries, status=status, handover_method=handover_method, search=q, sort=sort)

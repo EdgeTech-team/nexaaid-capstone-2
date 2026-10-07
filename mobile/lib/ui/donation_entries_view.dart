@@ -2,202 +2,374 @@ import 'package:flutter/material.dart';
 
 import 'widgets.dart';
 
-// Report -> Entries -> Items (team rule, Oct 6). One ENTRY = one donor
-// submission = one batch_reference. The grouping comes from the backend
-// (services/donation_entries.py); this file only displays it.
+/// Appendix H 4.4 View donation records / 4.5 Monitor donation status.
+/// Records are shown per donation entry (one QR / batch_reference) with its
+/// items, never one row per item. Rows come from GET /donations/records
+/// (staff) or the "entries" of GET /donations/mine (donor / organization).
+/// The filters and sort only change what is shown.
 
-/// 4.1: every donation entry, or only one report's.
-void openDonationEntries(
-  BuildContext context, {
-  int? reportId,
-  String title = 'Donation entries',
-}) => _openEntriesPage(
-  context,
-  title,
-  '/donations/entries',
-  query: {if (reportId != null) 'report_id': '$reportId'},
-  empty: 'No donations yet.',
-);
+const entryStatuses = ['Pending', 'Partly Received', 'Received', 'Confirmed'];
+const handoverMethods = ['Drop Off', 'Door to Door'];
 
-/// 5.1: the held donations behind the Admin dashboard tile.
-void openHeldDonations(BuildContext context) => _openEntriesPage(
-  context,
-  'Held donations',
-  '/dashboard/admin/held',
-  empty: 'No donations are on hold.',
-);
+enum EntrySort {
+  newest('Newest first'),
+  oldest('Oldest first'),
+  mostItems('Most items'),
+  fewestItems('Fewest items');
 
-void _openEntriesPage(
-  BuildContext context,
-  String title,
-  String path, {
-  Map<String, String> query = const {},
-  required String empty,
-}) {
-  Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => Scaffold(
-        appBar: AppBar(title: Text(title)),
-        body: Loader(
-          load: [() => api.get(path, query: query)],
-          builder: (context, data) {
-            final m = data[0] as Map;
-            return EntryReportsList(
-              (m['reports'] as List).cast<Map>(),
-              held: ((m['held_donation_ids'] as List?) ?? const []).toSet(),
-              empty: empty,
-            );
-          },
-        ),
-      ),
-    ),
-  );
+  final String label;
+  const EntrySort(this.label);
 }
 
-/// Full list: each report, its entries (tap to open), each entry's items.
-class EntryReportsList extends StatelessWidget {
-  final List<Map> reports;
+String entryReportLabel(Map e) {
+  final r = e['report'] as Map?;
+  return '${e['report_label'] ?? r?['label'] ?? 'Report #${e['report_id']}'}';
+}
 
-  /// donation_ids to mark "On hold" (held donations page only).
-  final Set held;
-  final String empty;
-  const EntryReportsList(
-    this.reports, {
+String entryTitle(Map e) {
+  final n = e['total_items'] as int? ?? (e['items'] as List).length;
+  return '${e['entry_no'] != null ? 'Donation ${e['entry_no']}' : '${e['batch_reference']}'}'
+      ' · $n ${n == 1 ? 'item' : 'items'}';
+}
+
+/// Filters by status, report, handover method and search (QR reference,
+/// donor or item name), then sorts. Same rules as the backend's
+/// services/donation_entries.filter_and_sort.
+List<Map> filterEntries(
+  List<Map> entries, {
+  String search = '',
+  String? status,
+  int? reportId,
+  String? handover,
+  EntrySort sort = EntrySort.newest,
+}) {
+  final q = search.trim().toLowerCase();
+  final shown = entries
+      .where((e) => status == null || e['status'] == status)
+      .where((e) => reportId == null || e['report_id'] == reportId)
+      .where((e) => handover == null || e['handover_method'] == handover)
+      .where(
+        (e) =>
+            q.isEmpty ||
+            '${e['batch_reference']}'.toLowerCase().contains(q) ||
+            '${e['donor'] ?? ''}'.toLowerCase().contains(q) ||
+            (e['items'] as List).any(
+              (i) => '${i['item_name']}'.toLowerCase().contains(q),
+            ),
+      )
+      .toList();
+  // The first item's id follows the order entries were submitted in.
+  int first(Map e) =>
+      ((e['items'] as List).first['donation_id'] as num).toInt();
+  int count(Map e) => (e['total_items'] as num?)?.toInt() ?? 0;
+  shown.sort(switch (sort) {
+    EntrySort.newest => (a, b) => first(b).compareTo(first(a)),
+    EntrySort.oldest => (a, b) => first(a).compareTo(first(b)),
+    EntrySort.mostItems =>
+      (a, b) => count(b) != count(a)
+          ? count(b).compareTo(count(a))
+          : first(b).compareTo(first(a)),
+    EntrySort.fewestItems =>
+      (a, b) => count(a) != count(b)
+          ? count(a).compareTo(count(b))
+          : first(b).compareTo(first(a)),
+  });
+  return shown;
+}
+
+class DonationEntriesView extends StatefulWidget {
+  final List<Map> entries;
+
+  /// Optional extra content under each entry (e.g. the donor's timeline).
+  final Widget Function(Map entry)? footer;
+  final void Function(Map entry)? onTap;
+  final String emptyTitle;
+  final String emptyMessage;
+
+  const DonationEntriesView({
     super.key,
-    this.held = const {},
-    this.empty = 'No donations yet.',
+    required this.entries,
+    this.footer,
+    this.onTap,
+    this.emptyTitle = 'No donations yet.',
+    this.emptyMessage = 'Donation entries will show here once submitted.',
+  });
+
+  @override
+  State<DonationEntriesView> createState() => _DonationEntriesViewState();
+}
+
+class _DonationEntriesViewState extends State<DonationEntriesView> {
+  final searchC = TextEditingController();
+  String search = '';
+  String? status;
+  int? reportId;
+  String? handover;
+  EntrySort sort = EntrySort.newest;
+
+  @override
+  void dispose() {
+    searchC.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.entries.isEmpty) {
+      return EmptyView(
+        icon: Icons.volunteer_activism_outlined,
+        title: widget.emptyTitle,
+        message: widget.emptyMessage,
+        compact: true,
+      );
+    }
+    final reports = <int, String>{};
+    for (final e in widget.entries) {
+      reports.putIfAbsent(e['report_id'] as int, () => entryReportLabel(e));
+    }
+    int countOf(String s) =>
+        widget.entries.where((e) => e['status'] == s).length;
+    final shown = filterEntries(
+      widget.entries,
+      search: search,
+      status: status,
+      reportId: reportId,
+      handover: handover,
+      sort: sort,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final s in <String?>[null, ...entryStatuses])
+                Padding(
+                  padding: const EdgeInsets.only(right: Space.xs),
+                  child: ChoiceChip(
+                    label: Text(
+                      s == null
+                          ? 'All (${widget.entries.length})'
+                          : '$s (${countOf(s)})',
+                    ),
+                    selected: status == s,
+                    onSelected: (_) => setState(() => status = s),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Gaps.v12,
+        AppTextField(
+          controller: searchC,
+          label: widget.entries.any((e) => e['donor'] != null)
+              ? 'Search QR reference, donor or item'
+              : 'Search QR reference or item',
+          icon: Icons.search,
+          onChanged: (v) => setState(() => search = v),
+        ),
+        Gaps.v12,
+        DropdownButtonFormField<int?>(
+          key: const ValueKey('entries-report'),
+          initialValue: reportId,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Report'),
+          items: [
+            const DropdownMenuItem(value: null, child: Text('All reports')),
+            for (final e in reports.entries)
+              DropdownMenuItem(
+                value: e.key,
+                child: Text(e.value, overflow: TextOverflow.ellipsis),
+              ),
+          ],
+          onChanged: (v) => setState(() => reportId = v),
+        ),
+        Gaps.v12,
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String?>(
+                key: const ValueKey('entries-handover'),
+                initialValue: handover,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Handover'),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('All')),
+                  for (final h in handoverMethods)
+                    DropdownMenuItem(value: h, child: Text(h)),
+                ],
+                onChanged: (v) => setState(() => handover = v),
+              ),
+            ),
+            Gaps.h12,
+            Expanded(
+              child: DropdownButtonFormField<EntrySort>(
+                key: const ValueKey('entries-sort'),
+                initialValue: sort,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Sort by'),
+                items: [
+                  for (final s in EntrySort.values)
+                    DropdownMenuItem(value: s, child: Text(s.label)),
+                ],
+                onChanged: (v) => setState(() => sort = v ?? sort),
+              ),
+            ),
+          ],
+        ),
+        Gaps.v16,
+        if (shown.isEmpty)
+          const EmptyView(
+            icon: Icons.filter_alt_off_outlined,
+            title: 'No donations match.',
+            message: 'Try another status, report or search.',
+            compact: true,
+          ),
+        for (final e in shown)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Space.sm),
+            child: DonationEntryCard(
+              entry: e,
+              footer: widget.footer?.call(e),
+              onTap: widget.onTap == null ? null : () => widget.onTap!(e),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// One donation entry: its status, report, handover, and every item with
+/// its own status, received quantity and CMO hold reason.
+class DonationEntryCard extends StatelessWidget {
+  final Map entry;
+  final Widget? footer;
+  final VoidCallback? onTap;
+  const DonationEntryCard({
+    super.key,
+    required this.entry,
+    this.footer,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (reports.isEmpty) EmptyState(empty),
-        for (final r in reports) ...[
-          SectionTitle(
-            '${r['report_label'] ?? 'Report #${r['report_id']}'}',
-            trailing: Text(
-              '${r['total_entries']} entries · ${r['total_items']} items',
-              style: const TextStyle(color: Brand.muted),
-            ),
-          ),
-          for (final e in (r['entries'] as List).cast<Map>())
-            _entryCard(context, e),
-        ],
-      ],
-    );
-  }
-
-  Widget _entryCard(BuildContext context, Map e) {
+    final e = entry;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final muted = t.bodySmall?.copyWith(color: cs.onSurfaceVariant);
     final items = (e['items'] as List).cast<Map>();
-    final hasHeld = items.any((i) => held.contains(i['donation_id']));
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      clipBehavior: Clip.antiAlias,
-      child: ExpansionTile(
-        initiallyExpanded: hasHeld,
-        shape: const Border(),
-        collapsedShape: const Border(),
-        title: Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Donation ${e['entry_no']}',
-                style: const TextStyle(fontWeight: FontWeight.w700),
+    final mixed = items.map((i) => i['status']).toSet().length > 1;
+    return AppCard(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(entryTitle(e), style: t.titleMedium),
+                    Text('For ${entryReportLabel(e)}', style: muted),
+                  ],
+                ),
+              ),
+              Gaps.h8,
+              StatusChip('${e['status']}'),
+            ],
+          ),
+          Gaps.v8,
+          Wrap(
+            spacing: Space.md,
+            runSpacing: Space.xxs,
+            children: [
+              _Meta(Icons.qr_code_2, '${e['batch_reference']}'),
+              if (e['donor'] != null)
+                _Meta(Icons.person_outline, '${e['donor']}'),
+              _Meta(Icons.local_shipping_outlined, '${e['handover_method']}'),
+              _Meta(Icons.event_outlined, niceDate(e['created_at'])),
+            ],
+          ),
+          if ((e['on_hold_items'] as num? ?? 0) > 0) ...[
+            Gaps.v8,
+            const StatusChip('On Hold'),
+          ],
+          const Divider(height: Space.lg),
+          for (final i in items)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: Space.xxs),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.inventory_2_outlined,
+                    size: 18,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  Gaps.h8,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
+                              .replaceAll(RegExp(r'\s+'), ' '),
+                          style: t.bodyMedium,
+                        ),
+                        Text(
+                          [
+                            if (i['packaging'] != null) '${i['packaging']}',
+                            if (i['actual_quantity_received'] != null)
+                              '${i['actual_quantity_received']} received',
+                          ].join(' · '),
+                          style: muted,
+                        ),
+                        if (i['hold_reason'] != null)
+                          Text('On hold: ${i['hold_reason']}', style: muted),
+                      ],
+                    ),
+                  ),
+                  if (mixed || i['hold_reason'] != null) ...[
+                    Gaps.h8,
+                    StatusChip(
+                      i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
+                    ),
+                  ],
+                ],
               ),
             ),
-            Badge2.status('${e['status']}'),
-          ],
-        ),
-        subtitle: Text(
-          [
-            '${e['batch_reference']}',
-            if (e['donor'] != null) '${e['donor']}',
-            '${e['total_items']} item(s) · ${e['handover_method'] ?? '-'}',
-            niceDate(e['created_at']),
-          ].join('\n'),
-        ),
-        children: [for (final i in items) _itemTile(i)],
+          if (footer != null) ...[Gaps.v16, footer!],
+        ],
       ),
-    );
-  }
-
-  Widget _itemTile(Map i) {
-    final received = i['actual_quantity_received'];
-    return ListTile(
-      dense: true,
-      title: Text('${i['quantity']} ${i['unit']} ${i['item_name']}'),
-      subtitle: Text(
-        '${i['qr_reference']} · ${i['packaging'] ?? '-'}'
-        '${received != null ? ' · received $received' : ''}',
-      ),
-      trailing: held.contains(i['donation_id'])
-          ? const Badge2(
-              'On hold',
-              Color(0xFFC62828),
-              icon: Icons.pause_circle_outline,
-            )
-          : Badge2.status('${i['status']}'),
     );
   }
 }
 
-/// 6.3: one card per report with its entry and item counts, for the
-/// Admin and CMO dashboards. Tap a report to see its entries.
-class EntrySummaryList extends StatelessWidget {
-  final Map data; // the GET /donations/entries response
-  const EntrySummaryList(this.data, {super.key});
+class _Meta extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _Meta(this.icon, this.text);
 
   @override
   Widget build(BuildContext context) {
-    final reports = (data['reports'] as List).cast<Map>();
-    if (reports.isEmpty) return const EmptyState('No donations yet.');
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          '${data['total_entries']} entries across '
-          '${data['total_reports']} report(s)',
-          style: const TextStyle(color: Brand.muted),
-        ),
-        const SizedBox(height: 6),
-        for (final r in reports)
-          Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            child: ListTile(
-              title: Text(
-                '${r['report_label'] ?? 'Report #${r['report_id']}'}',
-                style: const TextStyle(fontWeight: FontWeight.w700),
-              ),
-              subtitle: Text(
-                '${r['total_entries']} entries · ${r['total_items']} items\n'
-                '${_itemStatusLine(r)}',
-              ),
-              isThreeLine: true,
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => openDonationEntries(
-                context,
-                reportId: r['report_id'] as int,
-                title: '${r['report_label'] ?? 'Report'}',
-              ),
-            ),
+        Icon(icon, size: 16, color: cs.onSurfaceVariant),
+        Gaps.h4,
+        Flexible(
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: cs.onSurfaceVariant),
           ),
+        ),
       ],
     );
   }
-}
-
-/// "4 confirmed · 2 received · 1 pending" across a report's items.
-String _itemStatusLine(Map report) {
-  final counts = <String, int>{};
-  for (final e in (report['entries'] as List).cast<Map>()) {
-    for (final i in (e['items'] as List).cast<Map>()) {
-      final s = '${i['status']}';
-      counts[s] = (counts[s] ?? 0) + 1;
-    }
-  }
-  return counts.entries
-      .map((c) => '${c.value} ${c.key.toLowerCase()}')
-      .join(' · ');
 }
