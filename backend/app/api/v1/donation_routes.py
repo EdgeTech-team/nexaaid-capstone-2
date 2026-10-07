@@ -34,7 +34,7 @@ from schemas.physical_donation_schema import (
     pickup_rules,
 )
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
-from services.donation_entries import build_entries, group_by_report
+from services.donation_entries import build_entries, filter_and_sort, group_by_report
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
@@ -619,6 +619,12 @@ def my_donations(
             "fulfillment_percentage": float(f.fulfillment_percentage) if f else 0.0,
         }
 
+    entries = build_entries(db, donations, include_cmo=True)
+    group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
+    by_ref = {}
+    for d in donations:
+        by_ref[d.batch_reference] = d  # rows are newest first, so this keeps the entry's first row
+
     org = db.get(Organization, current_user.organization_id) if current_user.organization_id else None
     by_status = {}
     for d in donations:
@@ -642,6 +648,7 @@ def my_donations(
             "total_quantity": sum(d.quantity for d in donations),
             "supported_reports": len(report_ids),
             "total_batches": len({d.batch_reference for d in donations}),
+            "total_entries": len(entries),
         },
         "donations": [
             {
@@ -670,6 +677,17 @@ def my_donations(
             for d in donations
         ],
         "supported_reports": [report_info(r) for r in reports.values()],
+        # 4.4 / 4.5: the same donations as entries (one per QR), newest first.
+        "entries": [
+            {
+                **e,
+                "pickup_address": by_ref[e["batch_reference"]].pickup_address,
+                "pickup_landmark": by_ref[e["batch_reference"]].pickup_landmark,
+                "preferred_pickup_at": _iso(by_ref[e["batch_reference"]].preferred_pickup_at),
+                "report": report_info(reports[e["report_id"]]) if e["report_id"] in reports else None,
+            }
+            for e in filter_and_sort(entries)
+        ],
     }
     # ---------------------------------------------------------------------------
 # Entry-based view: Report -> Entries (one per QR) -> Items.

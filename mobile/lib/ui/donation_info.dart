@@ -177,8 +177,9 @@ class ReportDonationInfo extends StatelessWidget {
         // A report override replaces the list (the server sends methods: []).
         final shown = methods.isNotEmpty ? methods : [?info];
         if (shown.isEmpty) return const SizedBox.shrink();
+        // Shown below the donated items (4.1), so the space goes on top.
         return Padding(
-          padding: const EdgeInsets.only(bottom: Space.md),
+          padding: const EdgeInsets.only(top: Space.lg),
           child: DonationMethodsList(
             methods: shown,
             heading: 'Send money directly to the barangay',
