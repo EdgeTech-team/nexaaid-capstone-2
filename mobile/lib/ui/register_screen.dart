@@ -7,7 +7,12 @@ import 'validators.dart';
 import 'widgets.dart';
 
 /// UC-D1 Register Individual Donor (adviser item 2) and organization
-/// registration reviewed in UC-A2 (adviser item 2.1).
+/// registration (UC-A2).
+///
+/// Capstone 2 adviser comments 1.1 and 1.3: Religious and Other
+/// organizations do not need a registration number or supporting document
+/// (PM suggestion), and both donor and organization accounts are validated
+/// automatically. The Administrator's view is for review only.
 ///
 /// Every rule here is repeated by the backend (schemas/user_schema.py,
 /// schemas/organization_schema.py), so the API can't be used to skip them.
@@ -30,6 +35,10 @@ const organizationTypes = [
   'Other',
 ];
 
+/// Same list as backend TYPES_WITHOUT_REQUIREMENTS. These organization types
+/// may register without a registration number or supporting document.
+const organizationTypesWithoutRequirements = ['Religious', 'Other'];
+
 /// D3: Terms and Conditions shown in the dialog. Edit the wording with the
 /// team and the adviser before the consultation.
 const termsAndConditionsText =
@@ -39,8 +48,8 @@ const termsAndConditionsText =
     '2. Responsible use. NexaAid is for disaster relief coordination. Do not '
     'submit false reports or donations, or misuse another person\'s account.\n\n'
     '3. Verification. The Administrator may review your registration, ID or '
-    'supporting document, and may hold, reject or deactivate an account that '
-    'cannot be verified.\n\n'
+    'supporting document, and may deactivate an account that cannot be '
+    'verified.\n\n'
     '4. Donations. NexaAid records and tracks physical donations. It does not '
     'process money. Official recognition of a donation depends on the '
     'confirmation of the City Mayor\'s Office.\n\n'
@@ -89,8 +98,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Validators.personName(c('first_name').text, label: 'First name'),
       'last_name': () =>
           Validators.personName(c('last_name').text, label: 'Last name'),
-      'registration_no': () =>
-          Validators.registrationNo(c('registration_no').text),
+      'registration_no': () => _docsOptional && v('registration_no').isEmpty
+          ? null
+          : Validators.registrationNo(c('registration_no').text),
     } else ...{
       'first_name': () =>
           Validators.personName(c('first_name').text, label: 'First name'),
@@ -106,8 +116,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ),
   };
 
-  bool get _filesReady =>
-      widget.org ? legitimacyDoc != null : idFront != null && idBack != null;
+  /// True when the chosen organization type does not need a registration
+  /// number or supporting document (Religious, Other).
+  bool get _docsOptional =>
+      orgType != null && organizationTypesWithoutRequirements.contains(orgType);
+
+  /// Other organization types must upload a supporting document. Donors need
+  /// the front and back of a valid ID.
+  bool get _filesReady => widget.org
+      ? (_docsOptional || legitimacyDoc != null)
+      : (idFront != null && idBack != null);
 
   bool get _valid =>
       _rules.values.every((rule) => rule() == null) &&
@@ -150,9 +168,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'address': v('address'),
                 'contact_first_name': v('first_name'),
                 'contact_last_name': v('last_name'),
-                'registration_no': v('registration_no'),
+                'registration_no': v('registration_no').isEmpty
+                    ? null
+                    : v('registration_no'),
                 'contact_email': c('email').text.trim(),
-                'legitimacy_document': _ref(legitimacyDoc!),
+                // Optional: only sent when the organization uploaded one.
+                if (legitimacyDoc != null)
+                  'legitimacy_document': _ref(legitimacyDoc!),
               },
             )
           : api.post(
@@ -166,9 +188,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'id_back': _ref(idBack!),
               },
             ),
-      success: widget.org
-          ? 'Registration submitted. You can log in once the Administrator approves your organization.'
-          : 'Account created. You can now log in.',
+      // Adviser comment 1.3: validated automatically for both.
+      success: 'Account created. You can now log in.',
     );
     if (!mounted) return;
     setState(() => busy = false);
@@ -234,12 +255,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  /// [required] is false for uploads that are optional (the organization's
+  /// supporting document), so no "Required" error is shown for them.
   Widget _upload(
     String label,
     String purpose,
     UploadedFile? current,
     ValueChanged<UploadedFile?> set, {
     String? helper,
+    bool required = true,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: Space.md),
@@ -254,7 +278,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  /// D2: shows the relaxed rule (8 to 64 characters, a letter and a number).
+  /// Adviser comment 1.1: 8 to 64 characters, a capital letter, a letter
+  /// and a number. Keep in sync with Validators.newPassword.
   Widget _passwordRules(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
@@ -284,6 +309,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           rule('8 to 64 characters', p.length >= 8 && p.length <= 64),
+          rule('At least one capital letter', RegExp(r'[A-Z]').hasMatch(p)),
           rule('At least one letter', RegExp(r'[A-Za-z]').hasMatch(p)),
           rule('At least one number', RegExp(r'\d').hasMatch(p)),
         ],
@@ -294,7 +320,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _consent(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final what = widget.org
-        ? 'my contact details and the supporting document'
+        ? 'my contact details and any supporting document I upload'
         : 'my contact details and my ID photos';
     return Padding(
       padding: const EdgeInsets.only(bottom: Space.md),
@@ -384,8 +410,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           children: [
             Text(
               widget.org
-                  ? 'Your organization can log in after the Administrator '
-                        'reviews your details and supporting document.'
+                  ? 'Your organization account is active right away. The '
+                        'Administrator may review your details later.'
                   : 'Your account is active right away. The Administrator '
                         'may review your ID later.',
               style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
@@ -410,15 +436,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               _text(
                 'registration_no',
-                'Registration number (SEC, DSWD, CDA...)',
+                _docsOptional
+                    ? 'Registration number (optional)'
+                    : 'Registration number (SEC, DSWD, CDA...)',
                 icon: Icons.badge_outlined,
               ),
               _upload(
-                'Supporting document (photo or PDF)',
+                _docsOptional
+                    ? 'Supporting document (optional)'
+                    : 'Supporting document (photo or PDF)',
                 'legitimacy_document',
                 legitimacyDoc,
                 (f) => legitimacyDoc = f,
-                helper: 'e.g. SEC or DSWD certificate. Only the Administrator can see it.',
+                required: !_docsOptional,
+                helper: _docsOptional
+                    ? 'Optional for this organization type. Upload an SEC, '
+                          'DSWD or similar certificate only if you have one. '
+                          'Only the Administrator can see it.'
+                    : 'e.g. SEC or DSWD certificate. Only the Administrator '
+                          'can see it.',
               ),
               SectionHeader('Contact person'),
             ] else

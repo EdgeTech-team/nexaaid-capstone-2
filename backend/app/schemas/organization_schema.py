@@ -14,11 +14,16 @@ ORGANIZATION_TYPES = (
     "NGO", "Religious", "Civic", "Private/CSR", "Academic", "Government", "Other",
 )
 
+# Religious and Other organizations may register without a registration
+# number or supporting document (PM suggestion on adviser comment 1.1).
+TYPES_WITHOUT_REQUIREMENTS = ("Religious", "Other")
+
 
 class OrganizationRegisterRequest(BaseModel):
-    """UC-A2 (the organization side): the account stays Pending, and cannot
-    log in, until the Administrator reviews the details and the supporting
-    document (UC-A2 step 4)."""
+    """UC-A2 (the organization side). Capstone 2 adviser comments 1.1 and
+    1.3: the supporting document is optional, and the account is validated
+    automatically. The Administrator's view is for review only."""
+
     org_name: str
     organization_type: Literal[ORGANIZATION_TYPES]
     # Required when organization_type is "Other"; stored as "Other: <text>".
@@ -33,7 +38,7 @@ class OrganizationRegisterRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
     # Supporting document, uploaded first with POST /uploads (photo or PDF).
-    legitimacy_document: UploadRef
+    legitimacy_document: Optional [UploadRef] = None    
     # RA 10173 (Data Privacy Act)
     consent: bool
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
@@ -57,8 +62,10 @@ class OrganizationRegisterRequest(BaseModel):
 
     @field_validator("registration_no")
     @classmethod
-    def _rn(cls, v): return clean_registration_no(v)
-
+    def _rn(cls, v):
+        if v is None or not v.strip():
+            return None
+        return clean_registration_no(v)
     @field_validator("contact_email")
     @classmethod
     def _ce(cls, v): return clean_email(str(v))
@@ -83,6 +90,13 @@ class OrganizationRegisterRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check(self):
+
+        if self.organization_type not in TYPES_WITHOUT_REQUIREMENTS:
+            if not self.registration_no:
+                raise ValueError("Registration number is required for this organization type")
+            if self.legitimacy_document is None:
+                raise ValueError("Supporting document is required for this organization type")
+                
         if self.organization_type == "Other":
             if not (self.organization_type_other or "").strip():
                 raise ValueError("Please specify the organization type")
@@ -104,7 +118,7 @@ class OrganizationRegisterRequest(BaseModel):
         if self.organization_type == "Other":
             return f"Other: {self.organization_type_other}"
         return self.organization_type
-
+          
     @property
     def contact_person(self) -> str:
         """organizations.contact_person keeps the full name in one column."""
