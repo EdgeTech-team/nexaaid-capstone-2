@@ -170,15 +170,24 @@ class _AccountTabState extends State<AccountTab> {
               ),
             ),
           ),
+
+          // ---- Donor ------------------------------------------------------
+          // NOTE: the real endpoint also needs id_front / id_back (uploaded
+          // file refs). This dev form cannot upload files, so expect a 422
+          // for those two fields. Use the real Register screen for donors.
           ApiForm(
-            title: 'Register a donor',
+            title: 'Register a donor (needs ID upload, use Register screen)',
             subtitle: 'POST /auth/register/donor',
             fields: const [
               F('first_name', 'First name'),
               F('last_name', 'Last name'),
               F('email', 'Email'),
-              F('password', 'Password (min 8)', obscure: true),
-              F('contact_number', 'Contact number (min 7)'),
+              F(
+                'password',
+                'Password (8-64, 1 capital + 1 number)',
+                obscure: true,
+              ),
+              F('contact_number', 'Contact number (09XXXXXXXXX)'),
             ],
             button: 'Register donor',
             onSubmit: (v) => api.post(
@@ -188,22 +197,32 @@ class _AccountTabState extends State<AccountTab> {
                 'last_name': v.s('last_name'),
                 'email': v.s('email'),
                 'password': v.raw['password'],
+                'confirm_password': v.raw['password'],
                 'contact_number': v.s('contact_number'),
+                'consent': true,
+                'accepted_terms': true,
               },
             ),
           ),
+
+          // ---- Organization -----------------------------------------------
           ApiForm(
             title: 'Register a relief organization',
             subtitle: 'POST /auth/register/organization  (starts as Pending)',
             fields: const [
               F('org_name', 'Organization name'),
               F('organization_type', 'Type', initial: 'NGO'),
-              F('address', 'Address'),
-              F('contact_person', 'Contact person'),
+              F('address', 'Address (min 10 characters)'),
+              F('contact_first_name', 'Contact first name'),
+              F('contact_last_name', 'Contact last name'),
               F('registration_no', 'Registration no. (unique)'),
               F('contact_email', 'Contact email (login)'),
-              F('password', 'Password (min 8)', obscure: true),
-              F('contact_number', 'Contact number'),
+              F('contact_number', 'Contact number (09XXXXXXXXX)'),
+              F(
+                'password',
+                'Password (8-64, 1 capital + 1 number)',
+                obscure: true,
+              ),
             ],
             button: 'Register organization',
             onSubmit: (v) => api.post(
@@ -213,13 +232,17 @@ class _AccountTabState extends State<AccountTab> {
                   'org_name',
                   'organization_type',
                   'address',
-                  'contact_person',
+                  'contact_first_name',
+                  'contact_last_name',
                   'registration_no',
                   'contact_email',
                   'contact_number',
                 ])
                   k: v.s(k),
                 'password': v.raw['password'],
+                'confirm_password': v.raw['password'],
+                'consent': true,
+                'accepted_terms': true,
               },
             ),
           ),
