@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'register_screen.dart';
 import 'widgets.dart';
+import 'forgot_password_screen.dart';
 
 import 'package:flutter/foundation.dart' show kDebugMode;
 
@@ -49,6 +50,21 @@ class _LoginScreenState extends State<LoginScreen> {
       fields: [DialogField('url', 'API base URL', initial: api.baseUrl)],
     );
     if (v != null) api.setBase(v['url']!);
+  }
+    /// UI concern: "Forgot password?" asks for the email (code by email).
+  Future<void> _forgot() async {
+    final email = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => ForgotPasswordScreen(initialEmail: emailC.text.trim()),
+      ),
+    );
+    if (email != null && mounted) {
+      setState(() {
+        emailC.text = email;
+        passC.clear();
+        error = null;
+      });
+    }
   }
 
   @override
@@ -152,6 +168,13 @@ class _LoginScreenState extends State<LoginScreen> {
                             : Icons.visibility_off_outlined,
                       ),
                     ),
+                  ),
+                ),
+                                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: _forgot,
+                    child: const Text('Forgot password?'),
                   ),
                 ),
                 if (error != null)
