@@ -433,21 +433,6 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
-                      const SizedBox(height: 8),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: Space.xs,
-                        runSpacing: Space.xs,
-                        children: [
-                          for (final d in const [
-                            ['Rejected', 'Reject'],
-                            ['Pending', 'Hold'],
-                            ['Approved', 'Approve'],
-                          ])
-                            if (o['status'] != d[0])
-                              _decisionButton(context, o, d[0], d[1]),
-                        ],
-                      ),
                     ],
                   ),
                 ),
@@ -493,50 +478,6 @@ class _RejectionReason extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Approve, Hold or Reject (UC-A2 steps 5-6). Hold and Reject ask for a
-/// reason (alt 6a); the backend refuses them without one.
-Widget _decisionButton(
-  BuildContext context,
-  Map o,
-  String decision,
-  String label,
-) {
-  Future<void> onPressed() async {
-    String? reason;
-    if (decision != 'Approved') {
-      final v = await formDialog(
-        context,
-        title: '$label ${o['org_name']}?',
-        message: decision == 'Rejected'
-            ? 'The organization stays inactive. Say what is wrong so they can fix it.'
-            : 'The application stays pending. Say what you are waiting for.',
-        fields: const [DialogField('reason', 'Reason', multiline: true)],
-        confirm: label,
-      );
-      if (v == null || !context.mounted) return;
-      reason = v['reason'];
-    }
-    await act(
-      context,
-      () => api.post(
-        '/admin/organizations/${o['organization_id']}/decision',
-        body: {'decision': decision, 'reason': ?reason},
-      ),
-      success: '${o['org_name']}: $decision',
-    );
-  }
-
-  return AppButton(
-    label,
-    onPressed: onPressed,
-    variant: switch (decision) {
-      'Approved' => AppButtonVariant.tonal,
-      'Rejected' => AppButtonVariant.danger,
-      _ => AppButtonVariant.secondary,
-    },
-  );
 }
 
 /// The organization's supporting document, or a flag when it is missing,
