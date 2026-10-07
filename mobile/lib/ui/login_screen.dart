@@ -60,13 +60,23 @@ class _LoginScreenState extends State<LoginScreen> {
             child: ListView(
               padding: const EdgeInsets.all(24),
               children: [
-                Align(
-                  alignment: Alignment.topRight,
-                  child: IconButton(
-                    tooltip: 'Server address',
-                    onPressed: _server,
-                    icon: const Icon(Icons.settings_outlined),
-                  ),
+                                // Back to the landing page it was opened from. Hidden when
+                // the login screen is the first page (nothing to go back to).
+                Row(
+                  children: [
+                    if (Navigator.of(context).canPop())
+                      TextButton.icon(
+                        onPressed: () => Navigator.of(context).maybePop(),
+                        icon: const Icon(Icons.arrow_back),
+                        label: const Text('Back'),
+                      ),
+                    const Spacer(),
+                    IconButton(
+                      tooltip: 'Server address',
+                      onPressed: _server,
+                      icon: const Icon(Icons.settings_outlined),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 CircleAvatar(
