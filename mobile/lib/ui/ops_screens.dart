@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart' show Roles;
 import 'records_screens.dart' show SupportRecordsScreen;
 import 'widgets.dart';
-import 'donation_entries_view.dart' show EntrySummaryList;
+import 'entry_report_views.dart' show EntrySummaryList;
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 
