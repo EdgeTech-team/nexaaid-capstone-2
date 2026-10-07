@@ -272,7 +272,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         label: label,
         purpose: purpose,
         helperText: helper,
-        errorText: _triedSubmit && current == null ? 'Required' : null,
+        errorText: required && _triedSubmit && current == null
+            ? 'Required'
+            : null,
         onChanged: (f) => setState(() => set(f)),
       ),
     );
