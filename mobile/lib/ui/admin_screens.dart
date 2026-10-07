@@ -8,7 +8,7 @@ import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
 import 'widgets.dart';
-import 'donation_entries_view.dart';
+import 'entry_report_views.dart';
 
 // ---------------------------------------------------------------------------
 // UC-A4 / manuscript 7.7 Administrator dashboard
