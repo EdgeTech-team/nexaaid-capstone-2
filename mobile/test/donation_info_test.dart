@@ -73,6 +73,23 @@ void main() {
     expect(c.toJson()['qr_file_id'], isNull);
   });
 
+  test('Concerns2 2.1: account numbers follow provider standards', () {
+    final c = DonationInfoController()..setProvider('Bank');
+    expect(c.accountNumberRule('1234567890'), isNull); // 10 digits
+    expect(c.accountNumberRule('1234567890123456'), isNull); // 16 digits
+    expect(c.accountNumberRule('123456789'), isNotNull); // 9: too short
+    expect(c.accountNumberRule('12345678901234567'), isNotNull); // 17: too long
+    expect(c.accountNumberRule('0012--3456'), isNotNull); // double hyphen
+
+    c.setProvider('Other');
+    expect(c.accountNumberRule('0917-555-0101'), isNull);
+    expect(c.accountNumberRule('abc123'), isNotNull); // letters
+    expect(
+      c.accountNumberRule('298999800000000000000000000000000000000000'),
+      isNotNull, // the 42-digit number from the screenshot
+    );
+  });
+
   testWidgets('New report: asks for a barangay first', (tester) async {
     await _pump(tester, const NewReportDonationInfo(barangayId: null));
     expect(
@@ -91,5 +108,27 @@ void main() {
     );
     await tester.enterText(number, '0917123456789');
     expect(c.accountNumber.text, '09171234567');
+  });
+
+  testWidgets('Edit fields: Other blocks letters', (tester) async {
+    final c = DonationInfoController()..setProvider('Other');
+    await _pump(tester, Form(child: DonationInfoFields(c: c)));
+    final number = find.descendant(
+      of: find.widgetWithText(AppTextField, 'Account number'),
+      matching: find.byType(EditableText),
+    );
+    await tester.enterText(number, '12ab-34cd');
+    expect(c.accountNumber.text, '12-34');
+  });
+
+  testWidgets('Edit fields: Bank number stops at 16 digits', (tester) async {
+    final c = DonationInfoController()..setProvider('Bank');
+    await _pump(tester, Form(child: DonationInfoFields(c: c)));
+    final number = find.descendant(
+      of: find.widgetWithText(AppTextField, 'Account number'),
+      matching: find.byType(EditableText),
+    );
+    await tester.enterText(number, '2311111111154543435345345');
+    expect(c.accountNumber.text, '2311111111154543'); // first 16 digits
   });
 }
