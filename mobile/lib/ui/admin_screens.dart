@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import 'account_detail_screen.dart';
 import 'account_form.dart' show AccountsScreen;
+import 'copyable_phone.dart';
 import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
@@ -330,21 +330,6 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
-                      const SizedBox(height: 8),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: Space.xs,
-                        runSpacing: Space.xs,
-                        children: [
-                          for (final d in const [
-                            ['Rejected', 'Reject'],
-                            ['Pending', 'Hold'],
-                            ['Approved', 'Approve'],
-                          ])
-                            if (o['status'] != d[0])
-                              _decisionButton(context, o, d[0], d[1]),
-                        ],
-                      ),
                     ],
                   ),
                 ),
@@ -390,50 +375,6 @@ class _RejectionReason extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Approve, Hold or Reject (UC-A2 steps 5-6). Hold and Reject ask for a
-/// reason (alt 6a); the backend refuses them without one.
-Widget _decisionButton(
-  BuildContext context,
-  Map o,
-  String decision,
-  String label,
-) {
-  Future<void> onPressed() async {
-    String? reason;
-    if (decision != 'Approved') {
-      final v = await formDialog(
-        context,
-        title: '$label ${o['org_name']}?',
-        message: decision == 'Rejected'
-            ? 'The organization stays inactive. Say what is wrong so they can fix it.'
-            : 'The application stays pending. Say what you are waiting for.',
-        fields: const [DialogField('reason', 'Reason', multiline: true)],
-        confirm: label,
-      );
-      if (v == null || !context.mounted) return;
-      reason = v['reason'];
-    }
-    await act(
-      context,
-      () => api.post(
-        '/admin/organizations/${o['organization_id']}/decision',
-        body: {'decision': decision, 'reason': ?reason},
-      ),
-      success: '${o['org_name']}: $decision',
-    );
-  }
-
-  return AppButton(
-    label,
-    onPressed: onPressed,
-    variant: switch (decision) {
-      'Approved' => AppButtonVariant.tonal,
-      'Rejected' => AppButtonVariant.danger,
-      _ => AppButtonVariant.secondary,
-    },
-  );
 }
 
 /// The organization's supporting document, or a flag when it is missing,
@@ -503,7 +444,8 @@ class _OrgDocument extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 // Appendix H 2.2: barangay reps see the CSWS Disaster Unit's phone number so
-// they can send the emergency SMS report.
+// they can send the emergency SMS report from their own phone. The number is
+// copy-only: the app never opens the dialer or the SMS app.
 // ---------------------------------------------------------------------------
 class DisasterUnitContactCard extends StatefulWidget {
   const DisasterUnitContactCard({super.key});
@@ -515,15 +457,6 @@ class DisasterUnitContactCard extends StatefulWidget {
 
 class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
   late final Future<ApiResult> _future = api.get('/contacts/disaster-unit');
-
-  Future<void> _open(String scheme, String number) async {
-    final ok = await launchUrl(Uri(scheme: scheme, path: number));
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open $scheme for $number')),
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -555,6 +488,11 @@ class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tap the number to copy it, then send your report from your phone\'s messaging app.',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                ),
                 const SizedBox(height: 8),
                 if (contacts.isEmpty)
                   Text(
@@ -564,35 +502,17 @@ class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
                 for (final c in contacts)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('${c['name']}'),
-                              SelectableText(
-                                '${c['contact_number']}',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: cs.primary,
-                                ),
-                              ),
-                            ],
+                        Text('${c['name']}'),
+                        CopyablePhone(
+                          number: '${c['contact_number']}',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: cs.primary,
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Send SMS',
-                          icon: const Icon(Icons.sms),
-                          onPressed: () =>
-                              _open('sms', '${c['contact_number']}'),
-                        ),
-                        IconButton(
-                          tooltip: 'Call',
-                          icon: const Icon(Icons.call),
-                          onPressed: () =>
-                              _open('tel', '${c['contact_number']}'),
                         ),
                       ],
                     ),

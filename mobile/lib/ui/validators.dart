@@ -14,16 +14,36 @@ class Validators {
 
   static String squash(String v) => v.trim().replaceAll(RegExp(r'\s+'), ' ');
 
-  /// D2 (relaxed rule): 8-64 characters, no spaces, at least one letter and
-  /// one number. Keep this in sync with validate_password_strength in
+  /// 8-64 characters, no spaces, at least one capital letter and one
+  /// number. Keep this in sync with validate_password_strength in
   /// backend/app/core/passwords.py.
   static String? newPassword(String? v) {
     final s = v ?? '';
+    const common = {
+      'password',
+      'password1',
+      'password123',
+      '12345678',
+      '123456789',
+      'qwerty123',
+      'iloveyou',
+      'admin123',
+      'welcome1',
+      'letmein123',
+      'nexaaid123',
+      'p@ssw0rd',
+    };
     if (s.isEmpty) return 'Password is required';
+    if (common.contains(s.toLowerCase())) return 'That password is too common';
+    if (!RegExp(r'^[\x21-\x7e]+$').hasMatch(s)) {
+      return 'Use standard keyboard characters only';
+    }
     if (s.length < 8 || s.length > 64) return 'Use 8-64 characters';
     if (s.contains(' ')) return 'No spaces allowed';
     if (!RegExp(r'[A-Za-z]').hasMatch(s)) return 'Add a letter';
+    if (!RegExp(r'[A-Z]').hasMatch(s)) return 'Add a capital letter';
     if (!RegExp(r'\d').hasMatch(s)) return 'Add a number';
+    if (!RegExp(r'[A-Z]').hasMatch(s)) return 'Add a capital letter';
     return null;
   }
 
