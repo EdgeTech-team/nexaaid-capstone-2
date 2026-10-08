@@ -66,6 +66,8 @@ def get_user_detail(
         "contact_number": u.contact_number,
         "role": u.role.role_name if u.role else None,
         "is_active": u.is_active,
+        "deactivation_reason": u.deactivation_reason,
+        "deactivated_at": u.deactivated_at,
         "created_at": u.created_at,
         "id_type": u.id_type,
         "employee_id": u.employee_id,

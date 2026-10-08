@@ -284,6 +284,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           rule('8 to 64 characters', p.length >= 8 && p.length <= 64),
+          rule('At least one capital letter', RegExp(r'[A-Z]').hasMatch(p)),
           rule('At least one letter', RegExp(r'[A-Za-z]').hasMatch(p)),
           rule('At least one number', RegExp(r'\d').hasMatch(p)),
         ],
