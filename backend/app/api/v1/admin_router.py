@@ -139,6 +139,10 @@ def _user_row(u: User, orgs: dict, barangays: dict) -> dict:
         "assigned_barangay": barangays.get(u.assigned_barangay_id),
         "employee_id": u.employee_id,
         "is_active": u.is_active,
+        # Why and when an Administrator deactivated the account (None while
+        # active, and for accounts deactivated before this was recorded).
+        "deactivation_reason": u.deactivation_reason,
+        "deactivated_at": u.deactivated_at,
         "created_at": u.created_at,
     }
 
@@ -187,12 +191,17 @@ def update_user(
 ):
     """UC-A1 step 5: update account details or status, with the same rules
     as account creation. Alt 3a: unknown account -> 404. Alt 5a: invalid
-    changes -> 422 (409 when the email / employee ID belongs to someone else)."""
+    changes -> 422 (409 when the email / employee ID belongs to someone else).
+
+    Deactivating an active account needs deactivation_reason (422 without
+    it). The reason and the time are kept on the account and cleared when it
+    is activated again."""
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Account not found")  # UC-A1 3a
     changes = payload.model_dump(exclude_unset=True)
     card = changes.pop("employee_id_card", None)
+    reason = changes.pop("deactivation_reason", None)   # already stripped; blank -> None
     for key in ("first_name", "last_name", "email", "contact_number", "role_name", "is_active"):
         if key in changes and changes[key] is None:
             raise HTTPException(status_code=422, detail=f"{key.replace('_', ' ').capitalize()} cannot be empty")
@@ -209,6 +218,8 @@ def update_user(
             raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
         if is_admin and user.is_active and _active_admins(db) <= 1:
             raise HTTPException(status_code=400, detail="At least one active Administrator must remain")
+        if user.is_active and not reason:
+            raise HTTPException(status_code=422, detail="Give a reason when you deactivate an account")
     new_role = changes.get("role_name")
     if new_role is not None and new_role != current_role:
         if is_self:
@@ -259,13 +270,24 @@ def update_user(
         if getattr(user, k) != v:
             old[k], new[k] = getattr(user, k), v
             setattr(user, k, v)
+    if "is_active" in new:
+        # Keep the reason with the account while it is deactivated; clear it
+        # when the account is activated again.
+        old["deactivation_reason"] = user.deactivation_reason
+        if new["is_active"] is False:
+            user.deactivation_reason = reason
+            user.deactivated_at = datetime.now(timezone.utc)
+        else:
+            user.deactivation_reason = None
+            user.deactivated_at = None
+        new["deactivation_reason"] = user.deactivation_reason
     if card is not None:
         up = transfer_upload(db, card["file_id"], current_user, user, "employee_id_card")
         new["employee_id_card"] = up.file_id
 
     if new:
         action = "UPDATE ACCOUNT"
-        if set(new) == {"is_active"}:
+        if "is_active" in new and set(new) <= {"is_active", "deactivation_reason"}:
             action = "ACTIVATE ACCOUNT" if new["is_active"] else "DEACTIVATE ACCOUNT"
         log_action(db, current_user, action, "users", user.user_id, old=old, new=new, request=request)
     db.flush()

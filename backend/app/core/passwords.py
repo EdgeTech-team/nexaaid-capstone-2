@@ -40,3 +40,5 @@ def validate_password_strength(password: str, email: str | None = None, names: t
         raise ValueError("Password needs at least one number")
     if password.lower() in _COMMON:
         raise ValueError("That password is too common. Choose something harder to guess")
+    if not re.search(r"[A-Z]", password):
+        raise ValueError("Password needs at least one capital letter")
