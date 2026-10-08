@@ -1,10 +1,19 @@
 """
 app/api/v1/contacts.py
-Appendix H 2.2: barangay reps must see the CSWS Disaster Unit's phone number
-so they can send the emergency SMS report.
 
-Only the name and contact number of active Disaster Unit users are returned.
-This is deliberately not the full user list.
+GET /contacts/sms-receivers  (NEW, Scope 2.4 / UC-CD1 alt 11b / UC-A3 alt 8a)
+    The CSWS Disaster Unit sends SMS reports when it has no internet, and the
+    Administrator reviews and encodes them. So the Disaster Unit needs the
+    Administrators' numbers. The app saves this list on the phone so the
+    "Send report by SMS" screen still works offline.
+
+GET /contacts/disaster-unit  (EXISTING, unchanged)
+    Built for the panel idea that barangay reps send SMS reports. The team
+    decided to follow the manuscript instead (Scope 1.3 / UC-B1: barangay
+    reps do not create reports; see claude/sms-reporting-decision.md), so the
+    app no longer calls it. Kept so nothing else breaks; safe to remove later.
+
+Only names and contact numbers are returned, never the full user records.
 """
 
 from typing import List
@@ -21,9 +30,11 @@ from models.role_model import Role
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
 DISASTER_UNIT = "CSWS Disaster Unit"
-# Roles allowed to read the number. Barangay reps need it; the others are
-# harmless to include and handy for testing.
+ADMINISTRATOR = "Administrator"
+# Roles allowed to read the Disaster Unit numbers (existing endpoint).
 _ALLOWED = {"Barangay Receiving Representative", "CSWS Disaster Unit", "Administrator"}
+# Roles allowed to read the SMS receivers: the senders and the admins themselves.
+_SMS_SENDERS = {DISASTER_UNIT, ADMINISTRATOR}
 
 
 class DisasterUnitContact(BaseModel):
@@ -31,19 +42,17 @@ class DisasterUnitContact(BaseModel):
     contact_number: str
 
 
-@router.get("/disaster-unit", response_model=List[DisasterUnitContact])
-def disaster_unit_contacts(
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    role_name = getattr(getattr(current_user, "role", None), "role_name", None)
-    if role_name not in _ALLOWED:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed")
+def _role_name(user) -> str | None:
+    return getattr(getattr(user, "role", None), "role_name", None)
 
+
+def _contacts_with_role(
+    db: Session, role_name: str, skip_blank: bool = False
+) -> List[DisasterUnitContact]:
     rows = (
         db.query(User)
         .join(Role, Role.role_id == User.role_id)
-        .filter(Role.role_name == DISASTER_UNIT, User.is_active.is_(True))
+        .filter(Role.role_name == role_name, User.is_active.is_(True))
         .order_by(User.user_id)
         .all()
     )
@@ -53,4 +62,25 @@ def disaster_unit_contacts(
             contact_number=u.contact_number,
         )
         for u in rows
+        if not skip_blank or (u.contact_number or "").strip()
     ]
+
+
+@router.get("/disaster-unit", response_model=List[DisasterUnitContact])
+def disaster_unit_contacts(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if _role_name(current_user) not in _ALLOWED:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed")
+    return _contacts_with_role(db, DISASTER_UNIT)
+
+
+@router.get("/sms-receivers", response_model=List[DisasterUnitContact])
+def sms_receivers(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    if _role_name(current_user) not in _SMS_SENDERS:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed")
+    return _contacts_with_role(db, ADMINISTRATOR, skip_blank=True)

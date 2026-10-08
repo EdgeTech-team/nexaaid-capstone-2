@@ -17,6 +17,64 @@ const donationNote =
 const donationProviders = ['GCash', 'Maya', 'Bank', 'Other'];
 
 // ---------------------------------------------------------------------------
+// Concerns2.txt 2.1: account number limits by provider. Must match the
+// backend (app/schemas/donation_info_schema.py).
+//   GCash / Maya: PH mobile number, 11 digits starting 09
+//   Bank:         10-16 digits (PH bank account numbers)
+//   Other:        6-20 digits
+// Spaces or hyphens between digit groups are allowed for Bank and Other.
+// ---------------------------------------------------------------------------
+const bankDigitsMin = 10, bankDigitsMax = 16;
+const otherDigitsMin = 6, otherDigitsMax = 20;
+
+/// Stops typing (and trims pasted text) once [maxDigits] digits are in the
+/// field. Spaces and hyphens don't count toward the limit.
+class MaxDigitsFormatter extends TextInputFormatter {
+  final int maxDigits;
+  const MaxDigitsFormatter(this.maxDigits);
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    var count = 0;
+    final kept = StringBuffer();
+    for (final ch in newValue.text.split('')) {
+      final isDigit = ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57;
+      if (isDigit) {
+        if (count == maxDigits) break;
+        count++;
+      }
+      kept.write(ch);
+    }
+    final text = kept.toString();
+    if (text == newValue.text) return newValue;
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
+}
+
+/// Only digits, spaces and hyphens can be typed (no letters), and typing
+/// stops at the provider's maximum number of digits.
+List<TextInputFormatter> accountNumberFormatters(int maxDigits) => [
+  FilteringTextInputFormatter.allow(RegExp(r'[0-9 \-]')),
+  MaxDigitsFormatter(maxDigits),
+];
+
+final _groupedDigits = RegExp(r'^[0-9]+([ \-][0-9]+)*$');
+
+String? _digitsRule(String n, int min, int max) {
+  if (!_groupedDigits.hasMatch(n)) {
+    return 'Numbers only (spaces or hyphens between groups are OK)';
+  }
+  final count = n.replaceAll(RegExp(r'[ \-]'), '').length;
+  return count < min || count > max ? 'Must be $min-$max digits' : null;
+}
+
+// ---------------------------------------------------------------------------
 // Display
 // ---------------------------------------------------------------------------
 
@@ -246,13 +304,19 @@ class DonationInfoController extends ChangeNotifier {
             ? null
             : 'Mobile number, 11 digits, e.g. 09171234567';
       case 'Bank':
-        return RegExp(r'^[0-9][0-9 \-]{4,28}[0-9]$').hasMatch(n)
-            ? null
-            : '6-30 digits (spaces and hyphens allowed)';
+        return _digitsRule(n, bankDigitsMin, bankDigitsMax);
       default:
-        return n.length < 3 || n.length > 50 ? '3-50 characters' : null;
+        return _digitsRule(n, otherDigitsMin, otherDigitsMax);
     }
   }
+
+  /// Hint shown in the account number field for the chosen provider.
+  String? get accountNumberHint => switch (provider) {
+    'GCash' || 'Maya' => '09171234567',
+    'Bank' => '$bankDigitsMin-$bankDigitsMax digits, e.g. 0012-3456-7890',
+    'Other' => '$otherDigitsMin-$otherDigitsMax digits',
+    _ => null,
+  };
 
   String? accountNameRule(String? v) {
     final s = (v ?? '').trim();
@@ -343,15 +407,13 @@ class DonationInfoFields extends StatelessWidget {
             controller: c.accountNumber,
             label: 'Account number',
             icon: Icons.numbers,
-            hint: c.provider == 'GCash' || c.provider == 'Maya'
-                ? '09171234567'
-                : null,
-            keyboardType: c.provider == 'Other'
-                ? TextInputType.text
-                : TextInputType.number,
-            inputFormatters: c.provider == 'GCash' || c.provider == 'Maya'
-                ? phoneFormatters
-                : null,
+            hint: c.accountNumberHint,
+            keyboardType: TextInputType.number,
+            inputFormatters: switch (c.provider) {
+              'GCash' || 'Maya' => phoneFormatters,
+              'Bank' => accountNumberFormatters(bankDigitsMax),
+              _ => accountNumberFormatters(otherDigitsMax),
+            },
             validator: c.accountNumberRule,
           ),
           Gaps.v16,
@@ -567,11 +629,7 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
         if (!snap.hasData) return const SkeletonList();
         final r = snap.data!;
         if (!r.ok) {
-          return ErrorView.forStatus(
-            r.status,
-            r.errorText,
-            onRetry: _reload,
-          );
+          return ErrorView.forStatus(r.status, r.errorText, onRetry: _reload);
         }
         final children = [
           if (!widget.embedded)
@@ -753,7 +811,9 @@ class NewReportDonationInfoState extends State<NewReportDonationInfo> {
       builder: (context, snap) {
         if (!snap.hasData) return const Skeleton(height: 96);
         final r = snap.data!;
-        final methods = r.ok ? ((r.json['methods'] as List?) ?? const []) : const [];
+        final methods = r.ok
+            ? ((r.json['methods'] as List?) ?? const [])
+            : const [];
         return DonationMethodsList(
           methods: methods,
           heading:
