@@ -2,19 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-/// Quick actions CSWS uses during Door to Door pickups: call or text the
-/// donor, copy details, and open directions in Google Maps. Shared by the
+/// Quick actions CSWS uses during Door to Door pickups: copy the donor's
+/// number and details, and open directions in Google Maps. Shared by the
 /// pickup board and the donation sheet so they behave the same everywhere.
-
-/// "0917 123 4567" / "+63 917..." -> "+639171234567" for the phone dialer.
-String dialable(String raw) {
-  final digits = raw.replaceAll(RegExp(r'[^0-9+]'), '');
-  if (digits.startsWith('09') && digits.length == 11) {
-    return '+63${digits.substring(1)}';
-  }
-  if (digits.startsWith('63') && digits.length == 12) return '+$digits';
-  return digits;
-}
+///
+/// Phone numbers are copy-only: the app never opens the dialer or the SMS app.
 
 /// "09171234567" -> "0917 123 4567" (easier to read aloud).
 String prettyPhone(String raw) {
@@ -37,31 +29,12 @@ Future<void> _launch(BuildContext context, Uri uri, String failMessage) async {
   }
 }
 
-Future<void> callNumber(BuildContext context, String phone) => _launch(
-  context,
-  Uri(scheme: 'tel', path: dialable(phone)),
-  'Could not open the phone app. Number: ${prettyPhone(phone)}',
-);
-
-Future<void> textNumber(
-  BuildContext context,
-  String phone, {
-  String? message,
-}) => _launch(
-  context,
-  Uri(
-    scheme: 'sms',
-    path: dialable(phone),
-    queryParameters: message == null ? null : {'body': message},
-  ),
-  'Could not open messages. Number: ${prettyPhone(phone)}',
-);
-
 Future<void> copyText(BuildContext context, String text, String what) async {
   await Clipboard.setData(ClipboardData(text: text));
   if (context.mounted) {
     ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('$what copied')));
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('$what copied')));
   }
 }
 
@@ -87,7 +60,9 @@ Future<void> openNavigation(
   );
 }
 
-/// Phone number with Call, Text and Copy buttons.
+/// Phone number that can only be copied. Tap the number or the copy icon.
+/// [smsMessage] is kept so existing callers still compile; it is not used,
+/// because the app no longer opens the SMS app.
 class ContactButtons extends StatelessWidget {
   final String phone;
   final String? smsMessage;
@@ -96,31 +71,22 @@ class ContactButtons extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    return Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 4,
-      runSpacing: 4,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: Text(prettyPhone(phone), style: t.titleSmall),
+    final value = phone.trim();
+    if (value.isEmpty) return const SizedBox.shrink();
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: () => copyText(context, value, 'Number'),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(child: Text(prettyPhone(value), style: t.titleSmall)),
+            const SizedBox(width: 6),
+            const Icon(Icons.copy, size: 18),
+          ],
         ),
-        FilledButton.tonalIcon(
-          onPressed: () => callNumber(context, phone),
-          icon: const Icon(Icons.call, size: 18),
-          label: const Text('Call'),
-        ),
-        OutlinedButton.icon(
-          onPressed: () => textNumber(context, phone, message: smsMessage),
-          icon: const Icon(Icons.sms_outlined, size: 18),
-          label: const Text('Text'),
-        ),
-        IconButton(
-          tooltip: 'Copy number',
-          onPressed: () => copyText(context, phone, 'Number'),
-          icon: const Icon(Icons.copy, size: 18),
-        ),
-      ],
+      ),
     );
   }
 }
