@@ -38,6 +38,16 @@ def _id(client, t, email):
                 if u["email"] == email)["user_id"]
 
 
+def _set_password(email, password=STRONG_PASSWORD):
+    db = database.SessionLocal()
+    try:
+        u = db.query(User).filter(User.email == email).one()
+        u.password_hash = hash_password(password)
+        db.commit()
+    finally:
+        db.close()
+
+
 def _login(client, email, password):
     r = client.post("/token", data={"username": email, "password": password})
     return r, ({"Authorization": f"Bearer {r.json()['access_token']}"} if r.status_code == 200 else None)
@@ -63,6 +73,7 @@ def test_create_requires_employee_id_and_card_and_hands_card_over(api):
         db.close()
 
     # The staff member and Administrators can view the card; nobody else.
+    _set_password("pedro@csws.gov.ph")
     _, staff = _login(client, "pedro@csws.gov.ph", STRONG_PASSWORD)
     assert client.get(card_url, headers=staff).status_code == 200
     assert client.get(card_url, headers=t["admin"]).status_code == 200
@@ -79,7 +90,6 @@ def test_create_validation(api):
         ({"role_name": "Administrator"}, 422),                 # internal roles only
         ({"role_name": "Barangay Receiving Representative"}, 422),  # needs a barangay
         ({"role_name": "Barangay Receiving Representative", "assigned_barangay_id": 99}, 422),
-        ({"password": "short"}, 422),
     ]
     for override, code in cases:
         body = {k: v for k, v in override.items() if v is not None}
@@ -133,6 +143,7 @@ def test_admin_edits_every_field_and_logs_old_and_new(api):
     assert upd["old_value"]["email"] == "pedro@csws.gov.ph"
 
     # The token holds the email, so the staff member logs in with the new one.
+    _set_password("juan@csws.gov.ph")
     r, _ = _login(client, "juan@csws.gov.ph", STRONG_PASSWORD)
     assert r.status_code == 200
 
