@@ -14,8 +14,8 @@ class Validators {
 
   static String squash(String v) => v.trim().replaceAll(RegExp(r'\s+'), ' ');
 
-  /// D2 (relaxed rule): 8-64 characters, no spaces, at least one letter and
-  /// one number. Keep this in sync with validate_password_strength in
+  /// 8-64 characters, no spaces, at least one capital letter and one
+  /// number. Keep this in sync with validate_password_strength in
   /// backend/app/core/passwords.py.
   static String? newPassword(String? v) {
     final s = v ?? '';
@@ -23,6 +23,7 @@ class Validators {
     if (s.length < 8 || s.length > 64) return 'Use 8-64 characters';
     if (s.contains(' ')) return 'No spaces allowed';
     if (!RegExp(r'[A-Za-z]').hasMatch(s)) return 'Add a letter';
+    if (!RegExp(r'[A-Z]').hasMatch(s)) return 'Add a capital letter';
     if (!RegExp(r'\d').hasMatch(s)) return 'Add a number';
     return null;
   }
