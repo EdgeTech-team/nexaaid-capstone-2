@@ -11,7 +11,7 @@ def test_active_and_deactivated_sections(api):
     everyone = _users(client, t)
     csws = next(u for u in everyone if u["email"] == "csws.test@example.com")["user_id"]
 
-    ok(client.patch(f"/admin/users/{csws}", headers=t["admin"], json={"is_active": False}))
+    ok(client.patch(f"/admin/users/{csws}", headers=t["admin"], json={"is_active": False, "deactivation_reason": "Test reason"}))
     active = _users(client, t, active="true")
     off = _users(client, t, active="false")
     assert all(u["is_active"] for u in active) and csws not in [u["user_id"] for u in active]

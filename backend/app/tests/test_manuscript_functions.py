@@ -25,7 +25,7 @@ def test_admin_accounts_orgs_and_logs(api):
     assert client.get("/admin/users", headers=t["csws"]).status_code == 403
 
     # UC-A1: deactivate -> cannot log in, reactivate -> can
-    ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": False}))
+    ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": False, "deactivation_reason": "Test reason"}))
     r = client.post("/token", data={"username": "donor.test@example.com", "password": PASSWORD})
     assert r.status_code == 403 and "deactivated" in r.json()["detail"]
     assert client.get("/health/secure", headers=t["donor"]).status_code == 403  # old token rejected

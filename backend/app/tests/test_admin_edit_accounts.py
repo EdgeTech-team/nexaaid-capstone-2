@@ -151,7 +151,7 @@ def test_edit_rules_and_errors(api):
     patch = lambda uid, body, who="admin": client.patch(f"/admin/users/{uid}", headers=t[who], json=body)
 
     assert patch(99999, {"first_name": "Xavier"}).status_code == 404                  # alt 3a
-    r = patch(me, {"is_active": False})
+    r = patch(me, {"is_active": False, "deactivation_reason": "Test reason"})
     assert r.status_code == 400 and "your own account" in r.text
     r = patch(me, {"role_name": "CSWS Main Office"})
     assert r.status_code == 400 and "your own role" in r.text
@@ -166,7 +166,7 @@ def test_edit_rules_and_errors(api):
         db.close()
     admin2 = _id(client, t, "admin2@test.ph")
     assert patch(admin2, {"role_name": "CSWS Main Office"}).status_code == 422
-    ok(patch(admin2, {"is_active": False}))           # another admin, one still active
+    ok(patch(admin2, {"is_active": False, "deactivation_reason": "Test reason"}))           # another admin, one still active
 
     # Donors and organizations: no role, employee ID or barangay.
     assert patch(donor, {"role_name": "CSWS Main Office"}).status_code == 422
@@ -194,7 +194,7 @@ def test_edit_rules_and_errors(api):
     csws = _id(client, t, "csws.test@example.com")
     r = patch(csws, {"first_name": "Carla"})
     assert r.status_code == 422 and "Employee ID is required" in r.text
-    ok(patch(csws, {"is_active": False}))
+    ok(patch(csws, {"is_active": False, "deactivation_reason": "Test reason"}))
     ok(patch(csws, {"is_active": True}))
     ok(patch(csws, {"first_name": "Carla", "employee_id": "CSWS-0001"}))
 
@@ -218,7 +218,7 @@ def test_old_account_with_empty_last_name(api):
     r = client.patch(f"/admin/users/{uid}", headers=t["admin"],
                      json={"first_name": "Maria Santos", "last_name": ""})
     assert r.status_code == 422 and "Last name must be 2-50 characters" in r.text
-    ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={"is_active": False}))
+    ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={"is_active": False, "deactivation_reason": "Test reason"}))
     row = ok(client.patch(f"/admin/users/{uid}", headers=t["admin"],
                           json={"first_name": "Maria", "last_name": "Santos", "is_active": True}))
     assert row["name"] == "Maria Santos"
