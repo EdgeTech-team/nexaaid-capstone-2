@@ -8,6 +8,8 @@ import 'widgets.dart';
 /// UC-A1 Manage accounts: one account's details and uploaded documents.
 /// For a donor the Administrator checks the valid ID (UC-D1 step 3) and
 /// can deactivate the account if the ID is invalid (UC-A1 step 5).
+/// Deactivating needs a reason, which stays visible on this screen and in
+/// the Deactivated accounts list.
 class AccountDetailScreen extends StatefulWidget {
   final int userId;
   const AccountDetailScreen({super.key, required this.userId});
@@ -27,37 +29,35 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
   bool busy = false;
 
   Future<void> _setActive(Map u, bool activate) async {
+    String? reason;
     if (!activate) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Deactivate this account?'),
-          content: Text(
+      final v = await formDialog(
+        context,
+        title: 'Deactivate this account?',
+        message:
             '${u['first_name']} ${u['last_name']} will be logged out and '
-            'cannot log in until you activate the account again.',
-          ),
-          actions: [
-            AppButton(
-              'Cancel',
-              variant: AppButtonVariant.text,
-              onPressed: () => Navigator.pop(ctx, false),
-            ),
-            AppButton(
-              'Deactivate',
-              variant: AppButtonVariant.danger,
-              onPressed: () => Navigator.pop(ctx, true),
-            ),
-          ],
-        ),
+            'cannot log in until you activate the account again. '
+            'Say why, so the reason is kept with the account.',
+        fields: const [DialogField('reason', 'Reason', multiline: true)],
+        confirm: 'Deactivate',
       );
-      if (ok != true || !mounted) return;
+      if (v == null || !mounted) return;
+      reason = (v['reason'] ?? '').trim();
+      if (reason.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('A reason is required to deactivate an account.'),
+          ),
+        );
+        return;
+      }
     }
     setState(() => busy = true);
     await act(
       context,
       () => api.patch(
         '/admin/users/${widget.userId}',
-        body: {'is_active': activate},
+        body: {'is_active': activate, 'deactivation_reason': ?reason},
       ),
       success: activate ? 'Account activated' : 'Account deactivated',
     );
@@ -110,6 +110,8 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
       ),
     );
 
+    final deactivationReason = '${u['deactivation_reason'] ?? ''}'.trim();
+
     return ListView(
       padding: Space.page,
       children: [
@@ -128,6 +130,36 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
           ],
         ),
         Gaps.v16,
+        // Why this account was deactivated (shown only while deactivated).
+        if (!active) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(Space.md),
+            decoration: BoxDecoration(
+              color: cs.errorContainer,
+              borderRadius: BorderRadius.circular(Radii.sm),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  u['deactivated_at'] == null
+                      ? 'Deactivation reason'
+                      : 'Deactivated ${niceDate(u['deactivated_at'])}',
+                  style: t.labelLarge?.copyWith(color: cs.onErrorContainer),
+                ),
+                Gaps.v8,
+                Text(
+                  deactivationReason.isEmpty
+                      ? 'No reason was recorded.'
+                      : deactivationReason,
+                  style: t.bodyMedium?.copyWith(color: cs.onErrorContainer),
+                ),
+              ],
+            ),
+          ),
+          Gaps.v16,
+        ],
         AppCard(
           child: Column(
             children: [
