@@ -138,7 +138,7 @@ def test_relaxed_password_rule(api):
         r = client.post("/auth/register/donor", json=body)
         assert r.status_code == 422, weak
 
-    easy = "abc12345"                                      # no capital, no symbol: allowed now
+    easy = "Abc12345"                                      # capital letter, no symbol: allowed
     body = dict(base, password=easy, confirm_password=easy)
     ok(client.post("/auth/register/donor", json=body), 201)
     ok(client.post("/token", data={"username": "pw@example.com", "password": easy}))
@@ -270,7 +270,7 @@ def test_admin_sees_donor_detail_and_documents(api):
     assert client.get("/admin/users/99999/documents", headers=t["admin"]).status_code == 404
 
     # Invalid ID -> the Administrator deactivates the account (UC-A1 step 5).
-    ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={"is_active": False}))
+    ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={"is_active": False, "deactivation_reason": "Test reason"}))
     r = client.post("/token", data={"username": "idcheck@example.com", "password": STRONG_PASSWORD})
     assert r.status_code == 403
 
