@@ -1,9 +1,7 @@
-# routers/admin_router.py
-from datetime import datetime, timezone
-from typing import Literal, Optional
+# api/v1/admin_router.py
+from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from core import email as mail_service
@@ -299,7 +297,11 @@ def update_user(
     return _user_row(user, orgs, barangays)
 
 
-# UC-A2 Review Organization Registration
+# UC-A2 Review Organization Registrations.
+# Capstone 2 adviser comment 1.3: organizations are validated automatically
+# when they register, so this list is for review only. There is no approve /
+# hold / reject endpoint any more. To stop an organization, deactivate its
+# account with PATCH /admin/users/{user_id} (is_active = false).
 @router.get("/organizations")
 def list_organizations(
     status_filter: Optional[str] = Query(default=None, alias="status"),
@@ -309,7 +311,8 @@ def list_organizations(
     query = db.query(Organization)
     if status_filter:
         query = query.filter(Organization.status == status_filter)
-    # Latest Hold/Reject reason and decision time per organization (audit_logs).
+    # Reason and decision time kept in audit_logs from before comment 1.3,
+    # when the Administrator still approved, held or rejected organizations.
     reasons, decided = {}, {}
     for log in (db.query(AuditLog)
                 .filter(AuditLog.entity_type == "organizations",
@@ -329,10 +332,11 @@ def list_organizations(
             "contact_email": o.contact_email,
             "registration_no": o.registration_no,
             "legitimacy_document_url": o.legitimacy_document_url,
-            # UC-A2 alt 4a: flag applications with a missing document
+            # Comment 1.1: the document is optional, so this only means
+            # "no document submitted". It is not an error.
             "document_missing": not (o.legitimacy_document_url or "").strip(),
             "status": o.status,
-            # I3 / D6: the saved rejection reason (older rows fall back to the audit log)
+            # Older rows only (organizations rejected before comment 1.3).
             "rejection_reason": o.rejection_reason,
             "decision_reason": o.rejection_reason or reasons.get(o.organization_id),
             "decided_at": decided.get(o.organization_id),
@@ -340,75 +344,6 @@ def list_organizations(
             "created_at": o.created_at,
         })
     return rows
-
-
-class OrganizationDecision(BaseModel):
-    # Approved activates the account; Pending = hold; Rejected keeps it inactive (UC-A2 6a).
-    decision: Literal["Approved", "Pending", "Rejected"]
-    # Required for Hold and Reject so the organization can be told why.
-    reason: Optional[str] = Field(default=None, max_length=500)
-
-    @model_validator(mode="after")
-    def _reason_required(self):
-        self.reason = (self.reason or "").strip() or None
-        if self.decision != "Approved" and self.reason is None:
-            raise ValueError("Give a reason when you hold or reject an organization")
-        return self
-
-
-@router.post("/organizations/{organization_id}/decision")
-def decide_organization(
-    organization_id: int,
-    payload: OrganizationDecision,
-    request: Request,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(ADMIN)),
-):
-    org = db.get(Organization, organization_id)
-    if org is None:
-        raise HTTPException(status_code=404, detail="Organization not found")
-    old = {"status": org.status}
-    org.status = payload.decision
-    org.rejection_reason = payload.reason if payload.decision == "Rejected" else None
-    if payload.decision == "Approved":
-        org.approved_by_user_id = current_user.user_id
-        org.approved_at = datetime.now(timezone.utc)
-    action = {"Approved": "APPROVE ORGANIZATION", "Pending": "HOLD ORGANIZATION",
-              "Rejected": "REJECT ORGANIZATION"}[payload.decision]
-    log_action(db, current_user, action, "organizations", org.organization_id,
-               old=old, new={"status": org.status, "reason": payload.reason}, request=request)
-
-    if payload.decision in ("Approved", "Rejected"):
-        event = "org_approved" if payload.decision == "Approved" else "org_rejected"
-        org_users = db.query(User.user_id, User.email).filter(
-            User.organization_id == org.organization_id).all()
-        for uid, _ in org_users:
-            notify_event(db, uid, event, "organization", org.organization_id,
-                         reason=payload.reason or "Please contact the administrator for details.")
-
-        # Email the same decision to the organization (one message per address).
-        recipients = {}
-        for addr in [org.contact_email] + [email for _, email in org_users]:
-            if addr:
-                recipients.setdefault(addr.lower(), addr)
-        greeting = org.contact_person or org.org_name
-        if payload.decision == "Approved":
-            subject = "Your NexaAid organization was approved"
-            text = (f"Hello {greeting},\n\n"
-                    f"Your organization, {org.org_name}, was approved. "
-                    "You can now sign in to NexaAid and start donating.\n\nNexaAid")
-        else:
-            subject = "Your NexaAid organization registration was not approved"
-            text = (f"Hello {greeting},\n\n"
-                    f"Your registration for {org.org_name} was not approved.\n"
-                    f"Reason: {payload.reason or 'Please contact the administrator for details.'}\n\n"
-                    "NexaAid")
-        for addr in recipients.values():
-            _queue_email(background_tasks, addr, subject, text)
-    db.flush()
-    return {"organization_id": org.organization_id, "org_name": org.org_name,
-            "status": org.status, "reason": payload.reason}
 
 
 # UC-A4 Monitor System Records: read-only activity logs
