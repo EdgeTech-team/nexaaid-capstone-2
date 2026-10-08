@@ -138,7 +138,7 @@ def test_relaxed_password_rule(api):
         r = client.post("/auth/register/donor", json=body)
         assert r.status_code == 422, weak
 
-    easy = "abc12345"                                      # no capital, no symbol: allowed now
+    easy = "Abc12345"                                      # capital letter, no symbol: allowed
     body = dict(base, password=easy, confirm_password=easy)
     ok(client.post("/auth/register/donor", json=body), 201)
     ok(client.post("/token", data={"username": "pw@example.com", "password": easy}))
