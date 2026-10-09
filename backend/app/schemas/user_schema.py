@@ -7,6 +7,7 @@ from core.names import capitalize_words
 from core.passwords import validate_password_strength
 from core.validators import clean_email, clean_employee_id, clean_person_name, clean_ph_mobile
 from schemas.upload_schema import UploadRef
+from core.validators import clean_email, clean_employee_id, clean_person_name, clean_ph_mobile, clean_text
 
 # UC-D1 step 3: kinds of valid ID a donor may upload (stored in users.id_type).
 # D1: the ID type is no longer asked during registration. The list and the
@@ -46,6 +47,7 @@ class DonorRegisterRequest(BaseModel):
     # Step 3: valid ID, front and back, uploaded first with POST /uploads.
     id_front: UploadRef
     id_back: UploadRef
+    address: Optional[str] = None
     # RA 10173 (Data Privacy Act): the ID photos are sensitive personal information.
     consent: bool
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
@@ -80,7 +82,12 @@ class DonorRegisterRequest(BaseModel):
         if v is not True:
             raise ValueError("You must accept the Terms and Conditions")
         return v
-
+    @field_validator("address")
+    @classmethod
+    def _ad(cls, v):
+        if v is None or not v.strip():
+            return None
+        return clean_text(v, "Address", 10, 300)
     @model_validator(mode="after")
     def _check(self):
         if self.id_front.file_id == self.id_back.file_id:

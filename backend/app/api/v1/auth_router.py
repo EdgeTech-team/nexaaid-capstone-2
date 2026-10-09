@@ -57,6 +57,7 @@ def register_donor(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
+  
     """UC-D1 Register Individual Donor (adviser item 2). The account is
     validated automatically (Capstone 2 adviser comment 1.3); the
     Administrator is notified and may review the ID afterwards."""
@@ -74,6 +75,7 @@ def register_donor(
         password_hash=hash_password(payload.password),
         contact_number=payload.contact_number,
         id_type=payload.id_type,
+        address=payload.address,
         role_id=donor_role.role_id,
         organization_id=None,
         terms_accepted_at=datetime.now(timezone.utc),
@@ -142,7 +144,7 @@ def register_organization(
         contact_person=payload.contact_person,
         registration_no=payload.registration_no,
         contact_email=payload.contact_email,
-        # Adviser comment 1.3: validated automatically, no admin approval.
+        # Organizations activate automatically; administrator review is separate.
         status="Approved",
         approved_at=datetime.now(timezone.utc),
     )

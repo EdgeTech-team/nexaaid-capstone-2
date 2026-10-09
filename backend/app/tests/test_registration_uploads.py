@@ -187,7 +187,7 @@ def test_organization_registers_with_document_and_split_contact(api):
     body = org_payload(client, "ops@relief.ph", organization_type="Other",
                        organization_type_other="Cooperative")
     org = ok(client.post("/auth/register/organization", json=body), 201)
-    assert org["status"] == "Pending"
+    assert org["status"] == "Approved"
 
     db = _db()
     try:
@@ -202,15 +202,18 @@ def test_organization_registers_with_document_and_split_contact(api):
     finally:
         db.close()
 
-    # Still cannot log in while Pending.
+    # Registration is active immediately; admin review is tracked separately.
     r = client.post("/token", data={"username": "ops@relief.ph", "password": STRONG_PASSWORD})
-    assert r.status_code == 403
+    assert r.status_code == 200
+    rows = ok(client.get("/admin/organizations?reviewed=false", headers=t["admin"]))
+    row = next(o for o in rows if o["organization_id"] == org["organization_id"])
+    assert row["reviewed_at"] is None
 
 
 def test_organization_document_and_type_are_required(api):
     client, t = api
     body = org_payload(client, "nodoc@relief.ph")
-    for field, value in {"legitimacy_document": None, "organization_type": "Cult",
+    for field, value in {"organization_type": "Cult",
                          "consent": False, "contact_last_name": ""}.items():
         b = dict(body)
         if value is None:
@@ -309,32 +312,6 @@ def test_organization_document_status_flags(api):
     assert rows[old_id]["document_missing"] is True       # existing flag kept for old rows
 
 
-def test_hold_and_reject_need_a_reason(api):
-    client, t = api
-    org = ok(client.post("/auth/register/organization", json=org_payload(client, "why@relief.ph")), 201)
-    url = f"/admin/organizations/{org['organization_id']}/decision"
-
-    for decision in ("Rejected", "Pending"):
-        r = client.post(url, headers=t["admin"], json={"decision": decision})
-        assert r.status_code == 422 and "reason" in r.text
-        r = client.post(url, headers=t["admin"], json={"decision": decision, "reason": "   "})
-        assert r.status_code == 422
-
-    res = ok(client.post(url, headers=t["admin"],
-                         json={"decision": "Rejected", "reason": "SEC certificate is expired"}))
-    assert res["status"] == "Rejected" and res["reason"] == "SEC certificate is expired"
-    # Rejected keeps it inactive (alt 6a).
-    r = client.post("/token", data={"username": "why@relief.ph", "password": STRONG_PASSWORD})
-    assert r.status_code == 403
-
-    row = next(o for o in ok(client.get("/admin/organizations", headers=t["admin"]))
-               if o["organization_id"] == org["organization_id"])
-    assert row["decision_reason"] == "SEC certificate is expired"
-    logs = ok(client.get("/admin/audit-logs?entity_type=organizations", headers=t["admin"]))
-    assert any(l["action"] == "REJECT ORGANIZATION" and l["new_value"]["reason"] for l in logs)
-    assert client.post(url, headers=t["csws"], json={"decision": "Approved"}).status_code == 403
-
-
 def test_unreadable_image_upload_asks_for_reupload(api):
     """UC-D1 alt 6a: a broken photo is refused at upload with a re-upload message."""
     client, t = api
@@ -344,3 +321,10 @@ def test_unreadable_image_upload_asks_for_reupload(api):
     assert r.status_code == 400 and "again" in _detail(r)
     assert client.post("/uploads", data={"purpose": "id_back"},
                        files={"file": ("id.pdf", pdf(), "application/pdf")}).status_code == 201
+
+
+def test_organization_document_is_optional(api):
+    client, t = api
+    body = org_payload(client, "optdoc@relief.ph")
+    body.pop("legitimacy_document", None)
+    assert client.post("/auth/register/organization", json=body).status_code == 201

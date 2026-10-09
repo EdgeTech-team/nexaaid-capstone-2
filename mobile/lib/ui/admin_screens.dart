@@ -20,15 +20,17 @@ class AdminDashboard extends StatelessWidget {
   void _open(BuildContext context, String title, Widget child) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) =>
-            Scaffold(appBar: AppBar(title: Text(title)), body: child),
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: child,
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-  return Loader(
+    return Loader(
       load: [
         () => api.get('/dashboard/admin'),
         () => api.get('/donations/entries'),
@@ -56,8 +58,11 @@ class AdminDashboard extends StatelessWidget {
                 '${m['pending_organizations']}',
                 Icons.apartment_outlined,
                 color: const Color(0xFFEF6C00),
-                onTap: () =>
-                    _open(context, 'Organizations', const OrganizationsReview()),
+                onTap: () => _open(
+                  context,
+                  'Organizations',
+                  const OrganizationsReview(),
+                ),
               ),
               StatTile(
                 'Reports to validate',
@@ -346,14 +351,49 @@ class OrganizationsReview extends StatefulWidget {
 }
 
 class _OrganizationsReviewState extends State<OrganizationsReview> {
-  String status = 'Pending';
+  bool reviewed = false;
+  final Set<int> busyIds = {};
+
+  Future<void> _setReviewed(int organizationId, bool value) async {
+    if (busyIds.contains(organizationId)) return;
+    setState(() => busyIds.add(organizationId));
+
+    final result = await api.patch(
+      '/admin/organizations/$organizationId/review',
+      body: {'reviewed': value},
+    );
+
+    if (!mounted) return;
+
+    setState(() => busyIds.remove(organizationId));
+
+    if (!result.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update review: ${result.errorText}')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          value
+              ? 'Organization marked Reviewed.'
+              : 'Organization marked Not Reviewed.',
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey(status),
+      key: ValueKey(reviewed),
       load: [
-        () => api.get('/admin/organizations', query: {'status': status}),
+        () => api.get(
+          '/admin/organizations',
+          query: {'reviewed': reviewed ? 'true' : 'false'},
+        ),
       ],
       builder: (context, data) {
         final orgs = (data[0] as List).cast<Map>();
@@ -362,120 +402,108 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
           children: [
             const PageHeader(
               'Organization Registrations',
-              subtitle: 'Relief organizations can only log in after approval (UC-A2).',
+              subtitle: 'Organizations activate automatically. Review records here without changing account access.',
             ),
-            SegmentedButton<String>(
+            SegmentedButton<bool>(
               segments: const [
-                ButtonSegment(value: 'Pending', label: Text('Pending')),
-                ButtonSegment(value: 'Approved', label: Text('Approved')),
-                ButtonSegment(value: 'Rejected', label: Text('Rejected')),
+                ButtonSegment(value: false, label: Text('Not Reviewed')),
+                ButtonSegment(value: true, label: Text('Reviewed')),
               ],
-              selected: {status},
-              onSelectionChanged: (s) => setState(() => status = s.first),
+              selected: {reviewed},
+              onSelectionChanged: (selection) {
+                setState(() => reviewed = selection.first);
+              },
             ),
-            // I3: the organization sees the same reason at login (D6).
-            if (status == 'Rejected') ...[
-              Gaps.v8,
-              Text(
-                'Rejected organizations see this reason when they try to log in.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
             const SizedBox(height: 12),
             if (orgs.isEmpty)
-              EmptyState('No ${status.toLowerCase()} organizations.'),
+              EmptyState(
+                reviewed
+                    ? 'No reviewed organizations.'
+                    : 'No organizations waiting for review.',
+              ),
             for (final o in orgs)
-              Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+              Builder(
+                builder: (context) {
+                  final id = o['organization_id'] as int;
+                  final isReviewed = o['reviewed_at'] != null;
+                  final busy = busyIds.contains(id);
+
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: Text(
-                              '${o['org_name']}',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${o['org_name']}',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              Badge2.status(
+                                isReviewed ? 'Reviewed' : 'Not Reviewed',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text('${o['organization_type'] ?? 'Organization'}'),
+                          Text(
+                            'Registration no.: ${o['registration_no'] ?? 'Not provided'}',
+                          ),
+                          if ((o['address'] ?? '').toString().trim().isNotEmpty)
+                            Text('Address: ${o['address']}'),
+                          Text(
+                            'Contact: ${o['contact_person'] ?? 'Not provided'}',
+                          ),
+                          Text(
+                            'Email: ${o['contact_email'] ?? 'Not provided'}',
+                          ),
+                          if (o['created_at'] != null)
+                            Text('Registered: ${o['created_at']}'),
+                          const SizedBox(height: 12),
+                          _OrgDocument(id),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: busy
+                                  ? null
+                                  : () => _setReviewed(id, !isReviewed),
+                              icon: busy
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      isReviewed
+                                          ? Icons.mark_email_unread_outlined
+                                          : Icons.fact_check_outlined,
+                                    ),
+                              label: Text(
+                                isReviewed
+                                    ? 'Mark Not Reviewed'
+                                    : 'Mark Reviewed',
                               ),
                             ),
                           ),
-                          Badge2.status(
-                            o['status'] == 'Approved'
-                                ? 'Validated'
-                                : '${o['status']}',
-                          ),
                         ],
                       ),
-                      Text(
-                        '${o['organization_type']} · Reg. no. ${o['registration_no'] ?? 'not given'}',
-                      ),
-                      Text('${o['address']}'),
-                      Text(
-                        'Contact: ${o['contact_person']} · ${o['contact_email']}',
-                      ),
-                      Gaps.v12,
-                      // UC-A2 step 4: the supporting document; alt 4a flags.
-                      _OrgDocument(o['organization_id'] as int),
-                      if (o['status'] == 'Rejected') ...[
-                        Gaps.v8,
-                        _RejectionReason(
-                          reason: o['rejection_reason'] ?? o['decision_reason'],
-                          at: o['decided_at'],
-                        ),
-                      ] else if (o['decision_reason'] != null) ...[
-                        Gaps.v8,
-                        Text(
-                          'Last reason: ${o['decision_reason']}',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               ),
           ],
         );
       },
-    );
-  }
-}
-
-/// I3: why an organization was rejected. The organization sees the same
-/// reason when it tries to log in (D6).
-class _RejectionReason extends StatelessWidget {
-  final dynamic reason;
-  final dynamic at;
-  const _RejectionReason({required this.reason, this.at});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(Space.md),
-      decoration: BoxDecoration(
-        color: cs.errorContainer,
-        borderRadius: BorderRadius.circular(Radii.sm),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            at == null ? 'Rejection reason' : 'Rejected ${niceDate(at)}',
-            style: t.labelLarge?.copyWith(color: cs.onErrorContainer),
-          ),
-          Gaps.v8,
-          Text(
-            '${reason ?? 'No reason was recorded.'}',
-            style: t.bodyMedium?.copyWith(color: cs.onErrorContainer),
-          ),
-        ],
-      ),
     );
   }
 }
