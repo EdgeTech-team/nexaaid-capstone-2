@@ -12,7 +12,7 @@ are placeholders- swap for real RBAC role names once Known.
   Receiving Representatives also only list/see deliveries to that barangay.
 """
 
-from datetime import datetime, timezone 
+from datetime import date, datetime, timezone 
 from decimal import Decimal
 from typing import List, Optional
 
@@ -30,6 +30,8 @@ from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from api.v1.drrmo_router import DRRMO
+from services.delivery_stock import check_stock, take_stock
+from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from schemas.delivery import (
     DeliveryCreate,
     DeliveryResponse,
@@ -66,24 +68,8 @@ def create_delivery(
 
   # Goods are released from this report's inventory (manuscript: "Inventory
   # is linked to specific report records"), so there must be enough stock.
-  stock = {}
-  for item_payload in payload.items:
-    inv = (
-      db.query(Inventory)
-      .filter(Inventory.item_id == item_payload.item_id, Inventory.report_id == payload.report_id)
-      .first()
-    )
-    available = inv.quantity if inv else 0
-    wanted = item_payload.quantity + stock.get(item_payload.item_id, (None, 0))[1]
-    if wanted > available:
-      raise HTTPException(
-        status_code=409,
-        detail=f"Not enough stock for item #{item_payload.item_id} in this report's inventory "
-               f"(available {available}, requested {wanted})",
-      )
-    stock[item_payload.item_id] = (inv, wanted)
-  for inv, qty in stock.values():
-    inv.quantity -= qty
+  # services/delivery_stock.py: shared with trips, plain-language messages.
+  take_stock(check_stock(db, payload.report_id, payload.items))
 
   delivery = Delivery (
     report_id=payload.report_id,
@@ -115,34 +101,57 @@ def create_delivery(
 # List — staff, with filters
 
 # Appendix H, Module 8.5: DRRMO also views delivery records (read only).
+# Sorting and filtering (Oct 9): status (one, or several comma-separated),
+# barangay, report, trip, delivery date range and a search box (delivery no.,
+# report no., barangay or item name). Names come with each delivery so the
+# app can show "Banilad" instead of an id.
+_LIST_ROLES = ("csws_main_office", "admin", "barangay_receiving_rep", "drrmo logistics support")
+
+
 @router.get("/",response_model=List[DeliveryResponse])
 def list_deliveries(
   status_filter: Optional[str] = Query(default=None, alias="status"),
   barangay_id: Optional[int]  = Query(default=None),
   report_id: Optional[int] = Query(default=None),
+  trip_id: Optional[int] = Query(default=None),
+  date_from: Optional[date] = Query(default=None, description="Delivery date on or after (Philippine date)"),
+  date_to: Optional[date] = Query(default=None, description="Delivery date on or before (Philippine date)"),
+  q: Optional[str] = Query(default=None, max_length=100),
+  sort: str = Query(default="newest", pattern="^(" + "|".join(DELIVERY_SORTS) + ")$"),
   skip: int = Query(default=0, ge=0),
   limit: int =Query(default=50, ge=1, le=200),
   db: Session = Depends(get_db),
-  current_user=Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep", "drrmo logistics support")),
+  current_user=Depends(require_role(*_LIST_ROLES)),
 
 ):
     query = db.query(Delivery).options(joinedload(Delivery.items))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
        query = query.filter(Delivery.destination_barangay_id == own_barangay)
-    if status_filter:
-       query = query.filter(Delivery.status == status_filter)
-    if barangay_id: 
-       query = query.filter(Delivery.destination_barangay_id == barangay_id)
-    if report_id: 
-        query= query.filter(Delivery.report_id == report_id)
+    query = apply_delivery_filters(
+       db, query, status=status_filter, barangay_id=barangay_id, report_id=report_id,
+       trip_id=trip_id, date_from=date_from, date_to=date_to, q=q, sort=sort)
+    return delivery_views(db, query.offset(skip).limit(limit).all())
 
-    return (
-       query.order_by(Delivery.created_at.desc())
-       .offset(skip)
-       .limit(limit)
-       .all()
-    )
+
+@router.get("/counts")
+def delivery_counts(
+  barangay_id: Optional[int] = Query(default=None),
+  report_id: Optional[int] = Query(default=None),
+  db: Session = Depends(get_db),
+  current_user=Depends(require_role(*_LIST_ROLES)),
+):
+    """How many deliveries are in each status, for the filter chips
+    ("In Transit (3)"). Same barangay scope as the list."""
+    query = db.query(Delivery)
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+       query = query.filter(Delivery.destination_barangay_id == own_barangay)
+    if barangay_id:
+       query = query.filter(Delivery.destination_barangay_id == barangay_id)
+    if report_id:
+       query = query.filter(Delivery.report_id == report_id)
+    return status_counts(query)
 
 # Retrieve one
 
@@ -177,7 +186,17 @@ def advance_delivery(
             status_code=404,
             detail="Delivery not found"
         )
+    move_to_next_status(db, delivery, current_user)
+    db.flush()
+    db.refresh(delivery)
 
+    return delivery
+
+
+def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delivery:
+    """One step forward (Preparing -> In Transit -> Delivered) with the
+    timestamped history and notifications. Used by advance_delivery and by
+    trips (api/v1/trips.py) so both behave the same. Does not commit."""
     # 'Confirmed' is the last stage and is only reached via
     # confirm_receipt below — never through this endpoint.
 
@@ -224,10 +243,6 @@ def advance_delivery(
     notify_event_many(db, recipients, "delivery_status_changed", "delivery",
                       delivery.delivery_id,
                       title=f"Delivery #{delivery.delivery_id}", status=delivery.status)
-
-    db.flush()
-    db.refresh(delivery)
-
     return delivery
 
 
