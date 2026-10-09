@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart' show Roles;
 import 'records_screens.dart' show DonationRecordsScreen, SupportRecordsScreen;
+import 'trip_screens.dart';
 import 'widgets.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
@@ -93,7 +94,7 @@ Future<void> showDeliveryHistory(BuildContext context, int deliveryId) async {
 // UC-CM2 release & delivery tracking (CSWS) and UC-B1 receive & acknowledge
 // (Barangay Receiving Representative)
 // ---------------------------------------------------------------------------
-class DeliveriesScreen extends StatelessWidget {
+class DeliveriesScreen extends StatefulWidget {
   final bool barangay;
 
   /// Appendix H 8.5 View delivery records only (Administrator, DRRMO).
@@ -104,7 +105,71 @@ class DeliveriesScreen extends StatelessWidget {
     this.readOnly = false,
   });
 
-   Future<void> _requestTransport(BuildContext context, Map d) async {
+  @override
+  State<DeliveriesScreen> createState() => _DeliveriesScreenState();
+}
+
+/// Sort options shown as plain words (backend: services/delivery_views.py).
+const _deliverySorts = {
+  'newest': 'Newest first',
+  'oldest': 'Oldest first',
+  'date_soonest': 'Delivery date: soonest',
+  'date_latest': 'Delivery date: latest',
+  'status': 'Needs action first',
+};
+
+class _DeliveriesScreenState extends State<DeliveriesScreen> {
+  bool get barangay => widget.barangay;
+  bool get readOnly => widget.readOnly;
+
+  // Filters (all optional). Changing one reloads the list.
+  String? status;
+  String sort = 'newest';
+  String search = '';
+  DateTimeRange? dates;
+  final searchC = TextEditingController();
+
+  @override
+  void dispose() {
+    searchC.dispose();
+    super.dispose();
+  }
+
+  String _ymd(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  Map<String, String> get _query => {
+    'sort': sort,
+    'limit': '200',
+    if (status != null) 'status': status!,
+    if (search.trim().isNotEmpty) 'q': search.trim(),
+    if (dates != null) 'date_from': _ymd(dates!.start),
+    if (dates != null) 'date_to': _ymd(dates!.end),
+  };
+
+  bool get _filtered =>
+      status != null || search.trim().isNotEmpty || dates != null;
+
+  void _clearFilters() => setState(() {
+    status = null;
+    search = '';
+    searchC.clear();
+    dates = null;
+  });
+
+  Future<void> _pickDates() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 1, 12, 31),
+      initialDateRange: dates,
+      helpText: 'Show deliveries between',
+    );
+    if (picked != null) setState(() => dates = picked);
+  }
+
+  Future<void> _requestTransport(BuildContext context, Map d) async {
     // I4: pick the numbers, no typing.
     final v = await formDialog(
       context,
@@ -176,31 +241,208 @@ class DeliveriesScreen extends StatelessWidget {
     );
   }
 
+  /// Barangay rep: one tap for every delivery of a trip that arrived here.
+  Future<void> _confirmTrip(BuildContext context, int tripId, int n) async {
+    final v = await formDialog(
+      context,
+      title: 'Confirm all $n deliveries?',
+      message:
+          'Trip #$tripId brought $n deliveries to your barangay. Confirm only '
+          'if everything arrived. If something is missing, confirm the '
+          'deliveries one by one instead.',
+      fields: const [
+        DialogField(
+          'remarks',
+          'Remarks (optional)',
+          required: false,
+          multiline: true,
+        ),
+      ],
+      confirm: 'Confirm all',
+    );
+    if (v == null || !context.mounted) return;
+    await act(
+      context,
+      () => api.post(
+        '/trips/$tripId/confirm-receipt',
+        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+      ),
+      success: '$n deliveries confirmed. Fulfillment updated.',
+    );
+  }
+
+  /// "Prepare delivery": one report, or several reports on one truck.
+  void _prepare(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'What are you sending?',
+                style: Theme.of(ctx).textTheme.titleLarge,
+              ),
+              Gaps.v12,
+              AppCard(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const NewDeliveryScreen(),
+                    ),
+                  );
+                },
+                child: const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.inventory, size: 32),
+                  title: Text('Goods for one report'),
+                  subtitle: Text('One delivery to one barangay.'),
+                  trailing: Icon(Icons.chevron_right),
+                ),
+              ),
+              Gaps.v8,
+              AppCard(
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const TripPlannerScreen()),
+                  );
+                },
+                child: const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.local_shipping, size: 32),
+                  title: Text('Several reports on one truck'),
+                  subtitle: Text(
+                    'Plan a trip, e.g. 3 Banilad reports and 2 nearby '
+                    'barangays in one go.',
+                  ),
+                  trailing: Icon(Icons.chevron_right),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _filters(BuildContext context, Map counts) {
+    final t = Theme.of(context).textTheme;
+    String chip(String? s) => s == null
+        ? 'All (${counts['total'] ?? 0})'
+        : '$s (${counts[s] ?? 0})';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final s in <String?>[null, ..._deliverySteps])
+                Padding(
+                  padding: const EdgeInsets.only(right: Space.xs),
+                  child: ChoiceChip(
+                    label: Text(chip(s)),
+                    selected: status == s,
+                    onSelected: (_) => setState(() => status = s),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        Gaps.v12,
+        TextField(
+          controller: searchC,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            labelText: 'Search barangay, item or delivery no.',
+            prefixIcon: const Icon(Icons.search),
+            suffixIcon: search.isEmpty
+                ? null
+                : IconButton(
+                    tooltip: 'Clear search',
+                    icon: const Icon(Icons.close),
+                    onPressed: () => setState(() {
+                      search = '';
+                      searchC.clear();
+                    }),
+                  ),
+          ),
+          onSubmitted: (v) => setState(() => search = v),
+        ),
+        Gaps.v8,
+        Wrap(
+          spacing: Space.xs,
+          runSpacing: Space.xs,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            PopupMenuButton<String>(
+              tooltip: 'Sort',
+              initialValue: sort,
+              onSelected: (v) => setState(() => sort = v),
+              itemBuilder: (_) => [
+                for (final e in _deliverySorts.entries)
+                  PopupMenuItem(value: e.key, child: Text(e.value)),
+              ],
+              child: Chip(
+                avatar: const Icon(Icons.sort, size: 18),
+                label: Text(_deliverySorts[sort]!),
+              ),
+            ),
+            InputChip(
+              avatar: const Icon(Icons.date_range, size: 18),
+              label: Text(
+                dates == null
+                    ? 'Any date'
+                    : '${niceDay(dates!.start)} – ${niceDay(dates!.end)}',
+              ),
+              onPressed: _pickDates,
+              onDeleted: dates == null ? null : () => setState(() => dates = null),
+            ),
+            if (_filtered)
+              TextButton(
+                onPressed: _clearFilters,
+                child: Text('Clear filters', style: t.labelLarge),
+              ),
+          ],
+        ),
+        Gaps.v12,
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       floatingActionButton: barangay || readOnly
           ? null
           : FloatingActionButton.extended(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const NewDeliveryScreen()),
-              ),
+              onPressed: () => _prepare(context),
               icon: const Icon(Icons.add),
               label: const Text('Prepare delivery'),
             ),
       body: Loader(
+        // A new key reloads the list whenever a filter changes.
+        key: ValueKey(_query.toString()),
         load: [
-          () => api.get('/deliveries/'),
+          () => api.get('/deliveries/', query: _query),
           api.lookupsResult,
           barangay
               ? () => api.get('/dashboard/barangay')
               : api.role == Roles.drrmo
               ? () => api.get('/drrmo/requests')
               : () => api.get('/logistics/requests'),
+          () => api.get('/deliveries/counts'),
         ],
         builder: (context, data) {
           final names = Names(Map<String, dynamic>.from(data[1] as Map));
           final rows = (data[0] as List).cast<Map>();
+          final counts = data[3] as Map;
           final acked = barangay
               ? ((data[2] as Map)['acknowledged_deliveries'] as List).toSet()
               : <dynamic>{};
@@ -209,6 +451,18 @@ class DeliveriesScreen extends StatelessWidget {
             for (final r in (data[2] as List).cast<Map>().reversed) {
               requests[r['delivery_id']] = r; // latest request per delivery
             }
+          }
+          // Barangay: trips that brought several deliveries that are now
+          // waiting for confirmation, so they can confirm them in one tap.
+          final waitingByTrip = <int, int>{};
+          if (barangay) {
+            for (final d in rows) {
+              if (d['trip_id'] != null && d['status'] == 'Delivered') {
+                final id = d['trip_id'] as int;
+                waitingByTrip[id] = (waitingByTrip[id] ?? 0) + 1;
+              }
+            }
+            waitingByTrip.removeWhere((_, n) => n < 2);
           }
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
@@ -227,27 +481,68 @@ class DeliveriesScreen extends StatelessWidget {
                     : 'Prepare goods from a report\'s inventory, then move the '
                           'status one step at a time.',
               ),
-              if (!barangay && !readOnly)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => Scaffold(
-                          appBar: AppBar(
-                            title: const Text('Logistics support records'),
-                          ),
-                          body: const SupportRecordsScreen(),
+              if (!barangay)
+                Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: Space.xs,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const TripsScreen(),
                         ),
                       ),
+                      icon: const Icon(Icons.local_shipping_outlined),
+                      label: const Text('Trips'),
                     ),
-                    icon: const Icon(Icons.fire_truck_outlined),
-                    label: const Text('Logistics support records'),
+                    if (!readOnly)
+                      TextButton.icon(
+                        onPressed: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => Scaffold(
+                              appBar: AppBar(
+                                title: const Text('Logistics support records'),
+                              ),
+                              body: const SupportRecordsScreen(),
+                            ),
+                          ),
+                        ),
+                        icon: const Icon(Icons.fire_truck_outlined),
+                        label: const Text('Logistics support records'),
+                      ),
+                  ],
+                ),
+              _filters(context, counts),
+              for (final e in waitingByTrip.entries)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: AppCard(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    child: Row(
+                      children: [
+                        const Icon(Icons.local_shipping, size: 28),
+                        Gaps.h12,
+                        Expanded(
+                          child: Text(
+                            'Trip #${e.key} arrived with ${e.value} deliveries '
+                            'for your barangay.',
+                          ),
+                        ),
+                        Gaps.h8,
+                        FilledButton(
+                          onPressed: () =>
+                              _confirmTrip(context, e.key, e.value),
+                          child: const Text('Confirm all'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               if (rows.isEmpty)
                 EmptyState(
-                  barangay
+                  _filtered
+                      ? 'No deliveries match these filters.'
+                      : barangay
                       ? 'No deliveries to your barangay yet.'
                       : readOnly
                       ? 'No deliveries yet.'
@@ -281,10 +576,15 @@ class DeliveriesScreen extends StatelessWidget {
     final items = (d['items'] as List? ?? const [])
         .map(
           (it) =>
-              '${it['quantity']} × ${names.of('items', it['item_id'], fallback: 'item')}',
+              '${it['quantity']} ${it['unit'] ?? ''} '
+                      '${it['item_name'] ?? names.of('items', it['item_id'], fallback: 'item')}'
+                  .replaceAll(RegExp(r'\s+'), ' '),
         )
         .join(', ');
     final reqStage = request?['stage'] as String?;
+    final barangayName =
+        d['destination_barangay_name'] ??
+        names.of('barangays', d['destination_barangay_id']);
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -296,8 +596,7 @@ class DeliveriesScreen extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Delivery #${d['delivery_id']} to '
-                    '${names.of('barangays', d['destination_barangay_id'])}',
+                    'Delivery #${d['delivery_id']} to $barangayName',
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
@@ -310,10 +609,29 @@ class DeliveriesScreen extends StatelessWidget {
             const SizedBox(height: 4),
             Text(items.isEmpty ? 'No items' : items),
             Text(
-              '${names.of('reports', d['report_id'], fallback: 'Report #${d['report_id']}')}'
+              '${d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report #${d['report_id']}')}'
               ' · ${niceDate(d['delivery_date'])}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
+            if (d['trip_id'] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: ActionChip(
+                  avatar: const Icon(Icons.local_shipping_outlined, size: 18),
+                  label: Text(
+                    'Trip #${d['trip_id']}'
+                    '${d['stop_order'] != null ? ' · Stop ${d['stop_order']}' : ''}',
+                  ),
+                  onPressed: barangay
+                      ? null
+                      : () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                TripDetailScreen(tripId: d['trip_id'] as int),
+                          ),
+                        ),
+                ),
+              ),
             if (request != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -409,6 +727,15 @@ class DeliveriesScreen extends StatelessWidget {
   }
 }
 
+/// "Oct 12" for compact chips.
+String niceDay(DateTime d) {
+  const m = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  return '${m[d.month - 1]} ${d.day}';
+}
+
 /// Prepare goods for release from a validated report's inventory.
 class NewDeliveryScreen extends StatefulWidget {
   const NewDeliveryScreen({super.key});
@@ -469,6 +796,12 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           : const [];
     });
   }
+
+  /// "All": fill in everything that is left of this item.
+  Widget _allButton(_DeliveryLine line, String max) => TextButton(
+    onPressed: () => setState(() => line.qty.text = max),
+    child: const Text('All'),
+  );
 
   Map? _stockOf(String? itemId) {
     for (final s in stock) {
@@ -537,7 +870,8 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                     DropdownMenuItem(
                       value: '${s['item_id']}',
                       child: Text(
-                        '${s['item_name']} (${s['quantity']} ${s['unit'] ?? ''} available)',
+                        '${s['item_name']} (${s['quantity']} ${s['unit'] ?? ''} left)'
+                            .replaceAll('  ', ' '),
                       ),
                     ),
               ],
@@ -547,10 +881,8 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                 labelText: i == 0
                     ? 'Item from this report\'s inventory'
                     : 'Item ${i + 1}',
-                helperText:
-                    i == 0 && reportId != null && !loadingStock && stock.isEmpty
-                    ? 'No stock for this report yet. Receive donations first.'
-                    : null,
+                // The "No more stock for this report" banner says why it is empty.
+                helperText: null,
               ),
             ),
           ),
@@ -563,6 +895,10 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
               decoration: InputDecoration(
                 labelText: 'Quantity',
                 suffixText: chosen?['unit'] as String?,
+                // One tap to send everything that is left of this item.
+                suffixIcon: chosen == null
+                    ? null
+                    : _allButton(line, '${chosen['quantity']}'),
               ),
               validator: (v) {
                 final n = int.tryParse(v?.trim() ?? '') ?? 0;
@@ -621,17 +957,35 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                 ),
                 const SizedBox(height: 12),
                 if (loadingStock) const LinearProgressIndicator(),
-                for (var i = 0; i < lines.length; i++) _lineFields(i),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: reportId == null || lines.length >= stock.length
-                        ? null
-                        : () => setState(() => lines.add(_DeliveryLine())),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add item'),
+                if (reportId != null && !loadingStock && stock.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 12),
+                    child: _NoStockBanner(),
                   ),
-                ),
+                if (stock.isNotEmpty || reportId == null)
+                  for (var i = 0; i < lines.length; i++) _lineFields(i),
+                if (stock.isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: lines.length >= stock.length
+                        ? Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text(
+                              'All items in stock for this report are listed. '
+                              'No more stock to add.',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          )
+                        : TextButton.icon(
+                            onPressed: () =>
+                                setState(() => lines.add(_DeliveryLine())),
+                            icon: const Icon(Icons.add),
+                            label: Text(
+                              'Add another item '
+                              '(${stock.length - lines.length} more in stock)',
+                            ),
+                          ),
+                  ),
                 const SizedBox(height: 12),
                 OutlinedButton.icon(
                   onPressed: () async {
@@ -645,7 +999,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                 ),
                 const SizedBox(height: 24),
                 FilledButton.icon(
-                  onPressed: busy ? null : _submit,
+                  onPressed: busy || stock.isEmpty ? null : _submit,
                   style: FilledButton.styleFrom(
                     minimumSize: const Size.fromHeight(50),
                   ),
@@ -656,6 +1010,36 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// Shown when the chosen report has nothing left to send.
+class _NoStockBanner extends StatelessWidget {
+  const _NoStockBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = StatusColors.of('Expired', Theme.of(context).brightness);
+    return Container(
+      padding: const EdgeInsets.all(Space.sm),
+      decoration: BoxDecoration(
+        color: tone.bg,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.remove_shopping_cart_outlined, color: tone.fg),
+          Gaps.h8,
+          Expanded(
+            child: Text(
+              'No more stock for this report. Receive more donations for it, '
+              'or choose another report.',
+              style: TextStyle(color: tone.fg, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
       ),
     );
   }

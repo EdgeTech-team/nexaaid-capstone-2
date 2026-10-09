@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../api.dart' show Roles;
 import 'donation_entries_view.dart';
+import 'expiry_widgets.dart';
 import 'ops_screens.dart' show DeliveriesScreen;
 import 'widgets.dart';
 
@@ -15,8 +17,13 @@ class DonationRecordsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // CSWS / Admin can reopen or cancel; the CMO only views.
+    final canManage = api.role == Roles.cswsMain || api.role == Roles.admin;
     return Loader(
-      load: [() => api.get('/donations/records')],
+      // include_closed: Expired / Cancelled donations get their own chips.
+      load: [
+        () => api.get('/donations/records', query: {'include_closed': 'true'}),
+      ],
       builder: (context, data) {
         final entries = (data[0] as List).cast<Map>();
         return ListView(
@@ -30,6 +37,7 @@ class DonationRecordsScreen extends StatelessWidget {
               ),
             DonationEntriesView(
               entries: entries,
+              footer: canManage ? (e) => _EntryActions(e) : null,
               emptyTitle: 'No donations to show.',
               emptyMessage:
                   'Donation entries appear here once donors submit them.',
@@ -37,6 +45,40 @@ class DonationRecordsScreen extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// Reopen (Expired / Cancelled) or cancel for the donor (still waiting).
+class _EntryActions extends StatelessWidget {
+  final Map entry;
+  const _EntryActions(this.entry);
+
+  @override
+  Widget build(BuildContext context) {
+    final closed = isClosedEntry(entry) ||
+        (entry['items'] as List).any(
+          (i) => (i as Map)['status'] == 'Expired' || i['status'] == 'Cancelled',
+        );
+    final waiting = hasWaitingItems(entry);
+    if (!closed && !waiting) return const SizedBox.shrink();
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: Space.xs,
+      children: [
+        if (waiting)
+          TextButton.icon(
+            onPressed: () => cancelDonation(context, entry, staff: true),
+            icon: const Icon(Icons.block),
+            label: const Text('Cancel for donor'),
+          ),
+        if (closed)
+          FilledButton.icon(
+            onPressed: () => reinstateDonation(context, entry),
+            icon: const Icon(Icons.restart_alt),
+            label: const Text('Reopen'),
+          ),
+      ],
     );
   }
 }
