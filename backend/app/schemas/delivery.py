@@ -22,6 +22,9 @@ class DeliveryItemResponse(BaseModel):
     delivery_item_id: int
     item_id: int
     quantity: int
+    # Readable names (filled by the list endpoint; None elsewhere).
+    item_name: Optional[str] = None
+    unit: Optional[str] = None
 
 
 # delivery
@@ -48,6 +51,11 @@ class DeliveryResponse(BaseModel):
     delivery_date: datetime
     created_at: datetime
     items: List[DeliveryItemResponse] = []
+    # Readable names and the trip it travels on (None = a delivery on its own).
+    report_label: Optional[str] = None
+    destination_barangay_name: Optional[str] = None
+    trip_id: Optional[int] = None
+    stop_order: Optional[int] = None
 
 
 #receipt confirmation
