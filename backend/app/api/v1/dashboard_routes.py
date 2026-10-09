@@ -106,6 +106,7 @@ from models.user_rbac_model import User
 from models.report import DisasterType, Barangay
 from models.donation_confirmation_model import DonationConfirmation
 from core.auth import barangay_scope
+from services.donation_entries import build_entries, group_by_report
 
 
 def _labels(db: Session, report_ids) -> dict:
@@ -241,12 +242,7 @@ def admin_dashboard(
     user=Depends(require_role("admin")),
 ):
     """Manuscript 7.7 / UC-A4 / wireframe Fig. 53."""
-    held = 0
-    latest = {}
-    for c in db.query(DonationConfirmation).order_by(DonationConfirmation.confirmation_id).all():
-        latest[c.donation_id] = c.status
-    received = {d.donation_id for d in db.query(PhysicalDonation).filter(PhysicalDonation.status == "Received")}
-    held = sum(1 for k, v in latest.items() if k in received and v == "On Hold")
+    held = len(_held_donation_ids(db))
     total_users = db.query(func.count(User.user_id)).scalar() or 0
     active_users = db.query(func.count(User.user_id)).filter(User.is_active.is_(True)).scalar() or 0
     return {
@@ -262,3 +258,68 @@ def admin_dashboard(
         "held_donations": held,
         "recent_activity": _recent_logs(db, limit=15),
     }
+def _held_donation_ids(db: Session) -> set:
+    """Received donations whose latest CMO decision is On Hold."""
+    latest = {}
+    for c in db.query(DonationConfirmation).order_by(DonationConfirmation.confirmation_id).all():
+        latest[c.donation_id] = c.status
+    received = {
+        d.donation_id
+        for d in db.query(PhysicalDonation).filter(PhysicalDonation.status == "Received")
+    }
+    return {k for k, v in latest.items() if k in received and v == "On Hold"}
+
+
+@router.get("/admin/reports")
+def admin_dashboard_reports(
+    status: str | None = None,
+    db: Session = Depends(get_db),
+    user=Depends(require_role("admin")),
+):
+    """5.1: the reports behind the admin dashboard's report tiles."""
+    q = db.query(DisasterReport)
+    if status:
+        q = q.filter(DisasterReport.status == status)
+    reports = q.order_by(DisasterReport.report_id.desc()).all()
+    labels = _labels(db, {r.report_id for r in reports})
+    return [
+        {
+            "report_id": r.report_id,
+            "report_label": labels.get(r.report_id),
+            "status": r.status,
+            "priority_level": r.priority_level,
+            "fulfillment_percentage": float(r.fulfillment.fulfillment_percentage)
+            if r.fulfillment else 0.0,
+        }
+        for r in reports
+    ]
+
+
+@router.get("/admin/held")
+def admin_held_donations(
+    db: Session = Depends(get_db),
+    user=Depends(require_role("admin")),
+):
+    """5.1 / 4.1: the held donations behind the dashboard tile, grouped
+    Report -> Entries -> Items with the shared donation_entries helper."""
+    held = _held_donation_ids(db)
+    if not held:
+        return {"held_donation_ids": [], "reports": []}
+    report_ids = {
+        rid for (rid,) in db.query(PhysicalDonation.report_id)
+        .filter(PhysicalDonation.donation_id.in_(held)).distinct()
+    }
+    rows = db.query(PhysicalDonation).filter(PhysicalDonation.report_id.in_(report_ids)).all()
+    # Group every donation of these reports first so "Donation 1, 2 ..."
+    # numbers match the normal entries view, then keep only entries that
+    # contain a held item.
+    out = []
+    for g in group_by_report(build_entries(db, rows, include_donor=True)):
+        g["entries"] = [
+            e for e in g["entries"] if any(i["donation_id"] in held for i in e["items"])
+        ]
+        if g["entries"]:
+            g["total_entries"] = len(g["entries"])
+            g["total_items"] = sum(e["total_items"] for e in g["entries"])
+            out.append(g)
+    return {"held_donation_ids": sorted(held), "reports": out}

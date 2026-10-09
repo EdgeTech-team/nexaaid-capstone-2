@@ -177,6 +177,9 @@ class StatTile extends StatelessWidget {
   final IconData icon;
   final Color? color;
   final String? note;
+
+  /// 5.1: opens the details behind the number. Null = not clickable.
+  final VoidCallback? onTap;
   const StatTile(
     this.label,
     this.value,
@@ -184,16 +187,35 @@ class StatTile extends StatelessWidget {
     super.key,
     this.color,
     this.note,
+    this.onTap,
   });
 
   @override
-  Widget build(BuildContext context) => StatCard(
-    label: label,
-    value: value,
-    icon: icon,
-    color: color,
-    note: note,
-  );
+  Widget build(BuildContext context) {
+    final card = StatCard(
+      label: label,
+      value: value,
+      icon: icon,
+      color: color,
+      note: note ?? (onTap != null ? 'Tap to view' : null),
+    );
+    if (onTap == null) return card;
+    // The ripple sits on top of the card so it is visible when tapped.
+    return Stack(
+      children: [
+        card,
+        Positioned.fill(
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 /// Old name for StatCardGrid.
