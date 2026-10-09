@@ -19,6 +19,7 @@ class User(Base):
     id_document_url = Column(Text, nullable=True)  # front of the valid ID (UC-D1 step 3)
     # Kind of valid ID (schemas/user_schema.ID_TYPES). Donors only; migration f3dd12dbc3d7.
     id_type = Column(String(40), nullable=True)
+    address = Column(Text, nullable=True)  # optional home address (donors)
     is_active = Column(Boolean, server_default="true", nullable=False)
     # Why an Administrator deactivated the account, and when. Set together with
     # is_active = False and cleared when the account is activated again.

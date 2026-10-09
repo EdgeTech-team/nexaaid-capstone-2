@@ -100,11 +100,17 @@ class AddressAutocompleteField extends StatefulWidget {
   final TextEditingController controller;
   final ValueChanged<PickedAddress> onChanged;
   final FormFieldValidator<String>? validator;
+  final String label;
+  final String hint;
+  final IconData icon;
   const AddressAutocompleteField({
     super.key,
     required this.controller,
     required this.onChanged,
     this.validator,
+    this.label = 'Pickup address',
+    this.hint = 'Start typing: house no., street, barangay',
+    this.icon = Icons.home_outlined,
   });
 
   @override
@@ -201,9 +207,9 @@ class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
           maxLines: 3,
           textInputAction: TextInputAction.done,
           decoration: InputDecoration(
-            labelText: 'Pickup address',
-            hintText: 'Start typing: house no., street, barangay',
-            prefixIcon: const Icon(Icons.home_outlined),
+            labelText: widget.label,
+            hintText: widget.hint,
+            prefixIcon: Icon(widget.icon),
             suffixIcon: _loading
                 ? const Padding(
                     padding: EdgeInsets.all(14),

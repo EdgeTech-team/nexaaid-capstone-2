@@ -249,7 +249,7 @@ def admin_dashboard(
         "total_users": total_users,
         "active_users": active_users,
         "pending_organizations": db.query(func.count(Organization.organization_id))
-            .filter(Organization.status == "Pending").scalar() or 0,
+            .filter(Organization.reviewed_at.is_(None)).scalar() or 0,
         "pending_validations": db.query(func.count(DisasterReport.report_id))
             .filter(DisasterReport.status == "Pending").scalar() or 0,
         "validated_reports": db.query(func.count(DisasterReport.report_id))

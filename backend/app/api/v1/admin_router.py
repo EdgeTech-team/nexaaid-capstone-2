@@ -1,4 +1,5 @@
 # api/v1/admin_router.py
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
@@ -304,13 +305,15 @@ def update_user(
 # account with PATCH /admin/users/{user_id} (is_active = false).
 @router.get("/organizations")
 def list_organizations(
-    status_filter: Optional[str] = Query(default=None, alias="status"),
+    reviewed: Optional[bool] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
     query = db.query(Organization)
-    if status_filter:
-        query = query.filter(Organization.status == status_filter)
+    if reviewed is True:
+        query = query.filter(Organization.reviewed_at.isnot(None))
+    elif reviewed is False:
+        query = query.filter(Organization.reviewed_at.is_(None))
     # Reason and decision time kept in audit_logs from before comment 1.3,
     # when the Administrator still approved, held or rejected organizations.
     reasons, decided = {}, {}
@@ -341,9 +344,65 @@ def list_organizations(
             "decision_reason": o.rejection_reason or reasons.get(o.organization_id),
             "decided_at": decided.get(o.organization_id),
             "approved_at": o.approved_at,
+            "reviewed_at": o.reviewed_at,
+            "reviewed_by_user_id": o.reviewed_by_user_id,
             "created_at": o.created_at,
         })
     return rows
+
+
+@router.patch("/organizations/{organization_id}/review")
+def review_organization(
+    organization_id: int,
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """Mark an organization Reviewed or Not Reviewed without changing activation."""
+    reviewed = payload.get("reviewed")
+    if not isinstance(reviewed, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="'reviewed' must be true or false",
+        )
+
+    org = db.get(Organization, organization_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    old = {
+        "reviewed_at": org.reviewed_at.isoformat() if org.reviewed_at else None,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
+
+    if reviewed:
+        org.reviewed_at = datetime.now(timezone.utc)
+        org.reviewed_by_user_id = current_user.user_id
+    else:
+        org.reviewed_at = None
+        org.reviewed_by_user_id = None
+
+    new = {
+        "reviewed_at": org.reviewed_at.isoformat() if org.reviewed_at else None,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
+
+    if old != new:
+        log_action(
+            db, current_user, "REVIEW ORGANIZATION", "organizations",
+            org.organization_id, old=old, new=new, request=request,
+        )
+
+    db.flush()
+    db.refresh(org)
+    return {
+        "organization_id": org.organization_id,
+        "org_name": org.org_name,
+        "status": org.status,
+        "reviewed_at": org.reviewed_at,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
 
 
 # UC-A4 Monitor System Records: read-only activity logs
