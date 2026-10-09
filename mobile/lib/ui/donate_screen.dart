@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'donation_info.dart' show ReportDonationInfo;
+import 'expiry_widgets.dart' show ExpiryNote;
 import 'location_picker.dart';
 import 'widgets.dart';
 
@@ -943,6 +944,11 @@ class _DonationReceiptState extends State<DonationReceipt> {
                 ],
               ),
             ),
+            // How long the donor has to hand it over (donation expiry).
+            if (batch['expires_label'] != null) ...[
+              Gaps.v12,
+              ExpiryNote(batch),
+            ],
             const SectionHeader('Items in this donation'),
             AppCard(
               padding: EdgeInsets.zero,

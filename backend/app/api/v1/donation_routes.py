@@ -35,6 +35,9 @@ from schemas.physical_donation_schema import (
 )
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 from services.donation_entries import build_entries, filter_and_sort, group_by_report
+from services.donation_expiry import (
+    entry_expiry_info, entry_status, expire_overdue, set_deadline,
+)
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
@@ -159,11 +162,8 @@ def _donor_info(db: Session, d: PhysicalDonation) -> dict:
 
 
 def _batch_status(statuses: set) -> str:
-    if len(statuses) == 1:
-        return next(iter(statuses))
-    if "Pending" in statuses:
-        return "Partly Received"
-    return "Received"
+    # Shared with the entry screens; also knows Expired / Cancelled.
+    return entry_status(statuses)
 
 
 def _batch_rows(db: Session, reference: str) -> list:
@@ -208,6 +208,8 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         "pickup_landmark": first.pickup_landmark,
         "preferred_pickup_at": _iso(first.preferred_pickup_at),
         "created_at": first.created_at,
+        # Handover deadline / why it was closed (services/donation_expiry.py)
+        **entry_expiry_info(rows),
         "total_items": len(rows),
         "items": [
             {
@@ -267,6 +269,7 @@ def create_donation_batch(
         )
         db.add(row)
         rows.append(row)
+    set_deadline(rows)  # handover deadline (services/donation_expiry.py)
     db.flush()  # assigns donation_id for the notifications
 
     if current_user:  # guest donors have no account
@@ -311,6 +314,7 @@ def create_donation(
         status="Pending",
     )
     db.add(donation)
+    set_deadline([donation])  # handover deadline (services/donation_expiry.py)
     db.flush()  # assigns donation_id for the notifications
 
     if current_user:  # guest donors have no account
@@ -361,6 +365,7 @@ def find_by_batch(
 ):
     """Every item of the scanned donation. Each item is then received on its
     own through POST /donations/receive (UC-CM1 steps 3-8, alt 4a/4b)."""
+    expire_overdue(db)  # an overdue scan shows "Expired" with the Reinstate option
     return _batch_view(db, _batch_rows(db, reference), staff=True)
 
 
@@ -374,6 +379,7 @@ def door_to_door_pickups(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(*CSWS_ROLES)),
 ):
+    expire_overdue(db)  # overdue pickups leave the board
     waiting = (
         db.query(PhysicalDonation.batch_reference)
         .filter(
@@ -428,6 +434,7 @@ def door_to_door_pickups(
             "pending_items": len(pending),
             "items_summary": summary,
             "created_at": first.created_at,
+            **entry_expiry_info(lines),
             **_donor_info(db, first),
         })
 
@@ -586,6 +593,7 @@ def my_donations(
     """Donor / Relief Organization dashboard (manuscript UC-D3, UC-D4,
     UC-R3, UC-R4): the user's own donation history and status, the reports
     they supported, and those reports' fulfillment progress."""
+    expire_overdue(db)
     donations = (
         db.query(PhysicalDonation)
         .filter(PhysicalDonation.user_id == current_user.user_id)
@@ -645,6 +653,8 @@ def my_donations(
             "pending": by_status.get("Pending", 0),
             "received": by_status.get("Received", 0),
             "confirmed": by_status.get("Confirmed", 0),
+            "expired": by_status.get("Expired", 0),
+            "cancelled": by_status.get("Cancelled", 0),
             "total_quantity": sum(d.quantity for d in donations),
             "supported_reports": len(report_ids),
             "total_batches": len({d.batch_reference for d in donations}),
@@ -664,6 +674,7 @@ def my_donations(
                 "pickup_landmark": d.pickup_landmark,
                 "preferred_pickup_at": _iso(d.preferred_pickup_at),
                 "status": d.status,
+                "close_reason": d.close_reason,
                 # 6.2: latest CMO decision, and the reason only while it is On Hold
                 "cmo_decision": decisions[d.donation_id].status if d.donation_id in decisions else None,
                 "hold_reason": (
@@ -706,6 +717,7 @@ def donation_entries(
     ),
 ):
     staff = has_role(current_user, *ENTRY_STAFF_ROLES)
+    expire_overdue(db)
     query = db.query(PhysicalDonation)
     if not staff:
         query = query.filter(PhysicalDonation.user_id == current_user.user_id)

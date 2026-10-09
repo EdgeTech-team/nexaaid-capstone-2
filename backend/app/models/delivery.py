@@ -52,6 +52,13 @@ class Delivery(Base):
     delivery_date = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
 
+    # Several reports on one truck (api/v1/trips.py). NULL = a delivery made
+    # on its own, exactly as before. stop_order: 1 = first barangay visited.
+    trip_id = Column(
+        Integer, ForeignKey("delivery_trips.trip_id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    stop_order = Column(Integer, nullable=True)
+
     __table_args__ = (
         CheckConstraint(
              "status IN ('Preparing','In Transit','Delivered', 'Confirmed')", 
@@ -68,6 +75,34 @@ class Delivery(Base):
     receipt = relationship(
         "Receipt", back_populates="delivery", uselist=False, cascade="all, delete-orphan"
     )
+    trip = relationship("DeliveryTrip", back_populates="deliveries")
+
+
+class DeliveryTrip(Base):
+    """One truck run that carries deliveries for several reports, e.g. three
+    Banilad reports and two nearby barangays in one go.
+
+    Each delivery inside keeps ONE report and ONE barangay, so stock per
+    report, the barangay's own receipt confirmation (UC-B1 alt 3a) and
+    fulfillment per report work exactly as for a single delivery. The trip
+    only groups them: prepare together, leave together, one stop per
+    barangay. Its status is worked out from its deliveries (api/v1/trips.py),
+    so it can never disagree with them. No route optimisation (Limitation 6).
+    """
+
+    __tablename__ = "delivery_trips"
+
+    trip_id = Column(Integer, primary_key=True)
+    trip_date = Column(TIMESTAMP(timezone=True), nullable=False)   # planned departure
+    vehicle_details = Column(Text, nullable=True)                  # e.g. "City truck, plate ABC 1234"
+    notes = Column(Text, nullable=True)
+    handled_by_user_id = Column(
+        Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    deliveries = relationship("Delivery", back_populates="trip", order_by="Delivery.stop_order")
+    handled_by = relationship("User", foreign_keys=[handled_by_user_id])
 
 class DeliveryItem(Base): 
         __tablename__ = "delivery_items"

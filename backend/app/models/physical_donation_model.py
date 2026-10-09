@@ -31,7 +31,7 @@ class PhysicalDonation(Base):
             name="chk_donation_donor_source",
         ),
         CheckConstraint(
-            "status IN ('Pending', 'Received', 'Confirmed')",
+            "status IN ('Pending', 'Received', 'Confirmed', 'Expired', 'Cancelled')",
             name="chk_physical_donations_status",
         ),
         CheckConstraint(
@@ -39,6 +39,8 @@ class PhysicalDonation(Base):
             name="chk_pickup_coords_pair",
         ),
         Index("idx_physical_donations_batch", "batch_reference"),
+        # The expiry check looks up Pending rows past their deadline.
+        Index("idx_physical_donations_status_expires", "status", "expires_at"),
     )
 
     donation_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -63,7 +65,18 @@ class PhysicalDonation(Base):
     status = Column(String(50), nullable=False, server_default="Pending")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    # Termination of donations that never arrive (services/donation_expiry.py).
+    # Pending items are handed over by expires_at, or the system marks them
+    # 'Expired'. A donor (or CSWS for them) can mark them 'Cancelled'.
+    # Closed rows are never deleted: they stay here for the records and audit.
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    reminder_sent_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    close_reason = Column(Text, nullable=True)
+    # NULL with closed_at set = closed automatically by the system.
+    closed_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+
     guest_donor = relationship("GuestDonor")
-    donor = relationship("User")
+    donor = relationship("User", foreign_keys=[user_id])
     report = relationship("DisasterReport")
     item = relationship("Item")

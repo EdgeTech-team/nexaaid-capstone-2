@@ -20,6 +20,81 @@ building anything that touches `users`.
 
 ---
 
+## Castillo — Donation expiry, delivery filters, delivery trips (Oct 9)
+
+**Status:** Built and tested on a branch, waiting for team review before merge
+**Last updated:** Oct 9, 2026
+
+Three additions to the spec, agreed by the team on Oct 9. None of them are
+in the manuscript, so present them as improvements found during testing.
+
+**1. Donations that never arrive now end (Expired / Cancelled).**
+A pending donation used to stay Pending forever (manuscript 3.2 never closes
+it). Now: Drop Off expires 14 days after it was submitted; Door to Door 7 days
+after the preferred pickup time. Donors get a reminder 3 days before. Donors
+can cancel while it is still waiting (guests prove it with their phone
+number); CSWS can cancel for them, and can **Reopen** an expired one when
+the donor arrives late (UC-CM1 alt 2a). Nothing is deleted: the row keeps
+`closed_at`, `close_reason`, `closed_by_user_id` (NULL = the system).
+Received goods and inventory are never touched.
+- Rules: `services/donation_expiry.py`. Endpoints: `api/v1/donation_lifecycle_routes.py`
+  (`GET /donations/expiry-rules`, `POST /donations/entries/{ref}/cancel`,
+  `/reinstate`, `POST /donations/expiry/run`).
+- No scheduler needed: pending lists and dashboards run the check when they
+  load. Optional daily cron: `POST /donations/expiry/run` with header
+  `X-Cron-Token: <DONATION_CRON_TOKEN>`.
+- `.env` (optional): `DONATION_DROPOFF_DAYS=14`, `DONATION_PICKUP_GRACE_DAYS=7`,
+  `DONATION_REMINDER_DAYS=3`, `DONATION_CRON_TOKEN=...`
+
+**2. Deliveries screen: sorting, filtering, stock messages.**
+`GET /deliveries/` gains `sort` (newest, oldest, date_soonest, date_latest,
+status), `date_from`/`date_to`, `q` (barangay, item or delivery no.),
+`trip_id`, and several statuses at once. Each delivery now carries readable
+names (`destination_barangay_name`, `report_label`, `item_name`).
+`GET /deliveries/counts` feeds the filter chips. Stock errors name the item:
+"No more stock of Rice for this report." / "Only 50 kg of Rice left...".
+
+**3. Trips: several reports on one truck.** (3 Banilad reports + 2 nearby
+barangays in one go.) A trip groups ordinary deliveries; each still has one
+report and one barangay, so stock per report, the barangay's own receipt
+(UC-B1 alt 3a) and fulfillment per report work exactly as before.
+Prepare (stock taken all-or-nothing) → Start → Arrived at each stop →
+barangay confirms (one tap for all of theirs) → Completed automatically.
+Undo is allowed only while still preparing (stock goes back).
+No route optimisation (Limitation 6). Endpoints: `api/v1/trips.py`.
+DRRMO transport requests are still per delivery; per-trip requests are a
+later step (would make `logistics_requests.delivery_id` nullable).
+
+**Schema (2 migrations, both additive, upgrade/downgrade tested on Postgres):**
+- `5e1b8c3d9f20` physical_donations: statuses `Expired`, `Cancelled`; columns
+  `expires_at`, `reminder_sent_at`, `closed_at`, `close_reason`,
+  `closed_by_user_id`. Existing Pending rows get a deadline at least 7 days
+  after the migration runs, so nothing expires on deploy day.
+- `7a2c4e6b8d10` new table `delivery_trips`; deliveries get nullable
+  `trip_id` and `stop_order`.
+
+**Who should check what:**
+- **Hoyohoy** (donations 3.5): `donation_routes.py` now sets `expires_at` on
+  create and shows the deadline; entry/batch status knows Expired/Cancelled.
+  `/donations/records` hides closed entries unless `status=` or
+  `include_closed=true`. Run `test_donation_*`.
+- **Mariquit** (deliveries 3.10): `create_delivery` stock check moved to
+  `services/delivery_stock.py` (same 409, clearer message);
+  `advance_delivery` logic moved into `move_to_next_status()` (trips reuse it);
+  `_receive_line` explains how to reopen an expired donation. Run
+  `test_deliveries.py`, `test_delivery_lines.py`, `test_delivery_trips.py`.
+- **Fernandez** (dashboard 3.13): `/dashboard/csws-main` adds
+  `due_soon_donations`, `expired_donations`, `cancelled_donations` (existing
+  fields unchanged). New statuses `Expired` and `Completed` have colors in
+  `design/status.dart`.
+
+**Test before merging:** `pytest` (new: `test_donation_expiry.py`,
+`test_delivery_trips.py`), `TEST_POSTGRES_URL=... pytest
+tests/test_models_match_migrations.py`, then `flutter analyze` (could not be
+run in my environment). Migrations go to Neon only after review.
+
+---
+
 ## Hoyohoy — Auth/Registration (3.3)
 
 **Status:** Done
