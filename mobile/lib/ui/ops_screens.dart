@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart' show Roles;
 import 'records_screens.dart' show DonationRecordsScreen, SupportRecordsScreen;
 import 'widgets.dart';
+import 'entry_report_views.dart' show EntrySummaryList;
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 
@@ -104,7 +105,7 @@ class DeliveriesScreen extends StatelessWidget {
     this.readOnly = false,
   });
 
-   Future<void> _requestTransport(BuildContext context, Map d) async {
+  Future<void> _requestTransport(BuildContext context, Map d) async {
     // I4: pick the numbers, no typing.
     final v = await formDialog(
       context,
@@ -674,6 +675,27 @@ class CmoScreen extends StatefulWidget {
 class _CmoScreenState extends State<CmoScreen> {
   String view = 'pending';
 
+  /// 5.1: null = all pending; 'On Hold' / 'Pending Review' = only those.
+  String? decision;
+  final _listKey = GlobalKey();
+
+  /// 5.1: a tile was tapped. Filter the list and scroll down to it.
+  void _show(String v, [String? d]) {
+    setState(() {
+      view = v;
+      decision = d;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final c = _listKey.currentContext;
+      if (c != null) {
+        Scrollable.ensureVisible(
+          c,
+          duration: const Duration(milliseconds: 300),
+        );
+      }
+    });
+  }
+
   Future<void> _decide(Map d, String decision) async {
     String? notes;
     if (decision != 'Confirmed') {
@@ -785,13 +807,20 @@ class _CmoScreenState extends State<CmoScreen> {
         () => api.get('/cmo/dashboard'),
         () => api.get('/cmo/donations/pending'),
         () => api.get('/cmo/donations/confirmed'),
+        () => api.get('/donations/entries'),
       ],
       builder: (context, data) {
         final dash = data[0] as Map;
         final pending = (data[1] as List).cast<Map>();
         final confirmed = (data[2] as List).cast<Map>();
         final perReport = (dash['per_report'] as List).cast<Map>();
-        final rows = view == 'pending' ? pending : confirmed;
+        final rows = view == 'pending'
+            ? pending
+                  .where(
+                    (d) => decision == null || d['cmo_decision'] == decision,
+                  )
+                  .toList()
+            : confirmed;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -818,26 +847,31 @@ class _CmoScreenState extends State<CmoScreen> {
                 '${dash['pending_confirmation']}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
+                onTap: () => _show('pending'),
               ),
               StatTile(
                 'On hold',
                 '${dash['on_hold']}',
                 Icons.pause_circle_outline,
+                onTap: () => _show('pending', 'On Hold'),
               ),
               StatTile(
                 'Pending review',
                 '${dash['pending_review']}',
                 Icons.rate_review_outlined,
+                onTap: () => _show('pending', 'Pending Review'),
               ),
               StatTile(
                 'Officially confirmed',
                 '${dash['confirmed']}',
                 Icons.verified,
                 color: const Color(0xFF2E7D32),
+                onTap: () => _show('confirmed'),
               ),
             ]),
             const SizedBox(height: 14),
             SegmentedButton<String>(
+              key: _listKey,
               segments: [
                 ButtonSegment(
                   value: 'pending',
@@ -849,8 +883,22 @@ class _CmoScreenState extends State<CmoScreen> {
                 ),
               ],
               selected: {view},
-              onSelectionChanged: (s) => setState(() => view = s.first),
+              onSelectionChanged: (s) => setState(() {
+                view = s.first;
+                decision = null;
+              }),
             ),
+            if (view == 'pending' && decision != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: InputChip(
+                    label: Text('Only: $decision'),
+                    onDeleted: () => setState(() => decision = null),
+                  ),
+                ),
+              ),
             const SizedBox(height: 12),
             if (rows.isEmpty)
               EmptyState(
@@ -859,7 +907,9 @@ class _CmoScreenState extends State<CmoScreen> {
                     : 'No confirmed donations yet.',
               ),
             for (final d in rows) _donationCard(d),
-            const SectionTitle('Donation summary per report'),
+            const SectionTitle('Donation entries per report'),
+            EntrySummaryList(data[3] as Map),
+            const SectionTitle('City confirmation per report'),
             if (perReport.isEmpty) const EmptyState('No donations yet.'),
             for (final r in perReport)
               Card(
