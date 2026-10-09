@@ -72,7 +72,8 @@ void main() {
     await menuFor(Roles.cmo, ['Confirmations', 'Reports']);
     await menuFor(Roles.drrmo, ['Logistics', 'Deliveries', 'Reports']);
     await menuFor(Roles.barangay, ['Incoming aid', 'Overview', 'Reports']);
-    await menuFor(Roles.donor, ['Dashboard', 'Donate']);
+    await menuFor(Roles.donor, ['Dashboard', 'Reports']);
+    await menuFor(Roles.org, ['Dashboard', 'Reports']);
     api.logout();
   });
 
