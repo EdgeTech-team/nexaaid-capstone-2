@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import 'batch_sheet.dart' show openDonationByQr;
+import 'expiry_widgets.dart' show ExpiryNote;
 import 'location_picker.dart' show PickupRules, formatPickupTime;
 import 'pickup_actions.dart';
 import 'widgets.dart';
@@ -329,6 +330,11 @@ class _PickupCard extends StatelessWidget {
             ],
           ),
           if (partly) ...[Gaps.v8, const StatusChip('Partly Received')],
+          // Close to the automatic expiry: say so on the card.
+          if ((b['days_left'] as num?) != null && (b['days_left'] as num) <= 3) ...[
+            Gaps.v8,
+            ExpiryNote(b, forStaff: true),
+          ],
           const Divider(height: Space.lg),
 
           // Who
