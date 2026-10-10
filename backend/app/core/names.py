@@ -14,3 +14,14 @@ _WORD_START = re.compile(r"(^|[\s\-'.])([^\W\d_])", re.UNICODE)
 def capitalize_words(value: str) -> str:
     value = re.sub(r"\s+", " ", value.strip())
     return _WORD_START.sub(lambda m: m.group(1) + m.group(2).upper(), value)
+
+
+def capitalize_org_words(value: str) -> str:
+    """Organization names: first letter of every word, split on spaces only.
+
+    Unlike capitalize_words (people's names), an apostrophe or period does not
+    start a new word, so "St. Mary's" stays "St. Mary's" and not "St. Mary'S".
+    The rest of each word is kept as typed, so "NGO" and "CSWS" are untouched.
+    """
+    value = re.sub(r"\s+", " ", value.strip())
+    return " ".join(w[:1].upper() + w[1:] for w in value.split(" "))
