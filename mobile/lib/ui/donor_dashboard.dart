@@ -457,7 +457,8 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                 row('Reference', e['batch_reference']),
                 row('Handover', e['handover_method']),
                 row('Pickup address', e['pickup_address']),
-                row('Notes for pickup', e['pickup_landmark']),
+                row('Landmark', e['pickup_landmark']),
+                row('Notes for pickup', e['pickup_notes']),
                 if (e['preferred_pickup_at'] != null)
                   row('Preferred pickup', niceDate(e['preferred_pickup_at'])),
                 row('Pledged on', niceDate(e['created_at'])),
