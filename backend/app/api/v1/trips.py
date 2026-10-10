@@ -51,6 +51,7 @@ STATUS_LABELS = {
     "In Transit": "On the road",
     "Delivered": "Delivered, waiting for barangay confirmation",
     "Completed": "Completed",
+    "Cancelled": "Cancelled",
 }
 
 
@@ -83,9 +84,10 @@ class TripCreate(BaseModel):
 def trip_status(statuses) -> str:
     """Worked out from the deliveries' statuses, so it can never disagree
     with them."""
-    s = set(statuses)
+    all_ = set(statuses)
+    s = all_ - {"Cancelled"}          # cancelled stops no longer count
     if not s:
-        return "Preparing"
+        return "Cancelled" if all_ else "Preparing"
     if s == {"Confirmed"}:
         return "Completed"
     if "In Transit" in s:
@@ -128,7 +130,9 @@ def _trip_view(db: Session, trip: DeliveryTrip) -> dict:
         "total_stops": len(stops),
         "total_quantity": sum(i.quantity for d in deliveries for i in d.items),
         "delivery_counts": {s: sum(1 for d in deliveries if d.status == s)
-                            for s in ("Preparing", "In Transit", "Delivered", "Confirmed")},
+                            for s in ("Preparing", "In Transit", "Delivered", "Confirmed", "Cancelled")},
+        "can_reschedule": any(d.status in ("Preparing", "In Transit") for d in deliveries),
+        "can_return": any(d.status == "In Transit" for d in deliveries),
         "can_start": code == "Preparing",
         "can_undo": all(d.status == "Preparing" for d in deliveries),
         "stops": sorted(stops.values(), key=lambda s: s["stop_order"] or 0),

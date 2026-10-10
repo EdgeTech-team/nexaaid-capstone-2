@@ -64,3 +64,13 @@ def org_payload(client, email, registration_no="REG-2026-01", **overrides) -> di
     }
     body.update(overrides)
     return body
+
+def temp_password(sent_emails, email):
+    """The temporary password POST /admin/users emailed to this address.
+    (The server makes it; the Administrator never chooses one.)"""
+    for m in reversed(sent_emails):
+        if m["to"].lower() == email.lower():
+            for line in m["body"].splitlines():
+                if line.startswith("Temporary password:"):
+                    return line.split(":", 1)[1].strip()
+    raise AssertionError(f"No temporary password was emailed to {email}")

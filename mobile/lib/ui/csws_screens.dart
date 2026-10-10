@@ -5,6 +5,8 @@ import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
 import 'batch_sheet.dart';
 import 'inventory_view.dart';
+import 'donation_entries_view.dart' show DonationEntryCard;
+import 'receive_filters.dart';
 export 'batch_sheet.dart' show openDonationByQr, BatchSheet;
 
 /// Camera QR scanner. Returns the scanned text (e.g. DON-1A2B3C...).
@@ -192,6 +194,57 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   String view = 'pending';
   int _loads = 0;
 
+  // Concerns2.txt 5.2: filter and sort by barangay and report, remembered
+  // on this phone. Priority comes from the validated reports (Module 3).
+  ReceiveFilters filters = const ReceiveFilters();
+  Map<int, String?> priorities = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreFilters();
+    _loadPriorities();
+  }
+
+  @override
+  void dispose() {
+    searchC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _restoreFilters() async {
+    final f = await ReceiveFilters.load();
+    if (mounted) setState(() => filters = f);
+  }
+
+  /// Priority per report for "Most urgent" and the report headers. If this
+  /// fails, the screen still works; reports just have no priority shown.
+  Future<void> _loadPriorities() async {
+    final r = await api.get('/reports/validated', query: {'limit': '200'});
+    if (!mounted || !r.ok || r.json is! List) return;
+    setState(() {
+      priorities = {
+        for (final x in (r.json as List).cast<Map>())
+          (x['report_id'] as num).toInt(): x['priority_level'] as String?,
+      };
+    });
+  }
+
+  void _setFilters(ReceiveFilters f) {
+    setState(() => filters = f);
+    f.save();
+  }
+
+  void _showAll() {
+    final f = filters.cleared();
+    searchC.clear();
+    setState(() {
+      search = '';
+      filters = f;
+    });
+    f.save();
+  }
+
   /// Opens an entry; when its sheet closes, the pending list and the
   /// inventory reload (after a receive they have changed).
   Future<void> _open(String reference) async {
@@ -212,31 +265,48 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       load: [
         () => api.get('/donations/entries', query: {'pending_only': 'true'}),
         () => api.get('/donations/inventory'),
+        // 5.2 Received tab: one record per donation entry (one QR).
+        () => api.get('/donations/records'),
       ],
       builder: (context, data) {
-        final q = search.toLowerCase();
-        // Report -> its pending entries (one per QR / batch_reference).
-        final reports = [
-          for (final r in ((data[0] as Map)['reports'] as List).cast<Map>())
-            {
-              ...r,
-              'entries': (r['entries'] as List)
-                  .cast<Map>()
-                  .where(
-                    (e) =>
-                        '${e['batch_reference']}'.toLowerCase().contains(q) ||
-                        '${e['donor'] ?? ''}'.toLowerCase().contains(q),
-                  )
-                  .toList(),
-            },
-        ].where((r) => (r['entries'] as List).isNotEmpty).toList();
+        final allReports = ((data[0] as Map)['reports'] as List).cast<Map>();
+        final inventory = (data[1] as List).cast<Map>();
+        final records = (data[2] as List).cast<Map>();
+        final receivedAll = records
+            .where((e) => e['status'] != 'Pending')
+            .toList();
+
+        // Choices come from every tab, so the lists are the same everywhere.
+        final everything = <Map>[...allReports, ...receivedAll, ...inventory];
+        final barangays = barangayOptions(everything);
+        final reportChoices = reportOptions(everything, filters.barangay);
+
+        // Report -> its pending entries (one per QR / batch_reference),
+        // filtered and in the chosen order.
+        final reports = filterPendingReports(
+          allReports,
+          filters,
+          search: search,
+          priorities: priorities,
+        );
+        final pendingTotal = allReports.fold<int>(
+          0,
+          (n, r) => n + (r['entries'] as List).length,
+        );
         final pendingCount = reports.fold<int>(
           0,
           (n, r) => n + (r['entries'] as List).length,
         );
-        final inventory = (data[1] as List).cast<Map>();
+        final received = filterReceivedEntries(
+          records,
+          filters,
+          search: search,
+          priorities: priorities,
+        );
+        final stock = filterInventoryRows(inventory, filters);
         // Inventory is linked to specific reports (Inventory module rules).
-        final reportCount = inventory.map((i) => i['report_id']).toSet().length;
+        final reportCount = stock.map((i) => i['report_id']).toSet().length;
+        final hiding = filters.narrowed || search.isNotEmpty;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -277,7 +347,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                     textCapitalization: TextCapitalization.characters,
                     decoration: const InputDecoration(
                       prefixIcon: Icon(Icons.search),
-                      labelText: 'Or type the QR reference',
+                      labelText: 'Or type the QR reference, donor or item',
                       hintText: 'DON-...',
                     ),
                     onChanged: (v) => setState(() => search = v.trim()),
@@ -299,6 +369,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                   label: Text('Pending ($pendingCount)'),
                 ),
                 ButtonSegment(
+                  value: 'received',
+                  label: Text('Received (${received.length})'),
+                ),
+                ButtonSegment(
                   value: 'inventory',
                   label: Text('Inventory ($reportCount)'),
                 ),
@@ -307,13 +381,71 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
               onSelectionChanged: (s) => setState(() => view = s.first),
             ),
             const SizedBox(height: 12),
+            ReceiveFilterBar(
+              key: ValueKey('filters-$view'),
+              filters: filters,
+              onChanged: _setFilters,
+              onShowAll: _showAll,
+              barangays: barangays,
+              reports: reportChoices,
+              received: view == 'received',
+              compact: view == 'inventory',
+              searching: search.isNotEmpty,
+              shown: switch (view) {
+                'received' => received.length,
+                'inventory' => stock.length,
+                _ => pendingCount,
+              },
+              total: switch (view) {
+                'received' => receivedAll.length,
+                'inventory' => inventory.length,
+                _ => pendingTotal,
+              },
+              noun: view == 'inventory' ? 'items in stock' : 'entries',
+            ),
+            const SizedBox(height: 12),
             if (view == 'pending') ...[
               if (reports.isEmpty)
-                const EmptyState('Nothing waiting to be received.'),
+                ReceiveEmpty(
+                  hiding: hiding,
+                  nothingText: 'Nothing waiting to be received.',
+                  onShowAll: _showAll,
+                ),
               for (final r in reports)
-                PendingReportCard(report: r, onOpen: _open),
-            ] else
-              InventoryView(rows: inventory),
+                PendingReportCard(
+                  report: r,
+                  onOpen: _open,
+                  priority: r['priority_level'] as String?,
+                  showWaiting: true,
+                ),
+            ] else if (view == 'received') ...[
+              if (received.isEmpty)
+                ReceiveEmpty(
+                  hiding: hiding,
+                  nothingText: 'No goods received yet.',
+                  onShowAll: _showAll,
+                ),
+              for (final e in received)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: DonationEntryCard(
+                    entry: e,
+                    onTap: () => _open('${e['batch_reference']}'),
+                  ),
+                ),
+            ] else if (stock.isEmpty && inventory.isNotEmpty)
+              ReceiveEmpty(
+                hiding: true,
+                nothingText: 'Inventory is empty.',
+                onShowAll: _showAll,
+              )
+            else
+              InventoryView(
+                // New key when the barangay/report changes, so its own
+                // report list starts fresh.
+                key: ValueKey('inv-${filters.barangay}-${filters.reportId}'),
+                rows: stock,
+              ),
           ],
         );
       },
@@ -326,10 +458,18 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 class PendingReportCard extends StatelessWidget {
   final Map report;
   final Future<void> Function(String batchReference) onOpen;
+
+  /// 5.2: report priority in words ("Critical"), shown in the header.
+  final String? priority;
+
+  /// 5.2: "Waiting 4 days" under each entry.
+  final bool showWaiting;
   const PendingReportCard({
     super.key,
     required this.report,
     required this.onOpen,
+    this.priority,
+    this.showWaiting = false,
   });
 
   @override
@@ -347,9 +487,11 @@ class PendingReportCard extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w700),
             ),
             subtitle: Text(
+              '${priority != null ? '$priority priority · ' : ''}'
               '${entries.length} '
               '${entries.length == 1 ? 'entry' : 'entries'} waiting',
             ),
+            trailing: priority == null ? null : Badge2.priority(priority),
           ),
           const Divider(height: 1),
           for (final e in entries)
@@ -365,6 +507,8 @@ class PendingReportCard extends StatelessWidget {
                   '${e['handover_method']}',
                   if (e['pending_items'] != e['total_items'])
                     '${e['pending_items']} still pending',
+                  if (showWaiting && waitingText(e['created_at']).isNotEmpty)
+                    waitingText(e['created_at']),
                 ].join(' · '),
               ),
               trailing: const Icon(Icons.chevron_right),

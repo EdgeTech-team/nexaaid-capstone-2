@@ -4,10 +4,52 @@ import 'widgets.dart';
 import 'donate_screen.dart';
 export 'donate_screen.dart' show DonateScreen, DonationReceipt;
 
+/// Ivan's note #2: the signed-in donor / relief organization's middle tab.
+/// It shows every validated report, split into Active (still needs help,
+/// with Donate buttons) and Done (reached 100%, with its final progress).
+/// Reports stay "Validated" after they are fulfilled, so both lists come
+/// from GET /lookups `validated_reports`.
+class DonorReportsTab extends StatelessWidget {
+  const DonorReportsTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return DefaultTabController(
+      length: 2,
+      child: Column(
+        children: [
+          Material(
+            color: cs.surface,
+            child: const TabBar(
+              tabs: [
+                Tab(text: 'Active'),
+                Tab(text: 'Done'),
+              ],
+            ),
+          ),
+          const Expanded(
+            child: TabBarView(
+              children: [
+                ReportsFeed(done: false),
+                ReportsFeed(done: true),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// UC-D2 / UC-R2 step 1-3: browse validated reports and pick one to
 /// support. Layout follows the "Validated Disaster Reports" wireframe.
+///
+/// [done]: null shows every validated report (guests); false only the ones
+/// still under 100%; true only the fulfilled ones, without Donate buttons.
 class ReportsFeed extends StatefulWidget {
-  const ReportsFeed({super.key});
+  final bool? done;
+  const ReportsFeed({super.key, this.done});
 
   @override
   State<ReportsFeed> createState() => _ReportsFeedState();
@@ -48,7 +90,12 @@ class _ReportsFeedState extends State<ReportsFeed> {
       load: [api.lookupsResult],
       builder: (context, data) {
         final names = Names(Map<String, dynamic>.from(data[0] as Map));
-        final all = names.rows('validated_reports');
+                final done = widget.done;
+        final all = names.rows('validated_reports').where((r) {
+          if (done == null) return true;
+          final full = (r['fulfillment_percentage'] as num? ?? 0) >= 100;
+          return done ? full : !full;
+        }).toList();
         final q = search.toLowerCase();
         final reports = all.where((r) {
           final text = [
@@ -70,22 +117,32 @@ class _ReportsFeedState extends State<ReportsFeed> {
               width: double.infinity,
               color: Brand.pinkSoft,
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-              child: const Column(
+                            child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Validated Disaster Reports',
-                    style: TextStyle(
+                    done == null
+                        ? 'Validated Disaster Reports'
+                        : done
+                        ? 'Completed Reports'
+                        : 'Active Reports',
+                    style: const TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.w800,
                       color: Brand.ink,
                     ),
                   ),
-                  SizedBox(height: 6),
+                  const SizedBox(height: 6),
                   Text(
-                    'Browse and support relief efforts for validated disaster '
-                    'reports in Mandaue City',
-                    style: TextStyle(color: Brand.muted),
+                    done == null
+                        ? 'Browse and support relief efforts for validated '
+                              'disaster reports in Mandaue City'
+                        : done
+                        ? 'Reports that received everything they needed. '
+                              'Thank you to everyone who helped.'
+                        : 'Reports that still need help. Pick one and '
+                              'pledge goods.',
+                    style: const TextStyle(color: Brand.muted),
                   ),
                 ],
               ),
@@ -96,17 +153,24 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   StatGrid([
-                    StatTile(
-                      'Validated reports',
+                                        StatTile(
+                      done == null
+                          ? 'Validated reports'
+                          : done
+                          ? 'Completed reports'
+                          : 'Active reports',
                       '${all.length}',
-                      Icons.report_outlined,
+                      done == true
+                          ? Icons.task_alt_outlined
+                          : Icons.report_outlined,
                     ),
-                    StatTile(
-                      'High / critical priority',
-                      '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
-                      Icons.trending_up,
-                      color: const Color(0xFFE65100),
-                    ),
+                    if (done != true)
+                      StatTile(
+                        'High / critical priority',
+                        '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
+                        Icons.trending_up,
+                        color: const Color(0xFFE65100),
+                      ),
                   ]),
                   const SizedBox(height: 14),
                   TextField(
@@ -162,7 +226,11 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   ),
                   const SizedBox(height: 10),
                   if (reports.isEmpty)
-                    const EmptyState('No validated reports match.'),
+                     EmptyState(
+                      done == true && all.isEmpty
+                          ? 'No completed reports yet.'
+                          : 'No validated reports match.',
+                    ),
                   for (final r in reports) _card(context, r, names),
                 ],
               ),
@@ -289,18 +357,20 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 ),
               ),
             ),
-            const SizedBox(height: 10),
-            FilledButton(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => DonateScreen(report: r, names: names),
+               if (widget.done != true) ...[
+              const SizedBox(height: 10),
+              FilledButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => DonateScreen(report: r, names: names),
+                  ),
                 ),
+                style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(46),
+                ),
+                child: const Text('Donate'),
               ),
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(46),
-              ),
-              child: const Text('Donate'),
-            ),
+            ],
           ],
         ),
       ),

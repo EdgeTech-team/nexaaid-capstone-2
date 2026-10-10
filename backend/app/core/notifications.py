@@ -44,9 +44,15 @@ EVENTS: dict[str, tuple[str, str]] = {
     "logistics_accepted": ("Logistics request accepted", "Request for {title} was accepted."),
     "logistics_scheduled": ("Logistics scheduled", "Pickup for {title}: {schedule}."),
     "logistics_declined": ("Logistics request declined", "{reason}"),
+    "logistics_cancelled": ("Logistics request cancelled", "CSWS no longer needs transport for {title}: {reason}"),
+    "logistics_withdrawn": ("DRRMO can no longer help", "Transport for {title} was withdrawn: {reason}. Ask again or arrange another vehicle."),
     # Delivery
     "delivery_status_changed": ("Delivery update", "{title} is now: {status}."),
     "delivery_receipt_confirmed": ("Receipt confirmed", "The barangay confirmed receipt for {title}."),
+    # Unexpected problems (api/v1/delivery_problems.py)
+    "delivery_rescheduled": ("Delivery date changed", "{title} is now set for {date}. {reason}"),
+    "delivery_returned": ("Delivery delayed", "{title} went back to the CSWS office: {reason}. A new date will follow."),
+    "delivery_cancelled": ("Delivery cancelled", "{title} was cancelled: {reason}"),
     # Accounts (callers also email these with core.email.send_email)
     "account_created": ("Account created", "Your NexaAid account is ready."),
     "account_password_changed": ("Password changed", "Your password was changed."),
