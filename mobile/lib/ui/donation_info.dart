@@ -431,7 +431,18 @@ class _BarangayDonationInfoScreenState
   @override
   Widget build(BuildContext context) {
     final body = Loader(
-      load: [isAdmin ? api.lookupsResult : () => api.get('/auth/me')],
+      load: [
+        isAdmin
+            // Cached /lookups: the admin only needs the barangay list here,
+            // so don't re-download every report and delivery on each visit.
+            // If the cached copy is empty (server was unreachable), fetch
+            // again so the screen shows the real error instead of no list.
+            ? () async {
+                final m = await api.lookups();
+                return m.isEmpty ? api.lookupsResult() : ApiResult(200, m, '');
+              }
+            : () => api.get('/auth/me'),
+      ],
       builder: (context, data) {
         final m = Map<String, dynamic>.from(data[0] as Map);
         if (!isAdmin) {
@@ -565,20 +576,19 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
       future: _load,
       builder: (context, snap) {
         if (!snap.hasData) {
-  return widget.embedded
-      ? const Padding(
-          padding: EdgeInsets.all(24),
-          child: Center(child: CircularProgressIndicator()),
-        )
-      : const SkeletonList();
-}
+          // Embedded = inside the Administrator's ListView (Accounts >
+          // Donation info). SkeletonList is itself a ListView, and a ListView
+          // inside a ListView has unbounded height, which froze the tab.
+          return widget.embedded
+              ? const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              : const SkeletonList();
+        }
         final r = snap.data!;
         if (!r.ok) {
-          return ErrorView.forStatus(
-            r.status,
-            r.errorText,
-            onRetry: _reload,
-          );
+          return ErrorView.forStatus(r.status, r.errorText, onRetry: _reload);
         }
         final children = [
           if (!widget.embedded)
@@ -760,7 +770,9 @@ class NewReportDonationInfoState extends State<NewReportDonationInfo> {
       builder: (context, snap) {
         if (!snap.hasData) return const Skeleton(height: 96);
         final r = snap.data!;
-        final methods = r.ok ? ((r.json['methods'] as List?) ?? const []) : const [];
+        final methods = r.ok
+            ? ((r.json['methods'] as List?) ?? const [])
+            : const [];
         return DonationMethodsList(
           methods: methods,
           heading:
