@@ -493,12 +493,18 @@ class _DonateScreenState extends State<DonateScreen> {
                 hintText: 'House no., street, barangay, city',
                 prefixIcon: Icon(Icons.home_outlined),
               ),
-              validator: (v) =>
-                  handover == 'Door to Door' &&
-                      (savedAddress == null || !useSavedAddress) &&
-                      (v ?? '').trim().length < 5
-                  ? 'Enter the pickup address'
-                  : null,
+              validator: (v) {
+                if (handover != 'Door to Door' ||
+                    (savedAddress != null && useSavedAddress)) {
+                  return null;
+                }
+                final text = (v ?? '').trim();
+                if (text.isEmpty) return 'Enter the pickup address';
+                if (text.length < 5) {
+                  return 'Add the street and barangay, e.g. 135 Manalili St., Poblacion';
+                }
+                return null;
+              },
             ),
             Gaps.v16,
           ],
