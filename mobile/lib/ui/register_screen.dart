@@ -43,7 +43,7 @@ Future<void> showRegisterPopup(
   BuildContext context, {
   required bool org,
 }) async {
-  final created = await showBlurPopup<bool>(
+  final creds = await showBlurPopup<(String, String)>(
     context,
     label: org ? 'Close organization registration' : 'Close registration',
     dismissible: false,
@@ -53,7 +53,11 @@ Future<void> showRegisterPopup(
     // behind the blur.
     child: ScaffoldMessenger(child: RegisterScreen(org: org, popup: true)),
   );
-  if (created != true || !context.mounted) return;
+  if (creds == null || !context.mounted) return;
+  // The pop-up is closed first, then the new account signs in. Signing in
+  // swaps the whole app to the role's home screen.
+  await api.login(creds.$1, creds.$2);
+  if (api.token != null || !context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(
     const SnackBar(
       backgroundColor: AppColors.success,
@@ -236,11 +240,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
               },
             ),
       // Adviser comment 1.3: validated automatically for both.
-      success: 'Account created. You can now log in.',
+      success: 'Account created.',
     );
     if (!mounted) return;
     setState(() => busy = false);
-    if (r.ok) Navigator.pop(context, true);
+    // Hands the email and password to showRegisterPopup, which signs in
+    // after this pop-up has closed.
+    if (r.ok) {
+      Navigator.pop(context, (c('email').text.trim(), c('password').text));
+    }
   }
 
   // ---- fields -------------------------------------------------------------

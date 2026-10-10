@@ -109,7 +109,9 @@ def register_donor(
         "Your NexaAid donor account was created. You can now sign in "
         "with this email address.\n\nNexaAid",
     )
-    db.flush()
+    # Commit before answering: the app signs in right after registering, and
+    # get_db() would only commit after the response and the email task.
+    db.commit()
     db.refresh(new_user)
     return new_user
 
@@ -191,7 +193,8 @@ def register_organization(
         f"Your organization, {new_org.org_name}, was registered and is active. "
         "You can now sign in with this email address.\n\nNexaAid",
     )
-    db.flush()
+    # Commit before answering (see register_donor): the app signs in at once.
+    db.commit()
     db.refresh(new_org)
     return new_org
 
