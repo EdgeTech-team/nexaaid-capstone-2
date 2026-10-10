@@ -13,6 +13,19 @@ EMAIL = "lorna@csws.gov.ph"
 NEW_PASSWORD = "Bagong#Pass2026"   # passes the old and the relaxed (D2) rule
 
 
+def _set_password(password=STRONG_PASSWORD):
+    import core.database as database
+    from core.auth import hash_password
+    from models.user_rbac_model import User
+    db = database.SessionLocal()
+    try:
+        u = db.query(User).filter(User.email == EMAIL).one()
+        u.password_hash = hash_password(password)
+        db.commit()
+    finally:
+        db.close()
+
+
 def _create_staff(client, t):
     card = upload(client, "employee_id_card", headers=t["admin"])
     ok(client.post("/admin/users", headers=t["admin"], json={
@@ -21,6 +34,7 @@ def _create_staff(client, t):
         "role_name": "CSWS Main Office", "employee_id": "CSWS-0777",
         "employee_id_card": {"file_id": card["file_id"]},
     }), 201)
+    _set_password()
 
 
 def _login(client, password):

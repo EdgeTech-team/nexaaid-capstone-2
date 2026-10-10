@@ -1,5 +1,8 @@
 import logging
 
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,6 +31,12 @@ from api.v1.trips import router as trips_router
 
 app = FastAPI()
 
+@app.exception_handler(RequestValidationError)
+async def validation_handler(request: Request, exc: RequestValidationError):
+    errors = [{k: v for k, v in e.items() if k not in ("input", "ctx")} for e in exc.errors()]
+    print("VALIDATION ERROR:", request.url.path,
+          [(e["loc"], e["msg"]) for e in errors], flush=True)
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
 # DEV ONLY: turn unexpected crashes into a JSON error the app can show.
 # Without this a 500 has no CORS headers, so Chrome hides it and the app

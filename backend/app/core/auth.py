@@ -56,13 +56,6 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
         )
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
-    if user.organization_id is not None:
-        org = db.get(Organization, user.organization_id)
-        if org and org.status != "Approved":
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Organization registration is {org.status}. Wait for administrator approval.",
-            )
     return user
 
 
