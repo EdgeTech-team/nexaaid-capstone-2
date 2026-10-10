@@ -431,7 +431,13 @@ class _BarangayDonationInfoScreenState
   @override
   Widget build(BuildContext context) {
     final body = Loader(
-      load: [isAdmin ? api.lookupsResult : () => api.get('/auth/me')],
+      load: [
+        isAdmin
+            // Cached /lookups: the admin only needs the barangay list here,
+            // so don't re-download every report and delivery on each visit.
+            ? () => api.lookups().then((m) => ApiResult(200, m, ''))
+            : () => api.get('/auth/me'),
+      ],
       builder: (context, data) {
         final m = Map<String, dynamic>.from(data[0] as Map);
         if (!isAdmin) {
@@ -567,12 +573,11 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
         if (!snap.hasData) {
           // Embedded = inside the Administrator's ListView (Accounts >
           // Donation info). SkeletonList is itself a ListView, and a ListView
-          // inside a ListView has unbounded height: Flutter throws on every
-          // frame and the tab looks frozen. Use plain cards there instead.
+          // inside a ListView has unbounded height, which froze the tab.
           return widget.embedded
-              ? const Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [SkeletonCard(), Gaps.v12, SkeletonCard()],
+              ? const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Center(child: CircularProgressIndicator()),
                 )
               : const SkeletonList();
         }
