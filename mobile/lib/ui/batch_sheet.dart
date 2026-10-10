@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'expiry_widgets.dart';
 import 'location_picker.dart' show formatPickupIso;
 import 'pickup_actions.dart';
 import 'widgets.dart';
@@ -115,6 +116,28 @@ class _BatchSheetState extends State<BatchSheet> {
     if (r.ok) Navigator.of(context).pop(true);
   }
 
+  /// After Reopen / Cancel: load the entry again and show its new state.
+  Future<void> _refresh() async {
+    final r = await api.get(
+      '/donations/by-batch/${Uri.encodeComponent('${b['batch_reference']}')}',
+    );
+    if (!mounted || !r.ok) return;
+    setState(() {
+      b = Map<String, dynamic>.from(r.json as Map);
+      for (final line in _items.where((i) => i['status'] == 'Pending')) {
+        _actual.putIfAbsent(
+          line['donation_id'] as int,
+          () => TextEditingController(text: '${line['quantity']}'),
+        );
+      }
+      _actual.removeWhere(
+        (id, _) => !_items.any(
+          (i) => i['donation_id'] == id && i['status'] == 'Pending',
+        ),
+      );
+    });
+  }
+
   Widget _row(String k, dynamic v) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 4),
     child: Row(
@@ -168,6 +191,29 @@ class _BatchSheetState extends State<BatchSheet> {
                   Badge2.status('${b['status']}'),
                 ],
               ),
+              // Deadline, or Expired / Cancelled with the way back.
+              if (isClosedEntry(b) ||
+                  b['expires_label'] != null ||
+                  (b['closed_items'] as num? ?? 0) > 0) ...[
+                const SizedBox(height: 10),
+                ExpiryNote(b, forStaff: true),
+              ],
+              if (_items.any(
+                (i) => i['status'] == 'Expired' || i['status'] == 'Cancelled',
+              ))
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                    ),
+                    onPressed: () async {
+                      if (await reinstateDonation(context, b)) await _refresh();
+                    },
+                    icon: const Icon(Icons.restart_alt),
+                    label: const Text('Reopen so it can be received'),
+                  ),
+                ),
               const SizedBox(height: 10),
               Card(
                 margin: EdgeInsets.zero,
@@ -204,7 +250,9 @@ class _BatchSheetState extends State<BatchSheet> {
                           formatPickupIso(b['preferred_pickup_at']),
                         ),
                       if (b['pickup_landmark'] != null)
-                        _row('Notes', b['pickup_landmark']),
+                        _row('Landmark', b['pickup_landmark']),
+                      if (b['pickup_notes'] != null)
+                        _row('Notes', b['pickup_notes']),
                       if ('${b['pickup_address'] ?? ''}'.trim().isNotEmpty)
                         Align(
                           alignment: Alignment.centerLeft,
@@ -254,6 +302,18 @@ class _BatchSheetState extends State<BatchSheet> {
                   ),
                   icon: const Icon(Icons.move_to_inbox),
                   label: const Text('Receive into inventory'),
+                ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: () async {
+                      if (await cancelDonation(context, b, staff: true)) {
+                        await _refresh();
+                      }
+                    },
+                    icon: const Icon(Icons.block),
+                    label: const Text('Donor cancelled? Cancel it here'),
+                  ),
                 ),
               ],
             ],

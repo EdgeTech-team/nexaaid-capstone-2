@@ -14,21 +14,26 @@ void main() {
   testWidgets('App starts on the landing page', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
     expect(find.text('NexaAid'), findsOneWidget);
-    expect(find.text('Log in'), findsOneWidget);
-    expect(find.text('Create account'), findsOneWidget);
+    // UI concern (new notes): Log in and Register come first, above
+    // guest donation.
+    expect(find.text('Log in to your account'), findsOneWidget);
+    expect(find.text('Register as donor or organization'), findsOneWidget);
     expect(find.text('Donate as guest'), findsOneWidget);
     expect(find.text('How it works', skipOffstage: false), findsOneWidget);
   });
 
-  testWidgets('Log in on the landing page opens the login screen', (
+  testWidgets('Log in on the landing page opens the login pop-up', (
     tester,
   ) async {
     await tester.pumpWidget(const NexaAidApp());
-    await tester.tap(find.text('Log in'));
+    await tester.tap(find.text('Log in to your account'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('Email'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
+    // It's a pop-up over the blurred landing page, with a close button.
+    expect(find.byType(BackdropFilter), findsWidgets);
+    expect(find.byTooltip('Close'), findsOneWidget);
   });
 
   testWidgets('Guest lands on the donate tab', (tester) async {

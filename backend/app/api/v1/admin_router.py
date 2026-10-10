@@ -1,9 +1,8 @@
-# routers/admin_router.py
+# api/v1/admin_router.py
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from core import email as mail_service
@@ -141,6 +140,10 @@ def _user_row(u: User, orgs: dict, barangays: dict) -> dict:
         "assigned_barangay": barangays.get(u.assigned_barangay_id),
         "employee_id": u.employee_id,
         "is_active": u.is_active,
+        # Why and when an Administrator deactivated the account (None while
+        # active, and for accounts deactivated before this was recorded).
+        "deactivation_reason": u.deactivation_reason,
+        "deactivated_at": u.deactivated_at,
         "created_at": u.created_at,
     }
 
@@ -189,12 +192,17 @@ def update_user(
 ):
     """UC-A1 step 5: update account details or status, with the same rules
     as account creation. Alt 3a: unknown account -> 404. Alt 5a: invalid
-    changes -> 422 (409 when the email / employee ID belongs to someone else)."""
+    changes -> 422 (409 when the email / employee ID belongs to someone else).
+
+    Deactivating an active account needs deactivation_reason (422 without
+    it). The reason and the time are kept on the account and cleared when it
+    is activated again."""
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="Account not found")  # UC-A1 3a
     changes = payload.model_dump(exclude_unset=True)
     card = changes.pop("employee_id_card", None)
+    reason = changes.pop("deactivation_reason", None)   # already stripped; blank -> None
     for key in ("first_name", "last_name", "email", "contact_number", "role_name", "is_active"):
         if key in changes and changes[key] is None:
             raise HTTPException(status_code=422, detail=f"{key.replace('_', ' ').capitalize()} cannot be empty")
@@ -211,6 +219,8 @@ def update_user(
             raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
         if is_admin and user.is_active and _active_admins(db) <= 1:
             raise HTTPException(status_code=400, detail="At least one active Administrator must remain")
+        if user.is_active and not reason:
+            raise HTTPException(status_code=422, detail="Give a reason when you deactivate an account")
     new_role = changes.get("role_name")
     if new_role is not None and new_role != current_role:
         if is_self:
@@ -261,13 +271,24 @@ def update_user(
         if getattr(user, k) != v:
             old[k], new[k] = getattr(user, k), v
             setattr(user, k, v)
+    if "is_active" in new:
+        # Keep the reason with the account while it is deactivated; clear it
+        # when the account is activated again.
+        old["deactivation_reason"] = user.deactivation_reason
+        if new["is_active"] is False:
+            user.deactivation_reason = reason
+            user.deactivated_at = datetime.now(timezone.utc)
+        else:
+            user.deactivation_reason = None
+            user.deactivated_at = None
+        new["deactivation_reason"] = user.deactivation_reason
     if card is not None:
         up = transfer_upload(db, card["file_id"], current_user, user, "employee_id_card")
         new["employee_id_card"] = up.file_id
 
     if new:
         action = "UPDATE ACCOUNT"
-        if set(new) == {"is_active"}:
+        if "is_active" in new and set(new) <= {"is_active", "deactivation_reason"}:
             action = "ACTIVATE ACCOUNT" if new["is_active"] else "DEACTIVATE ACCOUNT"
         log_action(db, current_user, action, "users", user.user_id, old=old, new=new, request=request)
     db.flush()
@@ -277,17 +298,24 @@ def update_user(
     return _user_row(user, orgs, barangays)
 
 
-# UC-A2 Review Organization Registration
+# UC-A2 Review Organization Registrations.
+# Capstone 2 adviser comment 1.3: organizations are validated automatically
+# when they register, so this list is for review only. There is no approve /
+# hold / reject endpoint any more. To stop an organization, deactivate its
+# account with PATCH /admin/users/{user_id} (is_active = false).
 @router.get("/organizations")
 def list_organizations(
-    status_filter: Optional[str] = Query(default=None, alias="status"),
+    reviewed: Optional[bool] = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
     query = db.query(Organization)
-    if status_filter:
-        query = query.filter(Organization.status == status_filter)
-    # Latest Hold/Reject reason and decision time per organization (audit_logs).
+    if reviewed is True:
+        query = query.filter(Organization.reviewed_at.isnot(None))
+    elif reviewed is False:
+        query = query.filter(Organization.reviewed_at.is_(None))
+    # Reason and decision time kept in audit_logs from before comment 1.3,
+    # when the Administrator still approved, held or rejected organizations.
     reasons, decided = {}, {}
     for log in (db.query(AuditLog)
                 .filter(AuditLog.entity_type == "organizations",
@@ -307,86 +335,74 @@ def list_organizations(
             "contact_email": o.contact_email,
             "registration_no": o.registration_no,
             "legitimacy_document_url": o.legitimacy_document_url,
-            # UC-A2 alt 4a: flag applications with a missing document
+            # Comment 1.1: the document is optional, so this only means
+            # "no document submitted". It is not an error.
             "document_missing": not (o.legitimacy_document_url or "").strip(),
             "status": o.status,
-            # I3 / D6: the saved rejection reason (older rows fall back to the audit log)
+            # Older rows only (organizations rejected before comment 1.3).
             "rejection_reason": o.rejection_reason,
             "decision_reason": o.rejection_reason or reasons.get(o.organization_id),
             "decided_at": decided.get(o.organization_id),
             "approved_at": o.approved_at,
+            "reviewed_at": o.reviewed_at,
+            "reviewed_by_user_id": o.reviewed_by_user_id,
             "created_at": o.created_at,
         })
     return rows
 
 
-class OrganizationDecision(BaseModel):
-    # Approved activates the account; Pending = hold; Rejected keeps it inactive (UC-A2 6a).
-    decision: Literal["Approved", "Pending", "Rejected"]
-    # Required for Hold and Reject so the organization can be told why.
-    reason: Optional[str] = Field(default=None, max_length=500)
-
-    @model_validator(mode="after")
-    def _reason_required(self):
-        self.reason = (self.reason or "").strip() or None
-        if self.decision != "Approved" and self.reason is None:
-            raise ValueError("Give a reason when you hold or reject an organization")
-        return self
-
-
-@router.post("/organizations/{organization_id}/decision")
-def decide_organization(
+@router.patch("/organizations/{organization_id}/review")
+def review_organization(
     organization_id: int,
-    payload: OrganizationDecision,
+    payload: dict,
     request: Request,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
+    """Mark an organization Reviewed or Not Reviewed without changing activation."""
+    reviewed = payload.get("reviewed")
+    if not isinstance(reviewed, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="'reviewed' must be true or false",
+        )
+
     org = db.get(Organization, organization_id)
     if org is None:
         raise HTTPException(status_code=404, detail="Organization not found")
-    old = {"status": org.status}
-    org.status = payload.decision
-    org.rejection_reason = payload.reason if payload.decision == "Rejected" else None
-    if payload.decision == "Approved":
-        org.approved_by_user_id = current_user.user_id
-        org.approved_at = datetime.now(timezone.utc)
-    action = {"Approved": "APPROVE ORGANIZATION", "Pending": "HOLD ORGANIZATION",
-              "Rejected": "REJECT ORGANIZATION"}[payload.decision]
-    log_action(db, current_user, action, "organizations", org.organization_id,
-               old=old, new={"status": org.status, "reason": payload.reason}, request=request)
 
-    if payload.decision in ("Approved", "Rejected"):
-        event = "org_approved" if payload.decision == "Approved" else "org_rejected"
-        org_users = db.query(User.user_id, User.email).filter(
-            User.organization_id == org.organization_id).all()
-        for uid, _ in org_users:
-            notify_event(db, uid, event, "organization", org.organization_id,
-                         reason=payload.reason or "Please contact the administrator for details.")
+    old = {
+        "reviewed_at": org.reviewed_at.isoformat() if org.reviewed_at else None,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
 
-        # Email the same decision to the organization (one message per address).
-        recipients = {}
-        for addr in [org.contact_email] + [email for _, email in org_users]:
-            if addr:
-                recipients.setdefault(addr.lower(), addr)
-        greeting = org.contact_person or org.org_name
-        if payload.decision == "Approved":
-            subject = "Your NexaAid organization was approved"
-            text = (f"Hello {greeting},\n\n"
-                    f"Your organization, {org.org_name}, was approved. "
-                    "You can now sign in to NexaAid and start donating.\n\nNexaAid")
-        else:
-            subject = "Your NexaAid organization registration was not approved"
-            text = (f"Hello {greeting},\n\n"
-                    f"Your registration for {org.org_name} was not approved.\n"
-                    f"Reason: {payload.reason or 'Please contact the administrator for details.'}\n\n"
-                    "NexaAid")
-        for addr in recipients.values():
-            _queue_email(background_tasks, addr, subject, text)
+    if reviewed:
+        org.reviewed_at = datetime.now(timezone.utc)
+        org.reviewed_by_user_id = current_user.user_id
+    else:
+        org.reviewed_at = None
+        org.reviewed_by_user_id = None
+
+    new = {
+        "reviewed_at": org.reviewed_at.isoformat() if org.reviewed_at else None,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
+
+    if old != new:
+        log_action(
+            db, current_user, "REVIEW ORGANIZATION", "organizations",
+            org.organization_id, old=old, new=new, request=request,
+        )
+
     db.flush()
-    return {"organization_id": org.organization_id, "org_name": org.org_name,
-            "status": org.status, "reason": payload.reason}
+    db.refresh(org)
+    return {
+        "organization_id": org.organization_id,
+        "org_name": org.org_name,
+        "status": org.status,
+        "reviewed_at": org.reviewed_at,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
 
 
 # UC-A4 Monitor System Records: read-only activity logs

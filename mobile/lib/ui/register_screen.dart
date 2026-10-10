@@ -2,12 +2,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'input_formatters.dart';
+import 'location_picker.dart' show AddressAutocompleteField;
 import 'upload_field.dart';
 import 'validators.dart';
 import 'widgets.dart';
 
 /// UC-D1 Register Individual Donor (adviser item 2) and organization
-/// registration reviewed in UC-A2 (adviser item 2.1).
+/// registration (UC-A2).
+///
+/// Capstone 2 adviser comments 1.1 and 1.3: the registration number and
+/// supporting document are optional for every organization type, and are
+/// hidden for Government (which is verified through a separate pathway).
+/// Both donor and organization accounts are validated automatically. The
+/// Administrator's view is for review only.
 ///
 /// Every rule here is repeated by the backend (schemas/user_schema.py,
 /// schemas/organization_schema.py), so the API can't be used to skip them.
@@ -30,6 +37,11 @@ const organizationTypes = [
   'Other',
 ];
 
+/// Same list as backend TYPES_WITHOUT_REGISTRATION. These organization types
+/// are not registered like private organizations, so the registration number
+/// and supporting document are hidden for them.
+const organizationTypesWithoutRegistration = ['Government'];
+
 /// D3: Terms and Conditions shown in the dialog. Edit the wording with the
 /// team and the adviser before the consultation.
 const termsAndConditionsText =
@@ -39,8 +51,8 @@ const termsAndConditionsText =
     '2. Responsible use. NexaAid is for disaster relief coordination. Do not '
     'submit false reports or donations, or misuse another person\'s account.\n\n'
     '3. Verification. The Administrator may review your registration, ID or '
-    'supporting document, and may hold, reject or deactivate an account that '
-    'cannot be verified.\n\n'
+    'supporting document, and may deactivate an account that cannot be '
+    'verified.\n\n'
     '4. Donations. NexaAid records and tracks physical donations. It does not '
     'process money. Official recognition of a donation depends on the '
     'confirmation of the City Mayor\'s Office.\n\n'
@@ -84,13 +96,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
               90,
             )
           : null,
-      'address': () => Validators.text(c('address').text, 'Address', 10, 300),
       'first_name': () =>
           Validators.personName(c('first_name').text, label: 'First name'),
       'last_name': () =>
           Validators.personName(c('last_name').text, label: 'Last name'),
-      'registration_no': () =>
-          Validators.registrationNo(c('registration_no').text),
+      // Optional: only checked when the organization typed something.
+      'registration_no': () => _showDocs && v('registration_no').isNotEmpty
+          ? Validators.registrationNo(c('registration_no').text)
+          : null,
     } else ...{
       'first_name': () =>
           Validators.personName(c('first_name').text, label: 'First name'),
@@ -98,6 +111,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Validators.personName(c('last_name').text, label: 'Last name'),
     },
     'email': () => Validators.email(c('email').text),
+    // Both donors and organizations may enter an address. It is optional,
+    // but when something is typed it must still be 10 to 300 characters.
+    'address': () => v('address').isEmpty
+        ? null
+        : Validators.text(c('address').text, 'Address', 10, 300),
     'contact_number': () => Validators.phMobile(c('contact_number').text),
     'password': () => Validators.newPassword(c('password').text),
     'confirm_password': () => Validators.confirmPassword(
@@ -106,8 +124,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ),
   };
 
+  /// True when the registration number and supporting document fields are
+  /// shown: any chosen type except Government. Both are optional.
+  bool get _showDocs =>
+      orgType != null &&
+      !organizationTypesWithoutRegistration.contains(orgType);
+
+  /// Organizations never need to upload anything. Donors need the front and
+  /// back of a valid ID.
   bool get _filesReady =>
-      widget.org ? legitimacyDoc != null : idFront != null && idBack != null;
+      widget.org ? true : (idFront != null && idBack != null);
 
   bool get _valid =>
       _rules.values.every((rule) => rule() == null) &&
@@ -147,12 +173,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'organization_type_other': orgType == 'Other'
                     ? v('org_type_other')
                     : null,
-                'address': v('address'),
+                // Optional: only sent when filled in.
+                if (v('address').isNotEmpty) 'address': v('address'),
                 'contact_first_name': v('first_name'),
                 'contact_last_name': v('last_name'),
-                'registration_no': v('registration_no'),
                 'contact_email': c('email').text.trim(),
-                'legitimacy_document': _ref(legitimacyDoc!),
+                // Optional: only sent when the organization filled them in.
+                if (_showDocs && v('registration_no').isNotEmpty)
+                  'registration_no': v('registration_no'),
+                if (_showDocs && legitimacyDoc != null)
+                  'legitimacy_document': _ref(legitimacyDoc!),
               },
             )
           : api.post(
@@ -162,13 +192,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'first_name': v('first_name'),
                 'last_name': v('last_name'),
                 'email': c('email').text.trim(),
+                // Optional: only sent when filled in.
+                if (v('address').isNotEmpty) 'address': v('address'),
                 'id_front': _ref(idFront!),
                 'id_back': _ref(idBack!),
               },
             ),
-      success: widget.org
-          ? 'Registration submitted. You can log in once the Administrator approves your organization.'
-          : 'Account created. You can now log in.',
+      // Adviser comment 1.3: validated automatically for both.
+      success: 'Account created. You can now log in.',
     );
     if (!mounted) return;
     setState(() => busy = false);
@@ -234,12 +265,33 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
+  /// Address field with suggestions (OpenStreetMap through the backend),
+  /// shared with the donate screen. Used by donors and organizations. It is
+  /// optional.
+  Widget _address() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Space.md),
+      child: AddressAutocompleteField(
+        key: const ValueKey('field-address'),
+        controller: c('address'),
+        label: 'Address (optional)',
+        hint: 'Start typing: street, barangay, municipality',
+        icon: Icons.place_outlined,
+        validator: (_) => _rules['address']?.call(),
+        onChanged: (_) => _changed(),
+      ),
+    );
+  }
+
+  /// [required] is false for uploads that are optional (the organization's
+  /// supporting document), so no "Required" error is shown for them.
   Widget _upload(
     String label,
     String purpose,
     UploadedFile? current,
     ValueChanged<UploadedFile?> set, {
     String? helper,
+    bool required = true,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: Space.md),
@@ -248,7 +300,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
         label: label,
         purpose: purpose,
         helperText: helper,
-        errorText: _triedSubmit && current == null ? 'Required' : null,
+        errorText: required && _triedSubmit && current == null
+            ? 'Required'
+            : null,
         onChanged: (f) => setState(() => set(f)),
       ),
     );
@@ -284,6 +338,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           rule('8 to 64 characters', p.length >= 8 && p.length <= 64),
+          rule('At least one capital letter', RegExp(r'[A-Z]').hasMatch(p)),
           rule('At least one letter', RegExp(r'[A-Za-z]').hasMatch(p)),
           rule('At least one number', RegExp(r'\d').hasMatch(p)),
         ],
@@ -294,7 +349,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _consent(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final what = widget.org
-        ? 'my contact details and the supporting document'
+        ? 'my contact details and any supporting document I upload'
         : 'my contact details and my ID photos';
     return Padding(
       padding: const EdgeInsets.only(bottom: Space.md),
@@ -384,8 +439,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
           children: [
             Text(
               widget.org
-                  ? 'Your organization can log in after the Administrator '
-                        'reviews your details and supporting document.'
+                  ? 'Your organization account is active right away. The '
+                        'Administrator may review your details later.'
                   : 'Your account is active right away. The Administrator '
                         'may review your ID later.',
               style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
@@ -393,33 +448,45 @@ class _RegisterScreenState extends State<RegisterScreen> {
             Gaps.v16,
             if (widget.org) ...[
               SectionHeader('Organization'),
-              _text('org_name', 'Organization name', icon: Icons.apartment),
+              _text(
+                'org_name',
+                'Organization name',
+                icon: Icons.apartment,
+                formatters: orgNameFormatters,
+              ),
               _dropdown('Organization type', orgType, organizationTypes, (x) {
                 orgType = x;
+                // Clear the hidden values when the type does not use them.
+                if (organizationTypesWithoutRegistration.contains(x)) {
+                  c('registration_no').clear();
+                  legitimacyDoc = null;
+                }
               }),
               if (orgType == 'Other')
                 _text('org_type_other', 'Please specify the type'),
-              // TODO(Dave Hoyohoy): replace with the AddressField
-              // (geo autocomplete) once it is merged.
-              _text(
-                'address',
-                'Address',
-                icon: Icons.place_outlined,
-                hint: 'Street, barangay, Mandaue City',
-                maxLines: 2,
-              ),
-              _text(
-                'registration_no',
-                'Registration number (SEC, DSWD, CDA...)',
-                icon: Icons.badge_outlined,
-              ),
-              _upload(
-                'Supporting document (photo or PDF)',
-                'legitimacy_document',
-                legitimacyDoc,
-                (f) => legitimacyDoc = f,
-                helper: 'e.g. SEC or DSWD certificate. Only the Administrator can see it.',
-              ),
+              _address(),
+              // Optional for every type except Government (hidden).
+              if (_showDocs) ...[
+                _text(
+                  'registration_no',
+                  'Registration number (optional)',
+                  icon: Icons.badge_outlined,
+                  helper:
+                      'SEC, DTI, CDA or DSWD number, if your '
+                      'organization has one.',
+                ),
+                _upload(
+                  'Supporting document (optional)',
+                  'legitimacy_document',
+                  legitimacyDoc,
+                  (f) => legitimacyDoc = f,
+                  required: false,
+                  helper:
+                      'Upload an SEC, DTI, CDA, DSWD or similar certificate '
+                      'only if you have one. Only the Administrator can see '
+                      'it.',
+                ),
+              ],
               SectionHeader('Contact person'),
             ] else
               SectionHeader('About you'),
@@ -441,6 +508,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               formatters: phoneFormatters,
             ),
             if (!widget.org) ...[
+              _address(),
               SectionHeader('Valid ID'),
               _upload(
                 'Valid ID (front)',

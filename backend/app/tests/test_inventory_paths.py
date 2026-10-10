@@ -6,7 +6,6 @@ stock(item, report) = sum(received_goods.actual_quantity) - sum(delivery_items.q
 One regression test per code path that sets physical_donations.status to
 Received / Confirmed or inserts received_goods:
   POST /donations/receive                 (CSWS, UC-CM1)       -> adds stock
-  POST /donations/{id}/confirm            (CSWS confirm)        -> stock unchanged
   POST /cmo/donations/{id}/confirm        (CMO, UC-C1)          -> stock unchanged
   POST /cmo/donations/{id}/revert         (CMO, UC-C1 alt 4a)   -> stock unchanged
 plus: receive is atomic, and scripts/rebuild_inventory.py.
@@ -115,7 +114,8 @@ def test_confirm_paths_do_not_change_stock(api):
     _receive(client, t, b, 70)
     assert _stock(1, rid) == 170
 
-    ok(client.post(f"/donations/{a}/confirm", headers=t["csws"]))                    # CSWS confirm
+    ok(client.post(f"/cmo/donations/{a}/confirm", headers=t["cmo"],
+                   json={"status": "Confirmed"}), 201)                               # CMO confirm
     assert _stock(1, rid) == 170
     ok(client.post(f"/cmo/donations/{b}/confirm", headers=t["cmo"],
                    json={"status": "On Hold", "notes": "check"}), 201)              # CMO hold
@@ -158,7 +158,8 @@ def _break_inventory(client, t):
     a, b = _donate(client, t, rid, 1, 100), _donate(client, t, rid, water, 20)
     _receive(client, t, a, 100)
     _receive(client, t, b, 15)
-    ok(client.post(f"/donations/{a}/confirm", headers=t["csws"]))
+    ok(client.post(f"/cmo/donations/{a}/confirm", headers=t["cmo"],
+                   json={"status": "Confirmed"}), 201)
     db = database.SessionLocal()
     try:
         db.query(Inventory).filter(Inventory.item_id == water).delete()   # missing row

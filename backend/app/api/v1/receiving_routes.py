@@ -12,6 +12,7 @@ from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResp
 from core.notifications import notify, notify_many, user_ids_with_role
 from services.inventory import add_received_stock
 from services.donation_entries import ENTRY_SORTS, build_entries, filter_and_sort, group_by_report
+from services.donation_expiry import CLOSED, expire_overdue, nice_date
 
 
 from typing import Optional
@@ -30,6 +31,7 @@ def list_pending_donations(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
 ):
+    expire_overdue(db)
     return db.query(PhysicalDonation).filter(PhysicalDonation.status == "Pending").all()
 
 
@@ -132,6 +134,14 @@ def _receive_line(db: Session, current_user: User, donation: PhysicalDonation,
     (alt 4a: may be less than declared), mark it Received and add it to the
     report's inventory. Single receive and entry receive both use this.
     Does not commit."""
+    if donation.status in CLOSED:
+        # Plain message for the person at the counter: what happened, what to do.
+        when = nice_date(donation.closed_at)
+        raise HTTPException(
+            status_code=400,
+            detail=f"This donation was marked {donation.status}{' on ' + when if when else ''}. "
+                   f"Tap Reinstate first if the donor is handing it over now.",
+        )
     if donation.status != "Pending":
         raise HTTPException(status_code=400, detail=f"Donation is already '{donation.status}', cannot receive again")
     receipt = ReceivedGoods(
@@ -249,6 +259,7 @@ def donation_records(
     handover_method: Optional[str] = None,
     q: Optional[str] = None,
     sort: str = Query("newest", pattern="^(" + "|".join(ENTRY_SORTS) + ")$"),
+    include_closed: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("Administrator", "CSWS Main Office", "CMO Representative")),
 ):
@@ -257,11 +268,19 @@ def donation_records(
 
     One record per donation entry (one QR / batch_reference) with its items.
     Filters: status (entry status), report_id, handover_method, q (QR
-    reference, donor or item). sort: newest, oldest, most_items, fewest_items.
+    reference, donor or item). sort: newest, oldest, most_items, fewest_items,
+    due_soonest.
+
+    Expired / Cancelled entries are hidden unless status asks for them
+    (status=Expired, Cancelled or Closed) or include_closed=true, so the
+    everyday list only shows donations that still need work.
     """
+    expire_overdue(db)
     query = db.query(PhysicalDonation)
     if report_id is not None:
         query = query.filter(PhysicalDonation.report_id == report_id)
     entries = build_entries(db, query.all(), include_donor=True, include_cmo=True)
     group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
+    if not status and not include_closed:
+        entries = [e for e in entries if e["status"] not in CLOSED]
     return filter_and_sort(entries, status=status, handover_method=handover_method, search=q, sort=sort)
