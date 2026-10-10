@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'donation_info.dart' show ReportDonationInfo;
+import 'expiry_widgets.dart' show ExpiryNote;
 import 'location_picker.dart';
 import 'widgets.dart';
 
@@ -86,9 +87,15 @@ class _DonateScreenState extends State<DonateScreen> {
   String handover = 'Drop Off';
   bool useSavedAddress = true;
   String? savedAddress; // organization address, if the account has one
-  final pickupAddress = TextEditingController(); // Door to Door address
-  final pickupNotes = TextEditingController(); // notes for the pickup team
-  PickedAddress? picked; // set when the donor taps a suggestion
+  // Door to Door pickup details:
+  //   landmark  -> box with map suggestions (also gives the pin for CSWS)
+  //   address   -> typed by the donor, no suggestions
+  //   date/time -> preferredPickup
+  //   notes     -> free text for the pickup team
+  final pickupLandmark = TextEditingController();
+  final pickupAddress = TextEditingController();
+  final pickupNotes = TextEditingController();
+  PickedAddress? picked; // set when the donor taps a landmark suggestion
   DateTime? preferredPickup; // Door to Door preferred date & time
   PickupRules pickupRules = const PickupRules();
   final guestName = TextEditingController();
@@ -120,6 +127,7 @@ class _DonateScreenState extends State<DonateScreen> {
       l.dispose();
     }
     _scroll.dispose();
+    pickupLandmark.dispose();
     pickupAddress.dispose();
     pickupNotes.dispose();
     guestName.dispose();
@@ -180,22 +188,27 @@ class _DonateScreenState extends State<DonateScreen> {
     }
     final door = handover == 'Door to Door';
     final useSaved = door && useSavedAddress && savedAddress != null;
-    final typed = pickupAddress.text.trim();
-    // Coordinates only when the box still holds the suggestion that was tapped.
-    final address = picked != null && picked!.address == typed
+    final typedAddress = pickupAddress.text.trim();
+    final landmarkText = pickupLandmark.text.trim();
+    // Pin coordinates only when the box still holds the suggestion that was
+    // tapped. If the donor edited the text afterwards, send the text only.
+    final landmark = picked != null && picked!.address == landmarkText
         ? picked!
-        : PickedAddress(typed);
+        : PickedAddress(landmarkText);
     setState(() => busy = true);
     final body = <String, dynamic>{
       'report_id': widget.report['id'],
       'handover_method': handover,
       if (door) ...{
-        ...(useSaved
-            ? <String, dynamic>{'pickup_address': savedAddress}
-            : address.toJson()),
+        'pickup_address': useSaved ? savedAddress : typedAddress,
+        if (landmarkText.isNotEmpty) ...{
+          'pickup_landmark': landmarkText,
+          'pickup_lat': landmark.lat,
+          'pickup_lng': landmark.lng,
+        },
         'preferred_pickup_at': preferredPickup!.toUtc().toIso8601String(),
         if (pickupNotes.text.trim().isNotEmpty)
-          'pickup_landmark': pickupNotes.text.trim(),
+          'pickup_notes': pickupNotes.text.trim(),
       },
       'items': [for (final l in lines) l.toJson()],
       if (!api.loggedIn)
@@ -421,7 +434,9 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  /// UC-D2 alt 7c: confirm or enter the pickup address, and choose when.
+  /// UC-D2 alt 7c: Door to Door pickup details.
+  /// Order: Landmark (with suggestions), Address (typed), preferred date and
+  /// time, notes for the pickup team.
   Widget _doorToDoorCard() {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
@@ -458,10 +473,26 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v8,
           ],
+          // 1. Landmark: suggestions appear as the donor types. Picking one
+          //    also saves the map pin so CSWS can navigate.
+          AddressAutocompleteField(
+            controller: pickupLandmark,
+            label: 'Landmark',
+            hint: 'Start typing a nearby landmark, e.g. church, school, store',
+            icon: Icons.place_outlined,
+            onChanged: (p) => picked = p.lat == null ? null : p,
+          ),
+          Gaps.v16,
+          // 2. Address: plain typed text, no suggestions.
           if (savedAddress == null || !useSavedAddress) ...[
-            AddressAutocompleteField(
+            TextFormField(
               controller: pickupAddress,
-              onChanged: (p) => picked = p.lat == null ? null : p,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Address',
+                hintText: 'House no., street, barangay, city',
+                prefixIcon: Icon(Icons.home_outlined),
+              ),
               validator: (v) =>
                   handover == 'Door to Door' &&
                       (savedAddress == null || !useSavedAddress) &&
@@ -471,6 +502,7 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v16,
           ],
+          // 3. Preferred pickup date and time.
           FormField<DateTime>(
             validator: (_) =>
                 handover == 'Door to Door' && preferredPickup == null
@@ -498,6 +530,7 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
           ),
           Gaps.v16,
+          // 4. Notes for the pickup team.
           TextFormField(
             controller: pickupNotes,
             maxLength: 300,
@@ -943,6 +976,11 @@ class _DonationReceiptState extends State<DonationReceipt> {
                 ],
               ),
             ),
+            // How long the donor has to hand it over (donation expiry).
+            if (batch['expires_label'] != null) ...[
+              Gaps.v12,
+              ExpiryNote(batch),
+            ],
             const SectionHeader('Items in this donation'),
             AppCard(
               padding: EdgeInsets.zero,
@@ -973,6 +1011,14 @@ class _DonationReceiptState extends State<DonationReceipt> {
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
+                    if (batch['pickup_landmark'] != null) ...[
+                      ListTile(
+                        leading: Icon(Icons.place_outlined, color: cs.primary),
+                        title: const Text('Landmark'),
+                        subtitle: Text('${batch['pickup_landmark']}'),
+                      ),
+                      const Divider(height: 1),
+                    ],
                     ListTile(
                       leading: Icon(Icons.home_outlined, color: cs.primary),
                       title: const Text('Address'),
@@ -986,12 +1032,15 @@ class _DonationReceiptState extends State<DonationReceipt> {
                         subtitle: Text(pickupTime),
                       ),
                     ],
-                    if (batch['pickup_landmark'] != null) ...[
+                    if (batch['pickup_notes'] != null) ...[
                       const Divider(height: 1),
                       ListTile(
-                        leading: Icon(Icons.flag_outlined, color: cs.primary),
+                        leading: Icon(
+                          Icons.sticky_note_2_outlined,
+                          color: cs.primary,
+                        ),
                         title: const Text('Notes for pickup'),
-                        subtitle: Text('${batch['pickup_landmark']}'),
+                        subtitle: Text('${batch['pickup_notes']}'),
                       ),
                     ],
                   ],

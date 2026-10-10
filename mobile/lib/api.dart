@@ -150,6 +150,7 @@ class Api extends ChangeNotifier {
       send('POST', path, body: body ?? {});
   Future<ApiResult> patch(String path, {Map<String, dynamic>? body}) =>
       send('PATCH', path, body: body ?? {});
+  Future<ApiResult> delete(String path) => send('DELETE', path);
 
   /// POST /uploads as multipart form data (purpose + file).
   /// Sends bytes instead of a file path, so it works on Android and Chrome.
@@ -216,6 +217,26 @@ class Api extends ChangeNotifier {
     }
     return r;
   }
+
+  /// POST /auth/forgot-password: emails a 6-digit code.
+  Future<ApiResult> forgotPassword(String email) =>
+      post('/auth/forgot-password', body: {'email': email.trim()});
+
+  /// POST /auth/reset-password: the emailed code plus the new password.
+  Future<ApiResult> resetPassword(
+    String email,
+    String code,
+    String newPassword,
+    String confirm,
+  ) => post(
+    '/auth/reset-password',
+    body: {
+      'email': email.trim(),
+      'code': code.trim(),
+      'new_password': newPassword,
+      'confirm_password': confirm,
+    },
+  );
 
   void logout() {
     token = null;

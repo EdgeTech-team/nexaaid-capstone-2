@@ -1,5 +1,8 @@
 import logging
 
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,9 +26,17 @@ from api.v1.public_routes import router as public_router
 from api.v1.admin_document_routes import router as admin_document_router
 from api.v1.donation_info_routes import router as donation_info_router
 from api.v1.account_router import router as account_router
+from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
+from api.v1.trips import router as trips_router
 
 app = FastAPI()
 
+@app.exception_handler(RequestValidationError)
+async def validation_handler(request: Request, exc: RequestValidationError):
+    errors = [{k: v for k, v in e.items() if k not in ("input", "ctx")} for e in exc.errors()]
+    print("VALIDATION ERROR:", request.url.path,
+          [(e["loc"], e["msg"]) for e in errors], flush=True)
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
 # DEV ONLY: turn unexpected crashes into a JSON error the app can show.
 # Without this a 500 has no CORS headers, so Chrome hides it and the app
@@ -56,6 +67,8 @@ app.include_router(health_router)
 app.include_router(dashboard_router)
 app.include_router(report_router)
 app.include_router(delivery_router)
+app.include_router(trips_router)
+app.include_router(donation_lifecycle_router)   # before donation_router: fixed paths first
 app.include_router(donation_router)
 app.include_router(receiving_router)
 app.include_router(session_router)

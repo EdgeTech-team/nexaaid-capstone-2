@@ -56,6 +56,10 @@ abstract final class StatusColors {
     'rejected': (_red, Icons.cancel_outlined),
     'declined': (_red, Icons.cancel_outlined),
     'cancelled': (_slate, Icons.block),
+    // Donation never handed over in time (services/donation_expiry.py)
+    'expired': (_red, Icons.timer_off_outlined),
+    // Delivery trips (several reports on one truck)
+    'completed': (_green, Icons.task_alt),
     // Fulfillment
     'not started': (_slate, Icons.radio_button_unchecked),
     'partial': (_blue, Icons.timelapse),
@@ -119,7 +123,7 @@ const donationLifecycle = [
 const donationLifecycleLabels = [
   'Pledged',
   'Received by CSWS',
-  'Confirmed by CMO',
+  'Acknowledged by CMO',
   'In transit',
   'Delivered',
   'Barangay confirmed',

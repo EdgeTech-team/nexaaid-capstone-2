@@ -118,7 +118,7 @@ void main() {
       ),
     );
     expect(
-      find.bySemanticsLabel('Status: Confirmed by CMO, step 3 of 6'),
+      find.bySemanticsLabel('Status: Acknowledged by CMO, step 3 of 6'),
       findsOneWidget,
     );
     semantics.dispose();

@@ -24,6 +24,25 @@ class CapitalizeWordsFormatter extends TextInputFormatter {
   }
 }
 
+/// Capitalizes only the first character of the whole text (e.g. organization
+/// name). Words after the first are kept as typed, so "of", "and" and
+/// acronyms like "NGO" are not changed.
+class CapitalizeFirstLetterFormatter extends TextInputFormatter {
+  const CapitalizeFirstLetterFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final t = newValue.text;
+    if (t.isEmpty) return newValue;
+    final fixed = t[0].toUpperCase() + t.substring(1);
+    // Same length as before, so the cursor and selection stay where they are.
+    return fixed == t ? newValue : newValue.copyWith(text: fixed);
+  }
+}
+
 /// Philippine mobile number: digits only, at most 11 (09XXXXXXXXX).
 /// Typing a 12th digit or a letter does nothing.
 final phoneFormatters = <TextInputFormatter>[
@@ -35,4 +54,9 @@ final phoneFormatters = <TextInputFormatter>[
 final nameFormatters = <TextInputFormatter>[
   CapitalizeWordsFormatter(),
   LengthLimitingTextInputFormatter(50),
+];
+
+/// Organization name: capitalize only the first letter.
+final orgNameFormatters = <TextInputFormatter>[
+  CapitalizeFirstLetterFormatter(),
 ];

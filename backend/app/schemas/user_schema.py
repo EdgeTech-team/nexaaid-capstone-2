@@ -7,6 +7,7 @@ from core.names import capitalize_words
 from core.passwords import validate_password_strength
 from core.validators import clean_email, clean_employee_id, clean_person_name, clean_ph_mobile
 from schemas.upload_schema import UploadRef
+from core.validators import clean_email, clean_employee_id, clean_person_name, clean_ph_mobile, clean_text
 
 # UC-D1 step 3: kinds of valid ID a donor may upload (stored in users.id_type).
 # D1: the ID type is no longer asked during registration. The list and the
@@ -16,7 +17,12 @@ ID_TYPES = (
     "PhilSys National ID", "Driver's License", "Passport", "UMID", "Postal ID",
     "Voter's ID", "PRC ID", "School ID", "Other",
 )
-IdType = Literal[ID_TYPES]
+# Type checkers (Pylance) cannot read a variable inside Literal[...], so the
+# values are spelled out here. Keep this list the same as ID_TYPES above.
+IdType = Literal[
+    "PhilSys National ID", "Driver's License", "Passport", "UMID", "Postal ID",
+    "Voter's ID", "PRC ID", "School ID", "Other",
+]
 
 
 def clean_name(value: str, label: str) -> str:
@@ -41,6 +47,7 @@ class DonorRegisterRequest(BaseModel):
     # Step 3: valid ID, front and back, uploaded first with POST /uploads.
     id_front: UploadRef
     id_back: UploadRef
+    address: Optional[str] = None
     # RA 10173 (Data Privacy Act): the ID photos are sensitive personal information.
     consent: bool
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
@@ -75,7 +82,12 @@ class DonorRegisterRequest(BaseModel):
         if v is not True:
             raise ValueError("You must accept the Terms and Conditions")
         return v
-
+    @field_validator("address")
+    @classmethod
+    def _ad(cls, v):
+        if v is None or not v.strip():
+            return None
+        return clean_text(v, "Address", 10, 300)
     @model_validator(mode="after")
     def _check(self):
         if self.id_front.file_id == self.id_back.file_id:
@@ -162,7 +174,10 @@ class InternalAccountCreateRequest(BaseModel):
 class AccountUpdateRequest(BaseModel):
     """UC-A1 step 5: the Administrator updates account details or status.
     Every field is optional (PATCH); invalid changes are rejected with 422
-    (alt 5a). Role, barangay and employee fields are for internal accounts."""
+    (alt 5a). Role, barangay and employee fields are for internal accounts.
+
+    Deactivating (is_active = false) needs deactivation_reason. The route
+    checks that, because it only applies when the account is active now."""
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[EmailStr] = None
@@ -172,6 +187,7 @@ class AccountUpdateRequest(BaseModel):
     employee_id: Optional[str] = None
     employee_id_card: Optional[UploadRef] = None  # replaces the current card
     is_active: Optional[bool] = None
+    deactivation_reason: Optional[str] = Field(default=None, max_length=500)
 
     @field_validator("first_name")
     @classmethod
@@ -193,6 +209,12 @@ class AccountUpdateRequest(BaseModel):
     @classmethod
     def _emp(cls, v): return None if v is None else clean_employee_id(v)
 
+    @field_validator("deactivation_reason")
+    @classmethod
+    def _reason(cls, v):
+        # A blank reason counts as no reason.
+        return (v or "").strip() or None
+
     @field_validator("role_name")
     @classmethod
     def _role(cls, v):
@@ -206,3 +228,28 @@ class LoginRequest(BaseModel):
     # "IndentationError: expected an indented block after class definition".
     email: EmailStr
     password: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def _em(cls, v): return clean_email(str(v))
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(..., pattern=r"^\d{6}$")
+    new_password: str = Field(..., min_length=8, max_length=64)
+    confirm_password: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("email")
+    @classmethod
+    def _em(cls, v): return clean_email(str(v))
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.new_password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        validate_password_strength(self.new_password, email=self.email)
+        return self
