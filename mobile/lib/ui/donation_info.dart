@@ -435,7 +435,14 @@ class _BarangayDonationInfoScreenState
         isAdmin
             // Cached /lookups: the admin only needs the barangay list here,
             // so don't re-download every report and delivery on each visit.
-            ? () => api.lookups().then((m) => ApiResult(200, m, ''))
+            // If the cached copy is empty (server was unreachable), fetch
+            // again so the screen shows the real error instead of no list.
+            ? () async {
+                final m = await api.lookups();
+                return m.isEmpty
+                    ? api.lookupsResult()
+                    : ApiResult(200, m, '');
+              }
             : () => api.get('/auth/me'),
       ],
       builder: (context, data) {
