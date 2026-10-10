@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult, Roles;
-import 'ops_screens.dart' show niceDay, showDeliveryHistory;
+import 'delivery_widgets.dart';
+import 'ops_screens.dart' show showDeliveryHistory;
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -24,6 +25,7 @@ const tripStatusLabels = {
   'In Transit': 'On the road',
   'Delivered': 'Waiting for barangay confirmation',
   'Completed': 'Completed',
+  'Cancelled': 'Cancelled',
 };
 
 bool get _canManageTrips =>
@@ -109,9 +111,7 @@ class _TripsScreenState extends State<TripsScreen> {
                       Padding(
                         padding: const EdgeInsets.only(right: Space.xs),
                         child: ChoiceChip(
-                          label: Text(
-                            s == null ? 'All' : tripStatusLabels[s]!,
-                          ),
+                          label: Text(s == null ? 'All' : tripStatusLabels[s]!),
                           selected: status == s,
                           onSelected: (_) => setState(() => status = s),
                         ),
@@ -286,6 +286,47 @@ class TripDetailScreen extends StatelessWidget {
     );
   }
 
+  /// New date for every stop not yet delivered. Barangays are told.
+  Future<void> _reschedule(BuildContext context, Map trip) async {
+    final when = await pickDeliveryDateTime(
+      context,
+      current: trip['trip_date'] as String?,
+      help: 'New date for this trip',
+    );
+    if (when == null || !context.mounted) return;
+    await act(
+      context,
+      () =>
+          api.post('/trips/$tripId/reschedule', body: {'delivery_date': when}),
+      success: 'Trip #$tripId moved to ${niceWhen(when)}',
+    );
+  }
+
+  /// The truck came back before finishing: stops not reached go back to
+  /// "Preparing"; stops already delivered stay delivered.
+  Future<void> _truckBack(BuildContext context) async {
+    final why = await askReason(
+      context,
+      title: 'Truck came back?',
+      message:
+          'Stops the truck did not reach go back to "Preparing", so you can '
+          'send them again or cancel them. Why did it come back?',
+      choices: const [
+        'The truck broke down',
+        'The road is closed or unsafe',
+        'Bad weather',
+        'Nobody was there to receive it',
+      ],
+      confirm: 'Bring it back',
+    );
+    if (why == null || !context.mounted) return;
+    await act(
+      context,
+      () => api.post('/trips/$tripId/return-to-office', body: {'reason': why}),
+      success: 'Trip #$tripId: the stops not reached are back at the office',
+    );
+  }
+
   Future<void> _undo(BuildContext context) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -374,6 +415,30 @@ class TripDetailScreen extends StatelessWidget {
                   onPressed: () => _start(context, trip),
                   icon: const Icon(Icons.local_shipping),
                   label: const Text('Start trip (the truck is leaving)'),
+                ),
+              ],
+              // Something went wrong with the whole trip.
+              if (manage &&
+                  (trip['can_reschedule'] == true ||
+                      trip['can_return'] == true)) ...[
+                Gaps.v8,
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    if (trip['can_reschedule'] == true)
+                      OutlinedButton.icon(
+                        onPressed: () => _reschedule(context, trip),
+                        icon: const Icon(Icons.event_repeat),
+                        label: const Text('Change date'),
+                      ),
+                    if (trip['can_return'] == true)
+                      OutlinedButton.icon(
+                        onPressed: () => _truckBack(context),
+                        icon: const Icon(Icons.u_turn_left),
+                        label: const Text('Truck came back'),
+                      ),
+                  ],
                 ),
               ],
               if (trip['status'] == 'Completed') ...[
@@ -475,14 +540,38 @@ class _StopDelivery extends StatelessWidget {
                   style: t.titleSmall,
                 ),
                 Text(items, style: t.bodyMedium),
-                TextButton(
-                  style: TextButton.styleFrom(
-                    padding: EdgeInsets.zero,
-                    visualDensity: VisualDensity.compact,
+                if (d['status'] == 'Cancelled' && d['cancel_reason'] != null)
+                  Text(
+                    'Cancelled: ${d['cancel_reason']}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
                   ),
-                  onPressed: () =>
-                      showDeliveryHistory(context, d['delivery_id'] as int),
-                  child: const Text('History'),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: () =>
+                          showDeliveryHistory(context, d['delivery_id'] as int),
+                      child: const Text('History'),
+                    ),
+                    // One stop has a problem (e.g. barangay not ready).
+                    if (_canManageTrips &&
+                        (d['status'] == 'Preparing' ||
+                            d['status'] == 'In Transit'))
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () => showDeliveryProblems(context, d),
+                        child: const Text('Something went wrong?'),
+                      ),
+                  ],
                 ),
               ],
             ),
@@ -496,6 +585,8 @@ class _StopDelivery extends StatelessWidget {
 
 // ===========================================================================
 // Trip planner: 1 choose reports -> 2 what to send -> 3 when and which truck
+// One page per step, big Next / Back buttons at the bottom, and every
+// problem shown next to what needs fixing (not only in a pop-up).
 // ===========================================================================
 class TripPlannerScreen extends StatefulWidget {
   const TripPlannerScreen({super.key});
@@ -506,11 +597,12 @@ class TripPlannerScreen extends StatefulWidget {
 
 class _TripPlannerScreenState extends State<TripPlannerScreen> {
   late Future<ApiResult> _candidates = api.get('/trips/candidates');
-  int step = 0;
+  int step = 0; // 0 reports, 1 quantities, 2 date and truck
   bool busy = false;
+  bool tried = false; // show errors on the current step
   String search = '';
 
-  /// report_id -> report (from GET /trips/candidates)
+  /// report_id -> report row (with its items in stock)
   final Map<int, Map> reports = {};
 
   /// Chosen reports, in the order they were ticked.
@@ -519,13 +611,13 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   /// Barangays in the order the truck visits them (staff can reorder).
   final List<int> stopOrder = [];
 
-  /// report_id -> item_id -> quantity field
+  /// report_id -> item_id -> quantity box
   final Map<int, Map<int, TextEditingController>> qty = {};
 
   final _sendForm = GlobalKey<FormState>();
   final vehicle = TextEditingController();
   final notes = TextEditingController();
-  String? date;
+  String? date; // ISO, UTC
 
   @override
   void dispose() {
@@ -541,13 +633,23 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   int _brgy(int reportId) => reports[reportId]!['barangay_id'] as int;
 
+  TextEditingController Function(int) _ctrlFor(int reportId) =>
+      (itemId) => qty
+          .putIfAbsent(reportId, () => <int, TextEditingController>{})
+          .putIfAbsent(itemId, () => TextEditingController());
+
+  List<Map> _items(int reportId) =>
+      (reports[reportId]!['items'] as List).cast<Map>();
+
+  int _total(int reportId) => linesFrom(
+    _items(reportId),
+    _ctrlFor(reportId),
+  ).fold(0, (a, l) => a + l['quantity']!);
+
   void _toggle(int reportId, bool on) {
     setState(() {
       if (on && !chosen.contains(reportId)) {
         chosen.add(reportId);
-        for (final i in (reports[reportId]!['items'] as List).cast<Map>()) {
-          _ctrl(reportId, i['item_id'] as int);
-        }
         if (!stopOrder.contains(_brgy(reportId))) {
           stopOrder.add(_brgy(reportId));
         }
@@ -563,74 +665,49 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   /// Chosen reports grouped by stop, in visiting order.
   List<MapEntry<int, List<int>>> get _stops => [
     for (final b in stopOrder)
-      MapEntry(b, [for (final r in chosen) if (_brgy(r) == b) r]),
+      MapEntry(b, [
+        for (final r in chosen)
+          if (_brgy(r) == b) r,
+      ]),
   ];
 
-  /// The quantity field for one item of one report (made on first use, so
-  /// it also exists for items that appear after the stock is reloaded).
-  TextEditingController _ctrl(int reportId, int itemId) => qty
-      .putIfAbsent(reportId, () => <int, TextEditingController>{})
-      .putIfAbsent(itemId, () => TextEditingController());
-
-  int _qtyOf(int reportId, int itemId) =>
-      int.tryParse(qty[reportId]?[itemId]?.text.trim() ?? '') ?? 0;
-
-  int _reportTotal(int reportId) => [
-    for (final i in (reports[reportId]!['items'] as List).cast<Map>())
-      _qtyOf(reportId, i['item_id'] as int),
-  ].fold(0, (a, b) => a + b);
-
-  void _say(String text) => ScaffoldMessenger.of(context)
-    ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(text)));
+  bool get _stepOk => switch (step) {
+    0 => chosen.isNotEmpty,
+    1 => chosen.every((r) => _total(r) > 0),
+    _ => date != null,
+  };
 
   void _next() {
-    if (step == 0) {
-      if (chosen.isEmpty) {
-        _say('Choose at least one report.');
-        return;
-      }
-      setState(() => step = 1);
-    } else if (step == 1) {
-      if (!_sendForm.currentState!.validate()) return;
-      final empty = [for (final r in chosen) if (_reportTotal(r) == 0) r];
-      if (empty.isNotEmpty) {
-        _say(
-          'Enter what to send for ${reports[empty.first]!['report_label']}, '
-          'or untick it in step 1.',
-        );
-        return;
-      }
-      setState(() => step = 2);
+    setState(() => tried = true);
+    if (step == 1 && !(_sendForm.currentState?.validate() ?? true)) return;
+    if (!_stepOk) return;
+    if (step < 2) {
+      setState(() {
+        step += 1;
+        tried = false;
+      });
     } else {
       _submit();
     }
   }
 
+  void _back() => setState(() {
+    step -= 1;
+    tried = false;
+  });
+
   Future<void> _submit() async {
-    if (date == null) {
-      _say('Pick when the truck leaves.');
-      return;
-    }
     setState(() => busy = true);
     final body = {
       'trip_date': date,
-      'vehicle_details': vehicle.text.trim().isEmpty ? null : vehicle.text.trim(),
+      'vehicle_details': vehicle.text.trim().isEmpty
+          ? null
+          : vehicle.text.trim(),
       'notes': notes.text.trim().isEmpty ? null : notes.text.trim(),
       'reports': [
         for (final stop in _stops)
           for (final r in stop.value)
-            {
-              'report_id': r,
-              'items': [
-                for (final i in (reports[r]!['items'] as List).cast<Map>())
-                  if (_qtyOf(r, i['item_id'] as int) > 0)
-                    {
-                      'item_id': i['item_id'],
-                      'quantity': _qtyOf(r, i['item_id'] as int),
-                    },
-              ],
-            },
+            {'report_id': r, 'items': linesFrom(_items(r), _ctrlFor(r))},
       ],
     };
     final res = await act(
@@ -648,47 +725,63 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
         ),
       );
     } else if (res.status == 409) {
-      // Stock changed meanwhile: reload the numbers, keep the choices.
-      setState(() => _candidates = api.get('/trips/candidates'));
+      // Stock changed meanwhile: reload the numbers, back to step 2.
+      setState(() {
+        step = 1;
+        _candidates = api.get('/trips/candidates');
+      });
     }
   }
 
-  // ---- Step 1 --------------------------------------------------------------
-  Widget _chooseReports(Map data) {
+  // ---- Step 1: which reports ------------------------------------------------
+  Widget _stepReports(Map data) {
     final t = Theme.of(context).textTheme;
-    final q = search.trim().toLowerCase();
+    final cs = Theme.of(context).colorScheme;
+    final q = search.trim().toLowerCase().replaceAll('#', '');
     bool match(Map r) =>
         q.isEmpty ||
         '${r['report_label']}'.toLowerCase().contains(q) ||
         '${r['barangay_name']}'.toLowerCase().contains(q);
     final groups = (data['barangays'] as List).cast<Map>();
     final empty = (data['no_stock_reports'] as List).cast<Map>();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
         Text(
-          'Tick every report going on this truck. Reports in the same '
-          'barangay are listed together, most urgent first.',
+          'Tick every report whose goods go on this truck. Reports in the '
+          'same barangay are listed together, most urgent first.',
           style: t.bodyMedium,
         ),
         Gaps.v8,
         TextField(
           decoration: const InputDecoration(
-            labelText: 'Search barangay or report',
+            labelText: 'Search barangay or report no.',
             prefixIcon: Icon(Icons.search),
           ),
           onChanged: (v) => setState(() => search = v),
         ),
+        if (tried && chosen.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Tick at least one report.',
+              style: TextStyle(color: cs.error),
+            ),
+          ),
         Gaps.v8,
         if (groups.isEmpty)
-          const EmptyState(
-            'No report has stock to send yet. Receive donations first.',
+          const EmptyView(
+            compact: true,
             icon: Icons.inventory_2_outlined,
+            title: 'Nothing to send yet',
+            message: 'No report has goods in stock. Receive donations first.',
           ),
         for (final g in groups)
           if ((g['reports'] as List).cast<Map>().any(match)) ...[
             Row(
               children: [
+                Icon(Icons.place_outlined, color: cs.primary),
+                Gaps.h8,
                 Expanded(
                   child: Text('${g['barangay_name']}', style: t.titleMedium),
                 ),
@@ -734,30 +827,22 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                 ),
             ],
           ),
-        Gaps.v8,
-        Text(
-          chosen.isEmpty
-              ? 'Nothing ticked yet.'
-              : '${chosen.length} ${chosen.length == 1 ? 'report' : 'reports'} '
-                    'in ${stopOrder.length} '
-                    '${stopOrder.length == 1 ? 'barangay' : 'barangays'} ticked.',
-          style: t.titleSmall,
-        ),
       ],
     );
   }
 
-  // ---- Step 2 --------------------------------------------------------------
-  Widget _whatToSend() {
+  // ---- Step 2: what to send -------------------------------------------------
+  Widget _stepQuantities() {
     final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     return Form(
       key: _sendForm,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
           Text(
-            'Enter how much of each item to load. Leave an item empty to '
-            'skip it.',
+            'Enter how much to load for each report. Every report needs at '
+            'least one item.',
             style: t.bodyMedium,
           ),
           for (final stop in _stops)
@@ -777,79 +862,52 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                             ),
                           ),
                           TextButton(
-                            onPressed: () => setState(() {
-                              for (final i in (reports[rid]!['items'] as List)
-                                  .cast<Map>()) {
-                                _ctrl(rid, i['item_id'] as int).text =
-                                    '${i['quantity']}';
-                              }
-                            }),
-                            child: const Text('Send everything'),
+                            onPressed: () => _toggle(rid, false),
+                            child: const Text('Remove'),
                           ),
                         ],
                       ),
-                      for (final i
-                          in (reports[rid]!['items'] as List).cast<Map>())
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: TextFormField(
-                            controller: _ctrl(rid, i['item_id'] as int),
-                            keyboardType: TextInputType.number,
-                            decoration: InputDecoration(
-                              labelText: '${i['item_name']}',
-                              helperText:
-                                  '${i['quantity']} ${i['unit'] ?? ''} left',
-                              suffixText: '${i['unit'] ?? ''}',
-                              suffixIcon: TextButton(
-                                onPressed: () => setState(
-                                  () => _ctrl(rid, i['item_id'] as int).text =
-                                      '${i['quantity']}',
-                                ),
-                                child: const Text('All'),
-                              ),
-                            ),
-                            validator: (v) {
-                              final text = v?.trim() ?? '';
-                              if (text.isEmpty) return null;
-                              final n = int.tryParse(text);
-                              if (n == null || n < 0) {
-                                return 'Enter a whole number';
-                              }
-                              if (n > (i['quantity'] as num)) {
-                                return 'Only ${i['quantity']} left';
-                              }
-                              return null;
-                            },
-                          ),
+                      StockQuantities(
+                        key: ValueKey('trip-items-$rid'),
+                        items: _items(rid),
+                        controllerFor: _ctrlFor(rid),
+                        onChanged: () => setState(() {}),
+                      ),
+                      if (tried && _total(rid) == 0)
+                        Text(
+                          'Enter at least one quantity, or tap Remove.',
+                          style: TextStyle(color: cs.error),
                         ),
                     ],
                   ),
                 ),
               ),
+          if (chosen.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 16),
+              child: Text('No reports left. Go Back and tick some.'),
+            ),
         ],
       ),
     );
   }
 
-  // ---- Step 3 --------------------------------------------------------------
-  Widget _whenAndTruck() {
+  // ---- Step 3: when and which truck -----------------------------------------
+  Widget _stepWhen() {
     final t = Theme.of(context).textTheme;
     final stops = _stops;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    final items = chosen.fold<int>(0, (a, r) => a + _total(r));
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
-        OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size.fromHeight(48),
-          ),
-          onPressed: () async {
-            final d = await pickDateTime(context);
+        DateField(
+          label: 'When does the truck leave?',
+          value: date,
+          error: tried && date == null ? 'Pick the date and time' : null,
+          onTap: () async {
+            final d = await pickDeliveryDateTime(context, current: date);
             if (d != null) setState(() => date = d);
           },
-          icon: const Icon(Icons.event),
-          label: Text(
-            date == null ? 'When does the truck leave?' : niceDate(date),
-          ),
         ),
         Gaps.v12,
         TextField(
@@ -857,31 +915,30 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
           decoration: const InputDecoration(
             labelText: 'Vehicle (optional)',
             hintText: 'e.g. City truck, plate ABC 1234',
+            prefixIcon: Icon(Icons.local_shipping_outlined),
           ),
         ),
-        Gaps.v8,
+        Gaps.v12,
         TextField(
           controller: notes,
           maxLines: 2,
-          decoration: const InputDecoration(labelText: 'Notes (optional)'),
+          decoration: const InputDecoration(
+            labelText: 'Notes for the driver (optional)',
+            prefixIcon: Icon(Icons.notes),
+          ),
         ),
-        Gaps.v16,
+        Gaps.v24,
         Text('Stops, in visiting order', style: t.titleSmall),
-        Text(
-          'Use the arrows to change the order.',
-          style: t.bodySmall,
-        ),
+        Text('Use the arrows to change the order.', style: t.bodySmall),
         for (var n = 0; n < stops.length; n++)
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: CircleAvatar(child: Text('${n + 1}')),
-            title: Text(
-              '${reports[stops[n].value.first]!['barangay_name']}',
-            ),
+            title: Text('${reports[stops[n].value.first]!['barangay_name']}'),
             subtitle: Text(
               '${stops[n].value.length} '
               '${stops[n].value.length == 1 ? 'report' : 'reports'} · '
-              '${stops[n].value.fold<int>(0, (a, r) => a + _reportTotal(r))} items',
+              '${stops[n].value.fold<int>(0, (a, r) => a + _total(r))} items',
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -909,14 +966,89 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
               ],
             ),
           ),
+        Gaps.v12,
+        AppCard(
+          child: Text(
+            'Summary: ${chosen.length} '
+            '${chosen.length == 1 ? 'report' : 'reports'}, '
+            '${stops.length} ${stops.length == 1 ? 'stop' : 'stops'}, '
+            '$items items'
+            '${date == null ? '' : ', leaving ${niceWhen(date)}'}.',
+            style: t.bodyMedium,
+          ),
+        ),
       ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    const titles = ['Choose reports', 'What to send', 'When and which truck'];
     return Scaffold(
-      appBar: AppBar(title: const Text('Plan a trip')),
+      appBar: AppBar(
+        title: Text('Plan a trip · Step ${step + 1} of 3'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(28),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Row(
+              children: [
+                for (var i = 0; i < 3; i++) ...[
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        LinearProgressIndicator(value: i <= step ? 1 : 0),
+                        Text(
+                          titles[i],
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: i == step
+                                ? FontWeight.w700
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (i < 2) Gaps.h8,
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              if (step > 0)
+                Expanded(
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(50),
+                    ),
+                    onPressed: busy ? null : _back,
+                    child: const Text('Back'),
+                  ),
+                ),
+              if (step > 0) Gaps.h12,
+              Expanded(
+                flex: 2,
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(50),
+                  ),
+                  onPressed: busy ? null : _next,
+                  child: Text(step == 2 ? 'Prepare trip' : 'Next'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
       body: FutureBuilder<ApiResult>(
         future: _candidates,
         builder: (context, snap) {
@@ -926,9 +1058,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
             return ErrorView.forStatus(
               r.status,
               r.errorText,
-              onRetry: () => setState(
-                () => _candidates = api.get('/trips/candidates'),
-              ),
+              onRetry: () =>
+                  setState(() => _candidates = api.get('/trips/candidates')),
             );
           }
           final data = r.json as Map;
@@ -942,54 +1073,11 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
           // A report that ran out of stock meanwhile drops out of the plan.
           chosen.removeWhere((id) => !reports.containsKey(id));
           stopOrder.removeWhere((b) => !chosen.any((id) => _brgy(id) == b));
-          return Stepper(
-            currentStep: step,
-            onStepTapped: (i) {
-              if (i < step) setState(() => step = i);
-            },
-            onStepContinue: busy ? null : _next,
-            onStepCancel: step == 0 ? null : () => setState(() => step -= 1),
-            controlsBuilder: (context, details) => Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Row(
-                children: [
-                  FilledButton(
-                    onPressed: details.onStepContinue,
-                    child: Text(step == 2 ? 'Prepare trip' : 'Next'),
-                  ),
-                  Gaps.h8,
-                  if (step > 0)
-                    TextButton(
-                      onPressed: details.onStepCancel,
-                      child: const Text('Back'),
-                    ),
-                ],
-              ),
-            ),
-            steps: [
-              Step(
-                title: const Text('Choose reports'),
-                subtitle: chosen.isEmpty
-                    ? null
-                    : Text('${chosen.length} chosen'),
-                isActive: step >= 0,
-                state: step > 0 ? StepState.complete : StepState.indexed,
-                content: _chooseReports(data),
-              ),
-              Step(
-                title: const Text('What to send'),
-                isActive: step >= 1,
-                state: step > 1 ? StepState.complete : StepState.indexed,
-                content: step >= 1 ? _whatToSend() : const SizedBox.shrink(),
-              ),
-              Step(
-                title: const Text('When and which truck'),
-                subtitle: date == null ? null : Text(niceDay(DateTime.parse(date!))),
-                isActive: step >= 2,
-                content: step >= 2 ? _whenAndTruck() : const SizedBox.shrink(),
-              ),
-            ],
-          );
+          return switch (step) {
+            0 => _stepReports(data),
+            1 => _stepQuantities(),
+            _ => _stepWhen(),
+          };
         },
       ),
     );
