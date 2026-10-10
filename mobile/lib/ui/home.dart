@@ -9,6 +9,7 @@ import 'donor_screens.dart';
 import 'notifications_screen.dart';
 import 'ops_screens.dart';
 import 'pickup_board.dart';
+import 'pickup_map.dart';
 import 'profile_screen.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
@@ -64,6 +65,11 @@ List<_Tab> _tabsFor(String? role) {
       return const [
         _Tab('Overview', Icons.dashboard_outlined, DashboardScreen()), // 9.3
         _Tab('New report', Icons.edit_note, NewReportScreen()), // 2.1
+        _Tab(
+          'Pickup map',
+          Icons.map_outlined,
+          PickupMapScreen(),
+        ), // Door to Door pickups on a map + DRRMO support (Oct 10 notes)
         _Tab(
           'SMS template',
           Icons.sms_outlined,

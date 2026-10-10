@@ -25,6 +25,10 @@ from models.report import DisasterReport, DisasterType, Barangay
 
 router = APIRouter(prefix="/donations", tags=["CSWS Receiving"])
 
+# Daniel (Oct 10): tell the donor what happens next, in order.
+RECEIVED_BODY = ("CSWS received your donation and is checking it. "
+                 "Next, the CMO acknowledges it.")
+
 
 @router.get("/pending")
 def list_pending_donations(
@@ -179,8 +183,8 @@ def receive_donation(
                 f"Donation #{donation.donation_id} was received by CSWS and needs a decision.")
     if donation.user_id:
         notify(db, donation.user_id, "donation_received",
-               title=f"Donation #{donation.donation_id} received",
-               body="Your donation arrived and is being checked.",
+               title=f"Donation entry {donation.batch_reference or donation.qr_reference} received",
+               body=RECEIVED_BODY,
                entity_type="donation", entity_id=donation.donation_id)
     db.commit()
     db.refresh(receipt)
@@ -231,8 +235,8 @@ def receive_entry(
                 f"Donation {ref} ({len(ids)} item(s)) was received by CSWS and needs a decision.")
     if first.user_id:
         notify(db, first.user_id, "donation_received",
-               title=f"Donation {ref} received",
-               body="Your donation arrived and is being checked.",
+               title=f"Donation entry {ref} received",
+               body=RECEIVED_BODY,
                entity_type="donation", entity_id=ids[0])
     db.commit()
     still_pending = sum(1 for d in rows.values() if d.status == "Pending")

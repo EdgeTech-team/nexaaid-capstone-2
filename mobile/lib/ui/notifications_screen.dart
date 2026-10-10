@@ -9,6 +9,7 @@ import 'admin_screens.dart';
 import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
 import 'ops_screens.dart';
+import 'pickup_map.dart';
 import 'widgets.dart';
 
 /// Where each notification type opens. Every module owner adds their own entry
@@ -72,7 +73,8 @@ final Map<String, EntityOpener> notificationDestinations = {
   },
 
   // logistics_requested goes to DRRMO; logistics_scheduled and
-  // logistics_declined go back to the CSWS Main Office user who asked.
+  // logistics_declined go back to the CSWS user who asked: Main Office for a
+  // delivery, the Disaster Unit for a Door to Door pickup run.
   'logistics_request': (c, id) {
     final Widget? screen;
     switch (api.role) {
@@ -81,6 +83,9 @@ final Map<String, EntityOpener> notificationDestinations = {
         break;
       case Roles.cswsMain:
         screen = _withAppBar('Deliveries', const DeliveriesScreen());
+        break;
+      case Roles.cswsUnit:
+        screen = const PickupMapScreen(standalone: true);
         break;
       default:
         screen = null;

@@ -243,7 +243,12 @@ class _BatchSheetState extends State<BatchSheet> {
                       _row('Handover', b['handover_method']),
                       if (doorToDoor || b['pickup_address'] != null)
                         _row('Pickup at', b['pickup_address']),
-                      if (doorToDoor ||
+                      if (b['pickup_days_label'] != null)
+                        _row(
+                          'Pickup days',
+                          '${b['pickup_days_label']} · ${b['pickup_hours'] ?? ''}',
+                        )
+                      else if (doorToDoor ||
                           formatPickupIso(b['preferred_pickup_at']) != null)
                         _row(
                           'Pickup time',

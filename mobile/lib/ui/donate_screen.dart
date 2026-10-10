@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
 import 'location_picker.dart';
+import 'pickup_days.dart';
+import 'qr_save.dart';
 import 'widgets.dart';
 
 // Fallback drop-off details, shown only when GET /donations/drop-off-info
@@ -90,13 +92,13 @@ class _DonateScreenState extends State<DonateScreen> {
   // Door to Door pickup details:
   //   landmark  -> box with map suggestions (also gives the pin for CSWS)
   //   address   -> typed by the donor, no suggestions
-  //   date/time -> preferredPickup
+  //   days      -> pickupDays: the days the donor is home (M / T / W ...)
   //   notes     -> free text for the pickup team
   final pickupLandmark = TextEditingController();
   final pickupAddress = TextEditingController();
   final pickupNotes = TextEditingController();
   PickedAddress? picked; // set when the donor taps a landmark suggestion
-  DateTime? preferredPickup; // Door to Door preferred date & time
+  Set<int> pickupDays = {}; // Door to Door: days the donor is home
   PickupRules pickupRules = const PickupRules();
   final guestName = TextEditingController();
   final guestPhone = TextEditingController();
@@ -157,14 +159,14 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  Future<void> _choosePickupTime(FormFieldState<DateTime> field) async {
-    final chosen = await pickPreferredPickup(
+  Future<void> _choosePickupDays(FormFieldState<Set<int>> field) async {
+    final chosen = await pickPickupDays(
       context,
       pickupRules,
-      current: preferredPickup,
+      current: pickupDays,
     );
     if (chosen == null || !mounted) return;
-    setState(() => preferredPickup = chosen);
+    setState(() => pickupDays = chosen);
     field.didChange(chosen);
   }
 
@@ -206,7 +208,7 @@ class _DonateScreenState extends State<DonateScreen> {
           'pickup_lat': landmark.lat,
           'pickup_lng': landmark.lng,
         },
-        'preferred_pickup_at': preferredPickup!.toUtc().toIso8601String(),
+        'pickup_days': (pickupDays.toList()..sort()),
         if (pickupNotes.text.trim().isNotEmpty)
           'pickup_notes': pickupNotes.text.trim(),
       },
@@ -435,8 +437,8 @@ class _DonateScreenState extends State<DonateScreen> {
   }
 
   /// UC-D2 alt 7c: Door to Door pickup details.
-  /// Order: Landmark (with suggestions), Address (typed), preferred date and
-  /// time, notes for the pickup team.
+  /// Order: Landmark (with suggestions), Address (typed), the days the donor
+  /// is home (pop-out with day buttons), notes for the pickup team.
   Widget _doorToDoorCard() {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
@@ -447,7 +449,7 @@ class _DonateScreenState extends State<DonateScreen> {
           Text('Pickup details', style: t.titleMedium),
           Gaps.v4,
           Text(
-            'CSWS will come to this address. They pick up ${pickupRules.label}.',
+            'CSWS will come to this address on one of the days you are home.',
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           Gaps.v12,
@@ -508,30 +510,53 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v16,
           ],
-          // 3. Preferred pickup date and time.
-          FormField<DateTime>(
+          // 3. Pickup days: a pop-out with M / T / W / Th / F buttons.
+          FormField<Set<int>>(
             validator: (_) =>
-                handover == 'Door to Door' && preferredPickup == null
-                ? 'Choose a preferred pickup date and time'
+                handover == 'Door to Door' && pickupDays.isEmpty
+                ? 'Choose at least one day you are home'
                 : null,
             builder: (field) => InkWell(
               borderRadius: BorderRadius.circular(Radii.md),
-              onTap: () => _choosePickupTime(field),
+              onTap: () => _choosePickupDays(field),
               child: InputDecorator(
                 decoration: InputDecoration(
-                  labelText: 'Preferred pickup date & time',
-                  prefixIcon: const Icon(Icons.event_outlined),
+                  labelText: 'Available pickup days',
+                  prefixIcon: const Icon(Icons.event_available_outlined),
                   suffixIcon: const Icon(Icons.edit_calendar_outlined),
                   errorText: field.errorText,
+                  helperText: 'Pickup hours are ${pickupHoursLabel(pickupRules)}',
                 ),
-                child: Text(
-                  preferredPickup == null
-                      ? 'Tap to choose'
-                      : formatPickupTime(preferredPickup!),
-                  style: preferredPickup == null
-                      ? t.bodyLarge?.copyWith(color: cs.onSurfaceVariant)
-                      : t.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
-                ),
+                child: pickupDays.isEmpty
+                    ? Text(
+                        'Tap to choose the days you are home',
+                        style: t.bodyLarge?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      )
+                    : Wrap(
+                        spacing: Space.xxs,
+                        runSpacing: Space.xxs,
+                        children: [
+                          for (final d in (pickupDays.toList()..sort()))
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: Space.xs + 2,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: cs.primary,
+                                borderRadius: BorderRadius.circular(Radii.pill),
+                              ),
+                              child: Text(
+                                pickupDayShort[d - 1],
+                                style: t.labelLarge?.copyWith(
+                                  color: cs.onPrimary,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
               ),
             ),
           ),
@@ -898,6 +923,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
     final dropOff = batch['handover_method'] == 'Drop Off';
     final qr = batch['qr_image_base64'] as String?;
     final pickupTime = formatPickupIso(batch['preferred_pickup_at']);
+    final pickupDays = pickupDaysOf(batch['pickup_days']);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Donation recorded')),
@@ -960,6 +986,13 @@ class _DonationReceiptState extends State<DonationReceipt> {
                     '${batch['batch_reference']}',
                     textAlign: TextAlign.center,
                     style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
+                  ),
+                  Gaps.v8,
+                  SaveQrButton(
+                    qrBase64: qr,
+                    reference: '${batch['batch_reference']}',
+                    handover: '${batch['handover_method']}',
+                    forReport: widget.reportTitle,
                   ),
                   Gaps.v8,
                   Wrap(
@@ -1030,7 +1063,20 @@ class _DonationReceiptState extends State<DonationReceipt> {
                       title: const Text('Address'),
                       subtitle: Text('${batch['pickup_address']}'),
                     ),
-                    if (pickupTime != null) ...[
+                    if (pickupDays.isNotEmpty) ...[
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: Icon(
+                          Icons.event_available_outlined,
+                          color: cs.primary,
+                        ),
+                        title: const Text('Available pickup days'),
+                        subtitle: Text(
+                          '${pickupDaysLabel(pickupDays)} · pickup hours '
+                          '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                        ),
+                      ),
+                    ] else if (pickupTime != null) ...[
                       const Divider(height: 1),
                       ListTile(
                         leading: Icon(Icons.event_outlined, color: cs.primary),

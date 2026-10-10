@@ -6,6 +6,7 @@ import '../api.dart' show ApiResult;
 import 'donation_entries_view.dart';
 import 'expiry_widgets.dart';
 import 'donor_screens.dart' show DonateScreen, ReportsFeed;
+import 'qr_save.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -566,19 +567,30 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                     style: muted,
                   );
                 }
-                return Center(
-                  child: Semantics(
-                    label: 'QR code for ${e['batch_reference']}',
-                    child: Container(
-                      padding: const EdgeInsets.all(Space.sm),
-                      color: Colors.white, // QR needs a white background
-                      child: Image.memory(
-                        base64Decode(b64),
-                        width: 220,
-                        height: 220,
+                return Column(
+                  children: [
+                    Center(
+                      child: Semantics(
+                        label: 'QR code for ${e['batch_reference']}',
+                        child: Container(
+                          padding: const EdgeInsets.all(Space.sm),
+                          color: Colors.white, // QR needs a white background
+                          child: Image.memory(
+                            base64Decode(b64),
+                            width: 220,
+                            height: 220,
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                    Gaps.v8,
+                    SaveQrButton(
+                      qrBase64: b64,
+                      reference: '${e['batch_reference']}',
+                      handover: '${e['handover_method'] ?? ''}',
+                      forReport: report?['label'] as String?,
+                    ),
+                  ],
                 );
               },
             ),
@@ -592,7 +604,12 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                 row('Pickup address', e['pickup_address']),
                 row('Landmark', e['pickup_landmark']),
                 row('Notes for pickup', e['pickup_notes']),
-                if (e['preferred_pickup_at'] != null)
+                if (e['pickup_days_label'] != null)
+                  row(
+                    'Pickup days',
+                    '${e['pickup_days_label']} · ${e['pickup_hours'] ?? ''}',
+                  )
+                else if (e['preferred_pickup_at'] != null)
                   row('Preferred pickup', niceDate(e['preferred_pickup_at'])),
                 row('Pledged on', niceDate(e['created_at'])),
                 row('For report', report?['label']),
