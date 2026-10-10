@@ -66,11 +66,10 @@ void main() {
     await _pump(tester, const RegisterScreen(org: false));
     expect(_registerButton(tester).onPressed, isNull);
 
-    // Two required uploads, ID type dropdown and consent are on the form.
+    // Two required uploads and consent are on the form.
     expect(find.byType(UploadField), findsNWidgets(2));
     expect(find.text('Valid ID (front)'), findsOneWidget);
     expect(find.text('Valid ID (back)'), findsOneWidget);
-    expect(find.text('ID type'), findsOneWidget);
     expect(find.byKey(const ValueKey('consent')), findsOneWidget);
 
     // Name is capitalized while typing; the phone stops at 11 digits.
@@ -95,7 +94,6 @@ void main() {
   ) async {
     await _pump(tester, const RegisterScreen(org: false));
     expect(find.byTooltip('Show password'), findsNWidgets(2));
-    expect(find.text('One special character'), findsOneWidget);
   });
 
   testWidgets('Organization form: document upload and type dropdown', (

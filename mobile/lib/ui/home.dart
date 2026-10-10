@@ -133,11 +133,9 @@ List<_Tab> _tabsFor(String? role) {
     case Roles.org:
       return const [
         _Tab('Dashboard', Icons.dashboard_outlined, DonorDashboard()), // 9.4
-        _Tab(
-          'Donate',
-          Icons.volunteer_activism_outlined,
-          ReportsFeed(),
-        ), // 2.4, 3.3, Module 4
+               // Ivan's note #2: every report, Active and Done (2.4, 2.5, 3.3).
+        // Donating still starts from a report's Donate button (Module 4).  
+        _Tab('Reports', Icons.article_outlined, DonorReportsTab()),
       ];
     default: // guest: public homepage (1.4)
       return const [

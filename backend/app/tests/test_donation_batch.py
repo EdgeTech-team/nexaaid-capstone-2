@@ -154,7 +154,7 @@ def test_pickup_board_lists_waiting_door_to_door_donations(api):
                      "preferred_pickup_at": _pickup_slot(hour=15).isoformat(),
                      "items": [LINE]}), 201)
     sooner = ok(post({**door, "pickup_address": "Sooner St, Mandaue City",
-                      "pickup_landmark": "Blue gate, call when outside",
+                      "pickup_notes": "Blue gate, call when outside",
                       "preferred_pickup_at": _pickup_slot(hour=9).isoformat(),
                       "items": [LINE, {"item_id": 1, "packaging": "Pack", "quantity": 5}],
                       "guest_donor": {"full_name": "Ana Guest", "contact_number": "09181234567"}},

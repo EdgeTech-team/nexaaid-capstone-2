@@ -19,7 +19,8 @@ from models.notification import Notification
 # event -> (title, message template). Missing {placeholders} render as "".
 EVENTS: dict[str, tuple[str, str]] = {
     # Organizations
-    "org_registered": ("New organization registration", "{name} is waiting for approval."),
+    "org_registered": ("New organization registered", "{name} registered and was approved automatically."),
+    "donor_registered": ("New donor registered", "{name} registered as an individual donor."),
     "org_approved": ("Organization approved", "Your organization account is now active."),
     "org_rejected": ("Organization registration rejected", "{reason}"),
     # Reports
@@ -31,7 +32,7 @@ EVENTS: dict[str, tuple[str, str]] = {
     "donation_submitted": ("New donation submitted", "Donation batch #{batch_no} is awaiting receipt."),
     "donation_submitted_confirm": ("Donation submitted", "Thank you! Your donation #{batch_no} was recorded."),
     "donation_received": ("Donation received", "Donation #{batch_no} was received at the CSWS office."),
-    "donation_confirmed": ("Donation confirmed", "Donation #{batch_no} was confirmed by the CMO."),
+        "donation_confirmed": ("Donation acknowledged", "Donation #{batch_no} was acknowledged by the CMO."),
     "donation_held": ("Donation on hold", "Donation #{batch_no} is on hold. {reason}"),
     # Donation expiry / cancellation (services/donation_expiry.py)
     "donation_expiring_soon": ("Donation due soon", "Please hand over donation {batch_no} by {date}, or it will expire."),

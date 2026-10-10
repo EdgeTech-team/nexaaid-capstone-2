@@ -14,7 +14,7 @@ from core.storage import get_storage
 from models.audit_log_model import AuditLog
 from models.upload_model import Upload
 from models.user_rbac_model import User
-from tests.reg_helpers import STRONG_PASSWORD, png, temp_password, upload
+from tests.reg_helpers import STRONG_PASSWORD, png, upload
 from tests.test_role_flows import PASSWORD, api, ok  # noqa: F401  (fixture)
 
 
@@ -38,6 +38,16 @@ def _id(client, t, email):
                 if u["email"] == email)["user_id"]
 
 
+def _set_password(email, password=STRONG_PASSWORD):
+    db = database.SessionLocal()
+    try:
+        u = db.query(User).filter(User.email == email).one()
+        u.password_hash = hash_password(password)
+        db.commit()
+    finally:
+        db.close()
+
+
 def _login(client, email, password):
     r = client.post("/token", data={"username": email, "password": password})
     return r, ({"Authorization": f"Bearer {r.json()['access_token']}"} if r.status_code == 200 else None)
@@ -45,7 +55,7 @@ def _login(client, email, password):
 
 # ------------------------------------------------------------------- create
 
-def test_create_requires_employee_id_and_card_and_hands_card_over(api, sent_emails):
+def test_create_requires_employee_id_and_card_and_hands_card_over(api):
     client, t = api
     created = ok(_new_staff(client, t), 201)
     assert created["employee_id"] == "CSWS-0042"               # stored upper case
@@ -63,7 +73,8 @@ def test_create_requires_employee_id_and_card_and_hands_card_over(api, sent_emai
         db.close()
 
     # The staff member and Administrators can view the card; nobody else.
-    _, staff = _login(client, "pedro@csws.gov.ph", temp_password(sent_emails, "pedro@csws.gov.ph"))
+    _set_password("pedro@csws.gov.ph")
+    _, staff = _login(client, "pedro@csws.gov.ph", STRONG_PASSWORD)
     assert client.get(card_url, headers=staff).status_code == 200
     assert client.get(card_url, headers=t["admin"]).status_code == 200
     assert client.get(card_url, headers=t["csws"]).status_code == 404
@@ -112,7 +123,7 @@ def test_create_validation(api):
 
 # --------------------------------------------------------------------- edit
 
-def test_admin_edits_every_field_and_logs_old_and_new(api, sent_emails):
+def test_admin_edits_every_field_and_logs_old_and_new(api):
     client, t = api
     uid = ok(_new_staff(client, t), 201)["user_id"]
     row = ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={
@@ -132,7 +143,8 @@ def test_admin_edits_every_field_and_logs_old_and_new(api, sent_emails):
     assert upd["old_value"]["email"] == "pedro@csws.gov.ph"
 
     # The token holds the email, so the staff member logs in with the new one.
-    r, _ = _login(client, "juan@csws.gov.ph", temp_password(sent_emails, "pedro@csws.gov.ph"))
+    _set_password("juan@csws.gov.ph")
+    r, _ = _login(client, "juan@csws.gov.ph", STRONG_PASSWORD)
     assert r.status_code == 200
 
     # Changing the role away from barangay rep clears the barangay.
@@ -150,7 +162,7 @@ def test_edit_rules_and_errors(api):
     patch = lambda uid, body, who="admin": client.patch(f"/admin/users/{uid}", headers=t[who], json=body)
 
     assert patch(99999, {"first_name": "Xavier"}).status_code == 404                  # alt 3a
-    r = patch(me, {"is_active": False})
+    r = patch(me, {"is_active": False, "deactivation_reason": "Test reason"})
     assert r.status_code == 400 and "your own account" in r.text
     r = patch(me, {"role_name": "CSWS Main Office"})
     assert r.status_code == 400 and "your own role" in r.text
@@ -165,7 +177,7 @@ def test_edit_rules_and_errors(api):
         db.close()
     admin2 = _id(client, t, "admin2@test.ph")
     assert patch(admin2, {"role_name": "CSWS Main Office"}).status_code == 422
-    ok(patch(admin2, {"is_active": False}))           # another admin, one still active
+    ok(patch(admin2, {"is_active": False, "deactivation_reason": "Test reason"}))           # another admin, one still active
 
     # Donors and organizations: no role, employee ID or barangay.
     assert patch(donor, {"role_name": "CSWS Main Office"}).status_code == 422
@@ -193,7 +205,7 @@ def test_edit_rules_and_errors(api):
     csws = _id(client, t, "csws.test@example.com")
     r = patch(csws, {"first_name": "Carla"})
     assert r.status_code == 422 and "Employee ID is required" in r.text
-    ok(patch(csws, {"is_active": False}))
+    ok(patch(csws, {"is_active": False, "deactivation_reason": "Test reason"}))
     ok(patch(csws, {"is_active": True}))
     ok(patch(csws, {"first_name": "Carla", "employee_id": "CSWS-0001"}))
 
@@ -217,7 +229,7 @@ def test_old_account_with_empty_last_name(api):
     r = client.patch(f"/admin/users/{uid}", headers=t["admin"],
                      json={"first_name": "Maria Santos", "last_name": ""})
     assert r.status_code == 422 and "Last name must be 2-50 characters" in r.text
-    ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={"is_active": False}))
+    ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={"is_active": False, "deactivation_reason": "Test reason"}))
     row = ok(client.patch(f"/admin/users/{uid}", headers=t["admin"],
                           json={"first_name": "Maria", "last_name": "Santos", "is_active": True}))
     assert row["name"] == "Maria Santos"

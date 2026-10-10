@@ -16,14 +16,14 @@ Existing Pending rows get a deadline at least 7 days after this migration
 runs, so nobody's donation expires the moment this is deployed.
 
 Revision ID: 5e1b8c3d9f20
-Revises: 8925e0d5db3a (org review and addresses; after password reset + deactivation reason)
+Revises: 4c9e1a7b2d30 (team fixes Oct 5)
 """
 from alembic import op
 import sqlalchemy as sa
 
 
 revision = "5e1b8c3d9f20"
-down_revision = "8925e0d5db3a"
+down_revision = "4c9e1a7b2d30"
 branch_labels = None
 depends_on = None
 
