@@ -60,13 +60,13 @@ final Map<String, EntityOpener> notificationDestinations = {
       debugPrint('Open report failed: $e');
     }
   },
-  // DonorDashboard is a tab body (no Scaffold), so wrap it to get an app bar
-  // and a back button. It lists all of the donor's own donations.
+  // MyDonationsScreen is a tab body (no Scaffold), so wrap it to get an app
+  // bar and a back button. It lists all of the donor's own donations.
   'donation': (c, id) => Navigator.of(c).push(
     MaterialPageRoute(
       builder: (_) => Scaffold(
         appBar: AppBar(title: const Text('My donations')),
-        body: const DonorDashboard(),
+        body: const MyDonationsScreen(),
       ),
     ),
   ),

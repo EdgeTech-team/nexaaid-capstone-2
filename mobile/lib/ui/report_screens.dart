@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
+import 'report_filters.dart';
 import 'widgets.dart';
 
 /// Card for one disaster report (with fulfillment if available).
@@ -530,6 +531,8 @@ class ValidatedReportsScreen extends StatefulWidget {
 
 class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
   String priority = '';
+  String? fulfillment;
+  ReportSort sort = ReportSort.urgent;
 
   @override
   Widget build(BuildContext context) {
@@ -543,8 +546,14 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
         api.lookupsResult,
       ],
       builder: (context, data) {
-        final rows = (data[0] as List).cast<Map<String, dynamic>>();
+        final all = (data[0] as List).cast<Map<String, dynamic>>();
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
+        final hasProgress = all.any((r) => fulfillmentState(r) != null);
+        final rows = sortAndFilterReports(
+          all,
+          fulfillment: fulfillment,
+          sort: sort,
+        );
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -558,6 +567,19 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
               PriorityChips(
                 value: priority,
                 onChanged: (p) => setState(() => priority = p),
+              ),
+              const SizedBox(height: 8),
+              if (hasProgress) ...[
+                FulfillmentChips(
+                  rows: all,
+                  value: fulfillment,
+                  onChanged: (v) => setState(() => fulfillment = v),
+                ),
+                const SizedBox(height: 12),
+              ],
+              ReportSortField(
+                value: sort,
+                onChanged: (v) => setState(() => sort = v),
               ),
               const SizedBox(height: 12),
             ],
@@ -628,6 +650,8 @@ class MonitoringScreen extends StatefulWidget {
 
 class _MonitoringScreenState extends State<MonitoringScreen> {
   String priority = '';
+  String? fulfillment;
+  ReportSort sort = ReportSort.urgent;
 
   @override
   Widget build(BuildContext context) {
@@ -641,19 +665,36 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
         api.lookupsResult,
       ],
       builder: (context, data) {
-        final rows = (data[0] as List).cast<Map<String, dynamic>>();
+        final all = (data[0] as List).cast<Map<String, dynamic>>();
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
+        final rows = sortAndFilterReports(
+          all,
+          fulfillment: fulfillment,
+          sort: sort,
+        );
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
             PageHeader(
-              'Active Reports',
+              'Report Status',
               subtitle:
-                  'Needs monitoring with fulfillment progress • ${roleLine()}',
+                  'Fulfillment progress of every report, active and done • '
+                  '${roleLine()}',
             ),
             PriorityChips(
               value: priority,
               onChanged: (p) => setState(() => priority = p),
+            ),
+            const SizedBox(height: 8),
+            FulfillmentChips(
+              rows: all,
+              value: fulfillment,
+              onChanged: (v) => setState(() => fulfillment = v),
+            ),
+            const SizedBox(height: 12),
+            ReportSortField(
+              value: sort,
+              onChanged: (v) => setState(() => sort = v),
             ),
             const SizedBox(height: 12),
             if (rows.isEmpty) const EmptyState('No reports to show.'),

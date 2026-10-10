@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../design/design.dart';
 import '../donor_screens.dart' show DonateScreen;
 import '../login_screen.dart';
+import '../theme_toggle.dart';
 import '../register_screen.dart';
 import '../widgets.dart' show api, formDialog, DialogField, Names;
 import 'landing_extras.dart';
@@ -51,51 +52,9 @@ class _LandingScreenState extends State<LandingScreen> {
     _reload();
   }
 
-  void _logIn() =>
-      Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => const LoginScreen()));
+  void _logIn() => showLoginPopup(context);
 
-  void _createAccount() {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Create an account',
-                style: Theme.of(ctx).textTheme.titleLarge,
-              ),
-              Gaps.v8,
-              ListTile(
-                leading: const Icon(Icons.person_outline),
-                title: const Text('Individual donor'),
-                subtitle: const Text('Track your donations to each report.'),
-                onTap: () => _register(ctx, org: false),
-              ),
-              ListTile(
-                leading: const Icon(Icons.groups_outlined),
-                title: const Text('Relief organization'),
-                subtitle: const Text(
-                  'The administrator reviews your organization first.',
-                ),
-                onTap: () => _register(ctx, org: true),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _register(BuildContext sheet, {required bool org}) {
-    Navigator.of(sheet).pop();
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => RegisterScreen(org: org)));
-  }
+  void _createAccount() => showJoinPopup(context);
 
   Future<void> _donate(Map<String, dynamic> report) async {
     final lookups = await api.lookups();
@@ -492,8 +451,11 @@ class _Hero extends StatelessWidget {
                     tooltip: 'Server address',
                     onPressed: onServer,
                     color: AppColors.harborMist,
-                    icon: const Icon(Icons.settings_outlined),
+                    icon: const Icon(Icons.dns_outlined),
                   ),
+                  // Light / dark mode: rightmost (signed in, it is in
+                  // Profile > Appearance instead).
+                  const ThemeToggleButton(color: Colors.white),
                 ],
               ),
               Gaps.v24,
@@ -511,36 +473,46 @@ class _Hero extends StatelessWidget {
                 style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
               ),
               Gaps.v24,
-              AppButton(
-                'Donate as guest',
-                icon: Icons.volunteer_activism_outlined,
-                variant: AppButtonVariant.donate,
-                large: true,
-                expand: true,
-                onPressed: onDonateAsGuest,
-              ),
-              Gaps.v12,
+              // Sign in and Join come first and stand out; guest giving is
+              // a smaller option underneath.
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton(
+                    child: FilledButton.icon(
                       onPressed: onLogIn,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: onHero,
-                        side: const BorderSide(color: AppColors.harborMist),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Colors.white,
+                        foregroundColor: AppColors.harborDeep,
+                        minimumSize: const Size.fromHeight(52),
                       ),
-                      child: const Text('Log in'),
+                      icon: const Icon(Icons.login, size: 20),
+                      label: const Text('Sign in'),
                     ),
                   ),
                   Gaps.h12,
                   Expanded(
-                    child: TextButton(
+                    child: AppButton(
+                      'Join NexaAid',
+                      icon: Icons.person_add_alt_1_outlined,
+                      variant: AppButtonVariant.donate,
+                      large: true,
+                      expand: true,
                       onPressed: onCreateAccount,
-                      style: TextButton.styleFrom(foregroundColor: onHero),
-                      child: const Text('Create account'),
                     ),
                   ),
                 ],
+              ),
+              Gaps.v8,
+              Center(
+                child: TextButton.icon(
+                  onPressed: onDonateAsGuest,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.harborMist,
+                    textStyle: t.bodyMedium,
+                  ),
+                  icon: const Icon(Icons.favorite_border, size: 18),
+                  label: const Text('or donate as a guest'),
+                ),
               ),
               if (urgent != null) ...[Gaps.v24, urgent!],
               Gaps.v24,

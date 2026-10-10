@@ -9,8 +9,8 @@ class FloatingNavItem {
   const FloatingNavItem(this.icon, this.label);
 }
 
-/// Floating dark pill navigation that spans the screen width, with the
-/// icons spread evenly. The selected tab sits in a white circle. Every
+/// Floating dark pill navigation, centered and sized to its buttons (it
+/// no longer stretches across wide phones), with the icons spaced evenly. The selected tab sits in a white circle. Every
 /// button has a tooltip (long-press) and a screen-reader label.
 class FloatingNavBar extends StatelessWidget {
   final List<FloatingNavItem> items;
@@ -24,8 +24,9 @@ class FloatingNavBar extends StatelessWidget {
     required this.onSelected,
   });
 
-  static const double _height = 68;
-  static const double _circle = 52;
+  static const double _height = 60;
+  static const double _circle = 46;
+  static const double _slot = 72; // width per button
 
   @override
   Widget build(BuildContext context) {
@@ -33,9 +34,13 @@ class FloatingNavBar extends StatelessWidget {
     return SafeArea(
       top: false,
       minimum: const EdgeInsets.only(bottom: Space.sm),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Space.md),
+      child: Center(
+        heightFactor: 1,
         child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: Space.md),
+          constraints: BoxConstraints(
+            maxWidth: items.length * _slot + Space.xs * 2,
+          ),
           height: _height,
           padding: const EdgeInsets.symmetric(horizontal: Space.xs),
           decoration: BoxDecoration(
@@ -111,7 +116,7 @@ class _NavButton extends StatelessWidget {
                 ),
                 child: Icon(
                   item.icon,
-                  size: 24,
+                  size: 22,
                   color: selected
                       ? AppColors.ink
                       : Colors.white.withValues(alpha: 0.85),

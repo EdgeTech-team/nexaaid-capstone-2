@@ -11,6 +11,7 @@ import 'ops_screens.dart';
 import 'pickup_board.dart';
 import 'profile_screen.dart';
 import 'records_screens.dart';
+import 'shell_tabs.dart';
 import 'report_screens.dart';
 import 'widgets.dart';
 import 'change_password_screen.dart';
@@ -125,17 +126,22 @@ List<_Tab> _tabsFor(String? role) {
       ];
     case Roles.donor:
     case Roles.org:
+      // 7.3 / UC-D4 / UC-R4. Home looks like the landing page, signed in.
+      // Donations (middle): the donor's own entries (UC-D3 / UC-R3).
+      // Reports: every validated report, active and fulfilled, with
+      // priority and fulfillment filters (2.4, 3.3, Module 4).
       return const [
-        _Tab('Dashboard', Icons.dashboard_outlined, DonorDashboard()), // 9.4
+        _Tab('Home', Icons.home_outlined, DonorDashboard()),
         _Tab(
-          'Donate',
+          'Donations',
           Icons.volunteer_activism_outlined,
-          ReportsFeed(),
-        ), // 2.4, 3.3, Module 4
+          MyDonationsScreen(),
+        ),
+        _Tab('Reports', Icons.article_outlined, ReportsFeed()),
       ];
     default: // guest: public homepage (1.4)
       return const [
-        _Tab('Donate', Icons.volunteer_activism_outlined, ReportsFeed()),
+        _Tab('Reports', Icons.volunteer_activism_outlined, ReportsFeed()),
       ];
   }
 }
@@ -157,9 +163,24 @@ class RoleHome extends StatefulWidget {
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
 
-    @override
+  /// ShellTabs.open('Reports') from inside a tab.
+  void _onTabRequest() {
+    final label = ShellTabs.request.value;
+    if (label == null) return;
+    final i = _tabsFor(api.role).indexWhere((t) => t.label == label);
+    if (i >= 0 && mounted) setState(() => index = i);
+  }
+
+  @override
+  void dispose() {
+    ShellTabs.request.removeListener(_onTabRequest);
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
+    ShellTabs.request.addListener(_onTabRequest);
     // I1: a temporary password must be changed first.
     if (api.mustChangePassword) {
       index = _tabsFor(api.role).length; // Profile is the last tab

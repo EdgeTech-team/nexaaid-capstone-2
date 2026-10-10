@@ -14,29 +14,46 @@ void main() {
   testWidgets('App starts on the landing page', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
     expect(find.text('NexaAid'), findsOneWidget);
-    expect(find.text('Log in'), findsOneWidget);
-    expect(find.text('Create account'), findsOneWidget);
-    expect(find.text('Donate as guest'), findsOneWidget);
+    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Join NexaAid'), findsOneWidget);
+    expect(find.text('or donate as a guest'), findsOneWidget);
+    expect(find.byTooltip('Switch to dark mode'), findsOneWidget);
     expect(find.text('How it works', skipOffstage: false), findsOneWidget);
   });
 
-  testWidgets('Log in on the landing page opens the login screen', (
+  testWidgets('Sign in on the landing page opens the sign-in pop-out', (
     tester,
   ) async {
     await tester.pumpWidget(const NexaAidApp());
-    await tester.tap(find.text('Log in'));
+    await tester.tap(find.text('Sign in'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('Welcome back'), findsOneWidget);
     expect(find.text('Email'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
+    expect(find.text('Forgot password?'), findsOneWidget);
+    // Back closes the pop-out and shows the landing page again.
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('Welcome back'), findsNothing);
   });
 
-  testWidgets('Guest lands on the donate tab', (tester) async {
+  testWidgets('Join NexaAid asks which kind of donor', (tester) async {
     await tester.pumpWidget(const NexaAidApp());
-    await tester.tap(find.text('Donate as guest'));
+    await tester.tap(find.text('Join NexaAid'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('As an individual'), findsOneWidget);
+    expect(find.text('As an organization'), findsOneWidget);
+  });
+
+  testWidgets('Guest lands on the reports tab', (tester) async {
+    await tester.pumpWidget(const NexaAidApp());
+    await tester.tap(find.text('or donate as a guest'));
     await tester.pump();
     expect(find.text('Guest'), findsOneWidget);
-    expect(find.byTooltip('Donate'), findsWidgets);
+    expect(find.byTooltip('Reports'), findsWidgets);
     expect(find.byTooltip('Profile'), findsOneWidget);
     Api.instance.logout();
   });
@@ -72,7 +89,8 @@ void main() {
     await menuFor(Roles.cmo, ['Confirmations', 'Reports']);
     await menuFor(Roles.drrmo, ['Logistics', 'Deliveries', 'Reports']);
     await menuFor(Roles.barangay, ['Incoming aid', 'Overview', 'Reports']);
-    await menuFor(Roles.donor, ['Dashboard', 'Donate']);
+    await menuFor(Roles.donor, ['Home', 'Donations', 'Reports']);
+    await menuFor(Roles.org, ['Home', 'Donations', 'Reports']);
     api.logout();
   });
 

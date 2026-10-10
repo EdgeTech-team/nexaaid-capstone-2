@@ -173,3 +173,30 @@ work in dark mode.
 **Next:** Item 10 donor/org dashboards (stat cards, `StatusTimeline` per
 donation, supported-report progress, optional self-declared financial log),
 then Module 8 delivery screens.
+
+---
+
+## Ivan — UI notes (landing, sign in, donor home, nav) — Oct 10, 2026
+
+- Landing: **Sign in** and **Join NexaAid** are now the main buttons, above a
+  smaller "or donate as a guest". Sun/moon light-dark toggle is the
+  rightmost header button (signed in it stays in Profile > Appearance).
+- Sign in opens as a pop-out over a slightly blurred landing page, with a
+  Back button, no settings, and **Forgot password?** (emails a temporary
+  password; signing in with it forces Change password).
+- Join NexaAid pop-out: formatted cards for "As an individual" /
+  "As an organization".
+- Donor / organization tabs: **Home** (landing-style, most urgent report,
+  critical/high highlighted, active reports by priority, short giving
+  summary), **Donations** (stat cards cut to 2, every donation entry,
+  supported reports), **Reports** (all reports, active and fulfilled).
+  Guest gets Reports.
+- Fulfillment status filter (Not Started / In Progress / Fulfilled) + sort
+  (most urgent, least/most fulfilled, most families, newest) on the donor
+  Reports tab and the staff Validated and Report Status screens. No separate
+  "Done" section: fulfilled reports are a filter.
+- Reports tab restyled with the design system (old Brand/StatTile widgets
+  gone there), floating nav bar tighter (60px, sized to its buttons).
+- Backend: `POST /auth/forgot-password` in account_router.py, no schema
+  change (reuses must_change_password + temp password + email). Tests:
+  tests/test_forgot_password.py.
