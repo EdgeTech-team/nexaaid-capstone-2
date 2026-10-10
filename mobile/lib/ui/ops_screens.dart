@@ -106,9 +106,6 @@ class DeliveriesScreen extends StatefulWidget {
     this.readOnly = false,
   });
 
-feature/donation-expiry-delivery-trips
-feature/donation-expiry-delivery-trips
-copy-develop
   @override
   State<DeliveriesScreen> createState() => _DeliveriesScreenState();
 }
@@ -172,11 +169,6 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     );
     if (picked != null) setState(() => dates = picked);
   }
-
-feature/donation-expiry-delivery-trips
-copy-develop
-  
-copy-develop
   Future<void> _requestTransport(BuildContext context, Map d) async {
     // I4: pick the numbers, no typing.
     final v = await formDialog(
