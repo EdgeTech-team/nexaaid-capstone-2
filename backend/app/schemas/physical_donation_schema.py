@@ -119,6 +119,7 @@ class _PickupFields(BaseModel):
     pickup_lat: Optional[float] = Field(default=None, ge=-90, le=90)
     pickup_lng: Optional[float] = Field(default=None, ge=-180, le=180)
     pickup_landmark: Optional[str] = Field(default=None, max_length=300)
+    pickup_notes: Optional[str] = Field(default=None, max_length=300)
     preferred_pickup_at: Optional[datetime] = None
 
     @model_validator(mode="after")
@@ -131,6 +132,8 @@ class _PickupFields(BaseModel):
             self.pickup_address = self.pickup_address.strip()
             if self.pickup_landmark is not None:
                 self.pickup_landmark = self.pickup_landmark.strip() or None
+            if self.pickup_notes is not None:
+                self.pickup_notes = self.pickup_notes.strip() or None
             if self.preferred_pickup_at is not None:
                 self.preferred_pickup_at = check_preferred_pickup(self.preferred_pickup_at)
         else:
@@ -139,6 +142,7 @@ class _PickupFields(BaseModel):
             self.pickup_lat = None
             self.pickup_lng = None
             self.pickup_landmark = None
+            self.pickup_notes = None
             self.preferred_pickup_at = None
         return self
 
@@ -193,6 +197,7 @@ class PhysicalDonationResponse(BaseModel):
     pickup_lat: Optional[float] = None
     pickup_lng: Optional[float] = None
     pickup_landmark: Optional[str] = None
+    pickup_notes: Optional[str] = None
     preferred_pickup_at: Optional[datetime] = None
     qr_reference: str
     batch_reference: Optional[str] = None

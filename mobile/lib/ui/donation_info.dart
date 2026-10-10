@@ -564,7 +564,14 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
     return FutureBuilder<ApiResult>(
       future: _load,
       builder: (context, snap) {
-        if (!snap.hasData) return const SkeletonList();
+        if (!snap.hasData) {
+  return widget.embedded
+      ? const Padding(
+          padding: EdgeInsets.all(24),
+          child: Center(child: CircularProgressIndicator()),
+        )
+      : const SkeletonList();
+}
         final r = snap.data!;
         if (!r.ok) {
           return ErrorView.forStatus(
