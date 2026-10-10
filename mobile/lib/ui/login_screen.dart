@@ -3,7 +3,6 @@ import 'dart:ui' show ImageFilter;
 import 'package:flutter/material.dart';
 
 import 'register_screen.dart';
-import 'theme_toggle.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -130,18 +129,15 @@ class _PopupFrame extends StatelessWidget {
   }
 }
 
-/// Full-page version of the sign-in form: back button on the left, the
-/// light/dark toggle rightmost, no settings.
+/// Full-page version of the sign-in form: back button only. No settings and
+/// no light/dark picker (that lives on the landing page and in Profile).
 class LoginScreen extends StatelessWidget {
   const LoginScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        leading: const BackButton(),
-        actions: const [ThemeToggleButton(), Gaps.h8],
-      ),
+      appBar: AppBar(leading: const BackButton()),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

@@ -17,7 +17,7 @@ void main() {
     expect(find.text('Sign in'), findsOneWidget);
     expect(find.text('Join NexaAid'), findsOneWidget);
     expect(find.text('or donate as a guest'), findsOneWidget);
-    expect(find.byTooltip('Switch to dark mode'), findsOneWidget);
+    expect(find.byTooltip('Light or dark mode'), findsOneWidget);
     expect(find.text('How it works', skipOffstage: false), findsOneWidget);
   });
 
@@ -32,11 +32,27 @@ void main() {
     expect(find.text('Email'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
     expect(find.text('Forgot password?'), findsOneWidget);
+    // The light/dark picker stays on the landing page, not in the pop-out.
+    expect(find.byTooltip('Light or dark mode'), findsOneWidget);
     // Back closes the pop-out and shows the landing page again.
     await tester.tap(find.byTooltip('Back'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('Welcome back'), findsNothing);
+  });
+
+  testWidgets('Landing page light/dark picker switches the theme', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const NexaAidApp());
+    await tester.tap(find.byTooltip('Light or dark mode'));
+    await tester.pumpAndSettle();
+    expect(find.text('System'), findsOneWidget);
+    expect(find.text('Light'), findsOneWidget);
+    await tester.tap(find.text('Dark'));
+    await tester.pumpAndSettle();
+    expect(AppTheme.mode.value, ThemeMode.dark);
+    AppTheme.mode.value = ThemeMode.system;
   });
 
   testWidgets('Join NexaAid asks which kind of donor', (tester) async {
