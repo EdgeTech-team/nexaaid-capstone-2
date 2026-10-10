@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'blur_popup.dart';
 import 'input_formatters.dart';
 import 'location_picker.dart' show AddressAutocompleteField;
+import 'login_screen.dart' show showLoginPopup;
 import 'upload_field.dart';
 import 'validators.dart';
 import 'widgets.dart';
@@ -18,12 +20,47 @@ import 'widgets.dart';
 ///
 /// Every rule here is repeated by the backend (schemas/user_schema.py,
 /// schemas/organization_schema.py), so the API can't be used to skip them.
+///
+/// UI concern (new notes): from the landing page both forms open as
+/// pop-ups over the blurred page ([showRegisterPopup]), like the login.
 class RegisterScreen extends StatefulWidget {
   final bool org;
-  const RegisterScreen({super.key, required this.org});
+
+  /// True when shown by [showRegisterPopup]: a close button instead of
+  /// Back, and the pop-up (not this screen) makes room for the keyboard.
+  final bool popup;
+  const RegisterScreen({super.key, required this.org, this.popup = false});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
+}
+
+/// Opens donor ([org] false) or organization registration as a pop-up
+/// over the landing page. Only the close button closes it, so a stray tap
+/// outside doesn't lose what was typed. After a successful registration
+/// the login pop-up opens so the new account can sign in right away.
+Future<void> showRegisterPopup(
+  BuildContext context, {
+  required bool org,
+}) async {
+  final created = await showBlurPopup<bool>(
+    context,
+    label: org ? 'Close organization registration' : 'Close registration',
+    dismissible: false,
+    maxWidth: 560,
+    maxHeight: 860,
+    // Its own messenger so error messages show inside the pop-up, not
+    // behind the blur.
+    child: ScaffoldMessenger(child: RegisterScreen(org: org, popup: true)),
+  );
+  if (created != true || !context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      backgroundColor: AppColors.success,
+      content: Text('Account created. You can now log in.'),
+    ),
+  );
+  await showLoginPopup(context);
 }
 
 /// Same list as backend ORGANIZATION_TYPES.
@@ -203,7 +240,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
     if (!mounted) return;
     setState(() => busy = false);
-    if (r.ok) Navigator.pop(context);
+    if (r.ok) Navigator.pop(context, true);
   }
 
   // ---- fields -------------------------------------------------------------
@@ -428,7 +465,17 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
+      // In the pop-up, the pop-up itself moves up for the keyboard.
+      resizeToAvoidBottomInset: !widget.popup,
       appBar: AppBar(
+        automaticallyImplyLeading: !widget.popup,
+        leading: widget.popup
+            ? IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.close),
+              )
+            : null,
         title: Text(widget.org ? 'Register organization' : 'Register as donor'),
       ),
       body: Form(

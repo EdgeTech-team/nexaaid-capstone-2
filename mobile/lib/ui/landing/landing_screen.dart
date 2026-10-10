@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import '../../design/design.dart';
 import '../donor_screens.dart' show DonateScreen;
 import '../login_screen.dart';
-import '../register_screen.dart';
+import '../register_screen.dart' show showRegisterPopup;
 import '../widgets.dart' show api, formDialog, DialogField, Names;
 import 'landing_extras.dart';
 import 'about_section.dart';
@@ -91,8 +91,7 @@ class _LandingScreenState extends State<LandingScreen> {
 
   void _register(BuildContext sheet, {required bool org}) {
     Navigator.of(sheet).pop();
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => RegisterScreen(org: org)));
+    showRegisterPopup(context, org: org);
   }
 
   Future<void> _donate(Map<String, dynamic> report) async {
@@ -396,9 +395,7 @@ class _LandingScreenState extends State<LandingScreen> {
         const MissionSection(),
         WaysToHelpSection(
           onDonate: api.continueAsGuest,
-          onRegister: (org) => Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => RegisterScreen(org: org))),
+          onRegister: (org) => showRegisterPopup(context, org: org),
         ),
         const AboutSection(),
         const CredentialsCard(),

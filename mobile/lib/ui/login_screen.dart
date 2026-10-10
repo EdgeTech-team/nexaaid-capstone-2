@@ -1,79 +1,20 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 
+import 'blur_popup.dart';
 import 'forgot_password_screen.dart';
-import 'register_screen.dart';
 import 'widgets.dart';
 
 /// UI concern (new notes): the login pops up over the landing page, which
 /// stays visible behind it with a slight blur. Tap outside, press Esc or
 /// tap the close button to go back to the landing page.
-Future<void> showLoginPopup(BuildContext context) {
-  return showGeneralDialog<void>(
-    context: context,
-    barrierDismissible: true,
-    barrierLabel: 'Close log in',
-    barrierColor: Colors.transparent, // the blur below draws the backdrop
-    transitionDuration: const Duration(milliseconds: 220),
-    pageBuilder: (ctx, _, _) {
-      final cs = Theme.of(ctx).colorScheme;
-      return SafeArea(
-        child: AnimatedPadding(
-          duration: const Duration(milliseconds: 120),
-          padding: MediaQuery.viewInsetsOf(ctx), // room for the keyboard
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 440),
-                child: Material(
-                  color: cs.surface,
-                  elevation: 12,
-                  borderRadius: BorderRadius.circular(24),
-                  clipBehavior: Clip.antiAlias,
-                  child: const LoginScreen(popup: true),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    },
-    transitionBuilder: (ctx, anim, _, card) {
-      final still = MediaQuery.disableAnimationsOf(ctx);
-      final curved = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
-      return AnimatedBuilder(
-        animation: curved,
-        child: card,
-        builder: (bctx, inner) {
-          final v = still ? 1.0 : curved.value;
-          return Stack(
-            children: [
-              // The landing page behind: slightly blurred and dimmed.
-              // Tapping it closes the pop-up.
-              Positioned.fill(
-                child: GestureDetector(
-                  onTap: () => Navigator.of(bctx).maybePop(),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 6 * v, sigmaY: 6 * v),
-                    child: ColoredBox(
-                      color: Colors.black.withValues(alpha: 0.3 * v),
-                    ),
-                  ),
-                ),
-              ),
-              Opacity(
-                opacity: v,
-                child: Transform.scale(scale: 0.96 + 0.04 * v, child: inner),
-              ),
-            ],
-          );
-        },
-      );
-    },
-  );
-}
+///
+/// Registering and guest donation are on the landing page itself, so the
+/// pop-up only logs in.
+Future<void> showLoginPopup(BuildContext context) => showBlurPopup<void>(
+  context,
+  label: 'Close log in',
+  child: const LoginScreen(popup: true),
+);
 
 class LoginScreen extends StatefulWidget {
   /// True when shown by [showLoginPopup] over the landing page.
@@ -115,11 +56,6 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
-  void _guest() {
-    if (widget.popup) Navigator.of(context).maybePop();
-    api.continueAsGuest();
-  }
-
   /// UI concern: "Forgot password?" asks for the email (code by email).
   Future<void> _forgot() async {
     final email = await Navigator.of(context).push<String>(
@@ -135,10 +71,6 @@ class _LoginScreenState extends State<LoginScreen> {
       });
     }
   }
-
-  void _register({required bool org}) =>
-      Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => RegisterScreen(org: org)));
 
   @override
   Widget build(BuildContext context) {
@@ -253,46 +185,6 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Log in'),
-        ),
-        const SizedBox(height: 12),
-        // UI concern: registering comes before guest donation and stands
-        // out more than it.
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => _register(org: false),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                child: const Text(
-                  'Register as donor',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton(
-                onPressed: () => _register(org: true),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                child: const Text(
-                  'Register organization',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        // Least highlighted option: plain text, muted color.
-        TextButton.icon(
-          onPressed: _guest,
-          style: TextButton.styleFrom(foregroundColor: cs.onSurfaceVariant),
-          icon: const Icon(Icons.favorite_border, size: 18),
-          label: const Text('Donate as guest'),
         ),
       ],
     );
