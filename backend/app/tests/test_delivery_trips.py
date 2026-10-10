@@ -61,7 +61,8 @@ def test_delivery_list_filters_sorts_and_names(api):
     assert row["items"][0]["item_name"] == "Water"
 
     counts = ok(client.get("/deliveries/counts", headers=t["csws"]))
-    assert counts == {"total": 3, "Preparing": 2, "In Transit": 1, "Delivered": 0, "Confirmed": 0}
+    assert counts == {"total": 3, "Preparing": 2, "In Transit": 1, "Delivered": 0,
+                      "Confirmed": 0, "Cancelled": 0}
     # Barangay reps only count their own barangay.
     assert ok(client.get("/deliveries/counts", headers=t["brgy2"]))["total"] == 1
 

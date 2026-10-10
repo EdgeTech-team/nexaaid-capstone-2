@@ -275,8 +275,10 @@ def create_donation_batch(
     if current_user:  # guest donors have no account
         notify_event(db, current_user.user_id, "donation_submitted_confirm",
                      "donation", rows[0].donation_id, batch_no=batch_reference)
+    # Linked to the donation so CSWS can open it from the notification.
     notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]),
-                      "donation_submitted", None, None, batch_no=batch_reference)
+                      "donation_submitted", "donation", rows[0].donation_id,
+                      batch_no=batch_reference)
 
     db.commit()
     for row in rows:
@@ -321,7 +323,7 @@ def create_donation(
         notify_event(db, current_user.user_id, "donation_submitted_confirm",
                      "donation", donation.donation_id, batch_no=donation.donation_id)
     notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]),
-                      "donation_submitted", None, None, batch_no=donation.donation_id)
+                      "donation_submitted", "donation", donation.donation_id, batch_no=donation.qr_reference)
 
     db.commit()
     db.refresh(donation)

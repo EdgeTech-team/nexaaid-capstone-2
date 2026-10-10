@@ -626,7 +626,17 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
     return FutureBuilder<ApiResult>(
       future: _load,
       builder: (context, snap) {
-        if (!snap.hasData) return const SkeletonList();
+        if (!snap.hasData) {
+          // Inside the Administrator's scrolling page a SkeletonList (itself
+          // a scrolling list) has no height limit and breaks the layout: the
+          // screen froze after picking a barangay. A spinner is safe there.
+          return widget.embedded
+              ? const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              : const SkeletonList();
+        }
         final r = snap.data!;
         if (!r.ok) {
           return ErrorView.forStatus(r.status, r.errorText, onRetry: _reload);

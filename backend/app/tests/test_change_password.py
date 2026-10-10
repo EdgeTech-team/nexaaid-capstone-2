@@ -5,7 +5,7 @@ and POST /auth/change-password clears the flag.
 """
 import core.database as database
 from models.audit_log_model import AuditLog
-from tests.reg_helpers import STRONG_PASSWORD, upload
+from tests.reg_helpers import STRONG_PASSWORD, temp_password, upload
 from tests.test_role_flows import PASSWORD, api, ok  # noqa: F401  (fixture)
 
 URL = "/auth/change-password"
@@ -27,11 +27,13 @@ def _login(client, password):
     return client.post("/auth/login", json={"email": EMAIL, "password": password})
 
 
-def test_new_internal_account_must_change_its_temporary_password(api):
+def test_new_internal_account_must_change_its_temporary_password(api, sent_emails):
     client, t = api
     _create_staff(client, t)
+    # The server makes the temporary password and emails it (admin_router.py).
+    TEMP = temp_password(sent_emails, EMAIL)
 
-    r = ok(_login(client, STRONG_PASSWORD))
+    r = ok(_login(client, TEMP))
     assert r["user"]["must_change_password"] is True
     h = {"Authorization": f"Bearer {r['access_token']}"}
     assert ok(client.get("/auth/me", headers=h))["must_change_password"] is True
@@ -43,16 +45,16 @@ def test_new_internal_account_must_change_its_temporary_password(api):
         })
 
     assert change("Wrong#Pass2026", NEW_PASSWORD).status_code == 400          # wrong current
-    assert change(STRONG_PASSWORD, NEW_PASSWORD, "Other#Pass2026").status_code == 422  # mismatch
-    assert change(STRONG_PASSWORD, STRONG_PASSWORD).status_code == 422        # same as current
-    assert change(STRONG_PASSWORD, "short").status_code == 422                # too weak
-    assert ok(_login(client, STRONG_PASSWORD))["user"]["must_change_password"] is True
+    assert change(TEMP, NEW_PASSWORD, "Other#Pass2026").status_code == 422  # mismatch
+    assert change(TEMP, TEMP).status_code == 422        # same as current
+    assert change(TEMP, "short").status_code == 422                # too weak
+    assert ok(_login(client, TEMP))["user"]["must_change_password"] is True
 
-    res = ok(change(STRONG_PASSWORD, NEW_PASSWORD))
+    res = ok(change(TEMP, NEW_PASSWORD))
     assert res["must_change_password"] is False
     # The same session keeps working, and the flag is gone.
     assert ok(client.get("/auth/me", headers=h))["must_change_password"] is False
-    assert _login(client, STRONG_PASSWORD).status_code == 401
+    assert _login(client, TEMP).status_code == 401
     assert ok(_login(client, NEW_PASSWORD))["user"]["must_change_password"] is False
 
     db = database.SessionLocal()
@@ -61,7 +63,7 @@ def test_new_internal_account_must_change_its_temporary_password(api):
         assert log.old_value["must_change_password"] is True
         assert log.new_value["must_change_password"] is False
         text = f"{log.old_value}{log.new_value}"
-        assert STRONG_PASSWORD not in text and NEW_PASSWORD not in text
+        assert TEMP not in text and NEW_PASSWORD not in text
     finally:
         db.close()
 

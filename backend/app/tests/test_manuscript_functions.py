@@ -178,12 +178,12 @@ def test_appendix_h_module_access(api):
     for role in ("donor", "drrmo", "cmo"):
         ok(client.get("/reports/monitoring", headers=t[role]), 403)
 
-    # 2.2 SMS-based reporting: Disaster Unit only.
+    # 2.2 SMS-based reporting: the Administrator encodes it (Scope 2.4, UC-A3 alt 8a).
     sms = {"contact_number": "09171234567", "raw_message": "FLOOD 5FAM",
            "disaster_type_id": 1, "barangay_id": 1}
-    for role in ("admin", "csws", "donor"):
+    for role in ("unit", "csws", "donor"):
         ok(client.post("/reports/sms", json=sms, headers=t[role]), 403)
-    created = ok(client.post("/reports/sms", json=sms, headers=t["unit"]), 201)
+    created = ok(client.post("/reports/sms", json=sms, headers=t["admin"]), 201)
     assert created["report"]["source"] == "SMS"
 
     # 4.4 / 4.5 Donation records: Admin, Main Office, CMO.
