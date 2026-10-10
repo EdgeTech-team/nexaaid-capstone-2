@@ -14,7 +14,7 @@ from core.storage import get_storage
 from models.audit_log_model import AuditLog
 from models.upload_model import Upload
 from models.user_rbac_model import User
-from tests.reg_helpers import STRONG_PASSWORD, png, upload
+from tests.reg_helpers import STRONG_PASSWORD, png, temp_password, upload
 from tests.test_role_flows import PASSWORD, api, ok  # noqa: F401  (fixture)
 
 
@@ -45,7 +45,7 @@ def _login(client, email, password):
 
 # ------------------------------------------------------------------- create
 
-def test_create_requires_employee_id_and_card_and_hands_card_over(api):
+def test_create_requires_employee_id_and_card_and_hands_card_over(api, sent_emails):
     client, t = api
     created = ok(_new_staff(client, t), 201)
     assert created["employee_id"] == "CSWS-0042"               # stored upper case
@@ -63,7 +63,7 @@ def test_create_requires_employee_id_and_card_and_hands_card_over(api):
         db.close()
 
     # The staff member and Administrators can view the card; nobody else.
-    _, staff = _login(client, "pedro@csws.gov.ph", STRONG_PASSWORD)
+    _, staff = _login(client, "pedro@csws.gov.ph", temp_password(sent_emails, "pedro@csws.gov.ph"))
     assert client.get(card_url, headers=staff).status_code == 200
     assert client.get(card_url, headers=t["admin"]).status_code == 200
     assert client.get(card_url, headers=t["csws"]).status_code == 404
@@ -79,7 +79,6 @@ def test_create_validation(api):
         ({"role_name": "Administrator"}, 422),                 # internal roles only
         ({"role_name": "Barangay Receiving Representative"}, 422),  # needs a barangay
         ({"role_name": "Barangay Receiving Representative", "assigned_barangay_id": 99}, 422),
-        ({"password": "short"}, 422),
     ]
     for override, code in cases:
         body = {k: v for k, v in override.items() if v is not None}
@@ -113,7 +112,7 @@ def test_create_validation(api):
 
 # --------------------------------------------------------------------- edit
 
-def test_admin_edits_every_field_and_logs_old_and_new(api):
+def test_admin_edits_every_field_and_logs_old_and_new(api, sent_emails):
     client, t = api
     uid = ok(_new_staff(client, t), 201)["user_id"]
     row = ok(client.patch(f"/admin/users/{uid}", headers=t["admin"], json={
@@ -133,7 +132,7 @@ def test_admin_edits_every_field_and_logs_old_and_new(api):
     assert upd["old_value"]["email"] == "pedro@csws.gov.ph"
 
     # The token holds the email, so the staff member logs in with the new one.
-    r, _ = _login(client, "juan@csws.gov.ph", STRONG_PASSWORD)
+    r, _ = _login(client, "juan@csws.gov.ph", temp_password(sent_emails, "pedro@csws.gov.ph"))
     assert r.status_code == 200
 
     # Changing the role away from barangay rep clears the barangay.

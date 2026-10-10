@@ -23,7 +23,7 @@ def submit_logistics_request(
     delivery = db.get(Delivery, payload.delivery_id)
     if delivery is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
-    if delivery.status in ("Delivered", "Confirmed"):
+    if delivery.status in ("Delivered", "Confirmed", "Cancelled"):
         raise HTTPException(status_code=409, detail=f"Delivery is already {delivery.status}")
     open_request = (
         db.query(LogisticsRequest)

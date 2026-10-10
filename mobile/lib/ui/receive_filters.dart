@@ -314,12 +314,11 @@ List<Map> filterReceivedEntries(
       .where((e) => inWhen(e['created_at'], f.when, now: now))
       .where((e) => matchesSearch(e, search))
       .toList();
-  int rank(Map e) => priorityRank(priorities[_reportId(e)]);
+  // "Most urgent" is for choosing what to receive first (Pending tab).
+  // Received goods are already in; their order follows time, so on this
+  // tab "Most urgent" shows the newest first.
   shown.sort(switch (f.sort) {
-    ReceiveSort.urgent => (a, b) {
-      final p = rank(a).compareTo(rank(b));
-      return p != 0 ? p : _age(b).compareTo(_age(a));
-    },
+    ReceiveSort.urgent => (a, b) => _age(b).compareTo(_age(a)),
     ReceiveSort.waitingLongest => (a, b) => _age(a).compareTo(_age(b)),
     ReceiveSort.newest => (a, b) => _age(b).compareTo(_age(a)),
     ReceiveSort.barangayAz => (a, b) {
@@ -455,7 +454,10 @@ class _ReceiveFilterBarState extends State<ReceiveFilterBar> {
               Expanded(
                 child: DropdownButtonFormField<ReceiveSort>(
                   key: ValueKey('receive-sort-${f.sort}-${widget.received}'),
-                  initialValue: f.sort,
+                  // Received tab has no "Most urgent" (see filterReceivedEntries).
+                  initialValue: widget.received && f.sort == ReceiveSort.urgent
+                      ? ReceiveSort.newest
+                      : f.sort,
                   isExpanded: true,
                   decoration: const InputDecoration(
                     labelText: 'Show first',
@@ -463,12 +465,13 @@ class _ReceiveFilterBarState extends State<ReceiveFilterBar> {
                   ),
                   items: [
                     for (final s in ReceiveSort.values)
-                      DropdownMenuItem(
-                        value: s,
-                        child: Text(
-                          widget.received ? s.receivedLabel : s.label,
+                      if (!(widget.received && s == ReceiveSort.urgent))
+                        DropdownMenuItem(
+                          value: s,
+                          child: Text(
+                            widget.received ? s.receivedLabel : s.label,
+                          ),
                         ),
-                      ),
                   ],
                   onChanged: (v) => widget.onChanged(f.copyWith(sort: v)),
                 ),

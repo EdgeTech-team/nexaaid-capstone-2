@@ -6,6 +6,7 @@ import '../api.dart';
 import '../report_detail_screen.dart';
 import '../report_model.dart';
 import 'admin_screens.dart';
+import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
 import 'ops_screens.dart';
 import 'widgets.dart';
@@ -35,16 +36,12 @@ final Map<String, EntityOpener> notificationDestinations = {
   // open for donations, rejected) opens a clear pop-up summary of the
   // report. "See full details" inside it opens ReportDetailScreen.
   'report': (c, id) => showReportSheet(c, id),
-  // DonorDashboard is a tab body (no Scaffold), so wrap it to get an app bar
-  // and a back button. It lists all of the donor's own donations.
-  'donation': (c, id) => Navigator.of(c).push(
-    MaterialPageRoute(
-      builder: (_) => Scaffold(
-        appBar: AppBar(title: const Text('My donations')),
-        body: const DonorDashboard(),
-      ),
-    ),
-  ),
+  // Donation notifications open the right screen for each role:
+  //   CSWS Main Office / Administrator: that donation's details sheet
+  //     (items, donor, deadline, Receive / Reopen / Cancel buttons)
+  //   CMO: the confirmations list
+  //   Donor / Relief Organization: their own donations
+  'donation': (c, id) => _openDonation(c, id),
   // delivery_status_changed goes to the barangay representative and the
   // reporter; delivery_receipt_confirmed goes to CSWS Main Office and the
   // reporter. Only the barangay representative and CSWS Main Office have a
@@ -100,6 +97,33 @@ final Map<String, EntityOpener> notificationDestinations = {
   },
   // 'donation_batch': (c, id) => ...,
 };
+
+Future<void> _openDonation(BuildContext c, int donationId) async {
+  switch (api.role) {
+    case Roles.cswsMain:
+    case Roles.admin:
+      // The notification points at one item; its QR reference opens the
+      // whole donation entry.
+      final r = await api.get('/donations/$donationId/qr');
+      if (!c.mounted) return;
+      if (!r.ok || r.json is! Map) {
+        ScaffoldMessenger.of(c).showSnackBar(
+          const SnackBar(content: Text('This donation could not be found.')),
+        );
+        return;
+      }
+      await openDonationByQr(c, '${(r.json as Map)['batch_reference']}');
+    case Roles.cmo:
+      _push(c, _withAppBar('Confirmations', const CmoScreen()));
+    case Roles.donor:
+    case Roles.org:
+      // DonorDashboard is a tab body (no Scaffold), so wrap it to get an
+      // app bar and a back button.
+      _push(c, _withAppBar('My donations', const DonorDashboard()));
+    default:
+      break; // other roles have no donation screen: stay on the inbox
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: report pop-up for non-technical users.

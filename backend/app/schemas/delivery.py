@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
-DeliveryStatus = Literal["Preparing", "In Transit", "Delivered", "Confirmed"]
+DeliveryStatus = Literal["Preparing", "In Transit", "Delivered", "Confirmed", "Cancelled"]
 
 # Delivery items
 
@@ -56,6 +56,9 @@ class DeliveryResponse(BaseModel):
     destination_barangay_name: Optional[str] = None
     trip_id: Optional[int] = None
     stop_order: Optional[int] = None
+    # Set when CSWS cancelled it (api/v1/delivery_problems.py).
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
 
 
 #receipt confirmation

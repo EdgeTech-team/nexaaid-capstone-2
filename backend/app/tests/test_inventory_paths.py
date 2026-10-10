@@ -115,7 +115,9 @@ def test_confirm_paths_do_not_change_stock(api):
     _receive(client, t, b, 70)
     assert _stock(1, rid) == 170
 
-    ok(client.post(f"/donations/{a}/confirm", headers=t["csws"]))                    # CSWS confirm
+    # Only the CMO confirms (6.1: the old CSWS POST /donations/{id}/confirm was removed).
+    ok(client.post(f"/cmo/donations/{a}/confirm", headers=t["cmo"],
+                   json={"status": "Confirmed"}), 201)                               # CMO confirm
     assert _stock(1, rid) == 170
     ok(client.post(f"/cmo/donations/{b}/confirm", headers=t["cmo"],
                    json={"status": "On Hold", "notes": "check"}), 201)              # CMO hold
@@ -158,7 +160,8 @@ def _break_inventory(client, t):
     a, b = _donate(client, t, rid, 1, 100), _donate(client, t, rid, water, 20)
     _receive(client, t, a, 100)
     _receive(client, t, b, 15)
-    ok(client.post(f"/donations/{a}/confirm", headers=t["csws"]))
+    ok(client.post(f"/cmo/donations/{a}/confirm", headers=t["cmo"],
+                   json={"status": "Confirmed"}), 201)   # Confirmed donation, like the shared DB
     db = database.SessionLocal()
     try:
         db.query(Inventory).filter(Inventory.item_id == water).delete()   # missing row
