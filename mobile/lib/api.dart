@@ -218,6 +218,26 @@ class Api extends ChangeNotifier {
     return r;
   }
 
+  /// POST /auth/forgot-password: emails a 6-digit code.
+  Future<ApiResult> forgotPassword(String email) =>
+      post('/auth/forgot-password', body: {'email': email.trim()});
+
+  /// POST /auth/reset-password: the emailed code plus the new password.
+  Future<ApiResult> resetPassword(
+    String email,
+    String code,
+    String newPassword,
+    String confirm,
+  ) => post(
+    '/auth/reset-password',
+    body: {
+      'email': email.trim(),
+      'code': code.trim(),
+      'new_password': newPassword,
+      'confirm_password': confirm,
+    },
+  );
+
   void logout() {
     token = null;
     email = null;

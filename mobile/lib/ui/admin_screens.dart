@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import 'account_detail_screen.dart';
 import 'account_form.dart' show AccountsScreen;
+import 'copyable_phone.dart';
 import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
 import 'widgets.dart';
+import 'entry_report_views.dart';
 
 // ---------------------------------------------------------------------------
 // UC-A4 / manuscript 7.7 Administrator dashboard
@@ -15,12 +16,28 @@ import 'widgets.dart';
 class AdminDashboard extends StatelessWidget {
   const AdminDashboard({super.key});
 
+  /// 5.1: open the details behind a tile on its own page with a back arrow.
+  void _open(BuildContext context, String title, Widget child) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: child,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Loader(
-      load: [() => api.get('/dashboard/admin')],
+      load: [
+        () => api.get('/dashboard/admin'),
+        () => api.get('/donations/entries'),
+      ],
       builder: (context, data) {
         final m = data[0] as Map;
+        final entries = data[1] as Map;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
@@ -30,39 +47,130 @@ class AdminDashboard extends StatelessWidget {
                 'Active users',
                 '${m['active_users']} / ${m['total_users']}',
                 Icons.people_outline,
+                onTap: () => _open(
+                  context,
+                  'Active accounts',
+                  const UsersScreen(key: ValueKey('active')),
+                ),
               ),
               StatTile(
                 'Organizations to approve',
                 '${m['pending_organizations']}',
                 Icons.apartment_outlined,
                 color: const Color(0xFFEF6C00),
+                onTap: () => _open(
+                  context,
+                  'Organizations',
+                  const OrganizationsReview(),
+                ),
               ),
               StatTile(
                 'Reports to validate',
                 '${m['pending_validations']}',
                 Icons.fact_check_outlined,
                 color: const Color(0xFFEF6C00),
+                onTap: () => _open(
+                  context,
+                  'Reports to validate',
+                  const DashboardReportsList(status: 'Pending'),
+                ),
               ),
               StatTile(
                 'Validated reports',
                 '${m['validated_reports']}',
                 Icons.verified_outlined,
                 color: const Color(0xFF2E7D32),
+                onTap: () => _open(
+                  context,
+                  'Validated reports',
+                  const DashboardReportsList(status: 'Validated'),
+                ),
               ),
+              // Team rule: count ENTRIES (one per donor submission), not rows.
               StatTile(
-                'Donations tracked',
-                '${m['total_donations']}',
+                'Donation entries',
+                '${entries['total_entries']}',
                 Icons.volunteer_activism_outlined,
+                note: '${m['total_donations']} items · tap to view',
+                onTap: () =>
+                    openDonationEntries(context, title: 'All donation entries'),
               ),
               StatTile(
                 'Held donations',
                 '${m['held_donations']}',
                 Icons.pause_circle_outline,
                 color: const Color(0xFFC62828),
+                onTap: () => openHeldDonations(context),
               ),
             ]),
+            const SectionTitle('Donation entries per report'),
+            EntrySummaryList(entries),
             const SectionTitle('System activity log'),
             ActivityList((m['recent_activity'] as List).cast<Map>()),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 5.1: the reports behind a dashboard number, filtered by status.
+class DashboardReportsList extends StatelessWidget {
+  final String status;
+  const DashboardReportsList({super.key, required this.status});
+
+  @override
+  Widget build(BuildContext context) {
+    return Loader(
+      load: [
+        () => api.get('/dashboard/admin/reports', query: {'status': status}),
+      ],
+      builder: (context, data) {
+        final reports = (data[0] as List).cast<Map>();
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Text(
+              '${reports.length} ${status.toLowerCase()} report(s)',
+              style: const TextStyle(color: Brand.muted),
+            ),
+            const SizedBox(height: 8),
+            if (reports.isEmpty)
+              EmptyState('No ${status.toLowerCase()} reports.'),
+            for (final r in reports)
+              Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${r['report_label'] ?? 'Report #${r['report_id']}'}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Badge2.status('${r['status']}'),
+                        ],
+                      ),
+                      Text('Priority: ${r['priority_level'] ?? '-'}'),
+                      if (status != 'Pending') ...[
+                        const SizedBox(height: 8),
+                        Progress(
+                          delivered: 0,
+                          needed: 0,
+                          percent: r['fulfillment_percentage'] as num,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
           ],
         );
       },
@@ -243,14 +351,49 @@ class OrganizationsReview extends StatefulWidget {
 }
 
 class _OrganizationsReviewState extends State<OrganizationsReview> {
-  String status = 'Pending';
+  bool reviewed = false;
+  final Set<int> busyIds = {};
+
+  Future<void> _setReviewed(int organizationId, bool value) async {
+    if (busyIds.contains(organizationId)) return;
+    setState(() => busyIds.add(organizationId));
+
+    final result = await api.patch(
+      '/admin/organizations/$organizationId/review',
+      body: {'reviewed': value},
+    );
+
+    if (!mounted) return;
+
+    setState(() => busyIds.remove(organizationId));
+
+    if (!result.ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update review: ${result.errorText}')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          value
+              ? 'Organization marked Reviewed.'
+              : 'Organization marked Not Reviewed.',
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey(status),
+      key: ValueKey(reviewed),
       load: [
-        () => api.get('/admin/organizations', query: {'status': status}),
+        () => api.get(
+          '/admin/organizations',
+          query: {'reviewed': reviewed ? 'true' : 'false'},
+        ),
       ],
       builder: (context, data) {
         final orgs = (data[0] as List).cast<Map>();
@@ -259,181 +402,110 @@ class _OrganizationsReviewState extends State<OrganizationsReview> {
           children: [
             const PageHeader(
               'Organization Registrations',
-              subtitle: 'Relief organizations can only log in after approval (UC-A2).',
+              subtitle: 'Organizations activate automatically. Review records here without changing account access.',
             ),
-            SegmentedButton<String>(
+            SegmentedButton<bool>(
               segments: const [
-                ButtonSegment(value: 'Pending', label: Text('Pending')),
-                ButtonSegment(value: 'Approved', label: Text('Approved')),
-                ButtonSegment(value: 'Rejected', label: Text('Rejected')),
+                ButtonSegment(value: false, label: Text('Not Reviewed')),
+                ButtonSegment(value: true, label: Text('Reviewed')),
               ],
-              selected: {status},
-              onSelectionChanged: (s) => setState(() => status = s.first),
+              selected: {reviewed},
+              onSelectionChanged: (selection) {
+                setState(() => reviewed = selection.first);
+              },
             ),
-            // I3: the organization sees the same reason at login (D6).
-            if (status == 'Rejected') ...[
-              Gaps.v8,
-              Text(
-                'Rejected organizations see this reason when they try to log in.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ],
             const SizedBox(height: 12),
             if (orgs.isEmpty)
-              EmptyState('No ${status.toLowerCase()} organizations.'),
+              EmptyState(
+                reviewed
+                    ? 'No reviewed organizations.'
+                    : 'No organizations waiting for review.',
+              ),
             for (final o in orgs)
-              Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+              Builder(
+                builder: (context) {
+                  final id = o['organization_id'] as int;
+                  final isReviewed = o['reviewed_at'] != null;
+                  final busy = busyIds.contains(id);
+
+                  return Card(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: Text(
-                              '${o['org_name']}',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${o['org_name']}',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              Badge2.status(
+                                isReviewed ? 'Reviewed' : 'Not Reviewed',
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text('${o['organization_type'] ?? 'Organization'}'),
+                          Text(
+                            'Registration no.: ${o['registration_no'] ?? 'Not provided'}',
+                          ),
+                          if ((o['address'] ?? '').toString().trim().isNotEmpty)
+                            Text('Address: ${o['address']}'),
+                          Text(
+                            'Contact: ${o['contact_person'] ?? 'Not provided'}',
+                          ),
+                          Text(
+                            'Email: ${o['contact_email'] ?? 'Not provided'}',
+                          ),
+                          if (o['created_at'] != null)
+                            Text('Registered: ${o['created_at']}'),
+                          const SizedBox(height: 12),
+                          _OrgDocument(id),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: busy
+                                  ? null
+                                  : () => _setReviewed(id, !isReviewed),
+                              icon: busy
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : Icon(
+                                      isReviewed
+                                          ? Icons.mark_email_unread_outlined
+                                          : Icons.fact_check_outlined,
+                                    ),
+                              label: Text(
+                                isReviewed
+                                    ? 'Mark Not Reviewed'
+                                    : 'Mark Reviewed',
                               ),
                             ),
                           ),
-                          Badge2.status(
-                            o['status'] == 'Approved'
-                                ? 'Validated'
-                                : '${o['status']}',
-                          ),
                         ],
                       ),
-                      Text(
-                        '${o['organization_type']} · Reg. no. ${o['registration_no'] ?? 'not given'}',
-                      ),
-                      Text('${o['address']}'),
-                      Text(
-                        'Contact: ${o['contact_person']} · ${o['contact_email']}',
-                      ),
-                      Gaps.v12,
-                      // UC-A2 step 4: the supporting document; alt 4a flags.
-                      _OrgDocument(o['organization_id'] as int),
-                      if (o['status'] == 'Rejected') ...[
-                        Gaps.v8,
-                        _RejectionReason(
-                          reason: o['rejection_reason'] ?? o['decision_reason'],
-                          at: o['decided_at'],
-                        ),
-                      ] else if (o['decision_reason'] != null) ...[
-                        Gaps.v8,
-                        Text(
-                          'Last reason: ${o['decision_reason']}',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                      const SizedBox(height: 8),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: Space.xs,
-                        runSpacing: Space.xs,
-                        children: [
-                          for (final d in const [
-                            ['Rejected', 'Reject'],
-                            ['Pending', 'Hold'],
-                            ['Approved', 'Approve'],
-                          ])
-                            if (o['status'] != d[0])
-                              _decisionButton(context, o, d[0], d[1]),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
+                    ),
+                  );
+                },
               ),
           ],
         );
       },
     );
   }
-}
-
-/// I3: why an organization was rejected. The organization sees the same
-/// reason when it tries to log in (D6).
-class _RejectionReason extends StatelessWidget {
-  final dynamic reason;
-  final dynamic at;
-  const _RejectionReason({required this.reason, this.at});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(Space.md),
-      decoration: BoxDecoration(
-        color: cs.errorContainer,
-        borderRadius: BorderRadius.circular(Radii.sm),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            at == null ? 'Rejection reason' : 'Rejected ${niceDate(at)}',
-            style: t.labelLarge?.copyWith(color: cs.onErrorContainer),
-          ),
-          Gaps.v8,
-          Text(
-            '${reason ?? 'No reason was recorded.'}',
-            style: t.bodyMedium?.copyWith(color: cs.onErrorContainer),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Approve, Hold or Reject (UC-A2 steps 5-6). Hold and Reject ask for a
-/// reason (alt 6a); the backend refuses them without one.
-Widget _decisionButton(
-  BuildContext context,
-  Map o,
-  String decision,
-  String label,
-) {
-  Future<void> onPressed() async {
-    String? reason;
-    if (decision != 'Approved') {
-      final v = await formDialog(
-        context,
-        title: '$label ${o['org_name']}?',
-        message: decision == 'Rejected'
-            ? 'The organization stays inactive. Say what is wrong so they can fix it.'
-            : 'The application stays pending. Say what you are waiting for.',
-        fields: const [DialogField('reason', 'Reason', multiline: true)],
-        confirm: label,
-      );
-      if (v == null || !context.mounted) return;
-      reason = v['reason'];
-    }
-    await act(
-      context,
-      () => api.post(
-        '/admin/organizations/${o['organization_id']}/decision',
-        body: {'decision': decision, 'reason': ?reason},
-      ),
-      success: '${o['org_name']}: $decision',
-    );
-  }
-
-  return AppButton(
-    label,
-    onPressed: onPressed,
-    variant: switch (decision) {
-      'Approved' => AppButtonVariant.tonal,
-      'Rejected' => AppButtonVariant.danger,
-      _ => AppButtonVariant.secondary,
-    },
-  );
 }
 
 /// The organization's supporting document, or a flag when it is missing,
@@ -503,7 +575,8 @@ class _OrgDocument extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 // Appendix H 2.2: barangay reps see the CSWS Disaster Unit's phone number so
-// they can send the emergency SMS report.
+// they can send the emergency SMS report from their own phone. The number is
+// copy-only: the app never opens the dialer or the SMS app.
 // ---------------------------------------------------------------------------
 class DisasterUnitContactCard extends StatefulWidget {
   const DisasterUnitContactCard({super.key});
@@ -515,15 +588,6 @@ class DisasterUnitContactCard extends StatefulWidget {
 
 class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
   late final Future<ApiResult> _future = api.get('/contacts/disaster-unit');
-
-  Future<void> _open(String scheme, String number) async {
-    final ok = await launchUrl(Uri(scheme: scheme, path: number));
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open $scheme for $number')),
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -555,6 +619,11 @@ class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
                     ),
                   ],
                 ),
+                const SizedBox(height: 4),
+                Text(
+                  'Tap the number to copy it, then send your report from your phone\'s messaging app.',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                ),
                 const SizedBox(height: 8),
                 if (contacts.isEmpty)
                   Text(
@@ -564,35 +633,17 @@ class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
                 for (final c in contacts)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('${c['name']}'),
-                              SelectableText(
-                                '${c['contact_number']}',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: cs.primary,
-                                ),
-                              ),
-                            ],
+                        Text('${c['name']}'),
+                        CopyablePhone(
+                          number: '${c['contact_number']}',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: cs.primary,
                           ),
-                        ),
-                        IconButton(
-                          tooltip: 'Send SMS',
-                          icon: const Icon(Icons.sms),
-                          onPressed: () =>
-                              _open('sms', '${c['contact_number']}'),
-                        ),
-                        IconButton(
-                          tooltip: 'Call',
-                          icon: const Icon(Icons.call),
-                          onPressed: () =>
-                              _open('tel', '${c['contact_number']}'),
                         ),
                       ],
                     ),

@@ -14,38 +14,53 @@ ORGANIZATION_TYPES = (
     "NGO", "Religious", "Civic", "Private/CSR", "Academic", "Government", "Other",
 )
 
+# CHANGED: these types are not registered like private organizations, so the
+# registration number and supporting document are not used for them. For every
+# other type both are optional.
+TYPES_WITHOUT_REGISTRATION = ("Government",)
+
 
 class OrganizationRegisterRequest(BaseModel):
-    """UC-A2 (the organization side): the account stays Pending, and cannot
-    log in, until the Administrator reviews the details and the supporting
-    document (UC-A2 step 4)."""
+    """UC-A2 (the organization side). Capstone 2 adviser comments 1.1 and
+    1.3: the registration number and supporting document are optional (and
+    ignored for Government), and the account is validated automatically. The
+    Administrator's view is for review only."""
+
     org_name: str
     organization_type: Literal[ORGANIZATION_TYPES]
     # Required when organization_type is "Other"; stored as "Other: <text>".
     organization_type_other: Optional[str] = None
     # TODO(Dave Hoyohoy): switch to the structured AddressField once it exists.
-    address: str
+    address: Optional[str] = None
     contact_first_name: str
     contact_last_name: str
-    registration_no: str
+    registration_no: Optional[str] = None
     contact_email: EmailStr
     contact_number: str
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
     # Supporting document, uploaded first with POST /uploads (photo or PDF).
-    legitimacy_document: UploadRef
+    # Optional.
+    legitimacy_document: Optional[UploadRef] = None
     # RA 10173 (Data Privacy Act)
     consent: bool
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
     accepted_terms: bool
 
+    # Capitalize the first letter after the existing cleaning/validation.
+    # The rest of the name is kept as typed ("of", "and", "NGO" are untouched).
     @field_validator("org_name")
     @classmethod
-    def _on(cls, v): return clean_org_name(v)
+    def _on(cls, v):
+        v = clean_org_name(v)
+        return v[:1].upper() + v[1:]
 
     @field_validator("address")
     @classmethod
-    def _ad(cls, v): return clean_text(v, "Address", 10, 300)
+    def _ad(cls, v):
+        if v is None or not v.strip():
+            return None
+        return clean_text(v, "Address", 10, 300)
 
     @field_validator("contact_first_name")
     @classmethod
@@ -55,9 +70,13 @@ class OrganizationRegisterRequest(BaseModel):
     @classmethod
     def _ln(cls, v): return clean_name(v, "Contact person's last name")
 
+    # Optional: an empty value becomes None, a filled one is still validated.
     @field_validator("registration_no")
     @classmethod
-    def _rn(cls, v): return clean_registration_no(v)
+    def _rn(cls, v):
+        if v is None or not v.strip():
+            return None
+        return clean_registration_no(v)
 
     @field_validator("contact_email")
     @classmethod
@@ -83,6 +102,13 @@ class OrganizationRegisterRequest(BaseModel):
 
     @model_validator(mode="after")
     def _check(self):
+
+        # CHANGED: nothing is required. Government does not use the two
+        # fields, so anything sent through the API is discarded.
+        if self.organization_type in TYPES_WITHOUT_REGISTRATION:
+            self.registration_no = None
+            self.legitimacy_document = None
+
         if self.organization_type == "Other":
             if not (self.organization_type_other or "").strip():
                 raise ValueError("Please specify the organization type")

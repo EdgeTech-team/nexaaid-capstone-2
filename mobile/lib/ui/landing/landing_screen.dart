@@ -51,9 +51,7 @@ class _LandingScreenState extends State<LandingScreen> {
     _reload();
   }
 
-  void _logIn() =>
-      Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => const LoginScreen()));
+  void _logIn() => showLoginPopup(context);
 
   void _createAccount() {
     showModalBottomSheet<void>(
@@ -488,12 +486,6 @@ class _Hero extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  IconButton(
-                    tooltip: 'Server address',
-                    onPressed: onServer,
-                    color: AppColors.harborMist,
-                    icon: const Icon(Icons.settings_outlined),
-                  ),
                 ],
               ),
               Gaps.v24,
@@ -501,6 +493,7 @@ class _Hero extends StatelessWidget {
                 header: true,
                 child: Text(
                   'Get relief to the barangays that need it most.',
+                  textAlign: TextAlign.center,
                   style: t.displaySmall?.copyWith(color: onHero),
                 ),
               ),
@@ -508,39 +501,88 @@ class _Hero extends StatelessWidget {
               Text(
                 'See validated disaster reports in Mandaue City, pledge goods, '
                 'and follow them until the barangay confirms they arrived.',
+                textAlign: TextAlign.center,
                 style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
               ),
               Gaps.v24,
-              AppButton(
-                'Donate as guest',
-                icon: Icons.volunteer_activism_outlined,
-                variant: AppButtonVariant.donate,
-                large: true,
-                expand: true,
-                onPressed: onDonateAsGuest,
-              ),
-              Gaps.v12,
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: onLogIn,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: onHero,
-                        side: const BorderSide(color: AppColors.harborMist),
-                      ),
-                      child: const Text('Log in'),
-                    ),
+              // UI concern (new notes): Log in and Create account come first,
+              // stand out and have friendlier names (side by side when there
+              // is room). Guest donation is a smaller pill below them that
+              // still stands out from the dark hero.
+              Align(
+                alignment: Alignment.center,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 600),
+                  child: LayoutBuilder(
+                    builder: (context, box) {
+                      final logIn = FilledButton.icon(
+                        onPressed: onLogIn,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.vest,
+                          foregroundColor: AppColors.vestInk,
+                          minimumSize: const Size.fromHeight(52),
+                        ),
+                        icon: const Icon(Icons.login),
+                        label: const Text('Log in to your account'),
+                      );
+                      final join = OutlinedButton.icon(
+                        onPressed: onCreateAccount,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: onHero,
+                          side: const BorderSide(color: onHero, width: 1.5),
+                          minimumSize: const Size.fromHeight(52),
+                        ),
+                        icon: const Icon(Icons.person_add_alt_1_outlined),
+                        label: const Text('Register as donor or organization'),
+                      );
+                      final sideBySide = box.maxWidth >= 480;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (sideBySide)
+                            Row(
+                              children: [
+                                Expanded(child: logIn),
+                                Gaps.h12,
+                                Expanded(child: join),
+                              ],
+                            )
+                          else ...[
+                            logIn,
+                            Gaps.v12,
+                            join,
+                          ],
+                          Gaps.v16,
+                          Center(
+                            child: TextButton.icon(
+                              onPressed: onDonateAsGuest,
+                              style: TextButton.styleFrom(
+                                foregroundColor: onHero,
+                                backgroundColor: Colors.white.withValues(
+                                  alpha: 0.16,
+                                ),
+                                side: BorderSide(
+                                  color: Colors.white.withValues(alpha: 0.55),
+                                ),
+                                shape: const StadiumBorder(),
+                                minimumSize: const Size(0, 40),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 20,
+                                ),
+                                textStyle: t.labelLarge,
+                              ),
+                              icon: const Icon(
+                                Icons.volunteer_activism_outlined,
+                                size: 18,
+                              ),
+                              label: const Text('Donate as guest'),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
                   ),
-                  Gaps.h12,
-                  Expanded(
-                    child: TextButton(
-                      onPressed: onCreateAccount,
-                      style: TextButton.styleFrom(foregroundColor: onHero),
-                      child: const Text('Create account'),
-                    ),
-                  ),
-                ],
+                ),
               ),
               if (urgent != null) ...[Gaps.v24, urgent!],
               Gaps.v24,
