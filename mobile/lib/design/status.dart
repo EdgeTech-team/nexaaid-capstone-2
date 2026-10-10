@@ -119,7 +119,7 @@ const donationLifecycle = [
 const donationLifecycleLabels = [
   'Pledged',
   'Received by CSWS',
-  'Confirmed by CMO',
+  'Acknowledged by CMO',
   'In transit',
   'Delivered',
   'Barangay confirmed',

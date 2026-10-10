@@ -32,7 +32,7 @@ EVENTS: dict[str, tuple[str, str]] = {
     "donation_submitted": ("New donation submitted", "Donation batch #{batch_no} is awaiting receipt."),
     "donation_submitted_confirm": ("Donation submitted", "Thank you! Your donation #{batch_no} was recorded."),
     "donation_received": ("Donation received", "Donation #{batch_no} was received at the CSWS office."),
-    "donation_confirmed": ("Donation confirmed", "Donation #{batch_no} was confirmed by the CMO."),
+        "donation_confirmed": ("Donation acknowledged", "Donation #{batch_no} was acknowledged by the CMO."),
     "donation_held": ("Donation on hold", "Donation #{batch_no} is on hold. {reason}"),
     # Logistics
     "logistics_requested": ("Logistics requested", "CSWS requested transport for {title}."),
