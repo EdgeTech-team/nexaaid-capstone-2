@@ -1,8 +1,36 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
+import 'input_formatters.dart';
+import 'sms_report_format.dart';
 import 'widgets.dart';
+
+// ---------------------------------------------------------------------------
+// Concerns2.txt 2.1: number limits. Must match the backend
+// (app/schemas/report.py: MAX_AFFECTED_FAMILIES, MAX_ESTIMATED_QUANTITY).
+// ---------------------------------------------------------------------------
+const maxAffectedFamilies = 20000;
+const maxEstimatedQuantity = 100000;
+
+/// Only digits can be typed (no letters, dots, minus signs), up to 6 digits.
+final _wholeNumberInput = <TextInputFormatter>[
+  FilteringTextInputFormatter.digitsOnly,
+  LengthLimitingTextInputFormatter(6),
+];
+
+/// 20000 -> "20,000"
+String _withCommas(int n) =>
+    n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+
+/// Validator: a whole number from 1 to [max].
+String? Function(String?) _wholeNumber(int max) => (v) {
+  final n = int.tryParse(v?.trim() ?? '');
+  if (n == null || n <= 0) return 'Enter a number above 0';
+  if (n > max) return 'Maximum is ${_withCommas(max)}';
+  return null;
+};
 
 /// Card for one disaster report (with fulfillment if available).
 class ReportCard extends StatelessWidget {
@@ -128,11 +156,15 @@ class ReportCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// UC-CD1 Submit post-disaster report and Appendix H 2.2 SMS-based
-// alternative reporting (both CSWS Disaster Unit)
+// UC-CD1 Submit post-disaster report (CSWS Disaster Unit), and
+// UC-A3 alt 8a Encode SMS report (Administrator, smsEncode: true).
+// Scope 2.4: the Disaster Unit SENDS structured SMS reports (see
+// sms_send_screen.dart); the Administrator reviews and ENCODES them here.
 // ---------------------------------------------------------------------------
 class NewReportScreen extends StatefulWidget {
-  const NewReportScreen({super.key});
+  /// true = Administrator encoding a received SMS report (UC-A3 8a).
+  final bool smsEncode;
+  const NewReportScreen({super.key, this.smsEncode = false});
 
   @override
   State<NewReportScreen> createState() => _NewReportScreenState();
@@ -158,8 +190,109 @@ class _NewReportScreenState extends State<NewReportScreen> {
   final needs = <_Need>[_Need()];
   bool busy = false;
 
-  /// true when encoding a report that arrived by SMS (Appendix H, 2.2).
-  bool sms = false;
+  /// true when encoding a report that arrived by SMS (UC-A3 8a).
+  late final bool sms = widget.smsEncode;
+
+  /// Bumped after "Fill from SMS" so the dropdowns rebuild with the new values.
+  int _fills = 0;
+
+  /// What could not be filled from the SMS, shown to the Administrator.
+  List<String> _fillNotes = const [];
+
+  /// "Rice (kg)" / " rice " -> "rice"
+  static String _norm(String s) => s
+      .replaceAll(RegExp(r'\s*\(.*\)$'), '')
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'\s+'), ' ');
+
+  /// Id of the lookup row whose display name matches [name], or null.
+  String? _idByName(Names names, String list, String? name) {
+    if (name == null) return null;
+    final want = _norm(name);
+    for (final r in names.rows(list)) {
+      if (_norm(names.of(list, r['id'], fallback: '')) == want) {
+        return '${r['id']}';
+      }
+    }
+    return null;
+  }
+
+  _Need _needFrom(SmsNeed n, Names names) {
+    final need = _Need()..qty.text = '${n.quantity}';
+    final id = _idByName(names, 'items', n.item);
+    if (id != null) {
+      need.itemId = id;
+    } else {
+      need.itemId = _other;
+      need.otherName.text = n.item;
+      need.otherUnit.text = n.unit;
+    }
+    return need;
+  }
+
+  /// Reads the pasted SMS (sms_report_format.dart) and fills the form.
+  /// Nothing is saved: the Administrator still checks every field and taps
+  /// "Encode SMS report" (manual review, Scope 2.4).
+  void _fillFromSms(Names names) {
+    final parsed = SmsReport.parse(smsText.text);
+    if (parsed == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This text is not in the NexaAid SMS format. '
+            'Fill in the form by hand.',
+          ),
+        ),
+      );
+      return;
+    }
+    final notes = <String>[
+      if (parsed.missing.isNotEmpty)
+        'The SMS is missing: ${parsed.missing.join(', ')}.',
+      ...parsed.problems,
+    ];
+    final type = _idByName(names, 'disaster_types', parsed.disasterType);
+    if (parsed.disasterType != null && type == null) {
+      notes.add(
+        'Disaster type "${parsed.disasterType}" not found. Choose it below.',
+      );
+    }
+    final brgy = _idByName(names, 'barangays', parsed.barangay);
+    if (parsed.barangay != null && brgy == null) {
+      notes.add('Barangay "${parsed.barangay}" not found. Choose it below.');
+    }
+    String? sitio;
+    if (brgy != null && parsed.sitio != null) {
+      final want = _norm(parsed.sitio!);
+      for (final st in names.rows('sitios')) {
+        if ('${st['barangay_id']}' == brgy && _norm('${st['name']}') == want) {
+          sitio = '${st['id']}';
+          break;
+        }
+      }
+      if (sitio == null) {
+        notes.add(
+          'Sitio "${parsed.sitio}" not found in this barangay. Choose it below.',
+        );
+      }
+    }
+    final newNeeds = [for (final n in parsed.needs) _needFrom(n, names)];
+    setState(() {
+      typeId = type;
+      brgyId = brgy;
+      sitioId = sitio;
+      if (parsed.families != null) families.text = '${parsed.families}';
+      if (parsed.details != null) desc.text = parsed.details!;
+      if (newNeeds.isNotEmpty) {
+        needs
+          ..clear()
+          ..addAll(newNeeds);
+      }
+      _fillNotes = notes;
+      _fills++;
+    });
+  }
 
   String _needName(_Need n, Names names) => n.itemId == _other
       ? n.otherName.text.trim()
@@ -175,8 +308,40 @@ class _NewReportScreenState extends State<NewReportScreen> {
     return '';
   }
 
+  /// Concerns2 follow-up: the same item can't be listed twice
+  /// (it showed up as "Medicine Kit: 1 boxes, Medicine Kit: 2 boxes").
+  /// Returns the earlier need number that already has this item, or null.
+  int? _duplicateOf(int i) {
+    final n = needs[i];
+    for (var j = 0; j < i; j++) {
+      final o = needs[j];
+      if (n.itemId == null || o.itemId != n.itemId) continue;
+      if (n.itemId != _other) return j + 1;
+      final a = n.otherName.text.trim().toLowerCase();
+      if (a.isNotEmpty && a == o.otherName.text.trim().toLowerCase()) {
+        return j + 1;
+      }
+    }
+    return null;
+  }
+
   Future<void> _submit(Names names) async {
     if (!_form.currentState!.validate()) return;
+    final total = needs.fold<int>(
+      0,
+      (a, n) => a + int.parse(n.qty.text.trim()),
+    );
+    if (total > maxEstimatedQuantity) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'All needs together come to ${_withCommas(total)}. '
+            'The maximum is ${_withCommas(maxEstimatedQuantity)}.',
+          ),
+        ),
+      );
+      return;
+    }
     setState(() => busy = true);
     // The report table has one text field for the needs and one total
     // quantity, so the list is stored as "Rice: 50 kg, Drinking Water: 20 gallons".
@@ -187,10 +352,6 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   .trim(),
         )
         .join(', ');
-    final total = needs.fold<int>(
-      0,
-      (a, n) => a + int.parse(n.qty.text.trim()),
-    );
     final body = {
       'disaster_type_id': int.parse(typeId!),
       'barangay_id': int.parse(brgyId!),
@@ -213,7 +374,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             )
           : api.post('/reports/', body: {...body, 'source': 'Mobile'}),
       success: sms
-          ? 'SMS report encoded. It is now pending admin validation.'
+          ? 'SMS report encoded and saved as Pending. Validate it under Validate.'
           : 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
@@ -229,13 +390,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
           ..clear()
           ..add(_Need());
         typeId = brgyId = sitioId = null;
+        _fillNotes = const [];
+        _fills++;
       }
     });
   }
-
-  String? _num(String? v) => (int.tryParse(v?.trim() ?? '') ?? 0) > 0
-      ? null
-      : 'Enter a number above 0';
 
   Widget _needRow(int i, Names names) {
     final n = needs[i];
@@ -266,7 +425,14 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       ),
                     ],
                     onChanged: (v) => setState(() => n.itemId = v),
-                    validator: (v) => v == null ? 'Choose an item' : null,
+                    validator: (v) {
+                      if (v == null) return 'Choose an item';
+                      if (v == _other) return null; // checked on the name
+                      final dup = _duplicateOf(i);
+                      return dup == null
+                          ? null
+                          : 'Already in Need $dup. Change the amount there.';
+                    },
                   ),
                 ),
                 if (needs.length > 1)
@@ -285,8 +451,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                     child: TextFormField(
                       controller: n.otherName,
                       decoration: const InputDecoration(labelText: 'Item'),
-                      validator: (v) =>
-                          (v ?? '').trim().isEmpty ? 'Required' : null,
+                      validator: (v) {
+                        if ((v ?? '').trim().isEmpty) return 'Required';
+                        final dup = _duplicateOf(i);
+                        return dup == null ? null : 'Already in Need $dup';
+                      },
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -309,11 +478,12 @@ class _NewReportScreenState extends State<NewReportScreen> {
             TextFormField(
               controller: n.qty,
               keyboardType: TextInputType.number,
+              inputFormatters: _wholeNumberInput,
               decoration: InputDecoration(
                 labelText: 'How many?',
                 suffixText: unit.isEmpty ? null : unit,
               ),
-              validator: _num,
+              validator: _wholeNumber(maxEstimatedQuantity),
             ),
           ],
         ),
@@ -342,51 +512,81 @@ class _NewReportScreenState extends State<NewReportScreen> {
               PageHeader(
                 sms ? 'Encode SMS Report' : 'Submit Post-Disaster Report',
                 subtitle: sms
-                    ? 'For reports texted in when there is no internet. '
-                          'Saved as Pending until the Administrator validates it.'
-                    : 'Saved as Pending until the Administrator validates it.',
-              ),
-              SegmentedButton<bool>(
-                segments: const [
-                  ButtonSegment(
-                    value: false,
-                    icon: Icon(Icons.edit_note),
-                    label: Text('Field report'),
-                  ),
-                  ButtonSegment(
-                    value: true,
-                    icon: Icon(Icons.sms_outlined),
-                    label: Text('SMS report'),
-                  ),
-                ],
-                selected: {sms},
-                onSelectionChanged: (v) => setState(() => sms = v.first),
+                    ? 'Paste the text the CSWS Disaster Unit sent, tap Fill, '
+                          'then check every field before saving. '
+                          'It is saved as Pending; validate it under Validate.'
+                    : 'Saved as Pending until the Administrator validates it. '
+                          'No internet? Use the SMS report tab.',
               ),
               if (sms) ...[
                 const SectionTitle('SMS as received'),
                 TextFormField(
                   controller: smsSender,
                   keyboardType: TextInputType.phone,
+                  // Same as the GCash field: digits only, stops at 11.
+                  inputFormatters: phoneFormatters,
                   decoration: const InputDecoration(
                     labelText: 'Sender number',
                     hintText: '09XXXXXXXXX',
+                    helperText: 'PH mobile number, 11 digits',
                   ),
-                  validator: (v) =>
-                      (v ?? '').trim().isEmpty ? 'Required' : null,
+                  validator: (v) {
+                    final n = (v ?? '').trim();
+                    if (n.isEmpty) return 'Required';
+                    return RegExp(r'^09\d{9}$').hasMatch(n)
+                        ? null
+                        : 'Mobile number, 11 digits, e.g. 09171234567';
+                  },
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: smsText,
-                  maxLines: 3,
+                  minLines: 4,
+                  maxLines: 10,
                   decoration: const InputDecoration(
-                    labelText: 'SMS text (copy it exactly)',
+                    labelText: 'SMS text (paste it exactly as received)',
+                    hintText: 'NEXAAID REPORT\nTYPE: ...\nBRGY: ...',
                   ),
                   validator: (v) =>
                       (v ?? '').trim().isEmpty ? 'Required' : null,
                 ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _fillFromSms(names),
+                    icon: const Icon(Icons.auto_fix_high),
+                    label: const Text('Fill the form from this SMS'),
+                  ),
+                ),
+                if (_fillNotes.isNotEmpty)
+                  Card(
+                    margin: const EdgeInsets.only(top: 8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final note in _fillNotes)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(Icons.warning_amber, size: 18),
+                                  const SizedBox(width: 6),
+                                  Expanded(child: Text(note)),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
               const SectionTitle('Disaster and location'),
               LookupDropdown(
+                key: ValueKey('type-$_fills'),
                 list: 'disaster_types',
                 label: 'Disaster type',
                 value: typeId,
@@ -395,6 +595,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
               ),
               const SizedBox(height: 12),
               LookupDropdown(
+                key: ValueKey('brgy-$_fills'),
                 list: 'barangays',
                 label: 'Barangay',
                 value: brgyId,
@@ -404,25 +605,32 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   sitioId = null;
                 }),
               ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                key: ValueKey('sitio-$brgyId'),
-                initialValue: sitioId,
-                isExpanded: true,
-                items: [
-                  const DropdownMenuItem(value: '', child: Text('(none)')),
-                  for (final s in sitios)
-                    DropdownMenuItem(
-                      value: '${s['id']}',
-                      child: Text('${s['name']}'),
+              // Concerns2: the sitio field only appears after a barangay is
+              // chosen, and defaults to the whole barangay.
+              if (brgyId != null) ...[
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  key: ValueKey('sitio-$brgyId-$_fills'),
+                  initialValue: sitioId ?? '',
+                  isExpanded: true,
+                  items: [
+                    const DropdownMenuItem(
+                      value: '',
+                      child: Text('Whole barangay'),
                     ),
-                ],
-                onChanged: brgyId == null ? null : (v) => sitioId = v,
-                decoration: InputDecoration(
-                  labelText: 'Sitio (optional)',
-                  helperText: brgyId == null ? 'Choose a barangay first' : null,
+                    for (final s in sitios)
+                      DropdownMenuItem(
+                        value: '${s['id']}',
+                        child: Text('${s['name']}'),
+                      ),
+                  ],
+                  onChanged: (v) => sitioId = v,
+                  decoration: const InputDecoration(
+                    labelText: 'Sitio',
+                    helperText: 'Choose a sitio, or keep Whole barangay',
+                  ),
                 ),
-              ),
+              ],
               const SectionTitle('Donation info'),
               NewReportDonationInfo(barangayId: brgyId),
               const SectionTitle('Situation (DROMIC)'),
@@ -438,10 +646,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
               TextFormField(
                 controller: families,
                 keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
+                inputFormatters: _wholeNumberInput,
+                decoration: InputDecoration(
                   labelText: 'Affected families',
+                  helperText:
+                      'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
                 ),
-                validator: _num,
+                validator: _wholeNumber(maxAffectedFamilies),
               ),
               SectionTitle(
                 'Assistance needed',
@@ -678,6 +889,7 @@ class AdminReportsScreen extends StatefulWidget {
 class _AdminReportsScreenState extends State<AdminReportsScreen> {
   String status = 'Pending';
   String priority = '';
+  int _loads = 0;
 
   Future<void> _reject(Map<String, dynamic> r) async {
     final v = await formDialog(
@@ -701,7 +913,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey('$status/$priority'),
+      key: ValueKey('$status/$priority/$_loads'),
       load: [
         () => api.get(
           '/reports/',
@@ -720,6 +932,26 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
           padding: const EdgeInsets.all(20),
           children: [
             PageHeader('Report Validation', subtitle: roleLine()),
+            // UC-A3 alt 8a: the Administrator encodes SMS reports.
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => Scaffold(
+                        appBar: AppBar(title: const Text('Encode SMS report')),
+                        body: const NewReportScreen(smsEncode: true),
+                      ),
+                    ),
+                  );
+                  if (mounted) setState(() => _loads++); // reload the list
+                },
+                icon: const Icon(Icons.sms_outlined),
+                label: const Text('Encode SMS report'),
+              ),
+            ),
+            const SizedBox(height: 8),
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(value: 'Pending', label: Text('Pending')),

@@ -23,6 +23,21 @@ needs to change.
 Role names ("citizen", "csws_staff", "admin") are placeholders too —
 swap them for whatever your actual RBAC role names are once 3.3 is
 merged.
+
+CHANGE LOG
+- Concerns2.txt 2.1 (Castillo): tapping a "report validated" notification
+  opens the report detail with the same UI, just elaborated. GET
+  /reports/{report_id} now returns ReportMonitoringResponse (the report
+  plus its fulfillment progress) instead of DisasterReportResponse.
+  Additive only: every old field is unchanged, four fields were added.
+  Row-building moved into _to_monitoring() so the detail, /monitoring and
+  /validated endpoints all build the same shape.
+- SMS reporting, manuscript-aligned (claude/sms-reporting-decision.md):
+  * POST /reports/sms is now Administrator-only (UC-A3 alt 8a, UC-CD1 alt
+    11b, Scope 2.4: the Disaster Unit SENDS the SMS, the Administrator
+    reviews and ENCODES it). Was CSWS Disaster Unit.
+  * Scope 2.4: when an SMS report is validated, every registered user is
+    notified, not only the usual recipients.
 """
 
 from typing import List, Optional
@@ -83,7 +98,7 @@ def _notify_new_report(db: Session, report: DisasterReport, exclude_user_id: int
 # The role_name strings below match the roles table exactly. If a role is
 # ever renamed, update them here: a wrong name notifies nobody, silently.
 # ---------------------------------------------------------------------------
-def _notify_report_validated(db: Session, report: DisasterReport, validator_id: int) -> None:
+def _notify_report_validated(db: Session, report: DisasterReport, validator_id: int) -> set[int]:
     skip = {report.user_id, validator_id}
 
     officials = set(user_ids_with_role(
@@ -111,6 +126,54 @@ def _notify_report_validated(db: Session, report: DisasterReport, validator_id: 
         db, donors, "report_open_for_donations",
         "report", report.report_id, title=title,
     )
+    return officials | brgy_reps | donors
+
+
+# Every role in the roles table (Scope 1). Used for Scope 2.4: "All
+# registered users will automatically receive a push notification once an
+# SMS report has been successfully encoded and validated."
+ALL_ROLES = [
+    "Administrator", "CSWS Disaster Unit", "CSWS Main Office",
+    "CMO Representative", "DRRMO Logistics Support",
+    "Barangay Receiving Representative", "Individual Donor",
+    "Relief Organization",
+]
+
+
+def _notify_sms_validated_everyone(
+    db: Session, report: DisasterReport, already: set[int]
+) -> None:
+    # No barangay filter here: Scope 2.4 says ALL registered users.
+    rest = set(user_ids_with_role(db, ALL_ROLES)) - already
+    notify_event_many(
+        db, rest, "report_validated", "report", report.report_id,
+        title=f"Report #{report.report_id}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shared response builder: report + fulfillment progress.
+# Used by GET /reports/{id}, /reports/monitoring and /reports/validated.
+# ---------------------------------------------------------------------------
+def _to_monitoring(report: DisasterReport) -> ReportMonitoringResponse:
+    fulfillment = report.fulfillment
+    return ReportMonitoringResponse(
+        **DisasterReportResponse.model_validate(report).model_dump(),
+        fulfillment_status=fulfillment.verification_status if fulfillment else None,
+        fulfillment_percentage=fulfillment.fulfillment_percentage if fulfillment else None,
+        total_items_needed=fulfillment.total_items_needed if fulfillment else None,
+        total_items_delivered=fulfillment.total_items_delivered if fulfillment else None,
+    )
+
+
+def _monitoring_rows(query, skip: int, limit: int):
+    rows = (
+        query.order_by(DisasterReport.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return [_to_monitoring(report) for report in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +214,6 @@ def list_reports(
     if own_barangay is not None:
         query = query.filter(DisasterReport.barangay_id == own_barangay)
 
-
     if status_filter:
         query = query.filter(DisasterReport.status == status_filter)
     if barangay_id:
@@ -163,7 +225,6 @@ def list_reports(
     if priority_level:
         query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
-
     return (
         query.order_by(DisasterReport.created_at.desc())
         .offset(skip)
@@ -171,8 +232,8 @@ def list_reports(
         .all()
     )
 
-@router.get("/monitoring",
-            response_model=List[ReportMonitoringResponse],)
+
+@router.get("/monitoring", response_model=List[ReportMonitoringResponse])
 def list_report_monitoring(
     barangay_id: Optional[int] = Query(default=None),
     disaster_type_id: Optional[int] = Query(default=None),
@@ -190,32 +251,17 @@ def list_report_monitoring(
         query = query.filter(DisasterReport.barangay_id == own_barangay)
 
     if status_filter:
-            query = query.filter(DisasterReport.status == status_filter)
+        query = query.filter(DisasterReport.status == status_filter)
     if barangay_id:
-            query = query.filter(DisasterReport.barangay_id == barangay_id)
+        query = query.filter(DisasterReport.barangay_id == barangay_id)
     if disaster_type_id:
-            query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
+        query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
     if source:
-            query = query.filter(DisasterReport.source == canonical_source(source))
+        query = query.filter(DisasterReport.source == canonical_source(source))
     if priority_level:
-            query = query.filter(DisasterReport.priority_level == priority_level) #3.7
+        query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
     return _monitoring_rows(query, skip, limit)
-
-def _monitoring_rows(query, skip: int, limit: int):
-    results = []
-    for report in (
-        query.order_by(DisasterReport.created_at.desc()).offset(skip).limit(limit).all()
-    ):
-        fulfillment = report.fulfillment
-        results.append(ReportMonitoringResponse(
-            **DisasterReportResponse.model_validate(report).model_dump(),
-            fulfillment_status=fulfillment.verification_status if fulfillment else None,
-            fulfillment_percentage=fulfillment.fulfillment_percentage if fulfillment else None,
-            total_items_needed=fulfillment.total_items_needed if fulfillment else None,
-            total_items_delivered=fulfillment.total_items_delivered if fulfillment else None,
-        ))
-    return results
 
 
 # ---------------------------------------------------------------------------
@@ -247,15 +293,22 @@ def list_validated_reports(
 
 
 # ---------------------------------------------------------------------------
-# Retrieve one
+# Retrieve one — also the target of every report notification tap
+# (Concerns2.txt 2.1). Returns the report plus fulfillment progress so the
+# detail screen can show the elaborated view.
 # ---------------------------------------------------------------------------
-@router.get("/{report_id}", response_model=DisasterReportResponse)
+@router.get("/{report_id}", response_model=ReportMonitoringResponse)
 def get_report(
     report_id: int,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    report = db.get(DisasterReport, report_id)
+    report = (
+        db.query(DisasterReport)
+        .options(joinedload(DisasterReport.fulfillment))
+        .filter(DisasterReport.report_id == report_id)
+        .first()
+    )
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
@@ -268,7 +321,7 @@ def get_report(
     if not (is_owner or is_staff or is_validated):
         raise HTTPException(status_code=403, detail="Not authorized to view this report")
 
-    return report
+    return _to_monitoring(report)
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +350,6 @@ def update_report(
 # ---------------------------------------------------------------------------
 # Validate — UC-02 step 6: admin approves, report becomes visible to donors
 # ---------------------------------------------------------------------------
-
 @router.post("/{report_id}/validate", response_model=DisasterReportResponse)
 def validate_report(
     report_id: int,
@@ -357,7 +409,11 @@ def validate_report(
 
     # ...and everyone else affected: CMO, both CSWS offices, the barangay
     # representative of the affected barangay, and the donors.
-    _notify_report_validated(db, report, current_user.user_id)
+    notified = _notify_report_validated(db, report, current_user.user_id)
+    if report.source == "SMS":
+        _notify_sms_validated_everyone(
+            db, report, notified | {report.user_id, current_user.user_id}
+        )
 
     db.flush()
     db.refresh(report)
@@ -421,9 +477,9 @@ def delete_report(
 def ingest_sms_report(
     payload: SmsReportIngest,
     db: Session = Depends(get_db),
-    # Appendix H, Module 2.2: SMS-based alternative reporting is the
-    # CSWS Disaster Unit's function.
-    current_user=Depends(require_role("csws_disaster_unit")),
+    # UC-A3 alt 8a / Scope 2.4: the CSWS Disaster Unit SENDS the SMS; the
+    # Administrator reviews and manually ENCODES it here.
+    current_user=Depends(require_role("admin")),
 ):
     report_fields = payload.model_dump(exclude={"contact_number", "raw_message"})
     report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")

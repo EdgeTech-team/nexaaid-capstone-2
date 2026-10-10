@@ -47,7 +47,7 @@ class Delivery(Base):
         Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
     )
 
-    status = Column(String(50),nullable=False)# 'Preparing', >'In Transit' > 'Delivered' > 'Confirmed'
+    status = Column(String(50),nullable=False)# 'Preparing', >'In Transit' > 'Delivered' > 'Confirmed' (or 'Cancelled')
 
     delivery_date = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
@@ -59,9 +59,15 @@ class Delivery(Base):
     )
     stop_order = Column(Integer, nullable=True)
 
+    # Unexpected problems (api/v1/delivery_problems.py): a delivery that
+    # cannot go ahead is Cancelled, its goods go back to stock, and the
+    # reason is kept here (migration 9c4e2b7a1f35).
+    cancelled_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+
     __table_args__ = (
         CheckConstraint(
-             "status IN ('Preparing','In Transit','Delivered', 'Confirmed')", 
+             "status IN ('Preparing','In Transit','Delivered', 'Confirmed', 'Cancelled')", 
              name="deliveries_status_check",
         ),
     )

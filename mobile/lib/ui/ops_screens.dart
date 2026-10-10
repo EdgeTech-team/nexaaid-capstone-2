@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
-import '../api.dart' show Roles;
+import '../api.dart' show ApiResult, Roles;
 import 'records_screens.dart' show DonationRecordsScreen, SupportRecordsScreen;
+import 'delivery_widgets.dart';
 import 'trip_screens.dart';
 import 'widgets.dart';
 import 'entry_report_views.dart' show EntrySummaryList;
@@ -106,9 +107,6 @@ class DeliveriesScreen extends StatefulWidget {
     this.readOnly = false,
   });
 
-feature/donation-expiry-delivery-trips
-feature/donation-expiry-delivery-trips
-copy-develop
   @override
   State<DeliveriesScreen> createState() => _DeliveriesScreenState();
 }
@@ -172,11 +170,6 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     );
     if (picked != null) setState(() => dates = picked);
   }
-
-feature/donation-expiry-delivery-trips
-copy-develop
-  
-copy-develop
   Future<void> _requestTransport(BuildContext context, Map d) async {
     // I4: pick the numbers, no typing.
     final v = await formDialog(
@@ -318,7 +311,9 @@ copy-develop
                 onTap: () {
                   Navigator.pop(ctx);
                   Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const TripPlannerScreen()),
+                    MaterialPageRoute(
+                      builder: (_) => const TripPlannerScreen(),
+                    ),
                   );
                 },
                 child: const ListTile(
@@ -341,9 +336,8 @@ copy-develop
 
   Widget _filters(BuildContext context, Map counts) {
     final t = Theme.of(context).textTheme;
-    String chip(String? s) => s == null
-        ? 'All (${counts['total'] ?? 0})'
-        : '$s (${counts[s] ?? 0})';
+    String chip(String? s) =>
+        s == null ? 'All (${counts['total'] ?? 0})' : '$s (${counts[s] ?? 0})';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -351,7 +345,7 @@ copy-develop
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-              for (final s in <String?>[null, ..._deliverySteps])
+              for (final s in <String?>[null, ..._deliverySteps, 'Cancelled'])
                 Padding(
                   padding: const EdgeInsets.only(right: Space.xs),
                   child: ChoiceChip(
@@ -410,7 +404,9 @@ copy-develop
                     : '${niceDay(dates!.start)} – ${niceDay(dates!.end)}',
               ),
               onPressed: _pickDates,
-              onDeleted: dates == null ? null : () => setState(() => dates = null),
+              onDeleted: dates == null
+                  ? null
+                  : () => setState(() => dates = null),
             ),
             if (_filtered)
               TextButton(
@@ -496,9 +492,7 @@ copy-develop
                   children: [
                     TextButton.icon(
                       onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => const TripsScreen(),
-                        ),
+                        MaterialPageRoute(builder: (_) => const TripsScreen()),
                       ),
                       icon: const Icon(Icons.local_shipping_outlined),
                       label: const Text('Trips'),
@@ -673,8 +667,20 @@ copy-develop
                   ],
                 ),
               ),
-            const SizedBox(height: 12),
-            DeliveryStepper(status),
+            if (status == 'Cancelled')
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  'Cancelled${d['cancelled_at'] != null ? ' on ${niceDate(d['cancelled_at'])}' : ''}'
+                  '${d['cancel_reason'] != null ? ': ${d['cancel_reason']}' : ''}. '
+                  'The goods went back to the report\'s stock.',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              )
+            else ...[
+              const SizedBox(height: 12),
+              DeliveryStepper(status),
+            ],
             const SizedBox(height: 8),
             Wrap(
               alignment: WrapAlignment.end,
@@ -687,11 +693,23 @@ copy-develop
                   icon: const Icon(Icons.history),
                   label: const Text('History'),
                 ),
+                // Unexpected problems: new date, truck came back, cancel,
+                // or no longer need DRRMO (delivery_widgets.dart).
+                if (!barangay &&
+                    !readOnly &&
+                    (status == 'Preparing' || status == 'In Transit'))
+                  TextButton.icon(
+                    onPressed: () =>
+                        showDeliveryProblems(context, d, request: request),
+                    icon: const Icon(Icons.report_problem_outlined),
+                    label: const Text('Something went wrong?'),
+                  ),
                 if (!barangay &&
                     !readOnly &&
                     (status == 'Preparing' || status == 'In Transit') &&
                     (request == null ||
                         reqStage == 'Declined' ||
+                        reqStage == 'Cancelled' ||
                         reqStage == 'Completed'))
                   OutlinedButton.icon(
                     onPressed: () => _requestTransport(context, d),
@@ -738,13 +756,32 @@ copy-develop
 /// "Oct 12" for compact chips.
 String niceDay(DateTime d) {
   const m = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   return '${m[d.month - 1]} ${d.day}';
 }
 
-/// Prepare goods for release from a validated report's inventory.
+/// Prepare goods for release from ONE validated report's inventory
+/// (UC-CM2 step 3). For several reports on one truck use TripPlannerScreen.
+///
+/// Built for staff in a hurry:
+///   1. Pick the report from a searchable list (only reports with stock).
+///   2. The destination is the report's own barangay, shown as text. "Change"
+///      is there for the rare case the goods go somewhere else.
+///   3. Every item in stock is a row with a quantity box (no dropdowns, so
+///      it still works with many items). Empty box = not sent.
+///   4. Pick the date and time, then Prepare delivery.
 class NewDeliveryScreen extends StatefulWidget {
   const NewDeliveryScreen({super.key});
 
@@ -752,302 +789,229 @@ class NewDeliveryScreen extends StatefulWidget {
   State<NewDeliveryScreen> createState() => _NewDeliveryScreenState();
 }
 
-/// One item line of a delivery: an item from the report's stock + quantity.
-class _DeliveryLine {
-  String? itemId;
-  final qty = TextEditingController();
-}
-
 class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   final _form = GlobalKey<FormState>();
-  String? reportId, brgyId;
-  List<Map> stock = const [];
-  bool loadingStock = false;
-  // 5.1.4: several item lines, each any item with stock in this report.
-  final List<_DeliveryLine> lines = [_DeliveryLine()];
-  String? date;
+  late Future<List<ApiResult>> _load = _fetch();
+  Map? report; // row from /trips/candidates (with its items)
+  String? brgyId; // destination; defaults to the report's barangay
+  bool changeBrgy = false;
+  final Map<int, TextEditingController> qty = {};
+  String? date; // ISO, UTC
+  bool tried = false;
   bool busy = false;
+
+  Future<List<ApiResult>> _fetch() =>
+      Future.wait([api.get('/trips/candidates'), api.lookupsResult()]);
 
   @override
   void dispose() {
-    for (final l in lines) {
-      l.qty.dispose();
+    for (final c in qty.values) {
+      c.dispose();
     }
     super.dispose();
   }
 
-  Future<void> _loadStock(String? rid, Names names) async {
+  TextEditingController _ctrl(int itemId) =>
+      qty.putIfAbsent(itemId, () => TextEditingController());
+
+  List<Map> get _items =>
+      report == null ? const [] : (report!['items'] as List).cast<Map>();
+
+  Future<void> _chooseReport(Map candidates) async {
+    final r = await pickReportWithStock(context, candidates);
+    if (r == null || !mounted) return;
     setState(() {
-      reportId = rid;
-      for (final l in lines) {
-        l.itemId = null;
-      }
-      stock = const [];
-      loadingStock = true;
-      // The report's own barangay is the usual destination.
-      for (final r in names.rows('validated_reports')) {
-        if ('${r['id']}' == rid) brgyId = '${r['barangay_id']}';
+      report = r;
+      brgyId = '${r['barangay_id']}';
+      changeBrgy = false;
+      for (final c in qty.values) {
+        c.clear();
       }
     });
-    final r = await api.get(
-      '/donations/inventory',
-      query: {'report_id': rid ?? ''},
-    );
-    if (!mounted) return;
-    setState(() {
-      loadingStock = false;
-      stock = r.ok
-          ? (r.json as List)
-                .cast<Map>()
-                .where((i) => i['quantity'] > 0)
-                .toList()
-          : const [];
-    });
-  }
-
-  /// "All": fill in everything that is left of this item.
-  Widget _allButton(_DeliveryLine line, String max) => TextButton(
-    onPressed: () => setState(() => line.qty.text = max),
-    child: const Text('All'),
-  );
-
-  Map? _stockOf(String? itemId) {
-    for (final s in stock) {
-      if ('${s['item_id']}' == itemId) return s;
-    }
-    return null;
   }
 
   Future<void> _submit() async {
+    setState(() => tried = true);
+    if (report == null) return;
     if (!_form.currentState!.validate()) return;
-    if (date == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Pick a delivery date')));
-      return;
-    }
+    final lines = linesFrom(_items, _ctrl);
+    if (lines.isEmpty || date == null) return;
     setState(() => busy = true);
     final r = await act(
       context,
       () => api.post(
         '/deliveries/',
         body: {
-          'report_id': int.parse(reportId!),
+          'report_id': report!['report_id'],
           'destination_barangay_id': int.parse(brgyId!),
           'delivery_date': date,
-          'items': [
-            for (final l in lines)
-              {
-                'item_id': int.parse(l.itemId!),
-                'quantity': int.parse(l.qty.text.trim()),
-              },
-          ],
+          'items': lines,
         },
       ),
       success: 'Delivery prepared',
     );
     if (!mounted) return;
     setState(() => busy = false);
-    if (r.ok) Navigator.pop(context);
-  }
-
-  Widget _lineFields(int i) {
-    final line = lines[i];
-    final chosen = _stockOf(line.itemId);
-    // An item already picked on another line is not offered again.
-    final taken = {
-      for (final l in lines)
-        if (l != line && l.itemId != null) l.itemId,
-    };
-    return Padding(
-      key: ObjectKey(line),
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            flex: 3,
-            child: DropdownButtonFormField<String>(
-              key: ValueKey(
-                'stock-$reportId-${stock.length}-$i-${lines.length}',
-              ),
-              initialValue: line.itemId,
-              isExpanded: true,
-              items: [
-                for (final s in stock)
-                  if (!taken.contains('${s['item_id']}'))
-                    DropdownMenuItem(
-                      value: '${s['item_id']}',
-                      child: Text(
-                        '${s['item_name']} (${s['quantity']} ${s['unit'] ?? ''} left)'
-                            .replaceAll('  ', ' '),
-                      ),
-                    ),
-              ],
-              onChanged: (v) => setState(() => line.itemId = v),
-              validator: (v) => v == null ? 'Choose an item' : null,
-              decoration: InputDecoration(
-                labelText: i == 0
-                    ? 'Item from this report\'s inventory'
-                    : 'Item ${i + 1}',
-                // The "No more stock for this report" banner says why it is empty.
-                helperText: null,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            flex: 2,
-            child: TextFormField(
-              controller: line.qty,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: 'Quantity',
-                suffixText: chosen?['unit'] as String?,
-                // One tap to send everything that is left of this item.
-                suffixIcon: chosen == null
-                    ? null
-                    : _allButton(line, '${chosen['quantity']}'),
-              ),
-              validator: (v) {
-                final n = int.tryParse(v?.trim() ?? '') ?? 0;
-                if (n <= 0) return 'Enter a number above 0';
-                if (chosen != null && n > (chosen['quantity'] as num)) {
-                  return 'Only ${chosen['quantity']} available';
-                }
-                return null;
-              },
-            ),
-          ),
-          if (lines.length > 1)
-            IconButton(
-              tooltip: 'Remove item',
-              onPressed: () => setState(() {
-                lines.removeAt(i).qty.dispose();
-              }),
-              icon: const Icon(Icons.remove_circle_outline),
-            ),
-        ],
-      ),
-    );
+    if (r.ok) {
+      Navigator.pop(context);
+    } else if (r.status == 409) {
+      // Stock changed meanwhile: reload the numbers.
+      setState(() {
+        report = null;
+        _load = _fetch();
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Prepare delivery')),
-      body: FutureBuilder<Map<String, dynamic>>(
-        future: api.lookups(),
+      body: FutureBuilder<List<ApiResult>>(
+        future: _load,
         builder: (context, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
+          if (!snap.hasData) return const SkeletonList();
+          final bad = snap.data!.where((r) => !r.ok).toList();
+          if (bad.isNotEmpty) {
+            return ErrorView.forStatus(
+              bad.first.status,
+              bad.first.errorText,
+              onRetry: () => setState(() => _load = _fetch()),
+            );
           }
-          final names = Names(snap.data!);
+          final candidates = snap.data![0].json as Map;
+          final names = Names(
+            Map<String, dynamic>.from(snap.data![1].json as Map),
+          );
+          final lines = linesFrom(_items, _ctrl);
+          final noReports = (candidates['barangays'] as List).isEmpty;
           return Form(
             key: _form,
             child: ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               children: [
-                LookupDropdown(
-                  list: 'validated_reports',
-                  label: 'For which validated report?',
-                  value: reportId,
-                  names: names,
-                  onChanged: (v) => _loadStock(v, names),
-                ),
-                const SizedBox(height: 12),
-                LookupDropdown(
-                  key: ValueKey('brgy-$brgyId'),
-                  list: 'barangays',
-                  label: 'Destination barangay',
-                  value: brgyId,
-                  names: names,
-                  onChanged: (v) => setState(() => brgyId = v),
-                ),
-                const SizedBox(height: 12),
-                if (loadingStock) const LinearProgressIndicator(),
-                if (reportId != null && !loadingStock && stock.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 12),
-                    child: _NoStockBanner(),
+                // 1. Report
+                Text('1. Which report?', style: t.titleMedium),
+                Gaps.v8,
+                if (noReports)
+                  const EmptyView(
+                    compact: true,
+                    icon: Icons.inventory_2_outlined,
+                    title: 'Nothing to send yet',
+                    message:
+                        'No report has goods in stock. Receive donations '
+                        'first (Receive tab).',
+                  )
+                else
+                  InkWell(
+                    onTap: () => _chooseReport(candidates),
+                    borderRadius: BorderRadius.circular(Radii.md),
+                    child: InputDecorator(
+                      decoration: InputDecoration(
+                        labelText: 'Report',
+                        prefixIcon: const Icon(Icons.assignment_outlined),
+                        suffixIcon: const Icon(Icons.search),
+                        errorText: tried && report == null
+                            ? 'Choose a report'
+                            : null,
+                      ),
+                      child: Text(
+                        report == null
+                            ? 'Tap to choose (search by number or barangay)'
+                            : '${report!['report_label']}',
+                        style: report == null
+                            ? TextStyle(color: cs.onSurfaceVariant)
+                            : null,
+                      ),
+                    ),
                   ),
-                if (stock.isNotEmpty || reportId == null)
-                  for (var i = 0; i < lines.length; i++) _lineFields(i),
-                if (stock.isNotEmpty)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: lines.length >= stock.length
-                        ? Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            child: Text(
-                              'All items in stock for this report are listed. '
-                              'No more stock to add.',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          )
-                        : TextButton.icon(
-                            onPressed: () =>
-                                setState(() => lines.add(_DeliveryLine())),
-                            icon: const Icon(Icons.add),
-                            label: Text(
-                              'Add another item '
-                              '(${stock.length - lines.length} more in stock)',
-                            ),
+                if (report != null) ...[
+                  // Destination: the report's barangay unless changed.
+                  Gaps.v8,
+                  if (!changeBrgy)
+                    Row(
+                      children: [
+                        Icon(Icons.place_outlined, color: cs.primary),
+                        Gaps.h8,
+                        Expanded(
+                          child: Text(
+                            'Delivering to ${names.of('barangays', brgyId, fallback: '${report!['barangay_name']}')}',
+                            style: t.bodyLarge,
                           ),
+                        ),
+                        TextButton(
+                          onPressed: () => setState(() => changeBrgy = true),
+                          child: const Text('Change'),
+                        ),
+                      ],
+                    )
+                  else
+                    LookupDropdown(
+                      list: 'barangays',
+                      label: 'Deliver to which barangay?',
+                      value: brgyId,
+                      names: names,
+                      onChanged: (v) => setState(() => brgyId = v),
+                    ),
+                  // 2. Items
+                  Gaps.v24,
+                  Text('2. What to send', style: t.titleMedium),
+                  Gaps.v8,
+                  StockQuantities(
+                    key: ValueKey('items-${report!['report_id']}'),
+                    items: _items,
+                    controllerFor: _ctrl,
+                    onChanged: () => setState(() {}),
                   ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () async {
-                    final d = await pickDateTime(context);
-                    if (d != null) setState(() => date = d);
-                  },
-                  icon: const Icon(Icons.event),
-                  label: Text(
-                    date == null ? 'Pick delivery date' : niceDate(date),
+                  if (tried && lines.isEmpty)
+                    Text(
+                      'Enter a quantity for at least one item.',
+                      style: TextStyle(color: cs.error),
+                    ),
+                  // 3. When
+                  Gaps.v24,
+                  Text('3. When will it leave?', style: t.titleMedium),
+                  Gaps.v8,
+                  DateField(
+                    label: 'Delivery date and time',
+                    value: date,
+                    error: tried && date == null
+                        ? 'Pick a date and time'
+                        : null,
+                    onTap: () async {
+                      final d = await pickDeliveryDateTime(
+                        context,
+                        current: date,
+                      );
+                      if (d != null) setState(() => date = d);
+                    },
                   ),
-                ),
-                const SizedBox(height: 24),
-                FilledButton.icon(
-                  onPressed: busy || stock.isEmpty ? null : _submit,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(50),
+                  Gaps.v24,
+                  if (lines.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        'Sending ${lines.length} '
+                        '${lines.length == 1 ? 'item' : 'items'}'
+                        '${date == null ? '' : ' on ${niceWhen(date)}'}.',
+                        style: t.bodyMedium,
+                      ),
+                    ),
+                  FilledButton.icon(
+                    onPressed: busy ? null : _submit,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(52),
+                    ),
+                    icon: const Icon(Icons.inventory),
+                    label: const Text('Prepare delivery'),
                   ),
-                  icon: const Icon(Icons.inventory),
-                  label: const Text('Prepare delivery'),
-                ),
+                ],
               ],
             ),
           );
         },
-      ),
-    );
-  }
-}
-
-/// Shown when the chosen report has nothing left to send.
-class _NoStockBanner extends StatelessWidget {
-  const _NoStockBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    final tone = StatusColors.of('Expired', Theme.of(context).brightness);
-    return Container(
-      padding: const EdgeInsets.all(Space.sm),
-      decoration: BoxDecoration(
-        color: tone.bg,
-        borderRadius: BorderRadius.circular(Radii.md),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.remove_shopping_cart_outlined, color: tone.fg),
-          Gaps.h8,
-          Expanded(
-            child: Text(
-              'No more stock for this report. Receive more donations for it, '
-              'or choose another report.',
-              style: TextStyle(color: tone.fg, fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -1393,6 +1357,33 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
     );
   }
 
+  /// Accepted, but something changed (truck broke down, sent to an
+  /// emergency). CSWS is told and can ask again or find another vehicle.
+  Future<void> _withdraw(Map r) async {
+    final why = await askReason(
+      context,
+      title: 'Can no longer do request #${r['request_id']}?',
+      message: 'CSWS will be told right away so they can find another vehicle.',
+      choices: const [
+        'The truck broke down',
+        'The truck was sent to an emergency',
+        'No driver available',
+        'The road is closed or unsafe',
+      ],
+      confirm: 'Tell CSWS',
+      danger: true,
+    );
+    if (why == null || !mounted) return;
+    await act(
+      context,
+      () => api.post(
+        '/drrmo/requests/${r['request_id']}/withdraw',
+        body: {'reason': why},
+      ),
+      success: 'CSWS was told you can no longer help',
+    );
+  }
+
   Future<void> _complete(Map r) async {
     final v = await formDialog(
       context,
@@ -1438,6 +1429,7 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
           'In Transit': 'In transit',
           'Completed': 'Completed',
           'Declined': 'Declined',
+          'Cancelled': 'Cancelled by CSWS',
         };
         return ListView(
           padding: const EdgeInsets.all(16),
@@ -1528,8 +1520,10 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 8),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
+                      Wrap(
+                        alignment: WrapAlignment.end,
+                        spacing: 0,
+                        runSpacing: 6,
                         children: [
                           if (r['stage'] == 'Pending') ...[
                             OutlinedButton(
@@ -1542,6 +1536,13 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
                               icon: const Icon(Icons.check),
                               label: const Text('Accept'),
                             ),
+                          ],
+                          if (r['stage'] == 'Accepted') ...[
+                            TextButton(
+                              onPressed: () => _withdraw(r),
+                              child: const Text('Can no longer do this'),
+                            ),
+                            const SizedBox(width: 8),
                           ],
                           if (r['stage'] == 'Accepted' ||
                               r['stage'] == 'In Transit')

@@ -199,6 +199,8 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
     trips (api/v1/trips.py) so both behave the same. Does not commit."""
     # 'Confirmed' is the last stage and is only reached via
     # confirm_receipt below — never through this endpoint.
+    if delivery.status == "Cancelled":
+        raise HTTPException(status_code=409, detail="This delivery was cancelled.")
 
     if delivery.status == "Delivered":
         raise HTTPException(
@@ -447,9 +449,3 @@ def _recalculate_fulfillment(
   
   db.flush()
   return fulfillment
-
-
-
-
-
-

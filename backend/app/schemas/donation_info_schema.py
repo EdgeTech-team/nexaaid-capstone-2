@@ -1,5 +1,13 @@
 """Barangay donation-sending info (adviser item 7). DISPLAY ONLY: NexaAid
-never processes, holds or verifies money (Scope Limitation #5)."""
+never processes, holds or verifies money (Scope Limitation #5).
+
+CHANGE LOG
+- Concerns2.txt 2.1 (Castillo): account numbers follow provider standards.
+  Bank: 10-16 digits. Other: 6-20 digits (was any 3-50 characters).
+  Spaces or hyphens between digit groups are allowed. GCash/Maya unchanged
+  (11-digit 09 mobile number). Must match mobile/lib/ui/donation_info.dart.
+  Input-only: no column or migration change; existing rows still display.
+"""
 import re
 from typing import Literal, Optional
 
@@ -8,6 +16,19 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from core.validators import clean_ph_mobile, clean_text
 
 NOTE = "NexaAid does not process or verify payments. Send directly to the barangay."
+
+BANK_DIGITS = (10, 16)
+OTHER_DIGITS = (6, 20)
+_GROUPED_DIGITS = re.compile(r"[0-9]+(?:[ \-][0-9]+)*")
+
+
+def _account_digits(n: str, min_digits: int, max_digits: int, label: str) -> str:
+    if not _GROUPED_DIGITS.fullmatch(n):
+        raise ValueError(f"{label}: numbers only (spaces or hyphens between groups are OK)")
+    count = len(re.sub(r"[ \-]", "", n))
+    if not min_digits <= count <= max_digits:
+        raise ValueError(f"{label}: must be {min_digits}-{max_digits} digits")
+    return n
 
 
 class DonationInfoIn(BaseModel):
@@ -48,9 +69,7 @@ class DonationInfoIn(BaseModel):
             if self.provider in ("GCash", "Maya"):
                 self.account_number = clean_ph_mobile(n)          # 09XXXXXXXXX
             elif self.provider == "Bank":
-                if not re.fullmatch(r"[0-9][0-9 \-]{4,28}[0-9]", n):
-                    raise ValueError("Bank account number: 6-30 digits (spaces and hyphens allowed)")
-                self.account_number = n
+                self.account_number = _account_digits(n, *BANK_DIGITS, "Bank account number")
             else:
-                self.account_number = clean_text(n, "Account number", 3, 50)
+                self.account_number = _account_digits(n, *OTHER_DIGITS, "Account number")
         return self

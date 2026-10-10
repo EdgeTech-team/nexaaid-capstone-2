@@ -16,7 +16,7 @@ from models.item_model import Item
 from models.report import DisasterReport, DisasterType
 from schemas.physical_donation_schema import MANILA
 
-STATUS_ORDER = ["Preparing", "In Transit", "Delivered", "Confirmed"]
+STATUS_ORDER = ["Preparing", "In Transit", "Delivered", "Confirmed", "Cancelled"]
 
 # newest / oldest: when the delivery was prepared.
 # date_soonest / date_latest: the planned delivery date.
@@ -127,6 +127,8 @@ def delivery_views(db: Session, deliveries: list) -> list:
             "created_at": d.created_at,
             "trip_id": d.trip_id,
             "stop_order": d.stop_order,
+            "cancelled_at": d.cancelled_at,
+            "cancel_reason": d.cancel_reason,
             "items": [
                 {
                     "delivery_item_id": i.delivery_item_id,

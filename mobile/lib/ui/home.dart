@@ -12,6 +12,7 @@ import 'pickup_board.dart';
 import 'profile_screen.dart';
 import 'records_screens.dart';
 import 'report_screens.dart';
+import 'sms_send_screen.dart';
 import 'widgets.dart';
 import 'change_password_screen.dart';
 
@@ -42,7 +43,7 @@ List<_Tab> _tabsFor(String? role) {
           'Validate',
           Icons.fact_check_outlined,
           AdminReportsScreen(),
-        ), // 2.3, 2.4, 3.1, 3.3
+        ), // 2.3, 2.4, 3.1, 3.3; "Encode SMS report" button = 2.2 (UC-A3 8a)
         _Tab(
           'Monitoring',
           Icons.monitor_heart_outlined,
@@ -62,7 +63,12 @@ List<_Tab> _tabsFor(String? role) {
     case Roles.cswsUnit:
       return const [
         _Tab('Overview', Icons.dashboard_outlined, DashboardScreen()), // 9.3
-        _Tab('New report', Icons.edit_note, NewReportScreen()), // 2.1, 2.2 SMS
+        _Tab('New report', Icons.edit_note, NewReportScreen()), // 2.1
+        _Tab(
+          'SMS template',
+          Icons.sms_outlined,
+          SmsSendScreen(),
+        ), // 2.2 send by SMS when offline (Scope 2.4, UC-CD1 11b)
         reportsHub, // 2.4, 2.5, 3.3
       ];
     case Roles.cswsMain:
@@ -155,7 +161,7 @@ class RoleHome extends StatefulWidget {
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
 
-    @override
+  @override
   void initState() {
     super.initState();
     // I1: a temporary password must be changed first.
