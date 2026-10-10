@@ -1,84 +1,101 @@
 """send_email(): Gmail SMTP. Credentials come from environment variables, never code.
 
-backend/app/.env  (loaded by core/config.py; never commit it):
-    EMAIL_DEV_MODE=false              true = print emails in the uvicorn terminal instead of sending
-    SMTP_HOST=smtp.gmail.com
-    SMTP_PORT=587
-    SMTP_USER=your.address@gmail.com
-    SMTP_PASSWORD=xxxxxxxxxxxxxxxx    Google app password (SMTP_APP_PASSWORD also works)
-    SMTP_FROM=your.address@gmail.com  optional, defaults to SMTP_USER
+.env:
+    SMTP_HOST=smtp.gmail.com          (optional)
+    SMTP_PORT=587                     (optional)
+    SMTP_USER=team.nexaaid@gmail.com
+    SMTP_PASSWORD=xxxx xxxx xxxx xxxx (Google app password; SMTP_APP_PASSWORD also works)
 
-Never raises and never logs the message body outside dev mode (it may hold
-a temporary password).
-
-Check the Gmail setup on its own, from backend/app:
-    python -m core.email you@example.com
+Never raises and never logs the message body (it may hold a temporary password).
 """
 import logging
 import os
 import smtplib
-import sys
 from email.message import EmailMessage
 
-import core.config  # noqa: F401  (loads backend/app/.env into os.environ)
 
 log = logging.getLogger("uvicorn.error")
 
 
-def _flag(name: str) -> bool:
-    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
-
-
-def _password() -> str:
-    return (os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_APP_PASSWORD") or "").replace(" ", "")
-
-
 def email_configured() -> bool:
-    """True when emails can be delivered (or printed, in dev mode). Checked
-    before creating a staff account, because the temporary password is only
-    ever delivered by email."""
-    return _flag("EMAIL_DEV_MODE") or bool(os.getenv("SMTP_USER") and _password())
+    """True when SMTP credentials are present. Checked before creating a staff
+    account, because the temporary password is only ever delivered by email."""
+    return bool(
+        os.getenv("SMTP_USER")
+        and (os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_APP_PASSWORD"))
+    )
 
 
 def send_email(to: str, subject: str, body: str) -> bool:
-    if _flag("EMAIL_DEV_MODE"):
-        log.info("EMAIL_DEV_MODE: not sent.\nTo: %s\nSubject: %s\n\n%s", to, subject, body)
-        return True
-
     host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER")
-    password = _password()
+    password = os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_APP_PASSWORD")
     if not user or not password:
         log.warning("send_email skipped: SMTP_USER or SMTP_PASSWORD not set")
         return False
 
     msg = EmailMessage()
-    msg["From"] = f"NexaAid <{os.getenv('SMTP_FROM') or user}>"
+    msg["From"] = f"NexaAid <{user}>"
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body)
     try:
-        with smtplib.SMTP(host, port, timeout=15) as s:
+        with smtplib.SMTP(host, port, timeout=10) as s:
             s.starttls()
-            s.login(user, password)
+            s.login(user, password.replace(" ", ""))
             s.send_message(msg)
-        log.info("send_email ok: %r to %s", subject, to)
         return True
-    except smtplib.SMTPAuthenticationError:
-        log.error("send_email failed: Gmail rejected SMTP_USER/SMTP_PASSWORD. "
-                  "Use a 16-letter Google app password, not your normal password.")
-        return False
     except Exception:
         log.exception("send_email failed for %s", to)
         return False
 
+# ---------------------------------------------------------------------------
+# Donor / organization notifications (no passwords, notification only).
+# Staff accounts above are unchanged: they still get a temporary password
+# from admin_router. These are queued as background tasks by the routers,
+# so a slow Gmail never delays registration or login.
+# ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    if len(sys.argv) != 2:
-        sys.exit("usage: python -m core.email you@example.com")
-    ok = send_email(sys.argv[1], "NexaAid test email",
-                    "If you can read this, NexaAid can send email.")
-    print("SENT" if ok else "NOT SENT - see the error above")
-    sys.exit(0 if ok else 1)
+_SIGN_OFF = "\n\n- The NexaAid Team"
+
+
+def send_registration_notice(to: str, first_name: str, role_name: str,
+                             org_name: str = None) -> bool:
+    """After self-registration: UC-D1 (donor, active right away) or
+    UC-A2 (organization, pending the Administrator's review)."""
+    if role_name == "Relief Organization":
+        subject = "NexaAid registration received - pending review"
+        body = (
+            f"Hello {first_name},\n\n"
+            f"Thank you for registering {org_name or 'your organization'} on NexaAid "
+            "as a Relief Organization.\n\n"
+            f"Login email: {to}\n\n"
+            "Your registration is pending review by the NexaAid Administrator. "
+            "You can sign in once it is approved, and we will notify you at this "
+            "email address when the review is done.\n\n"
+            "If you did not submit this registration, please reply to this email."
+        )
+    else:
+        subject = "Welcome to NexaAid - your donor account is ready"
+        body = (
+            f"Hello {first_name},\n\n"
+            "You have successfully registered on NexaAid as an Individual Donor.\n\n"
+            f"Login email: {to}\n\n"
+            "You can now sign in to view validated disaster reports in Cebu City "
+            "and support them. We will notify you at this email address about "
+            "updates to your account and your donations.\n\n"
+            "If you did not create this account, please reply to this email."
+        )
+    return send_email(to, subject, body + _SIGN_OFF)
+
+
+def send_login_notice(to: str, first_name: str, when: str) -> bool:
+    """After a donor or organization signs in: a security notice only."""
+    body = (
+        f"Hello {first_name},\n\n"
+        f"Your NexaAid account ({to}) was signed in on {when}.\n\n"
+        "If this was you, no action is needed. If it was not you, change your "
+        "password right away and contact the NexaAid Administrator."
+    )
+    return send_email(to, "New sign-in to your NexaAid account", body + _SIGN_OFF)

@@ -382,3 +382,25 @@ def test_failed_registration_sends_no_email(api, monkeypatch):
     r = client.post("/auth/register/donor", json=donor_payload(client, "dup@example.com"))
     assert r.status_code == 409
     assert len(sent) == 1                        # only the first, successful one
+
+
+def test_login_notice_only_for_donors_and_orgs(api, monkeypatch):
+    """Donors get a sign-in notice; staff (e.g. Administrator) do not."""
+    import core.email as mail_service
+    sent = []
+    monkeypatch.setattr(mail_service, "send_email",
+                        lambda to, subject, body: sent.append((to, subject, body)) or True)
+    client, t = api
+    ok(client.post("/auth/register/donor",
+                   json=donor_payload(client, "login.donor@example.com")), 201)
+    sent.clear()
+
+    ok(client.post("/token", data={"username": "login.donor@example.com",
+                                   "password": STRONG_PASSWORD}))
+    assert len(sent) == 1 and sent[0][0] == "login.donor@example.com"
+    assert "sign-in" in sent[0][1].lower() and STRONG_PASSWORD not in sent[0][2]
+
+    sent.clear()
+    from tests.test_role_flows import PASSWORD
+    ok(client.post("/token", data={"username": "testadmin@gmail.com", "password": PASSWORD}))
+    assert sent == []                                   # staff: no sign-in notice
