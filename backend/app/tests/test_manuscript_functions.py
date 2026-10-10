@@ -25,27 +25,49 @@ def test_admin_accounts_orgs_and_logs(api):
     assert client.get("/admin/users", headers=t["csws"]).status_code == 403
 
     # UC-A1: deactivate -> cannot log in, reactivate -> can
-    ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": False}))
+    ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": False, "deactivation_reason": "Test reason"}))
     r = client.post("/token", data={"username": "donor.test@example.com", "password": PASSWORD})
     assert r.status_code == 403 and "deactivated" in r.json()["detail"]
     assert client.get("/health/secure", headers=t["donor"]).status_code == 403  # old token rejected
     ok(client.patch(f"/admin/users/{donor['user_id']}", headers=t["admin"], json={"is_active": True}))
     ok(client.post("/token", data={"username": "donor.test@example.com", "password": PASSWORD}))
 
-    # UC-A2: organization is Pending until approved
-    org = ok(client.post("/auth/register/organization",
-                         json=org_payload(client, "jo@relief.ph")), 201)
-    r = client.post("/token", data={"username": "jo@relief.ph", "password": STRONG_PASSWORD})
-    assert r.status_code == 403 and "Pending" in r.json()["detail"]
-    pending = ok(client.get("/admin/organizations?status=Pending", headers=t["admin"]))
-    assert pending[0]["document_missing"] is False         # uploaded at registration
-    ok(client.post(f"/admin/organizations/{org['organization_id']}/decision",
-                   headers=t["admin"], json={"decision": "Approved"}))
-    ok(client.post("/token", data={"username": "jo@relief.ph", "password": STRONG_PASSWORD}))
+    # UC-A2: organization registration is active immediately;
+    # admin review is tracked separately from account activation.
+    org = ok(
+        client.post(
+            "/auth/register/organization",
+            json=org_payload(client, "jo@relief.ph"),
+        ),
+        201,
+    )
+    login = client.post(
+        "/token",
+        data={"username": "jo@relief.ph", "password": STRONG_PASSWORD},
+    )
+    assert login.status_code == 200
+
+    not_reviewed = ok(
+        client.get("/admin/organizations?reviewed=false", headers=t["admin"])
+    )
+    org_row = next(
+        o for o in not_reviewed
+        if o["organization_id"] == org["organization_id"]
+    )
+    assert org_row["document_missing"] is False
+    assert org_row["reviewed_at"] is None
+
+    ok(
+        client.patch(
+            f"/admin/organizations/{org['organization_id']}/review",
+            headers=t["admin"],
+            json={"reviewed": True},
+        )
+    )
 
     # UC-A4: activity logs, read-only, admin only
     actions = [l["action"] for l in ok(client.get("/admin/audit-logs", headers=t["admin"]))]
-    assert {"DEACTIVATE ACCOUNT", "ACTIVATE ACCOUNT", "APPROVE ORGANIZATION"} <= set(actions)
+    assert {"DEACTIVATE ACCOUNT", "ACTIVATE ACCOUNT", "REVIEW ORGANIZATION"} <= set(actions)
     assert client.get("/admin/audit-logs", headers=t["cmo"]).status_code == 403
     dash = ok(client.get("/dashboard/admin", headers=t["admin"]))
     assert dash["total_users"] >= 8 and dash["pending_organizations"] == 0
