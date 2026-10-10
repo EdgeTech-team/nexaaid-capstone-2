@@ -101,7 +101,6 @@ class _DonorDashboardState extends State<DonorDashboard> {
         return ListView(
           padding: const EdgeInsets.only(bottom: Space.xl),
           children: [
-feature/donor-dashboard-2
             _DashboardHero( 
               profile: profile,
               isOrg: isOrg,
@@ -111,94 +110,6 @@ feature/donor-dashboard-2
                       report: urgent,
                       onDonate: () => _donate(urgent, names),
                     ),
-
-            _Welcome(profile: profile, isOrg: isOrg),
-            const SectionHeader('Your giving'),
-            StatCardGrid([
-              StatCard(
-                label: 'Donations made',
-                value: '${sum['total_entries']}',
-                icon: Icons.volunteer_activism_outlined,
-              ),
-              StatCard(
-                label: 'Items given',
-                value: '${sum['total_quantity']}',
-                icon: Icons.inventory_outlined,
-              ),
-              StatCard(
-                label: 'Reports supported',
-                value: '${sum['supported_reports']}',
-                icon: Icons.campaign_outlined,
-              ),
-              StatCard(
-                label: 'Waiting for drop-off or pickup',
-                value:
-                    '${entries.where((e) => (e['pending_items'] as num) > 0).length}',
-                icon: Icons.schedule,
-                color: StatusColors.base('Pending'),
-              ),
-              StatCard(
-                label: 'Received by CSWS',
-                value: '${count('Received')}',
-                icon: Icons.inventory_2_outlined,
-                color: StatusColors.base('Received'),
-              ),
-              StatCard(
-                label: 'Confirmed by the City',
-                value: '${count('Confirmed')}',
-                icon: Icons.verified_outlined,
-                color: StatusColors.base('Confirmed'),
-              ),
-              if (count('Expired') + count('Cancelled') > 0)
-                StatCard(
-                  label: 'Expired or cancelled',
-                  value: '${count('Expired') + count('Cancelled')}',
-                  icon: Icons.timer_off_outlined,
-                  color: StatusColors.base('Expired'),
-                ),
-            ]),
-
-            // ---- Donations (one card per entry, 4.4 / 4.5) ------------------
-            const SectionHeader(
-              'Your donations',
-              subtitle: 'Tap a donation to see its QR code and full timeline.',
-            ),
-            if (entries.isEmpty)
-              AppCard(
-                child: EmptyView(
-                  compact: true,
-                  icon: Icons.volunteer_activism_outlined,
-                  title: 'No donations yet',
-                  message:
-                      'Pick a report that needs help and pledge goods. Your '
-                      'donations and their progress will show here.',
-                  action: AppButton(
-                    'Find a report to support',
-                    variant: AppButtonVariant.donate,
-                    onPressed: _openFeed,
-                  ),
-                ),
-              )
-            else
-              DonationEntriesView(
-                entries: entries,
-                footer: (e) => StatusTimeline(
-                  steps: donationLifecycle,
-                  labels: donationLifecycleLabels,
-                  current: _lifecycleStatus(e),
-                ),
-                onTap: (e) => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => DonationDetailScreen(entry: e),
-                  ),
-                ),
-              ),
-
-            // ---- Supported reports ---------------------------------------
-            const SectionHeader(
-              'Reports you supported',
-              subtitle: 'How close each report is to getting what it needs.',
-copy-develop
             ),
             _Centered(
               child: Column(
