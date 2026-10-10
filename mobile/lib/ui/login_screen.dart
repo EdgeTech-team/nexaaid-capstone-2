@@ -79,9 +79,9 @@ class _LoginScreenState extends State<LoginScreen> {
       shrinkWrap: widget.popup, // the pop-up card fits its content
       padding: const EdgeInsets.all(24),
       children: [
-        // Close (pop-up) or Back (full page) on the left, the light/dark
-        // toggle at the far right. The server address stays reachable in
-        // debug builds only, for running on Chrome vs the emulator.
+        // Close (pop-up) or Back (full page) on the left. No light/dark
+        // toggle here (Ivan's note): it is the rightmost button of the
+        // landing page header, and Profile > Appearance when signed in.
         Row(
           children: [
             if (widget.popup)
@@ -98,21 +98,6 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
             const Spacer(),
 
-            ValueListenableBuilder<ThemeMode>(
-              valueListenable: AppTheme.mode,
-              builder: (context, mode, _) {
-                final dark = Theme.of(context).brightness == Brightness.dark;
-                return IconButton(
-                  tooltip: dark ? 'Light mode' : 'Dark mode',
-                  onPressed: () => AppTheme.mode.value = dark
-                      ? ThemeMode.light
-                      : ThemeMode.dark,
-                  icon: Icon(
-                    dark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
-                  ),
-                );
-              },
-            ),
           ],
         ),
         const SizedBox(height: 8),

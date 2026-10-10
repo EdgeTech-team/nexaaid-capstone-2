@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import '../../design/design.dart';
 import '../donor_screens.dart' show DonateScreen;
 import '../login_screen.dart';
+import '../blur_popup.dart';
 import '../register_screen.dart' show showRegisterPopup;
+import '../theme_toggle.dart';
 import '../widgets.dart' show api, formDialog, DialogField, Names;
 import 'landing_extras.dart';
 import 'about_section.dart';
@@ -53,44 +55,15 @@ class _LandingScreenState extends State<LandingScreen> {
 
   void _logIn() => showLoginPopup(context);
 
-  void _createAccount() {
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Create an account',
-                style: Theme.of(ctx).textTheme.titleLarge,
-              ),
-              Gaps.v8,
-              ListTile(
-                leading: const Icon(Icons.person_outline),
-                title: const Text('Individual donor'),
-                subtitle: const Text('Track your donations to each report.'),
-                onTap: () => _register(ctx, org: false),
-              ),
-              ListTile(
-                leading: const Icon(Icons.groups_outlined),
-                title: const Text('Relief organization'),
-                subtitle: const Text(
-                  'The administrator reviews your organization first.',
-                ),
-                onTap: () => _register(ctx, org: true),
-              ),
-            ],
-          ),
-        ),
-      ),
+  /// "Register as donor or organization": a formatted pop-out (over the
+  /// blurred landing page) to choose which kind of donor account.
+  Future<void> _createAccount() async {
+    final org = await showBlurPopup<bool>(
+      context,
+      label: 'Close',
+      child: const _DonorTypeChooser(),
     );
-  }
-
-  void _register(BuildContext sheet, {required bool org}) {
-    Navigator.of(sheet).pop();
+    if (org == null || !mounted) return;
     showRegisterPopup(context, org: org);
   }
 
@@ -483,6 +456,9 @@ class _Hero extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
+                  // Light / dark mode picker, rightmost (Ivan's note). Not
+                  // in the login pop-up; signed in, it is in Profile.
+                  const ThemeToggleButton(color: onHero),
                 ],
               ),
               Gaps.v24,
@@ -984,6 +960,155 @@ class _PriorityGuide extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+// ---------------------------------------------------------------------------
+// Which kind of donor? (Ivan's note: "lacking format pop out for choosing
+// which donor"). Pops true for an organization, false for an individual.
+// ---------------------------------------------------------------------------
+class _DonorTypeChooser extends StatelessWidget {
+  const _DonorTypeChooser();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(Space.lg, Space.xs, Space.lg, Space.lg),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: IconButton(
+              tooltip: 'Close',
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: const Icon(Icons.close),
+            ),
+          ),
+          Text(
+            'Join NexaAid',
+            textAlign: TextAlign.center,
+            style: t.headlineSmall,
+          ),
+          Gaps.v4,
+          Text(
+            'How will you give? Either way you can donate to any validated '
+            'report and follow it to the barangay.',
+            textAlign: TextAlign.center,
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v24,
+          _DonorTypeCard(
+            icon: Icons.person_outline,
+            title: 'Individual donor',
+            subtitle: 'For yourself or your family.',
+            points: const [
+              'Donate right after signing up',
+              'Track each donation with its QR code',
+            ],
+            onTap: () => Navigator.of(context).pop(false),
+          ),
+          Gaps.v12,
+          _DonorTypeCard(
+            icon: Icons.groups_outlined,
+            title: 'Relief organization',
+            subtitle: 'Churches, companies, schools and relief groups.',
+            points: const [
+              'Give under your organization\'s name',
+              'Documents are optional for some organization types',
+            ],
+            onTap: () => Navigator.of(context).pop(true),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DonorTypeCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final List<String> points;
+  final VoidCallback onTap;
+
+  const _DonorTypeCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.points,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Semantics(
+      button: true,
+      label: '$title. $subtitle',
+      excludeSemantics: true,
+      child: Material(
+        color: cs.surfaceContainerLow,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.lg),
+          side: BorderSide(color: cs.outlineVariant),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(Space.md),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 22,
+                  backgroundColor: cs.primaryContainer,
+                  child: Icon(icon, color: cs.onPrimaryContainer),
+                ),
+                Gaps.h12,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title, style: t.titleMedium),
+                      Gaps.v4,
+                      Text(
+                        subtitle,
+                        style: t.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                      Gaps.v8,
+                      for (final p in points)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(
+                                Icons.check,
+                                size: 16,
+                                color: StatusColors.base('Acknowledged'),
+                              ),
+                              Gaps.h4,
+                              Expanded(child: Text(p, style: t.bodySmall)),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
