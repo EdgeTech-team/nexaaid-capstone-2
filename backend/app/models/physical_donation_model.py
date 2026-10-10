@@ -57,6 +57,7 @@ class PhysicalDonation(Base):
     pickup_lat = Column(Numeric(9, 6), nullable=True)
     pickup_lng = Column(Numeric(9, 6), nullable=True)
     pickup_landmark = Column(Text, nullable=True)
+    pickup_notes = Column(Text, nullable=True)
     # Door to Door: when the donor would like CSWS to pick up (UC-D2 alt 7c)
     preferred_pickup_at = Column(DateTime(timezone=True), nullable=True)
     qr_reference = Column(String(100), nullable=False, unique=True)
