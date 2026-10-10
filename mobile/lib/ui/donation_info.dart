@@ -564,7 +564,18 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
     return FutureBuilder<ApiResult>(
       future: _load,
       builder: (context, snap) {
-        if (!snap.hasData) return const SkeletonList();
+        if (!snap.hasData) {
+          // Embedded = inside the Administrator's ListView (Accounts >
+          // Donation info). SkeletonList is itself a ListView, and a ListView
+          // inside a ListView has unbounded height: Flutter throws on every
+          // frame and the tab looks frozen. Use plain cards there instead.
+          return widget.embedded
+              ? const Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [SkeletonCard(), Gaps.v12, SkeletonCard()],
+                )
+              : const SkeletonList();
+        }
         final r = snap.data!;
         if (!r.ok) {
           return ErrorView.forStatus(

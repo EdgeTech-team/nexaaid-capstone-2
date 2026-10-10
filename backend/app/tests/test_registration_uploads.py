@@ -344,3 +344,41 @@ def test_unreadable_image_upload_asks_for_reupload(api):
     assert r.status_code == 400 and "again" in _detail(r)
     assert client.post("/uploads", data={"purpose": "id_back"},
                        files={"file": ("id.pdf", pdf(), "application/pdf")}).status_code == 201
+
+# ------------------------------------------------- welcome email (registration)
+
+def test_registration_sends_welcome_email(api, monkeypatch):
+    """Donor and organization each get a confirmation email after registering.
+    Sent as a background task through core.email.send_email (mocked here)."""
+    import core.email as mail_service
+    sent = []
+    monkeypatch.setattr(mail_service, "send_email",
+                        lambda to, subject, body: sent.append((to, subject, body)) or True)
+    client, t = api
+
+    ok(client.post("/auth/register/donor",
+                   json=donor_payload(client, "welcome.donor@example.com")), 201)
+    assert len(sent) == 1
+    to, subject, body = sent[0]
+    assert to == "welcome.donor@example.com"
+    assert "registered" in body and "notify you" in body
+    assert STRONG_PASSWORD not in body          # never email the password
+
+    ok(client.post("/auth/register/organization",
+                   json=org_payload(client, "welcome.org@example.com", "REG-WELCOME-1")), 201)
+    assert len(sent) == 2
+    to, subject, body = sent[1]
+    assert to == "welcome.org@example.com"
+    assert "pending" in subject.lower() and "pending review" in body
+
+
+def test_failed_registration_sends_no_email(api, monkeypatch):
+    import core.email as mail_service
+    sent = []
+    monkeypatch.setattr(mail_service, "send_email", lambda *a: sent.append(a) or True)
+    client, t = api
+    ok(client.post("/auth/register/donor",
+                   json=donor_payload(client, "dup@example.com")), 201)
+    r = client.post("/auth/register/donor", json=donor_payload(client, "dup@example.com"))
+    assert r.status_code == 409
+    assert len(sent) == 1                        # only the first, successful one

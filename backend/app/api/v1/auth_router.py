@@ -1,9 +1,12 @@
 # routers/auth_router.py
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from core import email as mail_service
 from core.audit import log_action
 from core.auth import hash_password
 from core.database import get_db
@@ -27,6 +30,15 @@ def _email_taken(db: Session, email: str) -> bool:
     return db.query(User).filter(func.lower(User.email) == email.lower()).first() is not None
 
 
+def _queue_email(background_tasks: BackgroundTasks, to: Optional[str], subject: str, body: str) -> None:
+    """Welcome email, sent after the response (same pattern as admin_router):
+    a slow or unconfigured Gmail never delays or fails registration, and the
+    task only runs if the request succeeded (get_db committed the account).
+    send_email() never raises; without SMTP_USER/SMTP_PASSWORD it just logs."""
+    if to:
+        background_tasks.add_task(mail_service.send_email, to, subject, body)
+
+
 def _flush_or_409(db: Session, detail: str) -> None:
     # Two people registering the same email at the same moment: the second
     # one hits the UNIQUE constraint here instead of a 500.
@@ -38,7 +50,8 @@ def _flush_or_409(db: Session, detail: str) -> None:
 
 
 @router.post("/register/donor", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register_donor(payload: DonorRegisterRequest, request: Request, db: Session = Depends(get_db)):
+def register_donor(payload: DonorRegisterRequest, request: Request, background_tasks: BackgroundTasks,
+                   db: Session = Depends(get_db)):
     """UC-D1 Register Individual Donor (adviser item 2)."""
     if _email_taken(db, payload.email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
@@ -75,11 +88,26 @@ def register_donor(payload: DonorRegisterRequest, request: Request, db: Session 
     }, request=request)
     db.flush()
     db.refresh(new_user)
+
+    # Confirmation email: the account exists and updates will come by email.
+    _queue_email(
+        background_tasks, new_user.email,
+        "Welcome to NexaAid - your donor account is ready",
+        f"Hello {new_user.first_name},\n\n"
+        "You have successfully registered on NexaAid as an Individual Donor.\n\n"
+        f"Login email: {new_user.email}\n\n"
+        "You can now sign in to view validated disaster reports in Cebu City "
+        "and support them. We will notify you at this email address about "
+        "updates to your account and your donations.\n\n"
+        "If you did not create this account, please reply to this email.\n\n"
+        "- The NexaAid Team",
+    )
     return new_user
 
 
 @router.post("/register/organization", response_model=OrganizationResponse, status_code=status.HTTP_201_CREATED)
-def register_organization(payload: OrganizationRegisterRequest, request: Request, db: Session = Depends(get_db)):
+def register_organization(payload: OrganizationRegisterRequest, request: Request,
+                          background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """UC-A2: the organization registers and waits as Pending for the
     Administrator's review (adviser item 2.1)."""
     if _email_taken(db, payload.contact_email):
@@ -132,4 +160,19 @@ def register_organization(payload: OrganizationRegisterRequest, request: Request
     # Login stays blocked by authenticate_user() until the admin approves the org.
     db.flush()
     db.refresh(new_org)
+
+    # Confirmation email: registered, pending review. The approve/reject
+    # email is sent later from admin_router (UC-A2).
+    _queue_email(
+        background_tasks, new_user.email,
+        "NexaAid registration received - pending review",
+        f"Hello {new_user.first_name},\n\n"
+        f"Thank you for registering {new_org.org_name} on NexaAid as a Relief Organization.\n\n"
+        f"Login email: {new_user.email}\n\n"
+        "Your registration is now pending review by the NexaAid Administrator. "
+        "You will be able to sign in once it is approved, and we will notify "
+        "you at this email address when the review is done.\n\n"
+        "If you did not submit this registration, please reply to this email.\n\n"
+        "- The NexaAid Team",
+    )
     return new_org
