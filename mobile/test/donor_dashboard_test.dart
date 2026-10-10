@@ -116,23 +116,23 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('Reports tab: Active has Donate, Done has the 100% ones', (
+  testWidgets('Reports tab: one list, Fulfilled is a filter not a section', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const DonorReportsTab());
-      expect(find.text('Active Reports'), findsOneWidget);
+      expect(find.text('All Reports'), findsOneWidget);
+      expect(find.text('Done'), findsNothing); // no separate Done section
+      // Active and fulfilled reports are in the same list.
       expect(find.text('Flood in Barangay Banilad'), findsOneWidget);
-      expect(find.text('Flood in Barangay Looc'), findsNothing);
-      expect(find.text('Donate'), findsNWidgets(2));
+      expect(find.text('Flood in Barangay Looc'), findsOneWidget);
 
-      await tester.tap(find.text('Done'));
+      await tester.tap(find.textContaining('Fulfilled ('));
       await tester.pumpAndSettle();
-      expect(find.text('Completed Reports'), findsOneWidget);
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
       expect(find.text('Flood in Barangay Banilad'), findsNothing);
-      expect(find.text('Donate'), findsNothing);
+      expect(find.text('Donate'), findsNothing); // fulfilled: no Donate
     }, () => _server);
   });
 }
