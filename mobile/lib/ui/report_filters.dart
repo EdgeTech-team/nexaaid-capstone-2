@@ -9,12 +9,21 @@ import '../design/design.dart';
 // loaded, so no backend change is needed.
 // ---------------------------------------------------------------------------
 
+/// fulfillment_percentage as a number, or null if the row has none. The
+/// staff report endpoints send it as text ("40.00", a Decimal); /lookups
+/// sends a number, so both are accepted.
+double? fulfillmentPercent(Map r) {
+  final p = r['fulfillment_percentage'];
+  if (p == null) return null;
+  if (p is num) return p.toDouble();
+  return double.tryParse('$p');
+}
+
 /// Fulfillment status of a report from its fulfillment_percentage.
 /// Returns null when the row has no fulfillment data.
 String? fulfillmentState(Map r) {
-  final p = r['fulfillment_percentage'];
-  if (p == null) return null;
-  final pct = (p as num).toDouble();
+  final pct = fulfillmentPercent(r);
+  if (pct == null) return null;
   if (pct >= 100) return 'Fulfilled';
   if (pct > 0) return 'In Progress';
   return 'Not Started';
@@ -40,8 +49,7 @@ List<Map<String, dynamic>> sortAndFilterReports(
   String? fulfillment,
   ReportSort sort = ReportSort.urgent,
 }) {
-  double pct(Map r) =>
-      (r['fulfillment_percentage'] as num?)?.toDouble() ?? 0;
+  double pct(Map r) => fulfillmentPercent(r) ?? 0;
   int id(Map r) => ((r['report_id'] ?? r['id'] ?? 0) as num).toInt();
   int fam(Map r) => (r['affected_families'] as num?)?.toInt() ?? 0;
   int done(Map r) => pct(r) >= 100 ? 1 : 0;
