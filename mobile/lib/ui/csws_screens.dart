@@ -402,6 +402,19 @@ class CswsMainDashboard extends StatelessWidget {
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
               ),
+              // Donation expiry: what needs attention before it lapses.
+              StatTile(
+                'Due within 3 days',
+                '${m['due_soon_donations'] ?? 0}',
+                Icons.timer_outlined,
+                color: StatusColors.base('On Hold'),
+              ),
+              StatTile(
+                'Expired or cancelled',
+                '${(m['expired_donations'] ?? 0) + (m['cancelled_donations'] ?? 0)}',
+                Icons.timer_off_outlined,
+                color: StatusColors.base('Expired'),
+              ),
               StatTile(
                 'Entries received',
                 '${m['entries_received']}',

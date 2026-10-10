@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult;
 import 'donation_entries_view.dart';
+import 'expiry_widgets.dart';
 import 'donor_screens.dart' show DonateScreen, ReportsFeed;
 import 'widgets.dart';
 
@@ -120,6 +121,13 @@ class _DonorDashboardState extends State<DonorDashboard> {
                 icon: Icons.verified_outlined,
                 color: StatusColors.base('Confirmed'),
               ),
+              if (count('Expired') + count('Cancelled') > 0)
+                StatCard(
+                  label: 'Expired or cancelled',
+                  value: '${count('Expired') + count('Cancelled')}',
+                  icon: Icons.timer_off_outlined,
+                  color: StatusColors.base('Expired'),
+                ),
             ]),
 
             // ---- Donations (one card per entry, 4.4 / 4.5) ------------------
@@ -460,6 +468,24 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
           if (report != null) ...[
             const SectionHeader('Report progress'),
             _ReportProgress(report: report),
+          ],
+          // Withdraw while it is still waiting (only waiting items are
+          // cancelled; anything CSWS received stays received).
+          if (hasWaitingItems(e)) ...[
+            Gaps.v24,
+            OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.danger,
+                minimumSize: const Size.fromHeight(48),
+              ),
+              onPressed: () async {
+                if (await cancelDonation(context, e) && context.mounted) {
+                  Navigator.pop(context);
+                }
+              },
+              icon: const Icon(Icons.block),
+              label: const Text('I can no longer give this donation'),
+            ),
           ],
           Gaps.v24,
         ],
