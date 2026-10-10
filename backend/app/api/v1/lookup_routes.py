@@ -96,7 +96,7 @@ def get_lookups(db: Session = Depends(get_db)):
         "open_deliveries": deliveries("Preparing", "In Transit"),  # CSWS advances
         "delivered_deliveries": deliveries("Delivered"),  # Barangay acknowledges
         "pending_requests": [                          # DRRMO accepts / declines
-            {"id": r.request_id, "name": f"#{r.request_id} for delivery #{r.delivery_id}"}
+            {"id": r.request_id, "name": f"#{r.request_id} for {r.title}"}
             for r in requests
         ],
     }

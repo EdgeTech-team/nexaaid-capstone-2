@@ -107,13 +107,23 @@ def confirm_donation(
     log_action(db, current_user, f"CMO {payload.status.upper()}", "physical_donations", donation_id,
                old={"status": "Received"}, new={"status": donation.status, "decision": payload.status,
                                                "notes": payload.notes})
+    # Daniel (Oct 10): the donor hears about the whole donation entry, in
+    # order: submitted -> received by CSWS -> acknowledged by the CMO. One
+    # "acknowledged" notice per entry, sent when its last received item is
+    # acknowledged (not one per item).
+    ref = donation.batch_reference or donation.qr_reference
     if donation.user_id:  # guests have no account
         if payload.status == "Confirmed":
-            notify_event(db, donation.user_id, "donation_confirmed", "donation",
-                         donation_id, batch_no=donation_id)
+            waiting = (db.query(PhysicalDonation)
+                       .filter(PhysicalDonation.batch_reference == donation.batch_reference,
+                               PhysicalDonation.status == "Received")
+                       .count())
+            if waiting == 0:
+                notify_event(db, donation.user_id, "donation_confirmed", "donation",
+                             donation_id, batch_no=ref)
         elif payload.status == "On Hold":
             notify_event(db, donation.user_id, "donation_held", "donation",
-                         donation_id, batch_no=donation_id, reason=payload.notes or "")
+                         donation_id, batch_no=ref, reason=payload.notes or "")
     db.commit()
     db.refresh(confirmation)
     return confirmation

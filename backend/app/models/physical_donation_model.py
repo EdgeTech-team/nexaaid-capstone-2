@@ -58,7 +58,11 @@ class PhysicalDonation(Base):
     pickup_lng = Column(Numeric(9, 6), nullable=True)
     pickup_landmark = Column(Text, nullable=True)
     pickup_notes = Column(Text, nullable=True)
-    # Door to Door: when the donor would like CSWS to pick up (UC-D2 alt 7c)
+    # Door to Door: the days the donor is home for the pickup, as ISO weekday
+    # numbers "1,3,5" (1 = Monday). Pickups happen within the CSWS pickup
+    # hours (schemas/physical_donation_schema.pickup_rules).
+    pickup_days = Column(String(20), nullable=True)
+    # Door to Door, older entries: one preferred date and time (UC-D2 alt 7c)
     preferred_pickup_at = Column(DateTime(timezone=True), nullable=True)
     qr_reference = Column(String(100), nullable=False, unique=True)
     # Shared by every item of one donation; this is what the QR encodes.

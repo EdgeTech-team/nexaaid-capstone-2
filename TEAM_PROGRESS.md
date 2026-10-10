@@ -95,6 +95,63 @@ run in my environment). Migrations go to Neon only after review.
 
 ---
 
+## Daniel — Door to Door pickup days, Disaster Unit pickup map, DRRMO support (Oct 10 notes)
+
+**Status:** Built and tested on branch `daniel/pickup-days-map-logistics` (from `copy-develop`), waiting for team review
+**Last updated:** Oct 10, 2026
+
+**1. Donors choose pickup days, not one date and time.** Door to Door now
+opens a pop-out with day buttons (M / T / W / Th / F, Sa and Su crossed out
+while CSWS does not pick up then) and the note "Pickup hours are 9:00 AM to
+5:00 PM". Stored in `physical_donations.pickup_days` ("1,3,5", 1 = Monday).
+Old entries keep `preferred_pickup_at`. Pickup hours default to 9 AM - 5 PM
+(`PICKUP_START_HOUR=9`). Expiry for a days-only pickup: 14 days after it was
+submitted (`DONATION_PICKUP_WINDOW_DAYS`).
+
+**2. Pickup map for the CSWS Disaster Unit** (new "Pickup map" tab; Main
+Office opens it from the Pickups tab, view only). A numbered pin per waiting
+Door to Door donation at the landmark the donor picked; tap a pin to see its
+landmark and address. Above the map: day buttons (with how many donors are
+home that day), landmark chips, and order: Nearest (one way, nearest stop
+next, starting at the CSWS office when `DROPOFF_LAT`/`DROPOFF_LNG` are set)
+or A to Z. Straight-line distance only, not road routing (Limitation 6).
+
+**3. Disaster Unit asks DRRMO for logistics support for a pickup run**, like
+Main Office does for deliveries: a day, the stops in order, trucks /
+volunteers / pushcarts. `POST /logistics/pickup-requests`. DRRMO sees it in
+the same list. The server checks that every donor is home that day.
+
+**4. Appendix H 7.1 and 7.2.** No driver count any more (a truck comes with
+its driver); trucks, volunteers and the new pushcarts can each be None. DRRMO
+cards highlight what is needed and when it was requested.
+
+**5. Daniel's QR items.** Donors can save their QR as an image (a small QR
+pass with the reference). The Receive scanner can read a QR from a photo.
+Scanning still opens the receive pop-up directly. The donor is told in
+order, once per donation entry: submitted, received by CSWS, acknowledged by
+the CMO.
+
+**Schema (1 migration, additive, upgrade/downgrade tested on Postgres):**
+`d8f3a1c6b2e4` physical_donations.pickup_days; logistics_requests gets
+`request_type` ('Delivery' / 'Pickup'), `pickup_date`, `pickup_batches`, and
+`delivery_id` becomes nullable (a check keeps Delivery requests tied to a
+delivery).
+
+**Who should check what:**
+- **Hoyohoy** (donations): `schemas/physical_donation_schema.py` (pickup
+  days rules), `donation_routes.py` (pickup days in every view, Disaster Unit
+  may read `/donations/pickups`).
+- **Mariquit** (logistics/deliveries): `logistics_router.py`,
+  `drrmo_router.request_rows` (pickup runs), `delivery_problems.py` (the
+  Disaster Unit cancels only its own pickup runs).
+- **Fernandez** (UI): `ui/pickup_days.dart`, `ui/pickup_map.dart`,
+  `ui/logistics_cards.dart`, `ui/qr_save.dart`.
+
+**Tests:** `pytest` (new: `test_pickup_days_and_runs.py`,
+`test_donation_notice_order.py`), `flutter test test/pickup_days_test.dart`.
+
+---
+
 ## Hoyohoy — Auth/Registration (3.3)
 
 **Status:** Done

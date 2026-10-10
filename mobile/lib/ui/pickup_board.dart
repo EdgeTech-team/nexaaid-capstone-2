@@ -7,12 +7,17 @@ import 'batch_sheet.dart' show openDonationByQr;
 import 'expiry_widgets.dart' show ExpiryNote;
 import 'location_picker.dart' show PickupRules, formatPickupTime;
 import 'pickup_actions.dart';
+import 'pickup_days.dart';
+import 'pickup_map.dart';
 import 'widgets.dart';
 
 /// CSWS "Pickups" tab (Door to Door, Phase 1).
 ///
 /// One list of every Door to Door donation that still has goods to collect,
 /// grouped Overdue / Today / Tomorrow / This week / Later, soonest first.
+/// Donors now choose pickup days instead of one time, so a donation whose
+/// donor is home today shows under Today, tomorrow under Tomorrow, and so on.
+/// The map button opens the same pickups on a map (pickup_map.dart).
 /// Each card shows who donated, how to reach them, where to go, and what to
 /// collect, with one-tap Call, Text and Navigate. "Open" goes to the usual
 /// donation sheet to receive the goods (UC-CM1).
@@ -66,6 +71,19 @@ class _PickupBoardScreenState extends State<PickupBoardScreen> {
     if (days == 1) return 'Tomorrow';
     if (days <= 7) return 'This week';
     return 'Later';
+  }
+
+  /// Group for a donation: by its preferred time (older entries) or by the
+  /// next of the donor's pickup days.
+  static String _bucketOf(Map b) {
+    final at = _when(b);
+    if (at != null) return _bucket(at);
+    final days = pickupDaysOf(b['pickup_days']);
+    if (days.isEmpty) return 'No time set';
+    final today = PickupRules.phNow().weekday;
+    if (days.contains(today)) return 'Today';
+    if (days.contains(today % 7 + 1)) return 'Tomorrow';
+    return 'This week';
   }
 
   /// "in 2 h", "in 3 days", "45 min late", "2 days late".
@@ -134,7 +152,7 @@ class _PickupBoardScreenState extends State<PickupBoardScreen> {
           for (final g in _groups) g: [],
         };
         for (final b in all) {
-          grouped[_bucket(_when(b))]!.add(b);
+          grouped[_bucketOf(b)]!.add(b);
         }
         final shownGroups = _group == null ? _groups : [_group!];
 
@@ -156,6 +174,20 @@ class _PickupBoardScreenState extends State<PickupBoardScreen> {
                         subtitle:
                             'Donations waiting to be collected, soonest first.',
                       ),
+                    ),
+                    IconButton.filledTonal(
+                      tooltip: 'Show on map',
+                      onPressed: () async {
+                        await Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const PickupMapScreen(
+                              standalone: true,
+                            ),
+                          ),
+                        );
+                        if (mounted) _reload();
+                      },
+                      icon: const Icon(Icons.map_outlined),
                     ),
                     IconButton(
                       tooltip: 'Refresh',
@@ -230,7 +262,7 @@ class _PickupBoardScreenState extends State<PickupBoardScreen> {
                       title: 'No pickups waiting',
                       message:
                           'When a donor chooses Door to Door, the pickup shows up '
-                          'here with their address, preferred time and number.',
+                          'here with their address, pickup days and number.',
                     ),
                   ),
                 ],
@@ -318,7 +350,12 @@ class _PickupCard extends StatelessWidget {
               Gaps.h8,
               Expanded(
                 child: Text(
-                  when == null ? 'No preferred time' : formatPickupTime(when!),
+                  when != null
+                      ? formatPickupTime(when!)
+                      : b['pickup_days_label'] != null
+                      ? 'Home on ${b['pickup_days_label']}'
+                          '${b['pickup_hours'] != null ? ' · ${b['pickup_hours']}' : ''}'
+                      : 'No preferred time',
                   style: t.titleMedium?.copyWith(color: timeColor),
                 ),
               ),

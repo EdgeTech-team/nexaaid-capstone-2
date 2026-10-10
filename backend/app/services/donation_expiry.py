@@ -7,7 +7,11 @@ Team decision (Oct 9, 2026), an addition to the spec:
 
   Expired    the system closes Pending items whose handover deadline passed.
                Drop Off      14 days after the donation was submitted
-               Door to Door   7 days after the donor's preferred pickup time
+               Door to Door  14 days after it was submitted, on one of the
+                             donor's pickup days (Oct 10: the donor picks
+                             days, Mon / Tue / ..., not one time)
+                             Older entries with one preferred pickup time:
+                             7 days after that time
   Cancelled  the donor (or CSWS on the donor's behalf) withdraws Pending items.
 
 Nothing is deleted. Closed items keep their row with closed_at, close_reason
@@ -23,6 +27,7 @@ fresh deadline.
 The deadlines can be changed in backend/app/.env without new code:
     DONATION_DROPOFF_DAYS=14
     DONATION_PICKUP_GRACE_DAYS=7
+    DONATION_PICKUP_WINDOW_DAYS=14
     DONATION_REMINDER_DAYS=3
 
 There is no background scheduler: expire_overdue() runs at the start of the
@@ -54,10 +59,12 @@ def _env_days(name: str, default: int) -> int:
 def expiry_rules() -> dict:
     drop_off = _env_days("DONATION_DROPOFF_DAYS", 14)
     pickup = _env_days("DONATION_PICKUP_GRACE_DAYS", 7)
+    window = _env_days("DONATION_PICKUP_WINDOW_DAYS", 14)
     reminder = _env_days("DONATION_REMINDER_DAYS", 3)
     return {
         "drop_off_days": drop_off,
         "pickup_grace_days": pickup,
+        "pickup_window_days": window,
         "reminder_days": reminder,
         # Plain sentences the app shows as they are.
         "drop_off_label": (
@@ -65,8 +72,8 @@ def expiry_rules() -> dict:
             f"After that it is marked Expired."
         ),
         "pickup_label": (
-            f"If CSWS cannot collect it within {pickup} days after your "
-            f"preferred pickup time, it is marked Expired."
+            f"CSWS collects it on one of your pickup days within {window} days. "
+            f"If it cannot be collected by then, it is marked Expired."
         ),
     }
 
@@ -94,8 +101,10 @@ def deadline_for(handover_method: str, preferred_pickup_at: Optional[datetime],
     (or reinstated); defaults to now."""
     rules = expiry_rules()
     start = utc(start) or now_utc()
-    if handover_method == "Door to Door" and preferred_pickup_at is not None:
-        return utc(preferred_pickup_at) + timedelta(days=rules["pickup_grace_days"])
+    if handover_method == "Door to Door":
+        if preferred_pickup_at is not None:  # entries from before pickup days
+            return utc(preferred_pickup_at) + timedelta(days=rules["pickup_grace_days"])
+        return start + timedelta(days=rules["pickup_window_days"])
     return start + timedelta(days=rules["drop_off_days"])
 
 

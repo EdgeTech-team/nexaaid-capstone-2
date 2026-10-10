@@ -4,13 +4,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 HandoverMethod = Literal["Drop Off", "Door to Door"]
 
 # Philippine time (no daylight saving), used for pickup scheduling rules.
 MANILA = timezone(timedelta(hours=8))
 _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def _env_int(name: str, default: int) -> int:
@@ -31,7 +32,7 @@ def pickup_rules() -> dict:
     raw_days = os.getenv("PICKUP_DAYS", "1,2,3,4,5")
     days = sorted({int(d) for d in raw_days.split(",") if d.strip().isdigit() and 1 <= int(d) <= 7})
     days = days or [1, 2, 3, 4, 5]
-    start = _env_int("PICKUP_START_HOUR", 8)
+    start = _env_int("PICKUP_START_HOUR", 9)
     end = _env_int("PICKUP_END_HOUR", 17)
     if days == list(range(days[0], days[-1] + 1)) and len(days) > 1:
         day_label = f"{_DAY_NAMES[days[0] - 1]} to {_DAY_NAMES[days[-1] - 1]}"
@@ -45,7 +46,59 @@ def pickup_rules() -> dict:
         "max_days_ahead": _env_int("PICKUP_MAX_DAYS_AHEAD", 30),
         "timezone": "Asia/Manila",
         "label": f"{day_label}, {_hour_label(start)} to {_hour_label(end)}",
+        # The donor picks the days they are home (Mon / Tue / ...); this is
+        # the note shown under the day buttons.
+        "hours_label": f"{_hour_label(start)} to {_hour_label(end)}",
+        "day_names": _DAY_SHORT,
     }
+
+
+def check_pickup_days(values) -> List[int]:
+    """The days a donor is available for a Door to Door pickup
+    (1 = Monday ... 7 = Sunday). Raises ValueError (shown to the donor)
+    if none is chosen or a day is not a CSWS pickup day."""
+    rules = pickup_rules()
+    days = sorted({int(d) for d in values or []})
+    if not days:
+        raise ValueError("Choose at least one day CSWS can pick up your donation")
+    if any(d < 1 or d > 7 for d in days):
+        raise ValueError("Pickup days use 1 = Monday ... 7 = Sunday")
+    off = [d for d in days if d not in rules["days"]]
+    if off:
+        names = ", ".join(_DAY_NAMES[d - 1] for d in off)
+        raise ValueError(f"CSWS does not pick up on {names}. Pickups: {rules['label']}")
+    return days
+
+
+def encode_pickup_days(days) -> Optional[str]:
+    """[1, 3, 5] -> "1,3,5" (the physical_donations.pickup_days column)."""
+    return ",".join(str(d) for d in days) if days else None
+
+
+def decode_pickup_days(raw) -> List[int]:
+    """"1,3,5" -> [1, 3, 5]. Also accepts a list. Bad parts are skipped."""
+    if not raw:
+        return []
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    out = set()
+    for p in parts:
+        try:
+            d = int(p)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= d <= 7:
+            out.add(d)
+    return sorted(out)
+
+
+def pickup_days_label(raw) -> Optional[str]:
+    """"1,3,5" -> "Mon, Wed, Fri"; every weekday -> "Mon to Fri"."""
+    days = decode_pickup_days(raw)
+    if not days:
+        return None
+    if len(days) > 2 and days == list(range(days[0], days[-1] + 1)):
+        return f"{_DAY_SHORT[days[0] - 1]} to {_DAY_SHORT[days[-1] - 1]}"
+    return ", ".join(_DAY_SHORT[d - 1] for d in days)
 
 
 def check_preferred_pickup(value: datetime) -> datetime:
@@ -120,6 +173,10 @@ class _PickupFields(BaseModel):
     pickup_lng: Optional[float] = Field(default=None, ge=-180, le=180)
     pickup_landmark: Optional[str] = Field(default=None, max_length=300)
     pickup_notes: Optional[str] = Field(default=None, max_length=300)
+    # Days the donor is home for the pickup (1 = Monday ... 7 = Sunday).
+    # Replaces preferred_pickup_at in the app; older clients may still send a
+    # single date and time instead.
+    pickup_days: Optional[List[int]] = Field(default=None, max_length=7)
     preferred_pickup_at: Optional[datetime] = None
 
     @model_validator(mode="after")
@@ -134,6 +191,8 @@ class _PickupFields(BaseModel):
                 self.pickup_landmark = self.pickup_landmark.strip() or None
             if self.pickup_notes is not None:
                 self.pickup_notes = self.pickup_notes.strip() or None
+            if self.pickup_days is not None:
+                self.pickup_days = check_pickup_days(self.pickup_days)
             if self.preferred_pickup_at is not None:
                 self.preferred_pickup_at = check_preferred_pickup(self.preferred_pickup_at)
         else:
@@ -143,6 +202,7 @@ class _PickupFields(BaseModel):
             self.pickup_lng = None
             self.pickup_landmark = None
             self.pickup_notes = None
+            self.pickup_days = None
             self.preferred_pickup_at = None
         return self
 
@@ -161,7 +221,8 @@ class DonationLine(_ItemFields):
 
 class DonationBatchCreate(_PickupFields):
     """One donation with one or more items -> one QR reference
-    (POST /donations/batch). Door to Door needs a preferred pickup time."""
+    (POST /donations/batch). Door to Door needs the donor's pickup days
+    (or, from older clients, one preferred pickup time)."""
 
     report_id: int
     items: List[DonationLine] = Field(min_length=1, max_length=30)
@@ -169,8 +230,9 @@ class DonationBatchCreate(_PickupFields):
 
     @model_validator(mode="after")
     def check_pickup_time_given(self):
-        if self.handover_method == "Door to Door" and self.preferred_pickup_at is None:
-            raise ValueError("Choose a preferred pickup date and time for Door to Door")
+        if (self.handover_method == "Door to Door" and not self.pickup_days
+                and self.preferred_pickup_at is None):
+            raise ValueError("Choose at least one day CSWS can pick up your donation")
         return self
 
     @model_validator(mode="after")
@@ -198,8 +260,14 @@ class PhysicalDonationResponse(BaseModel):
     pickup_lng: Optional[float] = None
     pickup_landmark: Optional[str] = None
     pickup_notes: Optional[str] = None
+    pickup_days: List[int] = []
     preferred_pickup_at: Optional[datetime] = None
     qr_reference: str
     batch_reference: Optional[str] = None
     status: str
     created_at: datetime
+    @field_validator("pickup_days", mode="before")
+    @classmethod
+    def _days(cls, v):
+        # Stored as "1,3,5" in physical_donations.pickup_days.
+        return decode_pickup_days(v)

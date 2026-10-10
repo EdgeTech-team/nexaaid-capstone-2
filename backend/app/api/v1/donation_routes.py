@@ -25,6 +25,7 @@ from models.guest_donor_model import GuestDonor
 from models.physical_donation_model import PhysicalDonation
 from models.received_goods_model import ReceivedGoods
 from models.item_model import Item
+from models.logistics_request_model import LogisticsRequest
 from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
 from schemas.physical_donation_schema import (
@@ -32,6 +33,9 @@ from schemas.physical_donation_schema import (
     PhysicalDonationCreate,
     PhysicalDonationResponse,
     pickup_rules,
+    encode_pickup_days,
+    decode_pickup_days,
+    pickup_days_label,
 )
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 from services.donation_entries import build_entries, filter_and_sort, group_by_report
@@ -42,6 +46,9 @@ from services.donation_expiry import (
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
 CSWS_ROLES = ("CSWS Main Office", "Administrator")
+# The Door to Door pickup list and map. The CSWS Disaster Unit plans the
+# pickup runs on the map (Oct 10 notes); Main Office still receives the goods.
+PICKUP_ROLES = (*CSWS_ROLES, "CSWS Disaster Unit")
 
 # Address search (UC-D2 alt 7c) uses OpenStreetMap data through Photon:
 # free, no API key, no billing. GEOCODER_URL can point to a self-hosted
@@ -161,6 +168,16 @@ def _donor_info(db: Session, d: PhysicalDonation) -> dict:
     }
 
 
+def _pickup_days_view(d: PhysicalDonation) -> dict:
+    """Door to Door pickup days for the screens: [1, 3], "Mon, Wed" and
+    the pickup hours they apply to ("9:00 AM to 5:00 PM")."""
+    return {
+        "pickup_days": decode_pickup_days(d.pickup_days),
+        "pickup_days_label": pickup_days_label(d.pickup_days),
+        "pickup_hours": pickup_rules()["hours_label"] if d.pickup_days else None,
+    }
+
+
 def _batch_status(statuses: set) -> str:
     # Shared with the entry screens; also knows Expired / Cancelled.
     return entry_status(statuses)
@@ -207,6 +224,7 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         "pickup_lng": _num(first.pickup_lng),
         "pickup_landmark": first.pickup_landmark,
         "pickup_notes": first.pickup_notes,
+        **_pickup_days_view(first),
         "preferred_pickup_at": _iso(first.preferred_pickup_at),
         "created_at": first.created_at,
         # Handover deadline / why it was closed (services/donation_expiry.py)
@@ -264,6 +282,7 @@ def create_donation_batch(
             pickup_lng=payload.pickup_lng,
             pickup_landmark=payload.pickup_landmark,
             pickup_notes=payload.pickup_notes,
+            pickup_days=encode_pickup_days(payload.pickup_days),
             preferred_pickup_at=payload.preferred_pickup_at,
             qr_reference=f"{batch_reference}-{n}",
             batch_reference=batch_reference,
@@ -313,6 +332,7 @@ def create_donation(
         pickup_lng=payload.pickup_lng,
         pickup_landmark=payload.pickup_landmark,
         pickup_notes=payload.pickup_notes,
+        pickup_days=encode_pickup_days(payload.pickup_days),
         preferred_pickup_at=payload.preferred_pickup_at,
         qr_reference=reference,
         batch_reference=reference,
@@ -382,7 +402,7 @@ def find_by_batch(
 @router.get("/pickups")
 def door_to_door_pickups(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(*CSWS_ROLES)),
+    current_user: User = Depends(require_role(*PICKUP_ROLES)),
 ):
     expire_overdue(db)  # overdue pickups leave the board
     waiting = (
@@ -434,6 +454,7 @@ def door_to_door_pickups(
             "pickup_lng": _num(first.pickup_lng),
             "pickup_landmark": first.pickup_landmark,
             "pickup_notes": first.pickup_notes,
+            **_pickup_days_view(first),
             "report_id": first.report_id,
             "report_label": labels[first.report_id],
             "total_items": len(lines),
@@ -443,6 +464,20 @@ def door_to_door_pickups(
             **entry_expiry_info(lines),
             **_donor_info(db, first),
         })
+
+    # Pickup runs already sent to DRRMO, so the map can mark those stops.
+    runs = {}
+    for req in (db.query(LogisticsRequest)
+                .filter(LogisticsRequest.request_type == "Pickup",
+                        LogisticsRequest.status.in_(("Pending", "Accepted"))).all()):
+        for ref in req.batch_list:
+            runs[ref] = {
+                "request_id": req.request_id,
+                "status": req.status,
+                "pickup_date": req.pickup_date.isoformat() if req.pickup_date else None,
+            }
+    for b in out:
+        b["pickup_request"] = runs.get(b["batch_reference"])
 
     # Soonest preferred time first; donations without a time go last.
     out.sort(key=lambda b: (b["preferred_pickup_at"] is None,
@@ -679,6 +714,7 @@ def my_donations(
                 "pickup_address": d.pickup_address,
                 "pickup_landmark": d.pickup_landmark,
                 "pickup_notes": d.pickup_notes,
+                **_pickup_days_view(d),
                 "preferred_pickup_at": _iso(d.preferred_pickup_at),
                 "status": d.status,
                 "close_reason": d.close_reason,
@@ -702,6 +738,7 @@ def my_donations(
                 "pickup_address": by_ref[e["batch_reference"]].pickup_address,
                 "pickup_landmark": by_ref[e["batch_reference"]].pickup_landmark,
                 "pickup_notes": by_ref[e["batch_reference"]].pickup_notes,
+                **_pickup_days_view(by_ref[e["batch_reference"]]),
                 "preferred_pickup_at": _iso(by_ref[e["batch_reference"]].preferred_pickup_at),
                 "report": report_info(reports[e["report_id"]]) if e["report_id"] in reports else None,
             }

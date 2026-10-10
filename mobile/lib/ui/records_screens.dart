@@ -199,12 +199,20 @@ class _SupportRecordsScreenState extends State<SupportRecordsScreen> {
               Card(
                 margin: const EdgeInsets.only(bottom: 10),
                 child: ListTile(
-                  leading: const CircleAvatar(
-                    child: Icon(Icons.fire_truck_outlined),
+                  leading: CircleAvatar(
+                    child: Icon(
+                      r['request_type'] == 'Pickup'
+                          ? Icons.door_front_door_outlined
+                          : Icons.fire_truck_outlined,
+                    ),
                   ),
+                  // A Disaster Unit pickup run has no delivery.
                   title: Text(
-                    'Request #${r['request_id']} · delivery #${r['delivery_id']}'
-                    ' to ${r['destination'] ?? '-'}',
+                    r['request_type'] == 'Pickup'
+                        ? 'Request #${r['request_id']} · pickup run, '
+                              '${r['destination'] ?? '-'}'
+                        : 'Request #${r['request_id']} · delivery '
+                              '#${r['delivery_id']} to ${r['destination'] ?? '-'}',
                   ),
                   subtitle: Text(
                     [

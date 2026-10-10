@@ -499,9 +499,9 @@ class LogisticsPage extends StatelessWidget {
               'Delivery needing transport',
               lookup: 'open_deliveries',
             ),
-            F('trucks', 'Trucks needed', initial: '1'),
-            F('drivers', 'Drivers needed', initial: '1'),
+            F('trucks', 'Trucks needed (0 = none)', initial: '1'),
             F('volunteers', 'Volunteers needed', initial: '0'),
+            F('pushcarts', 'Pushcarts needed', initial: '0'),
           ],
           button: 'Submit request',
           onSubmit: (v) => _api.post(
@@ -509,8 +509,8 @@ class LogisticsPage extends StatelessWidget {
                        body: {
               'delivery_id': v.i('delivery_id'),
               'trucks': v.i('trucks'),
-              'drivers': v.i('drivers'),
               'volunteers': v.i('volunteers'),
+              'pushcarts': v.i('pushcarts'),
             },
           ),
         ),

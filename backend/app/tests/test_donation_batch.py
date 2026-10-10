@@ -189,12 +189,14 @@ def test_pickup_board_lists_waiting_door_to_door_donations(api):
 def test_pickup_rules_endpoint(api, monkeypatch):
     client, _ = api
     rules = ok(client.get("/donations/pickup-rules"))
-    assert rules["days"] == [1, 2, 3, 4, 5] and (rules["start_hour"], rules["end_hour"]) == (8, 17)
-    assert rules["label"] == "Monday to Friday, 8:00 AM to 5:00 PM"
+    # Oct 10 notes: pickup hours are 9 AM to 5 PM
+    assert rules["days"] == [1, 2, 3, 4, 5] and (rules["start_hour"], rules["end_hour"]) == (9, 17)
+    assert rules["label"] == "Monday to Friday, 9:00 AM to 5:00 PM"
+    assert rules["hours_label"] == "9:00 AM to 5:00 PM"
     monkeypatch.setenv("PICKUP_DAYS", "1,2,3,4,5,6")
     monkeypatch.setenv("PICKUP_END_HOUR", "15")
     rules = ok(client.get("/donations/pickup-rules"))
-    assert rules["label"] == "Monday to Saturday, 8:00 AM to 3:00 PM"
+    assert rules["label"] == "Monday to Saturday, 9:00 AM to 3:00 PM"
 
 
 def test_single_item_endpoint_still_works(api):
