@@ -250,7 +250,9 @@ class _BatchSheetState extends State<BatchSheet> {
                           formatPickupIso(b['preferred_pickup_at']),
                         ),
                       if (b['pickup_landmark'] != null)
-                        _row('Notes', b['pickup_landmark']),
+                        _row('Landmark', b['pickup_landmark']),
+                      if (b['pickup_notes'] != null)
+                        _row('Notes', b['pickup_notes']),
                       if ('${b['pickup_address'] ?? ''}'.trim().isNotEmpty)
                         Align(
                           alignment: Alignment.centerLeft,
