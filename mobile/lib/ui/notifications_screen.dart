@@ -90,9 +90,18 @@ final Map<String, EntityOpener> notificationDestinations = {
   // org_registered goes to every Administrator. org_approved and org_rejected
   // go to the organization's own account, which has no screen for this, so it
   // stays on the inbox.
-  'organization': (c, id) {
+    'organization': (c, id) {
     if (api.role == Roles.admin) {
-      _push(c, _withAppBar('Organizations', const OrganizationsReview()));
+      _push(c, _withAppBar('Accounts', const AccountsHub(initialView: 'registrations')));
+    }
+  },
+  // donor_registered points at the new user account.
+  'user': (c, id) {
+    if (api.role == Roles.admin) {
+      _push(
+        c,
+        _withAppBar('Accounts', const AccountsHub(initialView: 'registrations')),
+      );
     }
   },
   // 'donation_batch': (c, id) => ...,

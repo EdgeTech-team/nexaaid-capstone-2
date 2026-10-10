@@ -19,8 +19,8 @@ from models.notification import Notification
 # event -> (title, message template). Missing {placeholders} render as "".
 EVENTS: dict[str, tuple[str, str]] = {
     # Organizations
-    "org_registered": ("New organization registered", "{name} registered and was approved automatically."),
-    "donor_registered": ("New donor registered", "{name} registered as an individual donor."),
+    "org_registered": ("New organization registered", "{name} registered. Tap to review."),
+    "donor_registered": ("New donor registered", "{name} registered as an individual donor. Tap to review."),
     "org_approved": ("Organization approved", "Your organization account is now active."),
     "org_rejected": ("Organization registration rejected", "{reason}"),
     # Reports

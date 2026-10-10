@@ -3,6 +3,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from core.names import capitalize_org_words
 from core.passwords import validate_password_strength
 from core.validators import (
     clean_email, clean_org_name, clean_ph_mobile, clean_registration_no, clean_text,
@@ -47,13 +48,12 @@ class OrganizationRegisterRequest(BaseModel):
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
     accepted_terms: bool
 
-    # Capitalize the first letter after the existing cleaning/validation.
-    # The rest of the name is kept as typed ("of", "and", "NGO" are untouched).
+    # Capitalize the first letter of every word (PM rule) after the existing
+    # cleaning/validation. The rest of each word is kept as typed ("NGO").
     @field_validator("org_name")
     @classmethod
     def _on(cls, v):
-        v = clean_org_name(v)
-        return v[:1].upper() + v[1:]
+        return capitalize_org_words(clean_org_name(v))
 
     @field_validator("address")
     @classmethod

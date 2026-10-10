@@ -53,8 +53,10 @@ class AdminDashboard extends StatelessWidget {
                   const UsersScreen(key: ValueKey('active')),
                 ),
               ),
+              // The Administrator now only reviews organizations (accounts
+              // activate automatically), so this says "review", not "approve".
               StatTile(
-                'Organizations to approve',
+                'Organizations to review',
                 '${m['pending_organizations']}',
                 Icons.apartment_outlined,
                 color: const Color(0xFFEF6C00),
@@ -182,14 +184,17 @@ class DashboardReportsList extends StatelessWidget {
 // UC-A1 Manage internal accounts + UC-A2 Review organization registration
 // ---------------------------------------------------------------------------
 class AccountsHub extends StatefulWidget {
-  const AccountsHub({super.key});
+  /// Which section to show first:
+  /// active, deactivated, registrations, orgs, donation, new.
+  final String initialView;
+  const AccountsHub({super.key, this.initialView = 'active'});
 
   @override
   State<AccountsHub> createState() => _AccountsHubState();
 }
 
 class _AccountsHubState extends State<AccountsHub> {
-  String view = 'active';
+  late String view = widget.initialView;
 
   @override
   Widget build(BuildContext context) {
@@ -204,6 +209,11 @@ class _AccountsHubState extends State<AccountsHub> {
             segments: const [
               ButtonSegment(value: 'active', label: Text('Active')),
               ButtonSegment(value: 'deactivated', label: Text('Deactivated')),
+              // New organizations and individual donors in one sortable list.
+              ButtonSegment(
+                value: 'registrations',
+                label: Text('Registrations'),
+              ),
               ButtonSegment(value: 'orgs', label: Text('Organizations')),
               // Adviser item 7: any barangay's donation-sending info, e.g.
               // a barangay without a representative yet, or a wrong number.
@@ -216,6 +226,7 @@ class _AccountsHubState extends State<AccountsHub> {
         ),
         Expanded(
           child: switch (view) {
+            'registrations' => const RegistrationsScreen(),
             'orgs' => const OrganizationsReview(),
             'donation' => const BarangayDonationInfoScreen(),
             'new' => const AccountsScreen(),
@@ -243,6 +254,14 @@ class UsersScreen extends StatefulWidget {
 class _UsersScreenState extends State<UsersScreen> {
   String role = '';
   String q = '';
+
+  /// In the Deactivated section, a labeled line with the reason the
+  /// Administrator gave (or a note when none was recorded).
+  String _reasonLine(Map u) {
+    if (widget.active) return '';
+    final r = '${u['deactivation_reason'] ?? ''}'.trim();
+    return '\nReason: ${r.isEmpty ? 'No reason was recorded' : r}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -322,7 +341,8 @@ class _UsersScreenState extends State<UsersScreen> {
                   subtitle: Text(
                     '${u['email']}\n${u['role']}'
                     '${u['assigned_barangay'] != null ? ' · ${u['assigned_barangay']}' : ''}'
-                    '${u['organization'] != null ? ' · ${u['organization']} (${u['organization_status']})' : ''}',
+                    '${u['organization'] != null ? ' · ${u['organization']} (${u['organization_status']})' : ''}'
+                    '${_reasonLine(u)}',
                   ),
                   isThreeLine: true,
                   onTap: () => Navigator.of(context).push(
@@ -334,6 +354,170 @@ class _UsersScreenState extends State<UsersScreen> {
                   // UC-A1: tap the row for details, Edit details and
                   // Deactivate (account_detail_screen.dart).
                   trailing: const Icon(Icons.chevron_right),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// New registrations: organizations and individual donors in one list,
+/// with a type filter and sorting. Tapping an organization opens the
+/// Organizations review (Reviewed / Not Reviewed); tapping a donor opens
+/// the account details.
+class RegistrationsScreen extends StatefulWidget {
+  const RegistrationsScreen({super.key});
+
+  @override
+  State<RegistrationsScreen> createState() => _RegistrationsScreenState();
+}
+
+class _RegistrationsScreenState extends State<RegistrationsScreen> {
+  String kind = 'all'; // all | orgs | donors
+  String sort = 'newest'; // newest | oldest | name
+
+  DateTime? _when(dynamic v) =>
+      v == null ? null : DateTime.tryParse('$v')?.toLocal();
+
+  String _fmt(DateTime? d) {
+    if (d == null) return 'Unknown date';
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Loader(
+      load: [
+        () => api.get('/admin/organizations'),
+        () => api.get('/admin/users', query: {'role': Roles.donor}),
+      ],
+      builder: (context, data) {
+        final orgs = (data[0] as List).cast<Map>();
+        final donors = (data[1] as List).cast<Map>();
+
+        final items = <Map<String, dynamic>>[
+          if (kind != 'donors')
+            for (final o in orgs)
+              {
+                'type': 'org',
+                'name': '${o['org_name']}',
+                'when': _when(o['created_at']),
+                'detail':
+                    '${o['organization_type'] ?? 'Organization'}'
+                    ' · ${o['contact_email'] ?? 'No email'}',
+                'reviewed': o['reviewed_at'] != null,
+              },
+          if (kind != 'orgs')
+            for (final u in donors)
+              {
+                'type': 'donor',
+                'user_id': u['user_id'],
+                'name': '${u['name']}',
+                'when': _when(u['created_at']),
+                'detail': 'Individual donor · ${u['email']}',
+                'reviewed': null,
+              },
+        ];
+
+        int byDate(Map a, Map b) {
+          final x = a['when'] as DateTime?;
+          final y = b['when'] as DateTime?;
+          if (x == null && y == null) return 0;
+          if (x == null) return 1;
+          if (y == null) return -1;
+          return x.compareTo(y);
+        }
+
+        items.sort((a, b) {
+          switch (sort) {
+            case 'oldest':
+              return byDate(a, b);
+            case 'name':
+              return (a['name'] as String).toLowerCase().compareTo(
+                (b['name'] as String).toLowerCase(),
+              );
+            default:
+              return byDate(b, a);
+          }
+        });
+
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            const PageHeader(
+              'New registrations',
+              subtitle: 'Organizations and individual donors together. Tap an organization to review it.',
+            ),
+            SegmentedButton<String>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: 'all', label: Text('All')),
+                ButtonSegment(value: 'orgs', label: Text('Organizations')),
+                ButtonSegment(value: 'donors', label: Text('Donors')),
+              ],
+              selected: {kind},
+              onSelectionChanged: (s) => setState(() => kind = s.first),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: sort,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Sort by'),
+              items: const [
+                DropdownMenuItem(value: 'newest', child: Text('Newest first')),
+                DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
+                DropdownMenuItem(value: 'name', child: Text('Name (A to Z)')),
+              ],
+              onChanged: (v) => setState(() => sort = v ?? 'newest'),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '${items.length} registrations',
+              style: const TextStyle(color: Brand.muted),
+            ),
+            const SizedBox(height: 6),
+            if (items.isEmpty) const EmptyState('No registrations yet.'),
+            for (final i in items)
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  leading: Icon(
+                    i['type'] == 'org'
+                        ? Icons.apartment_outlined
+                        : Icons.person_outline,
+                  ),
+                  title: Text('${i['name']}'),
+                  subtitle: Text(
+                    '${i['detail']}\nRegistered ${_fmt(i['when'])}',
+                  ),
+                  isThreeLine: true,
+                  trailing: i['reviewed'] == null
+                      ? const Icon(Icons.chevron_right)
+                      : Badge2.status(
+                          i['reviewed'] == true ? 'Reviewed' : 'Not Reviewed',
+                        ),
+                  onTap: () {
+                    if (i['type'] == 'org') {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => Scaffold(
+                            appBar: AppBar(title: const Text('Organizations')),
+                            body: const OrganizationsReview(),
+                          ),
+                        ),
+                      );
+                    } else if (i['user_id'] is int) {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              AccountDetailScreen(userId: i['user_id'] as int),
+                        ),
+                      );
+                    }
+                  },
                 ),
               ),
           ],

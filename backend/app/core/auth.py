@@ -55,7 +55,11 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
+        # Only shown after the password is right, so it can't be used to probe accounts.
+        reason = (user.deactivation_reason or "").strip()
+        detail = "Account is deactivated."
+        detail += f" Reason: {reason}" if reason else " No reason was recorded."
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
     return user
 
 

@@ -43,6 +43,29 @@ class CapitalizeFirstLetterFormatter extends TextInputFormatter {
   }
 }
 
+/// Capitalizes the first letter of every word in an organization name. Words
+/// are split on spaces only, so "St. Mary's" is not turned into "St. Mary'S".
+/// The rest of each word is kept as typed ("NGO" stays). The backend does the
+/// same in core/names.py (capitalize_org_words).
+class CapitalizeOrgWordsFormatter extends TextInputFormatter {
+  const CapitalizeOrgWordsFormatter();
+
+  static final _wordStart = RegExp(r"(^|\s)(\p{L})", unicode: true);
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final text = newValue.text.replaceAllMapped(
+      _wordStart,
+      (m) => '${m[1]}${m[2]!.toUpperCase()}',
+    );
+    // Same length as before, so the cursor and selection stay where they are.
+    return text == newValue.text ? newValue : newValue.copyWith(text: text);
+  }
+}
+
 /// Philippine mobile number: digits only, at most 11 (09XXXXXXXXX).
 /// Typing a 12th digit or a letter does nothing.
 final phoneFormatters = <TextInputFormatter>[
@@ -56,7 +79,5 @@ final nameFormatters = <TextInputFormatter>[
   LengthLimitingTextInputFormatter(50),
 ];
 
-/// Organization name: capitalize only the first letter.
-final orgNameFormatters = <TextInputFormatter>[
-  CapitalizeFirstLetterFormatter(),
-];
+/// Organization name: capitalize the first letter of every word.
+final orgNameFormatters = <TextInputFormatter>[CapitalizeOrgWordsFormatter()];
