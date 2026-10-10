@@ -26,6 +26,8 @@ from api.v1.public_routes import router as public_router
 from api.v1.admin_document_routes import router as admin_document_router
 from api.v1.donation_info_routes import router as donation_info_router
 from api.v1.account_router import router as account_router
+from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
+from api.v1.trips import router as trips_router
 
 app = FastAPI()
 
@@ -65,6 +67,8 @@ app.include_router(health_router)
 app.include_router(dashboard_router)
 app.include_router(report_router)
 app.include_router(delivery_router)
+app.include_router(trips_router)
+app.include_router(donation_lifecycle_router)   # before donation_router: fixed paths first
 app.include_router(donation_router)
 app.include_router(receiving_router)
 app.include_router(session_router)

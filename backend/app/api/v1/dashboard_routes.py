@@ -137,7 +137,10 @@ def csws_main_dashboard(
     user=Depends(require_role("csws_main_office", "admin")),
 ):
     """Manuscript 7.1 / UC-CM3."""
+    from services.donation_expiry import effective_deadline, expire_overdue, now_utc
+    expire_overdue(db)  # overdue donations leave the pending count
     donations = db.query(PhysicalDonation).order_by(PhysicalDonation.donation_id.desc()).all()
+    soon = now_utc().timestamp() + 3 * 86400
     items = {i.item_id: i for i in db.query(Item).all()}
     labels = _labels(db, {d.report_id for d in donations})
     received_qty = db.query(func.coalesce(func.sum(ReceivedGoods.actual_quantity), 0)).scalar() or 0
@@ -153,6 +156,12 @@ def csws_main_dashboard(
     name = lambda i: items[i].item_name if i in items else f"Item #{i}"
     return {
         "pending_donations": sum(1 for d in donations if d.status == "Pending"),
+        # Donation expiry: items due within 3 days, and closed ones (never deleted).
+        "due_soon_donations": sum(
+            1 for d in donations
+            if d.status == "Pending" and (effective_deadline(d).timestamp() <= soon)),
+        "expired_donations": sum(1 for d in donations if d.status == "Expired"),
+        "cancelled_donations": sum(1 for d in donations if d.status == "Cancelled"),
         "entries_received": sum(1 for d in donations if d.status in ("Received", "Confirmed")),
         "total_quantity_received": int(received_qty),
         "deliveries_made": db.query(func.count(delivery.delivery_id)).scalar() or 0,

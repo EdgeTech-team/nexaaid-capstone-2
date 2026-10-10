@@ -18,13 +18,12 @@ from models.item_model import Item
 from models.received_goods_model import ReceivedGoods
 from models.report import Barangay, DisasterReport, DisasterType
 from models.user_rbac_model import User
+from services.donation_expiry import entry_expiry_info, entry_status as _entry_status
 
 
 def entry_status(statuses: Iterable[str]) -> str:
-    s = set(statuses)
-    if len(s) == 1:
-        return next(iter(s))
-    return "Partly Received" if "Pending" in s else "Received"
+    # Lives in services/donation_expiry.py so it also knows Expired / Cancelled.
+    return _entry_status(statuses)
 
 
 def _report_labels(db: Session, report_ids) -> dict:
@@ -112,6 +111,8 @@ def build_entries(
             "total_items": len(lines),
             "total_quantity": sum(l.quantity or 0 for l in lines),
             "pending_items": sum(1 for l in lines if l.status == "Pending"),
+            # Handover deadline, or when and why it was closed.
+            **entry_expiry_info(lines),
             "items": [
                 {
                     "donation_id": l.donation_id,
@@ -170,7 +171,7 @@ def group_by_report(entries: list, pending_only: bool = False) -> list:
         out.append(g)
     return out
 
-ENTRY_SORTS = ("newest", "oldest", "most_items", "fewest_items")
+ENTRY_SORTS = ("newest", "oldest", "most_items", "fewest_items", "due_soonest")
 
 
 def filter_and_sort(
@@ -183,10 +184,13 @@ def filter_and_sort(
     """Filtering and sorting of entries for the record screens (4.4 / 4.5).
 
     status is the entry status (Pending, Partly Received, Received,
-    Confirmed); search matches the QR reference, the donor or an item name.
+    Confirmed, Expired, Cancelled), or "Closed" for Expired + Cancelled;
+    search matches the QR reference, the donor or an item name.
     """
     out = entries
-    if status:
+    if status and status.strip().lower() == "closed":
+        out = [e for e in out if e["status"] in ("Expired", "Cancelled")]
+    elif status:
         out = [e for e in out if e["status"].lower() == status.strip().lower()]
     if handover_method:
         out = [e for e in out if (e["handover_method"] or "").lower() == handover_method.strip().lower()]
@@ -208,4 +212,7 @@ def filter_and_sort(
         return sorted(out, key=lambda e: (-e["total_items"], -first_id(e)))
     if sort == "fewest_items":
         return sorted(out, key=lambda e: (e["total_items"], -first_id(e)))
+    if sort == "due_soonest":
+        # Donations closest to expiring first; ones with no deadline last.
+        return sorted(out, key=lambda e: (e["expires_at"] is None, e["expires_at"] or "", first_id(e)))
     return sorted(out, key=first_id, reverse=True)

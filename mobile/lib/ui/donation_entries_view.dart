@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'expiry_widgets.dart';
 import 'widgets.dart';
 
 /// Appendix H 4.4 View donation records / 4.5 Monitor donation status.
@@ -8,14 +9,23 @@ import 'widgets.dart';
 /// (staff) or the "entries" of GET /donations/mine (donor / organization).
 /// The filters and sort only change what is shown.
 
-const entryStatuses = ['Pending', 'Partly Received', 'Received', 'Confirmed'];
+const entryStatuses = [
+  'Pending',
+  'Partly Received',
+  'Received',
+  'Confirmed',
+  // Never handed over in time, or withdrawn (nothing is deleted).
+  'Expired',
+  'Cancelled',
+];
 const handoverMethods = ['Drop Off', 'Door to Door'];
 
 enum EntrySort {
   newest('Newest first'),
   oldest('Oldest first'),
   mostItems('Most items'),
-  fewestItems('Fewest items');
+  fewestItems('Fewest items'),
+  dueSoonest('Due soonest');
 
   final String label;
   const EntrySort(this.label);
@@ -73,6 +83,13 @@ List<Map> filterEntries(
       (a, b) => count(a) != count(b)
           ? count(a).compareTo(count(b))
           : first(b).compareTo(first(a)),
+    // Closest to expiring first; donations with no deadline go last.
+    EntrySort.dueSoonest => (a, b) {
+      final da = '${a['expires_at'] ?? ''}', db = '${b['expires_at'] ?? ''}';
+      if (da.isEmpty != db.isEmpty) return da.isEmpty ? 1 : -1;
+      final c = da.compareTo(db);
+      return c != 0 ? c : first(a).compareTo(first(b));
+    },
   });
   return shown;
 }
@@ -294,6 +311,13 @@ class DonationEntryCard extends StatelessWidget {
               _Meta(Icons.event_outlined, niceDate(e['created_at'])),
             ],
           ),
+          // Deadline to hand it over, or when and why it was closed.
+          if (isClosedEntry(e) ||
+              e['expires_label'] != null ||
+              (e['closed_items'] as num? ?? 0) > 0) ...[
+            Gaps.v8,
+            ExpiryNote(e, forStaff: e['donor'] != null),
+          ],
           if ((e['on_hold_items'] as num? ?? 0) > 0) ...[
             Gaps.v8,
             const StatusChip('On Hold'),
