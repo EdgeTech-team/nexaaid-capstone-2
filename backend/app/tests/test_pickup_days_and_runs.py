@@ -155,3 +155,29 @@ def test_unit_cannot_cancel_a_delivery_request(api):
     r = client.post(f"/logistics/requests/{req['request_id']}/cancel", headers=t["unit"],
                     json={"reason": "Not mine"})
     assert r.status_code == 403
+
+
+def test_pickups_stay_in_cebu_and_far_ones_can_be_declined(api, monkeypatch):
+    client, t = api
+    rid = _report(client, t)
+    post = lambda body: client.post("/donations/batch", headers=t["donor"], json=body)
+
+    # A pin outside Cebu province (Manila) is refused
+    r = post(_door(rid, [1], landmark="Rizal Park", lat=14.5826, lng=120.9787))
+    assert r.status_code == 422 and "Cebu province" in r.text
+
+    near = ok(post(_door(rid, [1])), 201)                                   # Mandaue City Hall
+    far = ok(post(_door(rid, [1], landmark="Bogo City Hall", lat=11.0517, lng=124.0055)), 201)
+    board = {p["batch_reference"]: p for p in ok(client.get("/donations/pickups", headers=t["csws"]))}
+    assert board[near["batch_reference"]]["too_far"] is False
+    assert board[far["batch_reference"]]["too_far"] is True
+    assert board[far["batch_reference"]]["distance_km"] > 70
+
+    rules = ok(client.get("/donations/pickup-rules"))
+    assert rules["area"]["name"] == "Cebu province" and rules["area"]["max_km"] == 20
+
+    # Main Office declines the far one; the donor is told why
+    ok(client.post(f"/donations/entries/{far['batch_reference']}/cancel", headers=t["csws"],
+                   json={"reason": "Too far for a Door to Door pickup. Please drop it off instead."}))
+    refs = [p["batch_reference"] for p in ok(client.get("/donations/pickups", headers=t["csws"]))]
+    assert far["batch_reference"] not in refs and near["batch_reference"] in refs

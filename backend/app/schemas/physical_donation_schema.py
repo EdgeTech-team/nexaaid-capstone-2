@@ -53,6 +53,58 @@ def pickup_rules() -> dict:
     }
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, default))
+    except ValueError:
+        return default
+
+
+def pickup_area() -> dict:
+    """Where Door to Door pickups can happen (Oct 11 notes: the map stays
+    inside Cebu province, and pickups far from the CSWS office can be
+    declined). Set in .env:
+        PICKUP_AREA_BBOX=minLon,minLat,maxLon,maxLat   (default: Cebu province;
+                                                       a Mandaue-only box also works)
+        PICKUP_AREA_NAME=Cebu province
+        PICKUP_MAX_KM=20       farther than this from the office is flagged "far"
+    The office is DROPOFF_LAT / DROPOFF_LNG, or Mandaue City centre."""
+    raw = os.getenv("PICKUP_AREA_BBOX", "123.25,9.40,124.10,11.30")
+    try:
+        min_lng, min_lat, max_lng, max_lat = (float(x) for x in raw.split(","))
+    except ValueError:
+        min_lng, min_lat, max_lng, max_lat = 123.25, 9.40, 124.10, 11.30
+    office_lat = os.getenv("DROPOFF_LAT")
+    office_lng = os.getenv("DROPOFF_LNG")
+    try:
+        office = (float(office_lat), float(office_lng)) if office_lat and office_lng else None
+    except ValueError:
+        office = None
+    return {
+        "name": os.getenv("PICKUP_AREA_NAME", "Cebu province"),
+        "bbox": [min_lng, min_lat, max_lng, max_lat],
+        "office": office or (10.3300, 123.9300),  # Mandaue City centre
+        "max_km": _env_float("PICKUP_MAX_KM", 20),
+    }
+
+
+def inside_pickup_area(lat: float, lng: float) -> bool:
+    min_lng, min_lat, max_lng, max_lat = pickup_area()["bbox"]
+    return min_lat <= lat <= max_lat and min_lng <= lng <= max_lng
+
+
+def km_from_office(lat, lng) -> Optional[float]:
+    """Straight-line distance from the CSWS office, in km (None without a pin)."""
+    if lat is None or lng is None:
+        return None
+    import math
+    o_lat, o_lng = pickup_area()["office"]
+    p1, p2 = math.radians(o_lat), math.radians(float(lat))
+    dp, dl = p2 - p1, math.radians(float(lng) - o_lng)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return round(6371 * 2 * math.asin(math.sqrt(a)), 1)
+
+
 def check_pickup_days(values) -> List[int]:
     """The days a donor is available for a Door to Door pickup
     (1 = Monday ... 7 = Sunday). Raises ValueError (shown to the donor)
@@ -186,6 +238,11 @@ class _PickupFields(BaseModel):
                 raise ValueError("pickup_address is required when handover_method is 'Door to Door'")
             if (self.pickup_lat is None) != (self.pickup_lng is None):
                 raise ValueError("Send both pickup_lat and pickup_lng, or neither")
+            if self.pickup_lat is not None and not inside_pickup_area(self.pickup_lat, self.pickup_lng):
+                raise ValueError(
+                    f"Door to Door pickups are only within {pickup_area()['name']}. "
+                    "Choose a landmark there, or choose Drop Off."
+                )
             self.pickup_address = self.pickup_address.strip()
             if self.pickup_landmark is not None:
                 self.pickup_landmark = self.pickup_landmark.strip() or None

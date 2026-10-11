@@ -33,6 +33,8 @@ from schemas.physical_donation_schema import (
     PhysicalDonationCreate,
     PhysicalDonationResponse,
     pickup_rules,
+    pickup_area,
+    km_from_office,
     encode_pickup_days,
     decode_pickup_days,
     pickup_days_label,
@@ -54,7 +56,9 @@ PICKUP_ROLES = (*CSWS_ROLES, "CSWS Disaster Unit")
 # free, no API key, no billing. GEOCODER_URL can point to a self-hosted
 # Photon server later without any app change.
 SEARCH_CENTER = (10.3300, 123.9300)             # (lat, lng) Mandaue City centre: results near here rank first
-SEARCH_BBOX = "123.25,9.40,124.10,11.30"        # minLon,minLat,maxLon,maxLat: all of Cebu province
+# minLon,minLat,maxLon,maxLat: the pickup area (all of Cebu province unless
+# PICKUP_AREA_BBOX says otherwise), so landmark suggestions stay inside it.
+SEARCH_BBOX = ",".join(str(x) for x in pickup_area()["bbox"])
 _GEO_CACHE: dict = {}
 _GEO_CACHE_TTL = 24 * 3600                      # seconds
 _GEO_CACHE_MAX = 1000
@@ -176,6 +180,13 @@ def _pickup_days_view(d: PhysicalDonation) -> dict:
         "pickup_days_label": pickup_days_label(d.pickup_days),
         "pickup_hours": pickup_rules()["hours_label"] if d.pickup_days else None,
     }
+
+
+def _distance_view(d: PhysicalDonation) -> dict:
+    """How far the pickup is from the CSWS office, and whether that is
+    farther than PICKUP_MAX_KM (Main Office may decline it)."""
+    km = km_from_office(d.pickup_lat, d.pickup_lng)
+    return {"distance_km": km, "too_far": km is not None and km > pickup_area()["max_km"]}
 
 
 def _batch_status(statuses: set) -> str:
@@ -455,6 +466,7 @@ def door_to_door_pickups(
             "pickup_landmark": first.pickup_landmark,
             "pickup_notes": first.pickup_notes,
             **_pickup_days_view(first),
+            **_distance_view(first),
             "report_id": first.report_id,
             "report_label": labels[first.report_id],
             "total_items": len(lines),
@@ -521,7 +533,12 @@ def drop_off_info():
 # ---------------------------------------------------------------------------
 @router.get("/pickup-rules")
 def get_pickup_rules():
-    return pickup_rules()
+    area = pickup_area()
+    return {**pickup_rules(), "area": {
+        "name": area["name"], "bbox": area["bbox"],
+        "office_lat": area["office"][0], "office_lng": area["office"][1],
+        "max_km": area["max_km"],
+    }}
 
 
 # ---------------------------------------------------------------------------
