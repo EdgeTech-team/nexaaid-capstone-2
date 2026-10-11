@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from core.audit import log_action
-from core.auth import require_role
+from core.auth import has_role, require_role
 from core.database import get_db
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 from models.delivery import Delivery, DeliveryTrip
@@ -43,6 +43,7 @@ router = APIRouter(tags=["Delivery problems"])
 
 CSWS = ("csws_main_office", "admin")
 DRRMO = "DRRMO Logistics Support"
+DISASTER_UNIT = "CSWS Disaster Unit"
 OPEN_REQUEST = ("Pending", "Accepted")
 
 
@@ -283,21 +284,27 @@ def cancel_logistics_request(
     request_id: int,
     payload: Reason,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(*CSWS)),
+    current_user: User = Depends(require_role(*CSWS, DISASTER_UNIT)),
 ):
     """CSWS no longer needs DRRMO's truck (found another vehicle, delivery
-    cancelled or moved). DRRMO is told."""
+    cancelled or moved). DRRMO is told. The Disaster Unit cancels its own
+    Door to Door pickup runs the same way."""
     req = _request(db, request_id)
+    if has_role(current_user, DISASTER_UNIT) and not has_role(current_user, *CSWS):
+        if req.request_type != "Pickup" or req.requested_by_user_id != current_user.user_id:
+            raise HTTPException(status_code=403, detail="You can cancel only your own pickup requests.")
     if req.status not in OPEN_REQUEST:
         raise HTTPException(status_code=409, detail=f"This request is already {req.status}.")
     old = req.status
     req.status = "Cancelled"
-    req.notes = f"{req.notes}\nCancelled by CSWS: {payload.reason}" if req.notes else f"Cancelled by CSWS: {payload.reason}"
+    who = "Disaster Unit" if req.request_type == "Pickup" else "CSWS"
+    req.notes = (f"{req.notes}\nCancelled by {who}: {payload.reason}" if req.notes
+                 else f"Cancelled by {who}: {payload.reason}")
     log_action(db, current_user, "CANCEL LOGISTICS REQUEST", "logistics_requests", req.request_id,
                old={"status": old}, new={"status": "Cancelled", "reason": payload.reason})
     notify_event_many(db, user_ids_with_role(db, [DRRMO]), "logistics_cancelled",
                       "logistics_request", req.request_id,
-                      title=f"delivery #{req.delivery_id}", reason=payload.reason)
+                      title=req.title, reason=payload.reason)
     db.commit()
     return {"request_id": req.request_id, "status": req.status}
 
@@ -318,7 +325,7 @@ def withdraw_logistics_request(
             status_code=409,
             detail="Only an accepted request can be withdrawn. Use Decline for a new one.",
         )
-    d = db.get(Delivery, req.delivery_id)
+    d = db.get(Delivery, req.delivery_id) if req.delivery_id else None
     if d is not None and d.status in ("Delivered", "Confirmed"):
         raise HTTPException(status_code=409, detail="The goods already arrived, so this can no longer be withdrawn.")
     req.status = "Declined"
@@ -326,6 +333,6 @@ def withdraw_logistics_request(
     log_action(db, current_user, "WITHDRAW LOGISTICS SUPPORT", "logistics_requests", req.request_id,
                old={"status": "Accepted"}, new={"status": "Declined", "reason": payload.reason})
     notify_event(db, req.requested_by_user_id, "logistics_withdrawn", "logistics_request",
-                 req.request_id, title=f"delivery #{req.delivery_id}", reason=payload.reason)
+                 req.request_id, title=req.title, reason=payload.reason)
     db.commit()
     return {"request_id": req.request_id, "status": req.status}

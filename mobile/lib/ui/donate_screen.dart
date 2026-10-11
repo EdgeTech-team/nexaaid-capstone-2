@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
 import 'location_picker.dart';
+import 'pickup_days.dart';
+import 'qr_save.dart';
 import 'widgets.dart';
 
 // Fallback drop-off details, shown only when GET /donations/drop-off-info
@@ -74,7 +76,16 @@ class _Line {
 class DonateScreen extends StatefulWidget {
   final Map<String, dynamic> report;
   final Names names;
-  const DonateScreen({super.key, required this.report, required this.names});
+
+  /// Oct 11: the donor changes a donation still waiting (or declined). The
+  /// form opens filled in; saving keeps the same QR reference.
+  final Map? edit;
+  const DonateScreen({
+    super.key,
+    required this.report,
+    required this.names,
+    this.edit,
+  });
 
   @override
   State<DonateScreen> createState() => _DonateScreenState();
@@ -90,21 +101,58 @@ class _DonateScreenState extends State<DonateScreen> {
   // Door to Door pickup details:
   //   landmark  -> box with map suggestions (also gives the pin for CSWS)
   //   address   -> typed by the donor, no suggestions
-  //   date/time -> preferredPickup
+  //   days      -> pickupDays: the days the donor is home (M / T / W ...)
   //   notes     -> free text for the pickup team
   final pickupLandmark = TextEditingController();
   final pickupAddress = TextEditingController();
   final pickupNotes = TextEditingController();
   PickedAddress? picked; // set when the donor taps a landmark suggestion
-  DateTime? preferredPickup; // Door to Door preferred date & time
+  Set<int> pickupDays = {}; // Door to Door: days the donor is home
   PickupRules pickupRules = const PickupRules();
   final guestName = TextEditingController();
   final guestPhone = TextEditingController();
   bool busy = false;
 
+  bool get _editing => widget.edit != null;
+
+  /// Fill the form from the donation being changed.
+  void _fillFromEntry(Map e) {
+    lines
+      ..forEach((l) => l.dispose())
+      ..clear();
+    for (final i in (e['items'] as List? ?? const []).cast<Map>()) {
+      final l = _Line()
+        ..itemId = '${i['item_id']}'
+        ..qty.text = '${i['quantity']}';
+      final pack = '${i['packaging'] ?? ''}';
+      if (packagingOptions.contains(pack)) {
+        l.packaging = pack;
+      } else {
+        l.packaging = 'Other';
+        l.otherPackaging.text = pack;
+      }
+      final value = i['estimated_value'];
+      if (value != null) l.value.text = '$value';
+      lines.add(l);
+    }
+    if (lines.isEmpty) lines.add(_Line());
+    handover = '${e['handover_method'] ?? 'Drop Off'}';
+    pickupLandmark.text = '${e['pickup_landmark'] ?? ''}';
+    pickupAddress.text = '${e['pickup_address'] ?? ''}';
+    pickupNotes.text = '${e['pickup_notes'] ?? ''}';
+    pickupDays = pickupDaysOf(e['pickup_days']);
+    final lat = (e['pickup_lat'] as num?)?.toDouble();
+    final lng = (e['pickup_lng'] as num?)?.toDouble();
+    picked = lat != null && lng != null
+        ? PickedAddress(pickupLandmark.text, lat: lat, lng: lng)
+        : null;
+    useSavedAddress = false; // show the address that was given
+  }
+
   @override
   void initState() {
     super.initState();
+    if (_editing) _fillFromEntry(widget.edit!);
     PickupRules.load().then((rules) {
       if (mounted) setState(() => pickupRules = rules);
     });
@@ -115,7 +163,7 @@ class _DonateScreenState extends State<DonateScreen> {
         if (r.ok) a = r.json['profile']?['address'] as String?;
         setState(() {
           savedAddress = (a ?? '').trim().isEmpty ? null : a;
-          useSavedAddress = savedAddress != null;
+          useSavedAddress = savedAddress != null && !_editing;
         });
       });
     }
@@ -157,14 +205,14 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  Future<void> _choosePickupTime(FormFieldState<DateTime> field) async {
-    final chosen = await pickPreferredPickup(
+  Future<void> _choosePickupDays(FormFieldState<Set<int>> field) async {
+    final chosen = await pickPickupDays(
       context,
       pickupRules,
-      current: preferredPickup,
+      current: pickupDays,
     );
     if (chosen == null || !mounted) return;
-    setState(() => preferredPickup = chosen);
+    setState(() => pickupDays = chosen);
     field.didChange(chosen);
   }
 
@@ -197,7 +245,7 @@ class _DonateScreenState extends State<DonateScreen> {
         : PickedAddress(landmarkText);
     setState(() => busy = true);
     final body = <String, dynamic>{
-      'report_id': widget.report['id'],
+      if (!_editing) 'report_id': widget.report['id'],
       'handover_method': handover,
       if (door) ...{
         'pickup_address': useSaved ? savedAddress : typedAddress,
@@ -206,18 +254,23 @@ class _DonateScreenState extends State<DonateScreen> {
           'pickup_lat': landmark.lat,
           'pickup_lng': landmark.lng,
         },
-        'preferred_pickup_at': preferredPickup!.toUtc().toIso8601String(),
+        'pickup_days': (pickupDays.toList()..sort()),
         if (pickupNotes.text.trim().isNotEmpty)
           'pickup_notes': pickupNotes.text.trim(),
       },
       'items': [for (final l in lines) l.toJson()],
-      if (!api.loggedIn)
+      if (!api.loggedIn && !_editing)
         'guest_donor': {
           'full_name': guestName.text.trim(),
           'contact_number': guestPhone.text.trim(),
         },
     };
-    final r = await api.post('/donations/batch', body: body);
+    final r = _editing
+        ? await api.put(
+            '/donations/entries/${Uri.encodeComponent('${widget.edit!['batch_reference']}')}',
+            body: body,
+          )
+        : await api.post('/donations/batch', body: body);
     if (!mounted) return;
     setState(() => busy = false);
     if (!r.ok || r.json is! Map) {
@@ -225,6 +278,11 @@ class _DonateScreenState extends State<DonateScreen> {
         r.status == 0 ? 'Cannot reach the server' : r.errorText,
         error: true,
       );
+      return;
+    }
+    if (_editing) {
+      _snack('Donation updated. Same QR code.');
+      Navigator.of(context).pop(true);
       return;
     }
     Navigator.of(context).pushReplacement(
@@ -435,8 +493,8 @@ class _DonateScreenState extends State<DonateScreen> {
   }
 
   /// UC-D2 alt 7c: Door to Door pickup details.
-  /// Order: Landmark (with suggestions), Address (typed), preferred date and
-  /// time, notes for the pickup team.
+  /// Order: Landmark (with suggestions), Address (typed), the days the donor
+  /// is home (pop-out with day buttons), notes for the pickup team.
   Widget _doorToDoorCard() {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
@@ -447,7 +505,7 @@ class _DonateScreenState extends State<DonateScreen> {
           Text('Pickup details', style: t.titleMedium),
           Gaps.v4,
           Text(
-            'CSWS will come to this address. They pick up ${pickupRules.label}.',
+            'CSWS will come to this address on one of the days you are home.',
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           Gaps.v12,
@@ -475,12 +533,25 @@ class _DonateScreenState extends State<DonateScreen> {
           ],
           // 1. Landmark: suggestions appear as the donor types. Picking one
           //    also saves the map pin so CSWS can navigate.
+          // Required, and picked from the suggestions (Oct 11): that gives
+          // the pin on the CSWS pickup map, and suggestions only come from
+          // the pickup area (Cebu province).
           AddressAutocompleteField(
             controller: pickupLandmark,
             label: 'Landmark',
             hint: 'Start typing a nearby landmark, e.g. church, school, store',
             icon: Icons.place_outlined,
             onChanged: (p) => picked = p.lat == null ? null : p,
+            validator: (v) {
+              if (handover != 'Door to Door') return null;
+              final text = (v ?? '').trim();
+              if (text.isEmpty) return 'Enter a landmark near your address';
+              if (picked == null || picked!.address != text) {
+                return 'Choose your landmark from the suggestions, so CSWS '
+                    'can find you on the map';
+              }
+              return null;
+            },
           ),
           Gaps.v16,
           // 2. Address: plain typed text, no suggestions.
@@ -508,30 +579,53 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v16,
           ],
-          // 3. Preferred pickup date and time.
-          FormField<DateTime>(
-            validator: (_) =>
-                handover == 'Door to Door' && preferredPickup == null
-                ? 'Choose a preferred pickup date and time'
+          // 3. Pickup days: a pop-out with M / T / W / Th / F buttons.
+          FormField<Set<int>>(
+            validator: (_) => handover == 'Door to Door' && pickupDays.isEmpty
+                ? 'Choose at least one day you are home'
                 : null,
             builder: (field) => InkWell(
               borderRadius: BorderRadius.circular(Radii.md),
-              onTap: () => _choosePickupTime(field),
+              onTap: () => _choosePickupDays(field),
               child: InputDecorator(
                 decoration: InputDecoration(
-                  labelText: 'Preferred pickup date & time',
-                  prefixIcon: const Icon(Icons.event_outlined),
+                  labelText: 'Available pickup days',
+                  prefixIcon: const Icon(Icons.event_available_outlined),
                   suffixIcon: const Icon(Icons.edit_calendar_outlined),
                   errorText: field.errorText,
+                  helperText:
+                      'Pickup hours are ${pickupHoursLabel(pickupRules)}',
                 ),
-                child: Text(
-                  preferredPickup == null
-                      ? 'Tap to choose'
-                      : formatPickupTime(preferredPickup!),
-                  style: preferredPickup == null
-                      ? t.bodyLarge?.copyWith(color: cs.onSurfaceVariant)
-                      : t.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
-                ),
+                child: pickupDays.isEmpty
+                    ? Text(
+                        'Tap to choose the days you are home',
+                        style: t.bodyLarge?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      )
+                    : Wrap(
+                        spacing: Space.xxs,
+                        runSpacing: Space.xxs,
+                        children: [
+                          for (final d in (pickupDays.toList()..sort()))
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: Space.xs + 2,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: cs.primary,
+                                borderRadius: BorderRadius.circular(Radii.pill),
+                              ),
+                              child: Text(
+                                pickupDayShort[d - 1],
+                                style: t.labelLarge?.copyWith(
+                                  color: cs.onPrimary,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
               ),
             ),
           ),
@@ -630,8 +724,8 @@ class _DonateScreenState extends State<DonateScreen> {
               ),
               Gaps.h12,
               AppButton(
-                'Submit & get QR code',
-                icon: Icons.qr_code_2,
+                _editing ? 'Save changes' : 'Submit & get QR code',
+                icon: _editing ? Icons.check : Icons.qr_code_2,
                 variant: AppButtonVariant.donate,
                 loading: busy,
                 onPressed: busy ? null : _submit,
@@ -648,7 +742,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final side = _sidePadding(context);
     final door = handover == 'Door to Door';
     return Scaffold(
-      appBar: AppBar(title: const Text('Donate goods')),
+      appBar: AppBar(title: Text(_editing ? 'Edit donation' : 'Donate goods')),
       bottomNavigationBar: _submitBar(),
       body: Form(
         key: _form,
@@ -898,6 +992,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
     final dropOff = batch['handover_method'] == 'Drop Off';
     final qr = batch['qr_image_base64'] as String?;
     final pickupTime = formatPickupIso(batch['preferred_pickup_at']);
+    final pickupDays = pickupDaysOf(batch['pickup_days']);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Donation recorded')),
@@ -960,6 +1055,13 @@ class _DonationReceiptState extends State<DonationReceipt> {
                     '${batch['batch_reference']}',
                     textAlign: TextAlign.center,
                     style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
+                  ),
+                  Gaps.v8,
+                  SaveQrButton(
+                    qrBase64: qr,
+                    reference: '${batch['batch_reference']}',
+                    handover: '${batch['handover_method']}',
+                    forReport: widget.reportTitle,
                   ),
                   Gaps.v8,
                   Wrap(
@@ -1030,7 +1132,20 @@ class _DonationReceiptState extends State<DonationReceipt> {
                       title: const Text('Address'),
                       subtitle: Text('${batch['pickup_address']}'),
                     ),
-                    if (pickupTime != null) ...[
+                    if (pickupDays.isNotEmpty) ...[
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: Icon(
+                          Icons.event_available_outlined,
+                          color: cs.primary,
+                        ),
+                        title: const Text('Available pickup days'),
+                        subtitle: Text(
+                          '${pickupDaysLabel(pickupDays)} · pickup hours '
+                          '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                        ),
+                      ),
+                    ] else if (pickupTime != null) ...[
                       const Divider(height: 1),
                       ListTile(
                         leading: Icon(Icons.event_outlined, color: cs.primary),

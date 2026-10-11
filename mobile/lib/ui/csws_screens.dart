@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'records_screens.dart' show DonationRecordsScreen;
@@ -19,6 +20,57 @@ class ScannerPage extends StatefulWidget {
 
 class _ScannerPageState extends State<ScannerPage> {
   bool done = false;
+  bool _reading = false;
+  final _camera = MobileScannerController();
+
+  @override
+  void dispose() {
+    _camera.dispose();
+    super.dispose();
+  }
+
+  void _found(BarcodeCapture? capture) {
+    if (done || capture == null) return;
+    final code = capture.barcodes
+        .map((b) => b.rawValue)
+        .whereType<String>()
+        .firstOrNull;
+    if (code == null) return;
+    done = true;
+    Navigator.of(context).pop(code);
+  }
+
+  /// Daniel (Oct 10): donors can save their QR as a picture and send it,
+  /// e.g. by chat. Read the QR from that picture instead of the camera.
+  Future<void> _fromPhoto() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final photo = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (photo == null || !mounted) return;
+    setState(() => _reading = true);
+    BarcodeCapture? capture;
+    String? problem;
+    try {
+      capture = await _camera.analyzeImage(
+        photo.path,
+        formats: const [BarcodeFormat.qrCode],
+      );
+      if (capture == null || capture.barcodes.isEmpty) {
+        problem = 'No QR code found in that picture. Try a clearer one.';
+      }
+    } on UnsupportedError {
+      problem = 'Reading a QR from a picture does not work on this device. '
+          'Type the reference instead.';
+    } catch (_) {
+      problem = 'Could not read that picture. Type the reference instead.';
+    }
+    if (!mounted) return;
+    setState(() => _reading = false);
+    if (problem != null) {
+      messenger.showSnackBar(SnackBar(content: Text(problem)));
+      return;
+    }
+    _found(capture);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -28,25 +80,33 @@ class _ScannerPageState extends State<ScannerPage> {
       body: Stack(
         children: [
           MobileScanner(
-            onDetect: (capture) {
-              if (done) return;
-              final code = capture.barcodes
-                  .map((b) => b.rawValue)
-                  .whereType<String>()
-                  .firstOrNull;
-              if (code == null) return;
-              done = true;
-              Navigator.of(context).pop(code);
-            },
+            controller: _camera,
+            onDetect: _found,
             errorBuilder: (context, error) => Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
                   'Camera not available (${error.errorCode.name}).\n'
-                  'Go back and type the reference instead.',
+                  'Use "Scan from a photo", or go back and type the reference.',
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white),
                 ),
+              ),
+            ),
+          ),
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: FilledButton.tonalIcon(
+                onPressed: _reading ? null : _fromPhoto,
+                icon: _reading
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.photo_library_outlined),
+                label: const Text('Scan from a photo'),
               ),
             ),
           ),
