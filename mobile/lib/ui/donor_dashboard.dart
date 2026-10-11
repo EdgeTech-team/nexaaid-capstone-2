@@ -5,11 +5,7 @@ import 'package:flutter/material.dart';
 import '../api.dart' show ApiResult;
 import 'disaster_art.dart';
 import 'donation_entries_view.dart';
-daniel/pickup-days-map-logistics
-
 import 'landing/landing_extras.dart' show kImpactImage;
-import 'expiry_widgets.dart';
-copy-develop
 import 'donor_screens.dart' show DonateScreen, ReportsFeed;
 import 'qr_save.dart';
 import 'widgets.dart';
@@ -394,12 +390,7 @@ class _DashboardHero extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-daniel/pickup-days-map-logistics
-                  isOrg ? 'Relief organization' : 'Thank you for helping families get back on their feet.',
-                  textAlign: TextAlign.center,
-
                   'Relief organization',
-copy-develop
                   style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
                 ),
                 StatusChip(status),
@@ -495,11 +486,7 @@ copy-develop
   }
 }
 
-daniel/pickup-days-map-logistics
-/// The hero's highlighted report (same look as the landing page's card).
-
 /// The hero's highlighted report, with its disaster picture on top.
-copy-develop
 class _UrgentReportCard extends StatelessWidget {
   final Map<String, dynamic> report;
   final VoidCallback onDonate;
