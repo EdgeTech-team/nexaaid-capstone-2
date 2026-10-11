@@ -78,7 +78,7 @@ void main() {
     await tester.tap(find.text('Log in to your account'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
-    expect(find.text('Email'), findsOneWidget);
+    expect(find.text('Email or username'), findsOneWidget);
     expect(find.text('Password'), findsOneWidget);
     // It's a pop-up over the blurred landing page, with a close button.
     expect(find.byType(BackdropFilter), findsWidgets);
