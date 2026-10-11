@@ -95,9 +95,15 @@ final Map<String, EntityOpener> notificationDestinations = {
   // org_registered goes to every Administrator. org_approved and org_rejected
   // go to the organization's own account, which has no screen for this, so it
   // stays on the inbox.
-    'organization': (c, id) {
+  'organization': (c, id) {
     if (api.role == Roles.admin) {
-      _push(c, _withAppBar('Accounts', const AccountsHub(initialView: 'registrations')));
+      _push(
+        c,
+        _withAppBar(
+          'Accounts',
+          const AccountsHub(initialView: 'registrations'),
+        ),
+      );
     }
   },
   // donor_registered points at the new user account.
@@ -105,7 +111,10 @@ final Map<String, EntityOpener> notificationDestinations = {
     if (api.role == Roles.admin) {
       _push(
         c,
-        _withAppBar('Accounts', const AccountsHub(initialView: 'registrations')),
+        _withAppBar(
+          'Accounts',
+          const AccountsHub(initialView: 'registrations'),
+        ),
       );
     }
   },
@@ -131,9 +140,8 @@ Future<void> _openDonation(BuildContext c, int donationId) async {
       _push(c, _withAppBar('Confirmations', const CmoScreen()));
     case Roles.donor:
     case Roles.org:
-      // DonorDashboard is a tab body (no Scaffold), so wrap it to get an
-      // app bar and a back button.
-      _push(c, _withAppBar('My donations', const DonorDashboard()));
+      // Straight to that donation's page (its status, reason and QR).
+      await openMyDonation(c, donationId);
     default:
       break; // other roles have no donation screen: stay on the inbox
   }
@@ -515,17 +523,19 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (mounted) setState(() => _reload++);
   }
 
-  Future<void> _open(BuildContext context, Map<String, dynamic> n) async {
+  Future<void> _open(BuildContext tileContext, Map<String, dynamic> n) async {
     if (n['is_read'] != true) {
       await api.post('/notifications/${n['notification_id']}/read');
-      _refreshList();
     }
     final type = n['entity_type'] as String?;
     final id = (n['entity_id'] as num?)?.toInt();
     final opener = type == null ? null : notificationDestinations[type];
-    if (opener != null && id != null && context.mounted) {
+    // Open from this screen's context: refreshing the list rebuilds the
+    // tiles, so the tapped tile's context would be gone and nothing opened.
+    if (opener != null && id != null && mounted) {
       opener(context, id);
     }
+    _refreshList();
   }
 
   @override

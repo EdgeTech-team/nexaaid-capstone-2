@@ -150,6 +150,8 @@ class Api extends ChangeNotifier {
       send('POST', path, body: body ?? {});
   Future<ApiResult> patch(String path, {Map<String, dynamic>? body}) =>
       send('PATCH', path, body: body ?? {});
+  Future<ApiResult> put(String path, {Map<String, dynamic>? body}) =>
+      send('PUT', path, body: body ?? {});
   Future<ApiResult> delete(String path) => send('DELETE', path);
 
   /// POST /uploads as multipart form data (purpose + file).

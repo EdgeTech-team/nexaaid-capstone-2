@@ -131,6 +131,18 @@ Scanning still opens the receive pop-up directly. The donor is told in
 order, once per donation entry: submitted, received by CSWS, acknowledged by
 the CMO.
 
+**6. Oct 11 follow-ups.** Main Office "Pickups" tab is the pickup map
+(the Overdue/Today list is gone). Pickups stay inside Cebu province
+(`PICKUP_AREA_BBOX`); pickups farther than `PICKUP_MAX_KM` (20) from the
+office are red, out of the route, and Main Office can decline them. Donors
+can edit or delete a donation while nothing of it was received
+(`PUT` / `DELETE /donations/entries/{ref}`, same QR); a declined one can be
+fixed (e.g. switched to Drop Off) and is waiting again. No staff
+notifications for donor edits/deletes; deleted entries leave every list,
+their notifications and any DRRMO pickup run. Tapping a donation
+notification opens that donation (and notification taps work again: they
+were lost when the list refreshed).
+
 **Schema (1 migration, additive, upgrade/downgrade tested on Postgres):**
 `d8f3a1c6b2e4` physical_donations.pickup_days; logistics_requests gets
 `request_type` ('Delivery' / 'Pickup'), `pickup_date`, `pickup_batches`, and

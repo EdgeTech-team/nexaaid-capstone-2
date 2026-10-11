@@ -300,6 +300,21 @@ class DonationBatchCreate(_PickupFields):
         return self
 
 
+class DonationEntryEdit(_PickupFields):
+    """The donor changes a donation that is still waiting (or was declined):
+    items, handover method and pickup details (PUT /donations/entries/{ref}).
+    Same rules as a new donation; the report and the QR stay the same."""
+
+    items: List[DonationLine] = Field(min_length=1, max_length=30)
+
+    @model_validator(mode="after")
+    def check_pickup_time_given(self):
+        if (self.handover_method == "Door to Door" and not self.pickup_days
+                and self.preferred_pickup_at is None):
+            raise ValueError("Choose at least one day CSWS can pick up your donation")
+        return self
+
+
 class PhysicalDonationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

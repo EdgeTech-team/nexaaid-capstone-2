@@ -181,3 +181,65 @@ def test_pickups_stay_in_cebu_and_far_ones_can_be_declined(api, monkeypatch):
                    json={"reason": "Too far for a Door to Door pickup. Please drop it off instead."}))
     refs = [p["batch_reference"] for p in ok(client.get("/donations/pickups", headers=t["csws"]))]
     assert far["batch_reference"] not in refs and near["batch_reference"] in refs
+
+
+def test_donor_edits_or_deletes_a_waiting_donation(api):
+    client, t = api
+    _activate_everyone()
+    rid = _report(client, t)
+    b = ok(client.post("/donations/batch", headers=t["donor"], json=_door(rid, [1, 3])), 201)
+    ref = b["batch_reference"]
+    staff_before = len(ok(client.get("/notifications/", headers=t["csws"]))["items"])
+
+    # Only the donor can change it
+    edit = {"handover_method": "Door to Door", "pickup_address": "12 A. Del Rosario St., Centro",
+            "pickup_landmark": "Mandaue City Hall", "pickup_lat": 10.3236, "pickup_lng": 123.9430,
+            "pickup_days": [5],
+            "items": [{"item_id": 1, "packaging": "Sack", "quantity": 9},
+                      {"other_item_name": "Bottled water", "other_item_unit": "bottles",
+                       "packaging": "Case", "quantity": 24}]}
+    assert client.put(f"/donations/entries/{ref}", headers=t["csws"], json=edit).status_code == 403
+    e = ok(client.put(f"/donations/entries/{ref}", headers=t["donor"], json=edit))
+    assert e["batch_reference"] == ref and e["pickup_days"] == [5] and e["total_items"] == 2
+    assert [i["quantity"] for i in e["items"]] == [9, 24]
+    # Switch to Drop Off and back to one item
+    e = ok(client.put(f"/donations/entries/{ref}", headers=t["donor"], json={
+        "handover_method": "Drop Off", "items": [{"item_id": 1, "packaging": "Box", "quantity": 3}]}))
+    assert e["handover_method"] == "Drop Off" and e["total_items"] == 1 and e["pickup_days"] == []
+    assert ref not in [p["batch_reference"] for p in ok(client.get("/donations/pickups", headers=t["csws"]))]
+
+    # A declined donation can be fixed and is waiting again
+    door = ok(client.post("/donations/batch", headers=t["donor"], json=_door(rid, [1])), 201)
+    ok(client.post(f"/donations/entries/{door['batch_reference']}/cancel", headers=t["csws"],
+                   json={"reason": "Too far for a Door to Door pickup."}))
+    fixed = ok(client.put(f"/donations/entries/{door['batch_reference']}", headers=t["donor"], json={
+        "handover_method": "Drop Off", "items": [{"item_id": 1, "packaging": "Box", "quantity": 2}]}))
+    assert fixed["status"] == "Pending" and fixed["days_left"] >= 13
+
+    # Delete: gone for the donor and for staff, with its notifications; no new ones
+    ok(client.delete(f"/donations/entries/{ref}", headers=t["donor"]))
+    assert client.get(f"/donations/by-batch/{ref}", headers=t["csws"]).status_code == 404
+    mine = ok(client.get("/donations/mine", headers=t["donor"]))
+    assert ref not in [x["batch_reference"] for x in mine["entries"]]
+    assert len(ok(client.get("/notifications/", headers=t["csws"]))["items"]) <= staff_before + 1
+
+    # Received goods can no longer be changed or deleted
+    got = ok(client.post("/donations/batch", headers=t["donor"], json={
+        "report_id": rid, "handover_method": "Drop Off", "items": [{"item_id": 1, "packaging": "Box", "quantity": 2}]}), 201)
+    ok(client.post(f"/donations/entries/{got['batch_reference']}/receive", headers=t["csws"], json={
+        "items": [{"donation_id": got["items"][0]["donation_id"], "actual_quantity": 2}]}))
+    assert client.delete(f"/donations/entries/{got['batch_reference']}", headers=t["donor"]).status_code == 409
+    assert client.put(f"/donations/entries/{got['batch_reference']}", headers=t["donor"], json={
+        "handover_method": "Drop Off", "items": [{"item_id": 1, "packaging": "Box", "quantity": 5}]}).status_code == 409
+
+
+def test_deleting_the_only_stop_cancels_the_pickup_run(api):
+    client, t = api
+    rid = _report(client, t)
+    a = ok(client.post("/donations/batch", headers=t["donor"], json=_door(rid, [3])), 201)["batch_reference"]
+    req = ok(client.post("/logistics/pickup-requests", headers=t["unit"], json={
+        "pickup_date": _next(3).isoformat(), "batch_references": [a], "trucks": 1}), 201)
+    ok(client.delete(f"/donations/entries/{a}", headers=t["donor"]))
+    run = next(r for r in ok(client.get("/logistics/requests", headers=t["unit"]))
+               if r["request_id"] == req["request_id"])
+    assert run["status"] == "Cancelled"
