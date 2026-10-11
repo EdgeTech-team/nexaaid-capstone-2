@@ -5,6 +5,10 @@ import 'package:flutter/material.dart';
 import '../api.dart' show ApiResult;
 import 'disaster_art.dart';
 import 'donation_entries_view.dart';
+import 'donor_feed.dart';
+import 'landing/about_section.dart';
+import 'landing/landing_screen.dart' show HowItWorksSteps;
+import 'landing/mission_section.dart';
 import 'landing/landing_extras.dart' show kImpactImage;
 import 'donor_screens.dart' show DonateScreen, DonorReportsTab;
 import 'qr_save.dart';
@@ -67,6 +71,8 @@ class DonorDashboard extends StatefulWidget {
 }
 
 class _DonorDashboardState extends State<DonorDashboard> {
+  int _loads = 0; // a new value reloads (after an edit or delete)
+
   /// "See all reports": every validated report, active and done, with the
   /// priority and progress filters (2.4, 3.3).
   void _openAllReports() => Navigator.of(context).push(
@@ -88,12 +94,14 @@ class _DonorDashboardState extends State<DonorDashboard> {
   @override
   Widget build(BuildContext context) {
     return Loader(
+      key: ValueKey(_loads),
       load: [() => api.get('/donations/mine'), api.lookupsResult],
       builder: (context, data) {
         final m = data[0] as Map;
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         final profile = m['profile'] as Map;
         final sum = m['summary'] as Map;
+        final entries = (m['entries'] as List? ?? const []).cast<Map>();
         final supported = (m['supported_reports'] as List).cast<Map>();
         final isOrg = profile['organization'] != null;
         final validated = names.rows('validated_reports');
@@ -107,6 +115,10 @@ class _DonorDashboardState extends State<DonorDashboard> {
           for (final r in supported)
             {...r, ...?byId['${r['report_id']}'], 'label': r['label']},
         ];
+
+        final donateLabel = isOrg
+            ? 'Donate as ${profile['organization']}'
+            : 'Donate';
 
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
@@ -153,9 +165,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
                     for (final r in open.take(10)) ...[
                       NeedCard(
                         report: r,
-                        donateLabel: isOrg
-                            ? 'Donate as ${profile['organization']}'
-                            : 'Donate',
+                        donateLabel: donateLabel,
                         onDonate: () => _donate(r, names),
                       ),
                       Gaps.h12,
@@ -163,11 +173,34 @@ class _DonorDashboardState extends State<DonorDashboard> {
                   ],
                 ),
               ),
-            // Short on purpose: the donor's own status is in the Reports tab.
-            if (helped.isNotEmpty) ...[
-              Gaps.v24,
-              _Centered(child: _ThankYouStrip(helped: helped)),
-            ],
+            // ---- Latest updates: a short newsfeed (canvas) ------------
+            _Centered(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SectionHeader(
+                    'Latest updates',
+                    subtitle: 'New reports, your donations, and goods that '
+                        'arrived.',
+                  ),
+                  DonorFeed(
+                    validated: validated,
+                    entries: entries,
+                    supported: helped,
+                    donateLabel: donateLabel,
+                    onDonate: (r) => _donate(r, names),
+                    onChanged: () => setState(() => _loads++),
+                  ),
+
+                  // ---- About NexaAid, like the landing page -------------
+                  const SectionHeader('How NexaAid works'),
+                  const HowItWorksSteps(),
+                  Gaps.v8,
+                  const MissionSection(),
+                  const AboutSection(),
+                ],
+              ),
+            ),
           ],
         );
       },
@@ -501,60 +534,6 @@ String _barangayOf(Map r) {
   if (b != null) return '$b';
   final parts = '${r['label'] ?? ''}'.split(' in ');
   return parts.length > 1 ? parts.last : '${r['label'] ?? '-'}';
-}
-
-/// Photo strip that thanks the donor with a real report they helped.
-class _ThankYouStrip extends StatelessWidget {
-  final List<Map> helped;
-  const _ThankYouStrip({required this.helped});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    // The supported report furthest along, so the message is about progress.
-    final r = (helped.toList()
-          ..sort((a, b) => _percent(b).compareTo(_percent(a))))
-        .first;
-    final families = r['affected_families'];
-    final where = 'Barangay ${_barangayOf(r)}';
-    final pct = _percent(r).round();
-    final headline = pct >= 100
-        ? '$where got everything it needed.'
-        : families != null
-        ? '$families families in $where are getting help.'
-        : '$where is $pct% supplied.';
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(Radii.lg),
-      child: SizedBox(
-        height: 140,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            const _HeroPhoto(opacity: 0.66, alignment: Alignment(-0.4, 0.2)),
-            Padding(
-              padding: const EdgeInsets.all(Space.md),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Text(
-                    headline,
-                    style: t.titleMedium?.copyWith(color: Colors.white),
-                  ),
-                  Gaps.v4,
-                  Text(
-                    'Part of it came from you. Thank you.',
-                    style: t.bodyMedium?.copyWith(color: AppColors.harborMist),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 class _Notice extends StatelessWidget {

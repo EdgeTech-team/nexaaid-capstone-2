@@ -88,6 +88,8 @@ def get_lookups(db: Session = Depends(get_db)):
                 "total_items_needed": r.fulfillment.total_items_needed if r.fulfillment else r.estimated_quantity,
                 "total_items_delivered": r.fulfillment.total_items_delivered if r.fulfillment else 0,
                 "fulfillment_percentage": float(r.fulfillment.fulfillment_percentage) if r.fulfillment else 0.0,
+                # Ivan (donor feed): "New validated report · 2h".
+                "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in reports if r.status == "Validated"
         ],
