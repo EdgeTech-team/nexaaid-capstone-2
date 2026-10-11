@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 
 import 'disaster_art.dart';
-import 'donation_entries_view.dart' show entryReportLabel;
-import 'donor_dashboard.dart' show DonationDetailScreen, donationStep;
-import 'item_art.dart';
 import 'landing/landing_extras.dart' show kImpactImage;
 import 'landing/public_data.dart' show kDemoData;
 import 'notifications_screen.dart' show showReportSheet;
@@ -13,11 +10,11 @@ import 'widgets.dart';
 // Ivan (donor Dashboard, from the canvas): a short newsfeed under the
 // barangay box, newest first. Every post is real data the app already has:
 //   - New validated report    /lookups validated_reports (created_at)
-//   - Your donation update    /donations/mine entries
 //   - Goods arrived           /public/recent-deliveries (barangay confirmed)
 //   - You helped finish one   /donations/mine supported_reports at 100%
 //   - Right now in Mandaue    /public/stats
 // No likes, comments or other donors' names: there is no data for them.
+// The donor's own donation status is not here: it stays in the Reports tab.
 // ---------------------------------------------------------------------------
 
 /// "Just now", "2h", "Yesterday", "3 days ago", or the date.
@@ -38,20 +35,16 @@ typedef _Post = (DateTime?, Widget);
 
 class DonorFeed extends StatefulWidget {
   final List<Map<String, dynamic>> validated;
-  final List<Map> entries;
   final List<Map> supported;
   final String donateLabel;
   final void Function(Map<String, dynamic> report) onDonate;
-  final VoidCallback onChanged; // a donation was edited or deleted
 
   const DonorFeed({
     super.key,
     required this.validated,
-    required this.entries,
     required this.supported,
     required this.donateLabel,
     required this.onDonate,
-    required this.onChanged,
   });
 
   @override
@@ -72,13 +65,6 @@ class _DonorFeedState extends State<DonorFeed> {
   Future<Map?> _map(String path) async {
     final r = await api.get(path);
     return r.ok && r.json is Map ? r.json as Map : null;
-  }
-
-  Future<void> _openEntry(Map e) async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => DonationDetailScreen(entry: e)),
-    );
-    if (changed == true) widget.onChanged();
   }
 
   @override
@@ -124,17 +110,6 @@ class _DonorFeedState extends State<DonorFeed> {
             donateLabel: widget.donateLabel,
             onDonate: () => widget.onDonate(r),
           ),
-        ),
-      // The donor's 3 newest open donations.
-      for (final e
-          in widget.entries
-              .where(
-                (e) => !const {'Expired', 'Cancelled'}.contains(e['status']),
-              )
-              .take(3))
-        (
-          at(e['created_at']),
-          DonationUpdatePost(entry: e, onOpen: () => _openEntry(e)),
         ),
       // Goods the barangays confirmed (latest 3).
       for (final d in arrived.take(3))
@@ -327,87 +302,6 @@ class ReportPost extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    ]);
-  }
-}
-
-/// Your donation update: what happened and what is next, with the steps.
-class DonationUpdatePost extends StatelessWidget {
-  final Map entry;
-  final VoidCallback onOpen;
-  const DonationUpdatePost({
-    super.key,
-    required this.entry,
-    required this.onOpen,
-  });
-
-  /// Who did the last step, and the sentence for it.
-  static (String, String) _story(Map e) {
-    final items = itemsSummary(e, show: 2);
-    final report = entryReportLabel(e);
-    return switch ('${e['status']}') {
-      'Received' => (
-        'CSWS Main Office',
-        'CSWS received your $items for $report. Next, the CMO acknowledges it.',
-      ),
-      'Partly Received' => (
-        'CSWS Main Office',
-        'CSWS received part of your $items for $report. The rest is still '
-            'waiting for drop-off or pickup.',
-      ),
-      'Confirmed' => (
-        'CMO Representative',
-        'The CMO acknowledged your $items for $report. It is ready to be '
-            'delivered.',
-      ),
-      _ => (
-        'You',
-        'You pledged $items for $report. Next, drop it off at the CSWS Main '
-            'Office or wait for pickup.',
-      ),
-    };
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final e = entry;
-    final items = (e['items'] as List? ?? const []).cast<Map>();
-    final (who, story) = _story(e);
-    return _postCard([
-      _PostHeader(
-        avatar: ItemArt(
-          items.isEmpty ? null : items.first['item_name'],
-          size: 40,
-        ),
-        title: 'Your donation update',
-        subtitle: [
-          who,
-          if (timeAgo(e['created_at']).isNotEmpty) timeAgo(e['created_at']),
-        ].join(' · '),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.sm),
-        child: Text(story, style: t.bodyLarge),
-      ),
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Space.md),
-        child: StatusTimeline(
-          steps: donationLifecycle,
-          labels: donationLifecycleLabels,
-          current: donationStep(e),
-        ),
-      ),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(Space.xs, Space.xxs, 0, Space.xs),
-          child: TextButton(
-            onPressed: onOpen,
-            child: const Text('View QR and timeline'),
-          ),
         ),
       ),
     ]);

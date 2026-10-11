@@ -288,7 +288,7 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('Feed: report, donation update, arrived, finished, Mandaue', (
+  testWidgets('Feed: report, arrived, finished, Mandaue; no donation status', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
@@ -302,25 +302,20 @@ void main() {
         SingleChildScrollView(
           child: DonorFeed(
             validated: reports,
-            entries: (_mine['entries'] as List).cast<Map>(),
             supported: [
               {'label': 'Flood in Looc', 'fulfillment_percentage': 100.0},
             ],
             donateLabel: 'Donate',
             onDonate: (_) {},
-            onChanged: () {},
           ),
         ),
       );
       // New validated report (Looc is full, so only Banilad).
       expect(find.byType(ReportPost), findsOneWidget);
       expect(find.text('CSWS Disaster Unit'), findsOneWidget);
-      // Both of Ana's open donations.
-      expect(find.byType(DonationUpdatePost), findsNWidgets(2));
-      expect(
-        find.textContaining('CSWS received your 10 kg Rice'),
-        findsOneWidget,
-      );
+      // The donor's own donation status stays in the Reports tab.
+      expect(find.text('Your donation update'), findsNothing);
+      expect(find.textContaining('CSWS received your'), findsNothing);
       // Goods the barangay confirmed.
       expect(find.text('Barangay Tipolo'), findsOneWidget);
       expect(
