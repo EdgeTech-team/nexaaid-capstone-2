@@ -29,6 +29,7 @@ from models.logistics_request_model import LogisticsRequest
 from models.notification import Notification
 from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
+from models.delivery import Delivery
 from schemas.physical_donation_schema import (
     DonationBatchCreate,
     DonationEntryEdit,
@@ -898,6 +899,11 @@ def my_donations(
             for d in donations
         ],
         "supported_reports": [report_info(r) for r in reports.values()],
+        # Ivan (donor Reports tab): delivery status. Donated goods go into
+        # CSWS inventory and are delivered per report, so a delivery is not
+        # tied to one donation. These are the deliveries to the reports this
+        # user donated to, newest first, cancelled ones left out.
+        "deliveries": _deliveries_to(db, list(report_ids), types, barangays),
         # 4.4 / 4.5: the same donations as entries (one per QR), newest first.
         "entries": [
             {
@@ -914,7 +920,45 @@ def my_donations(
             for e in filter_and_sort(entries)
         ],
     }
-    # ---------------------------------------------------------------------------
+
+
+def _deliveries_to(db: Session, report_ids: list, types: dict, barangays: dict) -> list:
+    if not report_ids:
+        return []
+    rows = (
+        db.query(Delivery)
+        .filter(Delivery.report_id.in_(report_ids), Delivery.status != "Cancelled")
+        .order_by(Delivery.delivery_date.desc(), Delivery.delivery_id.desc())
+        .limit(20)
+        .all()
+    )
+    out = []
+    for d in rows:
+        names = [i.item.item_name for i in d.items if i.item is not None]
+        summary = (
+            "Relief goods" if not names
+            else names[0] if len(names) == 1
+            else f"{names[0]} and {len(names) - 1} more"
+        )
+        r = d.report
+        out.append({
+            "delivery_id": d.delivery_id,
+            "report_id": d.report_id,
+            "report_label": (
+                f"{types.get(r.disaster_type_id, 'Disaster')} in "
+                f"{barangays.get(r.barangay_id, 'Barangay')}" if r else None
+            ),
+            "barangay": d.destination_barangay.barangay_name if d.destination_barangay else None,
+            "status": d.status,  # Preparing, In Transit, Delivered, Confirmed
+            "items_summary": summary,
+            "total_quantity": sum(i.quantity or 0 for i in d.items),
+            "delivery_date": _iso(d.delivery_date),
+            "confirmed_at": _iso(d.receipt.received_at) if d.receipt else None,
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Entry-based view: Report -> Entries (one per QR) -> Items.
 # Staff see every entry; donors and relief orgs only their own.
 # ---------------------------------------------------------------------------

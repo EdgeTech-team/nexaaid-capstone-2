@@ -1,6 +1,7 @@
-// Ivan's note #2: the donor dashboard looks like the landing page (greeting
-// and the most urgent report on top, fewer cards), and every report moved to
-// the middle "Reports" tab, split into Active and Done.
+// Ivan (simple donor screens): the Dashboard tab is the landing-page banner
+// plus a side-scrolling box of barangays that need help; the Reports tab is
+// the donor's own giving (4 clickable cards, donation status, delivery
+// status). Every report is behind "See all reports".
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:mobile/ui/disaster_art.dart';
 import 'package:mobile/ui/donation_entries_view.dart';
 import 'package:mobile/ui/donor_dashboard.dart';
 import 'package:mobile/ui/item_art.dart';
+import 'package:mobile/ui/my_giving.dart';
 import 'package:mobile/ui/donor_screens.dart';
 
 Map<String, dynamic> _report(
@@ -103,6 +105,22 @@ var _mine = <String, dynamic>{
       ['Rice', 10, 'kg'],
       ['Canned sardines', 2, 'pcs'],
     ]),
+    _entry('BATCH-ANA-2', 'Pending', [
+      ['Bottled water', 6, 'jugs'],
+    ]),
+  ],
+  'deliveries': [
+    {
+      'delivery_id': 7,
+      'report_id': 2,
+      'report_label': 'Flood in Banilad',
+      'barangay': 'Banilad',
+      'status': 'In Transit',
+      'items_summary': 'Rice and 1 more',
+      'total_quantity': 30,
+      'delivery_date': '2026-10-11T02:00:00Z',
+      'confirmed_at': null,
+    },
   ],
   'supported_reports': [
     {
@@ -115,6 +133,15 @@ var _mine = <String, dynamic>{
       'fulfillment_percentage': 40.0,
     },
   ],
+};
+
+/// A donor who has not donated yet.
+final _newMine = <String, dynamic>{
+  'profile': {'name': 'Ben Cruz', 'organization': null},
+  'summary': {'total_entries': 0, 'total_quantity': 0, 'supported_reports': 0},
+  'entries': <Map>[],
+  'supported_reports': <Map>[],
+  'deliveries': <Map>[],
 };
 
 final _server = MockClient((req) async {
@@ -171,43 +198,32 @@ void main() {
     expect(mostUrgentReport([_report(3, 'Looc', 'Critical', 100)]), isNull);
   });
 
-  testWidgets('Dashboard: photo hero, urgent report with picture, ring', (
+  testWidgets('Dashboard: banner, then barangays that need help', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const DonorDashboard());
       expect(find.text('Hi, Ana'), findsOneWidget);
-      expect(find.text('Most urgent right now'), findsOneWidget);
-      expect(find.text('Flood in Barangay Banilad'), findsOneWidget);
-      expect(find.text('Donate to this report'), findsOneWidget);
-      // Ivan (dashboard design): pictures instead of plain cards.
-      expect(find.byType(DisasterArt), findsWidgets);
-      // Canvas: one line on where the donor's goods are going.
+      expect(find.text('Barangays that need help'), findsOneWidget);
+      expect(find.text('See all reports'), findsOneWidget);
+      // Most urgent first; the fully supplied one (Looc) is hidden.
+      final cards = find.byType(NeedCard);
+      expect(cards, findsNWidgets(2));
       expect(
-        find.text(
-          'Your donations are helping 1 barangay in Mandaue. '
-          'Here is who needs help next.',
-        ),
-        findsOneWidget,
+        tester.getTopLeft(find.text('Barangay Banilad')).dx,
+        lessThan(tester.getTopLeft(find.text('Barangay Tipolo')).dx),
       );
-      expect(find.text('Your giving'), findsOneWidget);
-      expect(find.text('0/1'), findsOneWidget); // the confirmed ring
-      // Latest donation with its item picture and timeline.
-      expect(find.text('Latest donation · 2 items'), findsOneWidget);
-      expect(find.byType(ItemArt), findsOneWidget);
-      expect(find.text('View all 1'), findsOneWidget);
-      // The full list moved behind "View all".
-      expect(find.byType(DonationEntriesView), findsNothing);
-      // The old six stat cards and the report list stay off the dashboard.
+      expect(find.text('Barangay Looc'), findsNothing);
+      expect(find.text('Still needs 60 of 100 items'), findsOneWidget);
+      expect(find.text('Donate'), findsNWidgets(2));
+      // Kept short: no status cards or lists on the dashboard.
       expect(find.text('Donations made'), findsNothing);
-      expect(find.text('Reports that need help now'), findsNothing);
-      // No other open critical/high report: no picture carousel.
-      expect(find.text('Critical and high priority'), findsNothing);
+      expect(find.text('Most urgent right now'), findsNothing);
     }, () => _server);
   });
 
-  testWidgets('Organization: logo, impact numbers, barangay pins, thanks', (
+  testWidgets('Organization: same layout, Donate as the organization', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
@@ -218,28 +234,75 @@ void main() {
       await _pump(tester, const DonorDashboard());
       expect(find.text('Sto. Nino Parish Relief'), findsOneWidget);
       expect(find.text('SN'), findsOneWidget); // logo box initials
-      expect(find.text('120'), findsOneWidget); // items given
-      expect(find.text('barangay reached'), findsOneWidget);
-      // Families come from the /lookups report (12 in _report()).
-      expect(find.text('families in reports you support'), findsOneWidget);
       expect(find.text('Relief organization · Church'), findsOneWidget);
-      expect(find.text('Donate as Sto. Nino Parish Relief'), findsOneWidget);
-      // No place search in tests, so the map falls back to the pin list.
-      expect(find.text('Where your goods went'), findsOneWidget);
-      expect(find.text('Banilad'), findsOneWidget); // its pin
-      // Recent donations with item pictures instead of the ring.
-      expect(find.text('Recent donations'), findsOneWidget);
-      expect(find.text('120 kg Rice, 60 jugs Bottled water'), findsOneWidget);
-      expect(find.byType(ItemArt), findsOneWidget);
-      expect(find.text('0/1'), findsNothing);
+      expect(find.text('Barangays that need help'), findsOneWidget);
       expect(
-        find.text('12 families in Barangay Banilad are getting help.'),
-        findsOneWidget,
+        find.text('Donate as Sto. Nino Parish Relief'),
+        findsNWidgets(2),
       );
     }, () => _server);
   });
 
-  testWidgets('View all opens every donation with filters', (tester) async {
+  testWidgets('Reports tab: 4 cards, donation status, delivery status', (
+    tester,
+  ) async {
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await _pump(tester, const MyGivingScreen());
+      for (final label in [
+        'Donations made',
+        'Waiting for drop-off or pickup',
+        'In delivery',
+        'Reports supported',
+      ]) {
+        expect(find.text(label), findsOneWidget, reason: label);
+      }
+      expect(find.byType(StatCard), findsNWidgets(4));
+      // Donation status: each donation with its step; QR only when waiting.
+      expect(find.text('Donation status'), findsOneWidget);
+      expect(find.byType(DonationStatusCard), findsNWidgets(2));
+      expect(find.text('Received by CSWS'), findsWidgets);
+      expect(find.text('Show QR'), findsOneWidget); // only BATCH-ANA-2
+      // Delivery status.
+      expect(find.text('Delivery status'), findsOneWidget);
+      expect(find.text('Rice and 1 more to Barangay Banilad'), findsOneWidget);
+      expect(find.text('In transit'), findsWidgets);
+    }, () => _server);
+  });
+
+  testWidgets('Reports tab cards open their lists', (tester) async {
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await _pump(tester, const MyGivingScreen());
+      await tester.tap(find.text('In delivery'));
+      await tester.pumpAndSettle();
+      expect(find.byType(MyDeliveriesScreen), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Waiting for drop-off or pickup'));
+      await tester.pumpAndSettle();
+      expect(find.byType(MyDonationsScreen), findsOneWidget);
+      expect(find.textContaining('BATCH-ANA-2'), findsWidgets);
+      expect(find.textContaining('BATCH-ANA-1'), findsNothing); // received
+    }, () => _server);
+  });
+
+  testWidgets('New donor: friendly empty screen, not zeros', (tester) async {
+    Api.instance.token = 'test-token';
+    final donor = _mine;
+    _mine = _newMine;
+    addTearDown(() => _mine = donor);
+    await http.runWithClient(() async {
+      await _pump(tester, const MyGivingScreen());
+      expect(find.text('You haven\'t donated yet'), findsOneWidget);
+      expect(find.text('Find a barangay to help'), findsOneWidget);
+      expect(find.byType(StatCard), findsNothing);
+      expect(find.text('Donation status'), findsNothing);
+    }, () => _server);
+  });
+
+  testWidgets('See all donations: every entry with filters', (tester) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const MyDonationsScreen());
