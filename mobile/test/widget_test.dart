@@ -24,6 +24,26 @@ void main() {
     expect(find.byTooltip('Light or dark mode'), findsOneWidget);
   });
 
+  testWidgets('Landing page questions open one at a time', (tester) async {
+    await tester.pumpWidget(const NexaAidApp());
+    await tester.pumpAndSettle();
+    // The first question starts open.
+    expect(
+      find.textContaining('drop them off at the CSWS Main Office'),
+      findsOneWidget,
+    );
+    final q = find.text('Can I track my donation?');
+    await tester.ensureVisible(q);
+    await tester.pumpAndSettle();
+    await tester.tap(q);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('your Reports tab shows'), findsOneWidget);
+    expect(
+      find.textContaining('drop them off at the CSWS Main Office'),
+      findsNothing,
+    );
+  });
+
   testWidgets('Landing page light/dark picker switches the theme', (
     tester,
   ) async {
