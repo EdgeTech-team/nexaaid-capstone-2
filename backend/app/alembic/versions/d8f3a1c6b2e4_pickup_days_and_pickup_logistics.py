@@ -19,13 +19,13 @@ Additive and safe to re-run (IF EXISTS / IF NOT EXISTS). Existing rows
 become request_type 'Delivery'.
 
 Revision ID: d8f3a1c6b2e4
-Revises: 9c4e2b7a1f35
+Revises: fd7dfdd96918 (users.username, Jenises)
 """
 from alembic import op
 
 
 revision = "d8f3a1c6b2e4"
-down_revision = "9c4e2b7a1f35"
+down_revision = "fd7dfdd96918"
 branch_labels = None
 depends_on = None
 
