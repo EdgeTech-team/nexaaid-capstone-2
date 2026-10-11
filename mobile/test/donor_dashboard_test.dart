@@ -350,7 +350,11 @@ void main() {
       expect(find.text('Flood in Barangay Banilad'), findsOneWidget);
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
 
-      await tester.tap(find.textContaining('Fulfilled ('));
+      // The chips scroll sideways: bring "Fulfilled" into view first.
+      final fulfilled = find.textContaining('Fulfilled (');
+      await tester.ensureVisible(fulfilled);
+      await tester.pumpAndSettle();
+      await tester.tap(fulfilled);
       await tester.pumpAndSettle();
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
       expect(find.text('Flood in Barangay Banilad'), findsNothing);
