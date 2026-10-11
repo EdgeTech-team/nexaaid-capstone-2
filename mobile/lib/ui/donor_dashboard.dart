@@ -382,20 +382,25 @@ class _DashboardHero extends StatelessWidget {
 
     final greeting = isOrg
         ? <Widget>[
-            Container(
-              width: 72,
-              height: 72,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.vest,
-                borderRadius: BorderRadius.circular(Radii.lg),
-                border: Border.all(color: Colors.white, width: 3),
-              ),
-              child: Text(
-                initials(orgName),
-                style: t.headlineSmall?.copyWith(
-                  color: AppColors.vestInk,
-                  fontWeight: FontWeight.w700,
+            // Align keeps the logo a small square: the hero's Column
+            // stretches its children to full width.
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                width: 72,
+                height: 72,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.vest,
+                  borderRadius: BorderRadius.circular(Radii.lg),
+                  border: Border.all(color: Colors.white, width: 3),
+                ),
+                child: Text(
+                  initials(orgName),
+                  style: t.headlineSmall?.copyWith(
+                    color: AppColors.vestInk,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ),
