@@ -103,6 +103,9 @@ class DonationEntriesView extends StatefulWidget {
   final String emptyTitle;
   final String emptyMessage;
 
+  /// The "Report" dropdown. Off on a single report's records page.
+  final bool reportFilter;
+
   const DonationEntriesView({
     super.key,
     required this.entries,
@@ -110,6 +113,7 @@ class DonationEntriesView extends StatefulWidget {
     this.onTap,
     this.emptyTitle = 'No donations yet.',
     this.emptyMessage = 'Donation entries will show here once submitted.',
+    this.reportFilter = true,
   });
 
   @override
@@ -168,7 +172,7 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
                     label: Text(
                       s == null
                           ? 'All (${widget.entries.length})'
-                          : '$s (${countOf(s)})',
+                          : '${donationStatusText(s)} (${countOf(s)})',
                     ),
                     selected: status == s,
                     onSelected: (_) => setState(() => status = s),
@@ -186,22 +190,24 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
           icon: Icons.search,
           onChanged: (v) => setState(() => search = v),
         ),
-        Gaps.v12,
-        DropdownButtonFormField<int?>(
-          key: const ValueKey('entries-report'),
-          initialValue: reportId,
-          isExpanded: true,
-          decoration: const InputDecoration(labelText: 'Report'),
-          items: [
-            const DropdownMenuItem(value: null, child: Text('All reports')),
-            for (final e in reports.entries)
-              DropdownMenuItem(
-                value: e.key,
-                child: Text(e.value, overflow: TextOverflow.ellipsis),
-              ),
-          ],
-          onChanged: (v) => setState(() => reportId = v),
-        ),
+        if (widget.reportFilter && reports.length > 1) ...[
+          Gaps.v12,
+          DropdownButtonFormField<int?>(
+            key: const ValueKey('entries-report'),
+            initialValue: reportId,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Report'),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('All reports')),
+              for (final e in reports.entries)
+                DropdownMenuItem(
+                  value: e.key,
+                  child: Text(e.value, overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: (v) => setState(() => reportId = v),
+          ),
+        ],
         Gaps.v12,
         Row(
           children: [
@@ -257,6 +263,84 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
   }
 }
 
+/// Status summary on top of a report's donation records (Reminder 4.4):
+/// how many entries there are and how many are at each status.
+class EntryStatusSummary extends StatelessWidget {
+  final List<Map> entries;
+  const EntryStatusSummary(this.entries, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final counts = {
+      for (final s in entryStatuses)
+        s: entries.where((e) => e['status'] == s).length,
+    }..removeWhere((_, n) => n == 0);
+    final items = entries.fold<int>(
+      0,
+      (n, e) => n + ((e['total_items'] as num?)?.toInt() ?? 0),
+    );
+    return AppCard(
+      key: const ValueKey('entry-status-summary'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Status summary', style: t.titleMedium),
+          Gaps.v4,
+          Text(
+            '${entries.length} ${entries.length == 1 ? 'entry' : 'entries'}'
+            ' · $items ${items == 1 ? 'item' : 'items'}',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          if (counts.isNotEmpty) ...[
+            Gaps.v12,
+            // One bar split by status, so the mix shows at a glance.
+            ClipRRect(
+              borderRadius: BorderRadius.circular(Radii.sm),
+              child: Row(
+                children: [
+                  for (final c in counts.entries)
+                    Expanded(
+                      flex: c.value,
+                      child: Container(
+                        height: 8,
+                        color: StatusColors.base(c.key),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Gaps.v12,
+            Wrap(
+              spacing: Space.md,
+              runSpacing: Space.xs,
+              children: [
+                for (final c in counts.entries)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.circle,
+                        size: 10,
+                        color: StatusColors.base(c.key),
+                      ),
+                      Gaps.h4,
+                      Text(
+                        '${c.value} ${donationStatusText(c.key)}',
+                        style: t.bodyMedium,
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 /// One donation entry: its status, report, handover, and every item with
 /// its own status, received quantity and CMO hold reason.
 class DonationEntryCard extends StatelessWidget {
@@ -296,7 +380,7 @@ class DonationEntryCard extends StatelessWidget {
                 ),
               ),
               Gaps.h8,
-              StatusChip('${e['status']}'),
+              DonationStatusChip('${e['status']}'),
             ],
           ),
           Gaps.v8,
@@ -359,7 +443,7 @@ class DonationEntryCard extends StatelessWidget {
                   ),
                   if (mixed || i['hold_reason'] != null) ...[
                     Gaps.h8,
-                    StatusChip(
+                    DonationStatusChip(
                       i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
                     ),
                   ],

@@ -52,9 +52,9 @@ from services.donation_expiry import (
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
 CSWS_ROLES = ("CSWS Main Office", "Administrator")
-# The Door to Door pickup list and map. The CSWS Disaster Unit plans the
-# pickup runs on the map (Oct 10 notes); Main Office still receives the goods.
-PICKUP_ROLES = (*CSWS_ROLES, "CSWS Disaster Unit")
+# The Door to Door pickup list and map: CSWS Main Office (Oct 11 notes: the
+# Disaster Unit no longer has the pickup map).
+PICKUP_ROLES = CSWS_ROLES
 
 # Address search (UC-D2 alt 7c) uses OpenStreetMap data through Photon:
 # free, no API key, no billing. GEOCODER_URL can point to a self-hosted

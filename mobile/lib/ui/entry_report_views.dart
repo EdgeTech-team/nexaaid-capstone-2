@@ -1,23 +1,11 @@
 import 'package:flutter/material.dart';
 
+import 'records_screens.dart' show openReportRecords;
 import 'widgets.dart';
 
 // Report -> Entries -> Items (team rule, Oct 6). One ENTRY = one donor
 // submission = one batch_reference. The grouping comes from the backend
 // (services/donation_entries.py); this file only displays it.
-
-/// 4.1: every donation entry, or only one report's.
-void openDonationEntries(
-  BuildContext context, {
-  int? reportId,
-  String title = 'Donation entries',
-}) => _openEntriesPage(
-  context,
-  title,
-  '/donations/entries',
-  query: {if (reportId != null) 'report_id': '$reportId'},
-  empty: 'No donations yet.',
-);
 
 /// 5.1: the held donations behind the Admin dashboard tile.
 void openHeldDonations(BuildContext context) => _openEntriesPage(
@@ -107,7 +95,7 @@ class EntryReportsList extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
             ),
-            Badge2.status('${e['status']}'),
+            DonationStatusChip('${e['status']}'),
           ],
         ),
         subtitle: Text(
@@ -138,7 +126,7 @@ class EntryReportsList extends StatelessWidget {
               Color(0xFFC62828),
               icon: Icons.pause_circle_outline,
             )
-          : Badge2.status('${i['status']}'),
+          : DonationStatusChip('${i['status']}'),
     );
   }
 }
@@ -176,7 +164,9 @@ class EntrySummaryList extends StatelessWidget {
               ),
               isThreeLine: true,
               trailing: const Icon(Icons.chevron_right),
-              onTap: () => openDonationEntries(
+              // Records per report: entries with a status summary and the
+              // same filters as the records screens.
+              onTap: () => openReportRecords(
                 context,
                 reportId: r['report_id'] as int,
                 title: '${r['report_label'] ?? 'Report'}',

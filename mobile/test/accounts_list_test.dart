@@ -99,6 +99,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // The section buttons scroll sideways on narrow screens.
+      await tester.ensureVisible(find.text('Donation info'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Donation info'));
       await tester.pumpAndSettle();
       expect(find.byType(BarangayDonationInfoScreen), findsOneWidget);

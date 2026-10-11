@@ -9,6 +9,7 @@ import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
 import 'widgets.dart';
 import 'entry_report_views.dart';
+import 'home_nav.dart';
 
 // ---------------------------------------------------------------------------
 // UC-A4 / manuscript 7.7 Administrator dashboard
@@ -16,17 +17,10 @@ import 'entry_report_views.dart';
 class AdminDashboard extends StatelessWidget {
   const AdminDashboard({super.key});
 
-  /// 5.1: open the details behind a tile on its own page with a back arrow.
-  void _open(BuildContext context, String title, Widget child) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => Scaffold(
-          appBar: AppBar(title: Text(title)),
-          body: child,
-        ),
-      ),
-    );
-  }
+  /// 5.1: a tile opens the tab that already lists what it counts (Oct 11
+  /// notes: move to the existing page instead of opening a copy of it).
+  void _go(BuildContext context, String tab, String view) =>
+      HomeNav.go(context, HomeTarget(tab, view: view));
 
   @override
   Widget build(BuildContext context) {
@@ -47,11 +41,7 @@ class AdminDashboard extends StatelessWidget {
                 'Active users',
                 '${m['active_users']} / ${m['total_users']}',
                 Icons.people_outline,
-                onTap: () => _open(
-                  context,
-                  'Active accounts',
-                  const UsersScreen(key: ValueKey('active')),
-                ),
+                onTap: () => _go(context, 'Accounts', 'active'),
               ),
               // The Administrator now only reviews organizations (accounts
               // activate automatically), so this says "review", not "approve".
@@ -60,33 +50,22 @@ class AdminDashboard extends StatelessWidget {
                 '${m['pending_organizations']}',
                 Icons.apartment_outlined,
                 color: const Color(0xFFEF6C00),
-                onTap: () => _open(
-                  context,
-                  'Organizations',
-                  const OrganizationsReview(),
-                ),
+                onTap: () => _go(context, 'Accounts', 'registrations'),
               ),
               StatTile(
                 'Reports to validate',
                 '${m['pending_validations']}',
                 Icons.fact_check_outlined,
                 color: const Color(0xFFEF6C00),
-                onTap: () => _open(
-                  context,
-                  'Reports to validate',
-                  const DashboardReportsList(status: 'Pending'),
-                ),
+                onTap: () => _go(context, 'Validate', 'Pending'),
               ),
               StatTile(
                 'Validated reports',
                 '${m['validated_reports']}',
                 Icons.verified_outlined,
                 color: const Color(0xFF2E7D32),
-                onTap: () => _open(
-                  context,
-                  'Validated reports',
-                  const DashboardReportsList(status: 'Validated'),
-                ),
+                // Validate > Validated has the fulfillment chips and sort.
+                onTap: () => _go(context, 'Validate', 'Validated'),
               ),
               // Team rule: count ENTRIES (one per donor submission), not rows.
               StatTile(
@@ -94,8 +73,8 @@ class AdminDashboard extends StatelessWidget {
                 '${entries['total_entries']}',
                 Icons.volunteer_activism_outlined,
                 note: '${m['total_donations']} items · tap to view',
-                onTap: () =>
-                    openDonationEntries(context, title: 'All donation entries'),
+                // Records > Donations: every entry with filters and sort.
+                onTap: () => HomeNav.go(context, const HomeTarget('Records')),
               ),
               StatTile(
                 'Held donations',
@@ -116,70 +95,6 @@ class AdminDashboard extends StatelessWidget {
   }
 }
 
-/// 5.1: the reports behind a dashboard number, filtered by status.
-class DashboardReportsList extends StatelessWidget {
-  final String status;
-  const DashboardReportsList({super.key, required this.status});
-
-  @override
-  Widget build(BuildContext context) {
-    return Loader(
-      load: [
-        () => api.get('/dashboard/admin/reports', query: {'status': status}),
-      ],
-      builder: (context, data) {
-        final reports = (data[0] as List).cast<Map>();
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Text(
-              '${reports.length} ${status.toLowerCase()} report(s)',
-              style: const TextStyle(color: Brand.muted),
-            ),
-            const SizedBox(height: 8),
-            if (reports.isEmpty)
-              EmptyState('No ${status.toLowerCase()} reports.'),
-            for (final r in reports)
-              Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              '${r['report_label'] ?? 'Report #${r['report_id']}'}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          Badge2.status('${r['status']}'),
-                        ],
-                      ),
-                      Text('Priority: ${r['priority_level'] ?? '-'}'),
-                      if (status != 'Pending') ...[
-                        const SizedBox(height: 8),
-                        Progress(
-                          delivered: 0,
-                          needed: 0,
-                          percent: r['fulfillment_percentage'] as num,
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // UC-A1 Manage internal accounts + UC-A2 Review organization registration
 // ---------------------------------------------------------------------------
@@ -193,8 +108,18 @@ class AccountsHub extends StatefulWidget {
   State<AccountsHub> createState() => _AccountsHubState();
 }
 
-class _AccountsHubState extends State<AccountsHub> {
+class _AccountsHubState extends State<AccountsHub>
+    with HomeTargetListener<AccountsHub> {
   late String view = widget.initialView;
+
+  // A registration notification opens Accounts > Registrations (home_nav).
+  @override
+  String get homeTab => 'Accounts';
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    if (target.view != null) view = target.view!;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -871,13 +796,13 @@ class BarangayDashboard extends StatelessWidget {
                 Icons.volunteer_activism_outlined,
               ),
               StatTile(
-                'Pending city confirmation',
+                'Waiting for CMO acknowledgement',
                 '${m['pending_city_confirmation']}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
               ),
               StatTile(
-                'Confirmed by the City',
+                'Acknowledged by CMO',
                 '${m['confirmed']}',
                 Icons.verified_outlined,
                 color: const Color(0xFF2E7D32),
@@ -913,7 +838,7 @@ class BarangayDashboard extends StatelessWidget {
                         ],
                       ),
                       Text(
-                        '${r['confirmed_donations']} city-confirmed donation(s)',
+                        '${r['confirmed_donations']} donation(s) acknowledged by the CMO',
                       ),
                       const SizedBox(height: 8),
                       Progress(

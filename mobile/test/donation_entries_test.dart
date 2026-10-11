@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/donation_entries_view.dart';
+import 'package:mobile/ui/records_screens.dart';
 
 Map item(int id, String name, String status, {String? hold}) => {
   'donation_id': id,
@@ -115,9 +116,11 @@ void main() {
     expect(find.text('2 pcs Sardines'), findsNothing);
     expect(find.text('2 pcs Bottled Water'), findsOneWidget);
 
-    await tester.ensureVisible(find.text('Confirmed (0)'));
+    // Oct 11 notes (Dave): the CMO "acknowledges", so Confirmed reads
+    // "Acknowledged" on screen.
+    await tester.ensureVisible(find.text('Acknowledged (0)'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Confirmed (0)'));
+    await tester.tap(find.text('Acknowledged (0)'));
     await tester.pump();
     expect(find.text('No donations match.'), findsOneWidget);
   });
@@ -125,5 +128,65 @@ void main() {
   testWidgets('empty records', (tester) async {
     await pump(tester, []);
     expect(find.text('No donations yet.'), findsOneWidget);
+  });
+
+  testWidgets('status summary counts entries per status', (tester) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(body: EntryStatusSummary(entries)),
+      ),
+    );
+    expect(find.text('2 entries · 4 items'), findsOneWidget);
+    expect(find.text('1 Partly Received'), findsOneWidget);
+    expect(find.text('1 Pending'), findsOneWidget);
+    expect(find.textContaining('Acknowledged'), findsNothing); // none yet
+  });
+
+  testWidgets('one report: no report dropdown, same other filters', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(
+          body: ListView(
+            children: [
+              DonationEntriesView(
+                entries: entries.where((e) => e['report_id'] == 18).toList(),
+                reportFilter: false,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(find.byKey(const ValueKey('entries-report')), findsNothing);
+    expect(find.byKey(const ValueKey('entries-handover')), findsOneWidget);
+    expect(find.byKey(const ValueKey('entries-sort')), findsOneWidget);
+    expect(find.text('Partly Received (1)'), findsOneWidget);
+  });
+
+  testWidgets('Per report: one card per report with its status mix', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Scaffold(body: ReportRecordsList(entries)),
+      ),
+    );
+    // Newest report first.
+    final first = tester.getTopLeft(find.text('#21 Fire - Looc')).dy;
+    final second = tester.getTopLeft(find.text('#18 Flood - Tipolo')).dy;
+    expect(first, lessThan(second));
+    expect(find.text('1 entry · 1 Pending'), findsOneWidget);
+    expect(find.text('1 entry · 1 Partly Received'), findsOneWidget);
   });
 }

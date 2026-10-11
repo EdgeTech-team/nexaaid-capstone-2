@@ -41,13 +41,6 @@ Map<String, dynamic> _user(String role, {String email = 'staff@csws.gov.ph'}) =>
 void main() {
   setUpAll(() => AppTheme.useGoogleFonts = false);
 
-  test('Employee ID rule matches the backend', () {
-    expect(employeeIdRule('csws-0042'), isNull); // saved upper case
-    expect(employeeIdRule(''), isNotNull);
-    expect(employeeIdRule('ab'), isNotNull);
-    expect(employeeIdRule('CSWS 0042'), isNotNull);
-  });
-
   test('Old full names are split only when the last name is empty', () {
     expect(splitLegacyName('Maria Santos', ''), ('Maria', 'Santos'));
     expect(splitLegacyName('Juan  Dela   Cruz', ''), (
@@ -86,16 +79,18 @@ void main() {
     );
   });
 
-  testWidgets('Create: employee ID and card are required', (tester) async {
+  testWidgets('Create: employee ID card is required, no ID number field', (
+    tester,
+  ) async {
     await _pump(tester, AccountForm(names: _names));
-    expect(find.text('Employee ID'), findsOneWidget);
+    // Oct 11 notes (Dave): only the card, no separate employee ID number.
+    expect(find.byKey(const ValueKey('account-employee')), findsNothing);
     expect(find.byType(UploadField), findsOneWidget);
     expect(find.text('Temporary password'), findsOneWidget);
     expect(find.text('Assigned barangay'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('account-save')));
     await tester.pump();
-    expect(find.text('Employee ID is required'), findsOneWidget);
     expect(find.text('Required'), findsOneWidget); // the card
   });
 
@@ -116,7 +111,7 @@ void main() {
       AccountForm(user: _user(Roles.cswsMain), names: _names),
     );
     expect(find.text('Pedro'), findsOneWidget);
-    expect(find.text('CSWS-0042'), findsOneWidget);
+    expect(find.text('CSWS-0042'), findsNothing); // no ID number field
     expect(find.text('Save changes'), findsOneWidget);
     expect(find.text('Temporary password'), findsNothing);
     expect(find.text('Employee ID card (none on file yet)'), findsOneWidget);
@@ -134,7 +129,7 @@ void main() {
 
   testWidgets('Edit: donors have no role, employee ID or card', (tester) async {
     await _pump(tester, AccountForm(user: _user(Roles.donor), names: _names));
-    expect(find.text('Employee ID'), findsNothing);
+    expect(find.text('Employee ID card'), findsNothing);
     expect(find.byType(UploadField), findsNothing);
     expect(find.byKey(const ValueKey('account-role')), findsNothing);
     expect(find.text('Mobile number'), findsOneWidget);

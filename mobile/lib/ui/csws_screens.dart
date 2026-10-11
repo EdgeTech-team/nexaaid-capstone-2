@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'records_screens.dart' show DonationRecordsScreen;
+import 'home_nav.dart';
 import 'widgets.dart';
 import 'batch_sheet.dart';
 import 'inventory_view.dart';
@@ -58,7 +59,8 @@ class _ScannerPageState extends State<ScannerPage> {
         problem = 'No QR code found in that picture. Try a clearer one.';
       }
     } on UnsupportedError {
-      problem = 'Reading a QR from a picture does not work on this device. '
+      problem =
+          'Reading a QR from a picture does not work on this device. '
           'Type the reference instead.';
     } catch (_) {
       problem = 'Could not read that picture. Type the reference instead.';
@@ -199,7 +201,7 @@ class DonationSheet extends StatelessWidget {
                   ),
                 ),
               ),
-              Badge2.status('${d['status']}'),
+              DonationStatusChip('${d['status']}'),
             ],
           ),
           const SizedBox(height: 10),
@@ -600,11 +602,13 @@ class CswsMainDashboard extends StatelessWidget {
           children: [
             PageHeader('CSWS Main Office Dashboard', subtitle: roleLine()),
             StatGrid([
+              // Tiles open the tab that lists what they count.
               StatTile(
                 'Pending donations',
                 '${m['pending_donations']}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
+                onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
               ),
               // Donation expiry: what needs attention before it lapses.
               StatTile(
@@ -633,6 +637,8 @@ class CswsMainDashboard extends StatelessWidget {
                 'Deliveries made',
                 '${m['deliveries_made']}',
                 Icons.local_shipping_outlined,
+                onTap: () =>
+                    HomeNav.go(context, const HomeTarget('Deliveries')),
               ),
               StatTile(
                 'Total quantity distributed',
@@ -674,7 +680,7 @@ class CswsMainDashboard extends StatelessWidget {
                     '\n${d['report_label'] ?? ''}',
                   ),
                   isThreeLine: true,
-                  trailing: Badge2.status('${d['status']}'),
+                  trailing: DonationStatusChip('${d['status']}'),
                 ),
               ),
             const SectionTitle('Recent activity'),

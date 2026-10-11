@@ -531,7 +531,10 @@ class _ReceiveFilterBarState extends State<ReceiveFilterBar> {
                 items: [
                   const DropdownMenuItem(value: null, child: Text('Any')),
                   for (final s in receivedStatuses)
-                    DropdownMenuItem(value: s, child: Text(s)),
+                    DropdownMenuItem(
+                      value: s,
+                      child: Text(donationStatusText(s)),
+                    ),
                 ],
                 onChanged: (v) => widget.onChanged(f.copyWith(status: v)),
               ),

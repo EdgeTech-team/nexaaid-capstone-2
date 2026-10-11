@@ -3,11 +3,15 @@ from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 
 class ConfirmDonationRequest(BaseModel):
-    status: str = Field(..., pattern="^(Confirmed|On Hold|Pending Review)$")
+    # Oct 11 notes: the CMO "acknowledges" (the app's word); "Acknowledged"
+    # is accepted and stored as the existing status "Confirmed".
+    status: str = Field(..., pattern="^(Confirmed|Acknowledged|On Hold|Pending Review)$")
     notes: Optional[str] = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def hold_needs_reason(self):
+        if self.status == "Acknowledged":
+            self.status = "Confirmed"
         # "   " counts as empty
         if self.notes is not None:
             self.notes = self.notes.strip() or None

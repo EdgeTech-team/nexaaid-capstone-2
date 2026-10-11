@@ -5,6 +5,7 @@ import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_dashboard.dart';
 import 'donation_info.dart';
+import 'home_nav.dart';
 import 'donor_screens.dart';
 import 'my_giving.dart';
 import 'notifications_screen.dart';
@@ -66,11 +67,6 @@ List<_Tab> _tabsFor(String? role) {
         _Tab('Overview', Icons.dashboard_outlined, DashboardScreen()), // 9.3
         _Tab('New report', Icons.edit_note, NewReportScreen()), // 2.1
         _Tab(
-          'Pickup map',
-          Icons.map_outlined,
-          PickupMapScreen(),
-        ), // Door to Door pickups on a map + DRRMO support (Oct 10 notes)
-        _Tab(
           'SMS template',
           Icons.sms_outlined,
           SmsSendScreen(),
@@ -100,10 +96,10 @@ List<_Tab> _tabsFor(String? role) {
     case Roles.cmo:
       return const [
         _Tab(
-          'Confirmations',
+          'Acknowledge',
           Icons.verified_outlined,
           CmoScreen(),
-        ), // Module 6, 9.5
+        ), // Module 6, 9.5 (Oct 11: "Acknowledge", not "Confirm")
         reports, // 2.4
       ];
     case Roles.drrmo:
@@ -129,6 +125,11 @@ List<_Tab> _tabsFor(String? role) {
         ), // 8.2-8.5
         _Tab('Overview', Icons.dashboard_outlined, BarangayDashboard()), // 9.7
         reports, // 2.4
+        _Tab(
+          'Records',
+          Icons.folder_open_outlined,
+          DonationRecordsScreen(),
+        ), // 4.4, 4.5: own barangay's reports only (backend enforced)
         _Tab(
           'Donation info',
           Icons.account_balance_wallet_outlined,
@@ -169,9 +170,36 @@ class RoleHome extends StatefulWidget {
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
 
+  List<_Tab> get _allTabs => [
+    ..._tabsFor(api.role),
+    const _Tab('Profile', Icons.person_outline, ProfileScreen()),
+  ];
+
+  /// A notification asked for an existing tab (home_nav.dart): switch to it,
+  /// then run its follow-up (a pop-up or detail page over that tab).
+  void _onHomeTarget() {
+    final r = HomeNav.target.value;
+    if (r == null || !mounted) return;
+    final i = _allTabs.indexWhere((t) => t.label == r.to.tab);
+    if (i >= 0 && i != index) setState(() => index = i);
+    final then = r.to.then;
+    if (then != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) then(context);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    HomeNav.target.removeListener(_onHomeTarget);
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
+    HomeNav.target.addListener(_onHomeTarget);
     // I1: a temporary password must be changed first.
     if (api.mustChangePassword) {
       index = _tabsFor(api.role).length; // Profile is the last tab
@@ -188,10 +216,7 @@ class _RoleHomeState extends State<RoleHome> {
 
   @override
   Widget build(BuildContext context) {
-    final tabs = [
-      ..._tabsFor(api.role),
-      const _Tab('Profile', Icons.person_outline, ProfileScreen()),
-    ];
+    final tabs = _allTabs;
     if (index >= tabs.length) index = 0;
     final wide = MediaQuery.sizeOf(context).width >= Breakpoints.expanded;
     final cs = Theme.of(context).colorScheme;

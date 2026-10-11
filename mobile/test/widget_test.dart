@@ -96,9 +96,13 @@ void main() {
       'Overview',
       'Reports',
       'Receive',
+      'Pickups',
       'Deliveries',
     ]);
     await menuFor(Roles.cswsUnit, ['Overview', 'New report', 'Reports']);
+    // Oct 11 notes (Daniel): no pickup map for the Disaster Unit.
+    expect(find.byTooltip('Pickups'), findsNothing);
+    expect(find.byTooltip('Pickup map'), findsNothing);
     await menuFor(Roles.admin, [
       'Overview',
       'Validate',
@@ -106,9 +110,16 @@ void main() {
       'Records',
       'Accounts',
     ]);
-    await menuFor(Roles.cmo, ['Confirmations', 'Reports']);
+    // Oct 11 notes (Dave): "Acknowledge", not "Confirm".
+    await menuFor(Roles.cmo, ['Acknowledge', 'Reports']);
     await menuFor(Roles.drrmo, ['Logistics', 'Deliveries', 'Reports']);
-    await menuFor(Roles.barangay, ['Incoming aid', 'Overview', 'Reports']);
+    // 4.4: the Barangay Rep has donation records too.
+    await menuFor(Roles.barangay, [
+      'Incoming aid',
+      'Overview',
+      'Reports',
+      'Records',
+    ]);
     await menuFor(Roles.donor, ['Dashboard', 'Reports']);
     await menuFor(Roles.org, ['Dashboard', 'Reports']);
     api.logout();

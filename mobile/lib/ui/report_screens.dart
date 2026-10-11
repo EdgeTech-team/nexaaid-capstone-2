@@ -7,6 +7,7 @@ import 'input_formatters.dart';
 import 'report_filters.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
+import 'home_nav.dart';
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: number limits. Must match the backend
@@ -38,7 +39,16 @@ class ReportCard extends StatelessWidget {
   final Map<String, dynamic> r;
   final Names names;
   final List<Widget> actions;
-  const ReportCard(this.r, this.names, {super.key, this.actions = const []});
+
+  /// Outlined: the report a notification pointed at.
+  final bool highlighted;
+  const ReportCard(
+    this.r,
+    this.names, {
+    super.key,
+    this.actions = const [],
+    this.highlighted = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +59,15 @@ class ReportCard extends StatelessWidget {
     final showPriority = api.role != Roles.drrmo;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
+      shape: highlighted
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Radii.lg),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.primary,
+                width: 2,
+              ),
+            )
+          : null,
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -165,7 +184,11 @@ class ReportCard extends StatelessWidget {
 class NewReportScreen extends StatefulWidget {
   /// true = Administrator encoding a received SMS report (UC-A3 8a).
   final bool smsEncode;
-  const NewReportScreen({super.key, this.smsEncode = false});
+
+  /// Oct 11 (Daniel): the reporter corrects their own report before the
+  /// Administrator validates it. The form opens filled in.
+  final Map<String, dynamic>? edit;
+  const NewReportScreen({super.key, this.smsEncode = false, this.edit});
 
   @override
   State<NewReportScreen> createState() => _NewReportScreenState();
@@ -193,6 +216,40 @@ class _NewReportScreenState extends State<NewReportScreen> {
 
   /// true when encoding a report that arrived by SMS (UC-A3 8a).
   late final bool sms = widget.smsEncode;
+  bool get editing => widget.edit != null;
+  bool _filledFromEdit = false;
+
+  /// Fill the form from the report being corrected. The needs were saved
+  /// as "Rice: 50 kg, Drinking Water: 20 gallons".
+  void _fillFromReport(Map<String, dynamic> r, Names names) {
+    typeId = '${r['disaster_type_id']}';
+    brgyId = '${r['barangay_id']}';
+    sitioId = r['sitio_id'] == null ? null : '${r['sitio_id']}';
+    desc.text = '${r['description'] ?? ''}';
+    families.text = '${r['affected_families'] ?? ''}';
+    final parsed = <_Need>[];
+    for (final part in '${r['assistance_needed'] ?? ''}'.split(',')) {
+      final m = RegExp(r'^\s*(.+?):\s*(\d+)\s*(.*)$').firstMatch(part);
+      if (m == null) continue;
+      final need = _Need()..qty.text = m.group(2)!;
+      final id = _idByName(names, 'items', m.group(1));
+      if (id != null) {
+        need.itemId = id;
+      } else {
+        need
+          ..itemId = _other
+          ..otherName.text = m.group(1)!.trim()
+          ..otherUnit.text = m.group(3)!.trim();
+      }
+      parsed.add(need);
+    }
+    if (parsed.isNotEmpty) {
+      needs
+        ..clear()
+        ..addAll(parsed);
+    }
+    _fills++;
+  }
 
   /// Bumped after "Fill from SMS" so the dropdowns rebuild with the new values.
   int _fills = 0;
@@ -362,6 +419,19 @@ class _NewReportScreenState extends State<NewReportScreen> {
       'assistance_needed': summary,
       'estimated_quantity': total,
     };
+    if (editing) {
+      final r = await act(
+        context,
+        () => api.put('/reports/${widget.edit!['report_id']}/mine', body: body),
+        success: widget.edit!['status'] == 'Rejected'
+            ? 'Report corrected and sent back for validation.'
+            : 'Report updated. It is still pending validation.',
+      );
+      if (!mounted) return;
+      setState(() => busy = false);
+      if (r.ok) Navigator.of(context).pop(true);
+      return;
+    }
     final r = await act(
       context,
       () => sms
@@ -501,6 +571,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
           return const Center(child: CircularProgressIndicator());
         }
         final names = Names(snap.data!);
+        if (editing && !_filledFromEdit) {
+          _filledFromEdit = true;
+          _fillFromReport(widget.edit!, names);
+        }
         final sitios = names
             .rows('sitios')
             .where((s) => '${s['barangay_id']}' == brgyId)
@@ -511,8 +585,17 @@ class _NewReportScreenState extends State<NewReportScreen> {
             padding: const EdgeInsets.all(20),
             children: [
               PageHeader(
-                sms ? 'Encode SMS Report' : 'Submit Post-Disaster Report',
-                subtitle: sms
+                editing
+                    ? 'Edit Report #${widget.edit!['report_id']}'
+                    : sms
+                    ? 'Encode SMS Report'
+                    : 'Submit Post-Disaster Report',
+                subtitle: editing
+                    ? (widget.edit!['status'] == 'Rejected'
+                          ? 'Rejected: ${widget.edit!['rejection_reason'] ?? ''}\n'
+                                'Correct it and save to send it back for validation.'
+                          : 'You can change it until the Administrator validates it.')
+                    : sms
                     ? 'Paste the text the CSWS Disaster Unit sent, tap Fill, '
                           'then check every field before saving. '
                           'It is saved as Pending; validate it under Validate.'
@@ -670,8 +753,20 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(50),
                 ),
-                icon: Icon(sms ? Icons.sms_outlined : Icons.send),
-                label: Text(sms ? 'Encode SMS report' : 'Submit report'),
+                icon: Icon(
+                  editing
+                      ? Icons.check
+                      : sms
+                      ? Icons.sms_outlined
+                      : Icons.send,
+                ),
+                label: Text(
+                  editing
+                      ? 'Save changes'
+                      : sms
+                      ? 'Encode SMS report'
+                      : 'Submit report',
+                ),
               ),
             ],
           ),
@@ -779,20 +874,22 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
                 onChanged: (p) => setState(() => priority = p),
               ),
               const SizedBox(height: 8),
-              // Fulfillment status filter and sort (Ivan's note: for every
-              // user that has this dashboard).
-              FulfillmentChips(
-                rows: all,
-                value: progress,
-                onChanged: (v) => setState(() => progress = v),
-              ),
-              const SizedBox(height: 12),
-              ReportSortField(
-                value: sort,
-                onChanged: (v) => setState(() => sort = v),
-              ),
-              const SizedBox(height: 12),
             ],
+            // Fulfillment status filter and sort for every role, also the
+            // ones without priority filtering (Ivan's note: "for every user
+            // that has this dashboard"; fulfilled reports are found with the
+            // Fulfilled chip, there is no separate Done section).
+            FulfillmentChips(
+              rows: all,
+              value: progress,
+              onChanged: (v) => setState(() => progress = v),
+            ),
+            const SizedBox(height: 12),
+            ReportSortField(
+              value: sort,
+              onChanged: (v) => setState(() => sort = v),
+            ),
+            const SizedBox(height: 12),
             if (rows.isEmpty) const EmptyState('No validated reports to show.'),
             for (final r in rows) ReportCard(r, names),
           ],
@@ -811,8 +908,19 @@ class ReportsHub extends StatefulWidget {
   State<ReportsHub> createState() => _ReportsHubState();
 }
 
-class _ReportsHubState extends State<ReportsHub> {
+class _ReportsHubState extends State<ReportsHub>
+    with HomeTargetListener<ReportsHub> {
   bool monitor = false;
+
+  // A notification about a report opens Reports > Validated or Status.
+  @override
+  String get homeTab => 'Reports';
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    if (target.view == 'status') monitor = true;
+    if (target.view == 'validated') monitor = false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -862,26 +970,90 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
   String priority = '';
   String? progress; // fulfillment status, null = any (Ivan's note)
   ReportSort sort = ReportSort.urgent;
+  bool onlyMine = false;
+  int _loads = 0;
+
+  // Oct 11 (Daniel): the CSWS Disaster Unit edits or withdraws its own
+  // reports here until the Administrator validates them.
+  bool get _reporter => api.role == Roles.cswsUnit;
+
+  Future<void> _edit(Map<String, dynamic> r) async {
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(title: const Text('Edit report')),
+          body: NewReportScreen(edit: r),
+        ),
+      ),
+    );
+    if (saved == true && mounted) setState(() => _loads++);
+  }
+
+  Future<void> _withdraw(Map<String, dynamic> r) async {
+    final v = await formDialog(
+      context,
+      title: 'Withdraw report #${r['report_id']}?',
+      message:
+          'It will not be validated or shown to donors. It stays in your '
+          'list as Cancelled.',
+      fields: const [
+        DialogField(
+          'reason',
+          'Reason (optional)',
+          required: false,
+          multiline: true,
+          hint: 'e.g. Sent twice, or wrong barangay',
+        ),
+      ],
+      confirm: 'Withdraw',
+    );
+    if (v == null || !mounted) return;
+    final res = await act(
+      context,
+      () => api.post(
+        '/reports/${r['report_id']}/withdraw',
+        body: {if (v['reason']!.isNotEmpty) 'reason': v['reason']},
+      ),
+      success: 'Report #${r['report_id']} withdrawn',
+    );
+    if (res.ok && mounted) setState(() => _loads++);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey(priority),
+      key: ValueKey('$priority/$_loads'),
       load: [
         () => api.get(
           '/reports/monitoring',
           query: {if (priority.isNotEmpty) 'priority_level': priority},
         ),
         api.lookupsResult,
+        if (_reporter) () => api.get('/reports/mine'),
       ],
       builder: (context, data) {
-        final all = (data[0] as List).cast<Map<String, dynamic>>();
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
-        final rows = sortAndFilterReports(
-          all,
+        final mine = _reporter
+            ? {
+                for (final r in (data[2] as List).cast<Map>())
+                  r['report_id'] as int,
+              }
+            : <int>{};
+        final all = (data[0] as List).cast<Map<String, dynamic>>();
+        bool editable(Map r) =>
+            mine.contains(r['report_id']) &&
+            (r['status'] == 'Pending' || r['status'] == 'Rejected');
+        final sorted = sortAndFilterReports(
+          onlyMine
+              ? all.where((r) => mine.contains(r['report_id'])).toList()
+              : all,
           fulfillment: progress,
           sort: sort,
         );
+        // My own reports that can still be edited come first.
+        final rows = onlyMine
+            ? [...sorted.where(editable), ...sorted.where((r) => !editable(r))]
+            : sorted;
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -906,9 +1078,46 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
               value: sort,
               onChanged: (v) => setState(() => sort = v),
             ),
+            if (_reporter) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilterChip(
+                  avatar: const Icon(Icons.person_outline, size: 18),
+                  label: Text('Only my reports (${mine.length})'),
+                  selected: onlyMine,
+                  onSelected: (v) => setState(() => onlyMine = v),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             if (rows.isEmpty) const EmptyState('No reports to show.'),
-            for (final r in rows) ReportCard(r, names),
+            for (final r in rows)
+              ReportCard(
+                r,
+                names,
+                actions: editable(r)
+                    ? [
+                        TextButton.icon(
+                          onPressed: () => _withdraw(r),
+                          style: TextButton.styleFrom(
+                            foregroundColor: AppColors.danger,
+                          ),
+                          icon: const Icon(Icons.block, size: 18),
+                          label: const Text('Withdraw'),
+                        ),
+                        FilledButton.tonalIcon(
+                          onPressed: () => _edit(r),
+                          icon: const Icon(Icons.edit_outlined, size: 18),
+                          label: Text(
+                            r['status'] == 'Rejected'
+                                ? 'Fix and resend'
+                                : 'Edit',
+                          ),
+                        ),
+                      ]
+                    : const [],
+              ),
           ],
         );
       },
@@ -926,10 +1135,26 @@ class AdminReportsScreen extends StatefulWidget {
   State<AdminReportsScreen> createState() => _AdminReportsScreenState();
 }
 
-class _AdminReportsScreenState extends State<AdminReportsScreen> {
+class _AdminReportsScreenState extends State<AdminReportsScreen>
+    with HomeTargetListener<AdminReportsScreen> {
   String status = 'Pending';
   String priority = '';
+  String? progress; // fulfillment status in the Validated view
+  ReportSort sort = ReportSort.urgent;
   int _loads = 0;
+  int? _highlight; // report the notification is about, shown first
+
+  @override
+  String get homeTab => 'Validate';
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    if (const ['Pending', 'Validated', 'Rejected'].contains(target.view)) {
+      status = target.view!;
+    }
+    _highlight = target.id;
+    _loads++;
+  }
 
   Future<void> _reject(Map<String, dynamic> r) async {
     final v = await formDialog(
@@ -955,18 +1180,24 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
     return Loader(
       key: ValueKey('$status/$priority/$_loads'),
       load: [
-        () => api.get(
-          '/reports/',
-          query: {
-            'status': status,
-            if (status == 'Validated' && priority.isNotEmpty)
-              'priority_level': priority,
-          },
-        ),
+        // Validated reports come with their fulfillment progress, for the
+        // fulfillment chips and sort (Ivan's note).
+        () => status == 'Validated'
+            ? api.get(
+                '/reports/validated',
+                query: {if (priority.isNotEmpty) 'priority_level': priority},
+              )
+            : api.get('/reports/', query: {'status': status}),
         api.lookupsResult,
       ],
       builder: (context, data) {
-        final rows = (data[0] as List).cast<Map<String, dynamic>>();
+        final all = (data[0] as List).cast<Map<String, dynamic>>();
+        final rows = status == 'Validated'
+            ? sortAndFilterReports(all, fulfillment: progress, sort: sort)
+            : all;
+        // The report a notification pointed at comes first, outlined.
+        final hi = rows.indexWhere((r) => r['report_id'] == _highlight);
+        if (hi > 0) rows.insert(0, rows.removeAt(hi));
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         return ListView(
           padding: const EdgeInsets.all(20),
@@ -1007,6 +1238,17 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
                 value: priority,
                 onChanged: (p) => setState(() => priority = p),
               ),
+              const SizedBox(height: 8),
+              FulfillmentChips(
+                rows: all,
+                value: progress,
+                onChanged: (v) => setState(() => progress = v),
+              ),
+              const SizedBox(height: 12),
+              ReportSortField(
+                value: sort,
+                onChanged: (v) => setState(() => sort = v),
+              ),
               const SizedBox(height: 12),
             ],
             if (rows.isEmpty) EmptyState('No ${status.toLowerCase()} reports.'),
@@ -1014,6 +1256,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen> {
               ReportCard(
                 r,
                 names,
+                highlighted: r['report_id'] == _highlight,
                 actions: status == 'Pending'
                     ? [
                         OutlinedButton(

@@ -188,7 +188,7 @@ class _BatchSheetState extends State<BatchSheet> {
                       ),
                     ),
                   ),
-                  Badge2.status('${b['status']}'),
+                  DonationStatusChip('${b['status']}'),
                 ],
               ),
               // Deadline, or Expired / Cancelled with the way back.
@@ -345,7 +345,7 @@ class _BatchSheetState extends State<BatchSheet> {
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
-                Badge2.status('${line['status']}'),
+                DonationStatusChip('${line['status']}'),
               ],
             ),
             const SizedBox(height: 4),

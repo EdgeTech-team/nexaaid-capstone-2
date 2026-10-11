@@ -75,7 +75,7 @@ def create_internal_account(
         _check_barangay(db, payload.assigned_barangay_id)
     if _email_in_use(db, payload.email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
-    if _employee_id_in_use(db, payload.employee_id):
+    if payload.employee_id and _employee_id_in_use(db, payload.employee_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Employee ID already in use")
 
     role = db.query(Role).filter(Role.role_name == payload.role_name).first()
@@ -248,11 +248,6 @@ def update_user(
                                 detail="Only a Barangay Receiving Representative has an assigned barangay")
         if user.assigned_barangay_id is not None:
             changes["assigned_barangay_id"] = None   # role changed away from barangay rep
-    if final_role in INTERNAL_ROLES and set(changes) - {"is_active"}:
-        # Required for internal accounts. Older accounts without one must get
-        # it on their next edit; turning an account on/off alone is still allowed.
-        if not changes.get("employee_id", user.employee_id):
-            raise HTTPException(status_code=422, detail="Employee ID is required for internal accounts")
     if "email" in changes and _email_in_use(db, changes["email"], user.user_id):
         raise HTTPException(status_code=409, detail="Email already in use")
     if changes.get("employee_id") and _employee_id_in_use(db, changes["employee_id"], user.user_id):

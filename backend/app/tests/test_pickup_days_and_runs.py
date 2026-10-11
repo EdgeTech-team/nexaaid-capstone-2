@@ -94,56 +94,57 @@ def test_disaster_unit_sees_the_pickup_map_and_requests_drrmo_support(api):
                          json=_door(rid, [5], landmark="Parkmall", lat=10.3270, lng=123.9330)), 201)
     a, b = mon_wed["batch_reference"], fri["batch_reference"]
 
-    # The Disaster Unit (and CSWS Main Office) see the waiting pickups; donors don't
-    board = ok(client.get("/donations/pickups", headers=t["unit"]))
+    # CSWS Main Office sees the waiting pickups; donors and the Disaster Unit don't
+    board = ok(client.get("/donations/pickups", headers=t["csws"]))
     row = next(p for p in board if p["batch_reference"] == a)
     assert row["pickup_days"] == [1, 3] and row["pickup_landmark"] == "Mandaue City Hall"
     assert row["pickup_lat"] == 10.3236 and row["pickup_request"] is None
     assert client.get("/donations/pickups", headers=t["donor"]).status_code == 403
-    ok(client.get("/donations/pickups", headers=t["csws"]))
+    assert client.get("/donations/pickups", headers=t["unit"]).status_code == 403
 
     post = lambda who, body: client.post("/logistics/pickup-requests", headers=t[who], json=body)
     wed = _next(3)
     run = {"pickup_date": wed.isoformat(), "batch_references": [a], "trucks": 1, "volunteers": 2}
-    assert post("csws", run).status_code == 403                 # the Disaster Unit plans pickup runs
-    assert post("unit", {**run, "trucks": 0, "volunteers": 0}).status_code == 422
-    assert post("unit", {**run, "pickup_date": _next(6).isoformat()}).status_code == 422   # Saturday
-    r = post("unit", {**run, "batch_references": [a, b]})       # the Friday donor is not home on Wednesday
+    # Oct 11: Main Office owns the pickup map, so it asks DRRMO for pickup runs
+    assert post("unit", run).status_code == 403
+    assert post("csws", {**run, "trucks": 0, "volunteers": 0}).status_code == 422
+    assert post("csws", {**run, "pickup_date": _next(6).isoformat()}).status_code == 422   # Saturday
+    r = post("csws", {**run, "batch_references": [a, b]})       # the Friday donor is not home on Wednesday
     assert r.status_code == 409 and "not available on Wednesday" in r.text and "Fri" in r.text
-    assert post("unit", {**run, "batch_references": ["NOPE"]}).status_code == 404
+    assert post("csws", {**run, "batch_references": ["NOPE"]}).status_code == 404
 
-    req = ok(post("unit", {**run, "batch_references": [a.lower()], "notes": "Gate is blue"}), 201)
+    req = ok(post("csws", {**run, "batch_references": [a.lower()], "notes": "Gate is blue"}), 201)
     assert req["request_type"] == "Pickup" and req["delivery_id"] is None
     assert req["pickup_date"] == wed.isoformat()
     assert req["needs"] == "Needs 1 truck, 2 volunteers"
     assert req["stops"][0]["batch_reference"] == a and req["stops"][0]["landmark"] == "Mandaue City Hall"
     assert req["report_label"].startswith("Door to Door pickups on")
     assert "Gate is blue" in req["notes"]
-    assert post("unit", run).status_code == 409                 # already in an open run
+    assert post("csws", run).status_code == 409                 # already in an open run
 
     # The map marks the stop; DRRMO sees the run next to delivery requests
-    row = next(p for p in ok(client.get("/donations/pickups", headers=t["unit"])) if p["batch_reference"] == a)
+    row = next(p for p in ok(client.get("/donations/pickups", headers=t["csws"])) if p["batch_reference"] == a)
     assert row["pickup_request"]["request_id"] == req["request_id"]
     drrmo = ok(client.get("/drrmo/requests", headers=t["drrmo"]))
     seen = next(x for x in drrmo if x["request_id"] == req["request_id"])
-    assert seen["requested_by_role"] == "CSWS Disaster Unit" and seen["goods"]
+    assert seen["requested_by_role"] == "CSWS Main Office" and seen["goods"]
     assert "Door to Door stop" in seen["destination"]
     notes = ok(client.get("/notifications/", headers=t["drrmo"]))["items"]
     assert any("Door to Door pickups" in n["message"] for n in notes)
 
-    # The Disaster Unit sees only its pickup runs; DRRMO accepts; the unit is told
-    mine = ok(client.get("/logistics/requests", headers=t["unit"]))
-    assert [x["request_type"] for x in mine] == ["Pickup"]
+    # Main Office sees its pickup runs; DRRMO accepts; Main Office is told
+    mine = ok(client.get("/logistics/requests", headers=t["csws"]))
+    assert "Pickup" in [x["request_type"] for x in mine]
     ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json={}))
     assert any(n["title"] == "Logistics request accepted"
-               for n in ok(client.get("/notifications/", headers=t["unit"]))["items"])
+               for n in ok(client.get("/notifications/", headers=t["csws"]))["items"])
 
-    # The unit can cancel its own run (DRRMO is told); then the stop is free again
-    ok(client.post(f"/logistics/requests/{req['request_id']}/cancel", headers=t["unit"],
+    # Main Office can cancel the run (DRRMO is told); then the stop is free again
+    ok(client.post(f"/logistics/requests/{req['request_id']}/cancel", headers=t["csws"],
                    json={"reason": "Donor will drop it off instead"}))
-    row = next(p for p in ok(client.get("/donations/pickups", headers=t["unit"])) if p["batch_reference"] == a)
+    row = next(p for p in ok(client.get("/donations/pickups", headers=t["csws"])) if p["batch_reference"] == a)
     assert row["pickup_request"] is None
-    ok(post("unit", run), 201)
+    ok(post("csws", run), 201)
 
 
 def test_unit_cannot_cancel_a_delivery_request(api):
@@ -237,9 +238,9 @@ def test_deleting_the_only_stop_cancels_the_pickup_run(api):
     client, t = api
     rid = _report(client, t)
     a = ok(client.post("/donations/batch", headers=t["donor"], json=_door(rid, [3])), 201)["batch_reference"]
-    req = ok(client.post("/logistics/pickup-requests", headers=t["unit"], json={
+    req = ok(client.post("/logistics/pickup-requests", headers=t["csws"], json={
         "pickup_date": _next(3).isoformat(), "batch_references": [a], "trucks": 1}), 201)
     ok(client.delete(f"/donations/entries/{a}", headers=t["donor"]))
-    run = next(r for r in ok(client.get("/logistics/requests", headers=t["unit"]))
+    run = next(r for r in ok(client.get("/logistics/requests", headers=t["csws"]))
                if r["request_id"] == req["request_id"])
     assert run["status"] == "Cancelled"

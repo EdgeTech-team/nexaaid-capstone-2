@@ -62,7 +62,7 @@ def test_records_are_per_entry_with_filters_and_sorting(api):
     assert rec["on_hold_items"] == 1
     assert next(i for i in rec["items"] if i["donation_id"] == held)["hold_reason"] == "Check the count"
 
-    # Roles outside 4.4 / 4.5 staff access
+    # Roles outside 4.4 / 4.5 access
     for role in ("drrmo", "donor", "unit"):
         ok(client.get("/donations/records", headers=t[role]), 403)
 
@@ -74,3 +74,34 @@ def test_records_are_per_entry_with_filters_and_sorting(api):
     assert mine_big["status"] == "Partly Received" and mine_big["report"]["report_id"] == rid
     assert mine_big["on_hold_items"] == 1 and "donor" not in mine_big
     assert mine["entries"][0]["pickup_address"] == "1 Test St, Mandaue City"
+
+
+def test_barangay_rep_sees_only_its_own_barangays_records(api):
+    """Reminder (4.4): the Barangay Receiving Representative has donation
+    records too, only for reports in its assigned barangay, enforced by the
+    backend (UC-B1 alt 3a), and without donor names or CMO notes."""
+    client, t = api
+    own = _report(client, t)  # barangay 1 = "brgy"'s barangay
+    other = ok(client.post("/reports/", headers=t["unit"], json={
+        "disaster_type_id": 1, "barangay_id": 2, "estimated_quantity": 50}), 201)["report_id"]
+    ok(client.post(f"/reports/{other}/validate", headers=t["admin"], json={}))
+    mine = ok(client.post("/donations/batch", headers=t["donor"], json={
+        "report_id": own, "handover_method": "Drop Off", "items": [LINE]}), 201)
+    theirs = ok(client.post("/donations/batch", headers=t["donor"], json={
+        "report_id": other, "handover_method": "Drop Off", "items": [LINE, LINE]}), 201)
+
+    recs = ok(client.get("/donations/records", headers=t["brgy"]))
+    assert [e["batch_reference"] for e in recs] == [mine["batch_reference"]]
+    assert "donor" not in recs[0] and "on_hold_items" not in recs[0]
+    # Same filters and sort as staff; another barangay's report gives nothing
+    assert ok(client.get("/donations/records", params={"report_id": other},
+                         headers=t["brgy"])) == []
+    assert ok(client.get("/donations/records", params={"status": "Pending", "sort": "most_items"},
+                         headers=t["brgy"]))[0]["batch_reference"] == mine["batch_reference"]
+    # The other barangay's representative sees only its own
+    recs2 = ok(client.get("/donations/records", headers=t["brgy2"]))
+    assert [e["batch_reference"] for e in recs2] == [theirs["batch_reference"]]
+    # Staff still see both, with donor names
+    staff = ok(client.get("/donations/records", headers=t["admin"]))
+    assert {e["batch_reference"] for e in staff} == {mine["batch_reference"], theirs["batch_reference"]}
+    assert all(e["donor"] for e in staff)

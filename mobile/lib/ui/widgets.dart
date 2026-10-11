@@ -581,3 +581,18 @@ const _emptyHints = {
   'items': 'No items yet. Run database/seeds/demo_seed.sql in Neon.',
   'barangays': 'No barangays in the database.',
 };
+
+/// A donation's status in the words the app uses (Oct 11 notes): the CMO
+/// "acknowledges" a donation, so the stored status "Confirmed" reads
+/// "Acknowledged". Deliveries keep their own words.
+String donationStatusText(String? status) =>
+    status == 'Confirmed' ? 'Acknowledged' : (status ?? '-');
+
+class DonationStatusChip extends StatelessWidget {
+  final String? status;
+  const DonationStatusChip(this.status, {super.key});
+
+  @override
+  Widget build(BuildContext context) =>
+      StatusChip(status, label: donationStatusText(status));
+}

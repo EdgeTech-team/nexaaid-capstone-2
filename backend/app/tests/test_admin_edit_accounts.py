@@ -83,8 +83,7 @@ def test_create_requires_employee_id_and_card_and_hands_card_over(api):
 def test_create_validation(api):
     client, t = api
     cases = [
-        ({"employee_id": None}, 422),
-        ({"employee_id_card": None}, 422),
+        ({"employee_id_card": None}, 422),                     # the ID card is required
         ({"employee_id": "x!"}, 422),
         ({"contact_number": "1234567"}, 422),
         ({"role_name": "Administrator"}, 422),                 # internal roles only
@@ -200,11 +199,10 @@ def test_edit_rules_and_errors(api):
     r = patch(staff, {"employee_id": "brgy-0001"})
     assert r.status_code == 409 and r.json()["detail"] == "Employee ID already in use"
 
-    # Older internal accounts without an employee ID must get one on their next edit,
-    # but can still be turned off / on.
+    # Oct 11 notes: the employee ID number is no longer required (the ID card
+    # is the proof), so older accounts without one can be edited as usual.
     csws = _id(client, t, "csws.test@example.com")
-    r = patch(csws, {"first_name": "Carla"})
-    assert r.status_code == 422 and "Employee ID is required" in r.text
+    ok(patch(csws, {"first_name": "Carla"}))
     ok(patch(csws, {"is_active": False, "deactivation_reason": "Test reason"}))
     ok(patch(csws, {"is_active": True}))
     ok(patch(csws, {"first_name": "Carla", "employee_id": "CSWS-0001"}))
@@ -256,3 +254,17 @@ def test_replacing_the_card_deletes_the_old_one(api):
     assert client.get(f"/uploads/{old_id}", headers=t["admin"]).status_code == 404
     detail = ok(client.get(f"/admin/users/{uid}", headers=t["admin"]))
     assert detail["employee_id"] == "CSWS-0042"
+
+
+def test_staff_account_without_an_employee_id_number(api):
+    """Oct 11 notes (Dave): the Administrator uploads the employee ID card
+    only; no typed employee ID number."""
+    client, t = api
+    body = {"first_name": "Lito", "last_name": "Cruz", "email": "lito@csws.gov.ph",
+            "contact_number": "09181234567", "role_name": "CSWS Main Office",
+            "employee_id_card": _card(client, t)}
+    created = ok(client.post("/admin/users", headers=t["admin"], json=body), 201)
+    assert created["employee_id"] is None
+    # A second one without a number is fine too (no "already in use")
+    ok(client.post("/admin/users", headers=t["admin"], json={
+        **body, "email": "mara@csws.gov.ph", "employee_id_card": _card(client, t)}), 201)
