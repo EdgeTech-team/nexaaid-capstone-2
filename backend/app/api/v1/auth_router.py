@@ -216,7 +216,14 @@ def forgot_password(
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(func.lower(User.email) == payload.email.lower()).first()
-    if user is not None and user.is_active:
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not registered")
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated. Please contact an administrator.",
+        )
+    if True:
         now = datetime.now(timezone.utc)
         # Only the newest code works.
         db.query(PasswordResetToken).filter(
@@ -235,8 +242,7 @@ def forgot_password(
             f"Your password reset code is {code}. It expires in {RESET_CODE_MINUTES} minutes.\n\n"
             "If you did not ask for this, you can ignore this email.\n\nNexaAid",
         )
-    # Same answer whether or not the email exists, so emails can't be probed.
-    return {"detail": "If that email is registered, a reset code was sent."}
+    return {"detail": "A reset code was sent to your email."}
 
 
 @router.post("/reset-password")
