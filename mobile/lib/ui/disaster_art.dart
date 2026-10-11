@@ -222,7 +222,9 @@ class _ArtPainter extends CustomPainter {
       swirl,
     );
     final rain = _stroke(_storm, 3);
-    for (final x in [40.0, 60, 80, 100]) {
+    // <double> makes every value a double; a mixed list like [40.0, 60, 80]
+    // is inferred as List<num> and Offset(x, ...) rejects a num.
+    for (final x in <double>[40, 60, 80, 100]) {
       c.drawLine(Offset(x, 30), Offset(x - 8, 48), rain);
     }
     c.drawPath(
