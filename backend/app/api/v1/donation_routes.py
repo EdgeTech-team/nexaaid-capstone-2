@@ -850,6 +850,8 @@ def my_donations(
             "email": current_user.email,
             "role": current_user.role.role_name,
             "organization": org.org_name if org else None,
+            # Shown under the organization's name on its dashboard (Ivan).
+            "organization_type": org.organization_type if org else None,
             "account_status": org.status if org else "Active",
             # Door to Door: donors "select his/her address" (manuscript 3.1).
             "address": org.address if org else None,

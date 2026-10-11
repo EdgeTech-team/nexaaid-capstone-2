@@ -10,7 +10,9 @@ import 'package:http/testing.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/disaster_art.dart';
+import 'package:mobile/ui/donation_entries_view.dart';
 import 'package:mobile/ui/donor_dashboard.dart';
+import 'package:mobile/ui/item_art.dart';
 import 'package:mobile/ui/donor_screens.dart';
 
 Map<String, dynamic> _report(
@@ -36,10 +38,33 @@ Map<String, dynamic> _report(
 
 /// Ivan (dashboard design): an organization that already donated to the
 /// Banilad report, for the organization view.
+/// One donation entry, as GET /donations/mine sends it.
+Map<String, dynamic> _entry(String ref, String status, List<List> items) => {
+  'batch_reference': ref,
+  'report_id': 2,
+  'report_label': 'Flood in Banilad',
+  'status': status,
+  'handover_method': 'Drop Off',
+  'created_at': '2026-10-10T08:00:00Z',
+  'total_items': items.length,
+  'pending_items': status == 'Pending' ? items.length : 0,
+  'items': [
+    for (final (i, it) in items.indexed)
+      {
+        'donation_id': i + 1,
+        'item_name': it[0],
+        'quantity': it[1],
+        'unit': it[2],
+        'status': status,
+      },
+  ],
+};
+
 final _orgMine = {
   'profile': {
     'name': 'Rosa Cruz',
     'organization': 'Sto. Nino Parish Relief',
+    'organization_type': 'Church',
     'account_status': 'Approved',
   },
   'summary': {
@@ -47,7 +72,12 @@ final _orgMine = {
     'total_quantity': 120,
     'supported_reports': 1,
   },
-  'entries': <Map>[],
+  'entries': [
+    _entry('BATCH-ORG-1', 'Confirmed', [
+      ['Rice', 120, 'kg'],
+      ['Bottled water', 60, 'jugs'],
+    ]),
+  ],
   'supported_reports': [
     {
       'report_id': 2,
@@ -64,12 +94,27 @@ final _orgMine = {
 var _mine = <String, dynamic>{
   'profile': {'name': 'Ana Reyes', 'organization': null},
   'summary': {
-    'total_entries': 0,
-    'total_quantity': 0,
-    'supported_reports': 0,
+    'total_entries': 1,
+    'total_quantity': 12,
+    'supported_reports': 1,
   },
-  'entries': <Map>[],
-  'supported_reports': <Map>[],
+  'entries': [
+    _entry('BATCH-ANA-1', 'Received', [
+      ['Rice', 10, 'kg'],
+      ['Canned sardines', 2, 'pcs'],
+    ]),
+  ],
+  'supported_reports': [
+    {
+      'report_id': 2,
+      'label': 'Flood in Banilad',
+      'status': 'Validated',
+      'priority_level': 'Critical',
+      'total_items_needed': 100,
+      'total_items_delivered': 40,
+      'fulfillment_percentage': 40.0,
+    },
+  ],
 };
 
 final _server = MockClient((req) async {
@@ -138,8 +183,22 @@ void main() {
       expect(find.text('Donate to this report'), findsOneWidget);
       // Ivan (dashboard design): pictures instead of plain cards.
       expect(find.byType(DisasterArt), findsWidgets);
+      // Canvas: one line on where the donor's goods are going.
+      expect(
+        find.text(
+          'Your donations are helping 1 barangay in Mandaue. '
+          'Here is who needs help next.',
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Your giving'), findsOneWidget);
-      expect(find.text('0/0'), findsOneWidget); // the confirmed ring
+      expect(find.text('0/1'), findsOneWidget); // the confirmed ring
+      // Latest donation with its item picture and timeline.
+      expect(find.text('Latest donation · 2 items'), findsOneWidget);
+      expect(find.byType(ItemArt), findsOneWidget);
+      expect(find.text('View all 1'), findsOneWidget);
+      // The full list moved behind "View all".
+      expect(find.byType(DonationEntriesView), findsNothing);
       // The old six stat cards and the report list stay off the dashboard.
       expect(find.text('Donations made'), findsNothing);
       expect(find.text('Reports that need help now'), findsNothing);
@@ -163,13 +222,46 @@ void main() {
       expect(find.text('barangay reached'), findsOneWidget);
       // Families come from the /lookups report (12 in _report()).
       expect(find.text('families in reports you support'), findsOneWidget);
-      expect(find.text('Barangays your goods went to'), findsOneWidget);
+      expect(find.text('Relief organization · Church'), findsOneWidget);
+      expect(find.text('Donate as Sto. Nino Parish Relief'), findsOneWidget);
+      // No place search in tests, so the map falls back to the pin list.
+      expect(find.text('Where your goods went'), findsOneWidget);
       expect(find.text('Banilad'), findsOneWidget); // its pin
+      // Recent donations with item pictures instead of the ring.
+      expect(find.text('Recent donations'), findsOneWidget);
+      expect(find.text('120 kg Rice, 60 jugs Bottled water'), findsOneWidget);
+      expect(find.byType(ItemArt), findsOneWidget);
+      expect(find.text('0/1'), findsNothing);
       expect(
         find.text('12 families in Barangay Banilad are getting help.'),
         findsOneWidget,
       );
     }, () => _server);
+  });
+
+  testWidgets('View all opens every donation with filters', (tester) async {
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await _pump(tester, const MyDonationsScreen());
+      expect(find.text('My donations'), findsOneWidget);
+      expect(find.byType(DonationEntriesView), findsOneWidget);
+      expect(find.textContaining('BATCH-ANA-1'), findsWidgets);
+    }, () => _server);
+  });
+
+  test('Item pictures follow the item name', () {
+    expect(itemLook('Rice').$1, Icons.rice_bowl_outlined);
+    expect(itemLook('Bottled water').$1, Icons.water_drop_outlined);
+    expect(itemLook('Hygiene kit').$1, Icons.soap_outlined);
+    expect(itemLook('Something else').$1, Icons.inventory_2_outlined);
+    expect(
+      itemsSummary(_entry('X', 'Pending', [
+        ['Rice', 5, 'kg'],
+        ['Water', 2, 'jugs'],
+        ['Soap', 3, 'bars'],
+      ])),
+      '5 kg Rice, 2 jugs Water +1 more',
+    );
   });
 
   test('Disaster pictures follow the disaster type name', () {
