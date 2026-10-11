@@ -20,6 +20,35 @@ void main() {
     expect(find.text('Register as donor or organization'), findsOneWidget);
     expect(find.text('Donate as guest'), findsOneWidget);
     expect(find.text('How it works', skipOffstage: false), findsOneWidget);
+    // Light/dark picker: on the landing page header.
+    expect(find.byTooltip('Light or dark mode'), findsOneWidget);
+  });
+
+  testWidgets('Landing page light/dark picker switches the theme', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const NexaAidApp());
+    await tester.tap(find.byTooltip('Light or dark mode'));
+    await tester.pumpAndSettle();
+    expect(find.text('System'), findsOneWidget);
+    expect(find.text('Light'), findsOneWidget);
+    await tester.tap(find.text('Dark'));
+    await tester.pumpAndSettle();
+    expect(AppTheme.mode.value, ThemeMode.dark);
+    AppTheme.mode.value = ThemeMode.system;
+  });
+
+  testWidgets('Register asks which kind of donor in a pop-out', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const NexaAidApp());
+    await tester.tap(find.text('Register as donor or organization'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('Join NexaAid'), findsOneWidget);
+    expect(find.text('Individual donor'), findsOneWidget);
+    expect(find.text('Relief organization'), findsOneWidget);
+    expect(find.byType(BackdropFilter), findsWidgets);
   });
 
   testWidgets('Log in on the landing page opens the login pop-up', (
@@ -34,6 +63,9 @@ void main() {
     // It's a pop-up over the blurred landing page, with a close button.
     expect(find.byType(BackdropFilter), findsWidgets);
     expect(find.byTooltip('Close'), findsOneWidget);
+    // No light/dark toggle inside the pop-up: only the landing page's one.
+    expect(find.byTooltip('Dark mode'), findsNothing);
+    expect(find.byTooltip('Light or dark mode'), findsOneWidget);
   });
 
   testWidgets('Guest lands on the donate tab', (tester) async {
