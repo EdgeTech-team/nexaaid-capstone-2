@@ -38,6 +38,14 @@ class User(Base):
     employee_id = Column(String(30), unique=True, nullable=True)
     must_change_password = Column(Boolean, default=False, server_default="false", nullable=False)
     terms_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    # The Administrator reviewed this individual donor's registration (review
+    # only, like organizations.reviewed_at). Migration a7c3e5f19b42.
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    reviewed_by_user_id = Column(
+        Integer,
+        ForeignKey("users.user_id", name="fk_users_reviewed_by", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     role = relationship("Role")

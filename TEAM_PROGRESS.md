@@ -169,7 +169,14 @@ delivery).
 **Status:** Built and tested on `copy-develop`
 **Last updated:** Oct 11, 2026
 
-No database change (no new migration; head stays `d8f3a1c6b2e4`).
+**Mark: one migration to apply on Neon:** `a7c3e5f19b42` (run
+`alembic upgrade head` from `backend/app`). Without it, withdrawing a report
+fails with `CheckViolation ... chk_disaster_reports_status`: Neon has that
+check (it was never in our migrations) and it did not allow "Cancelled".
+The migration keeps every status the old check allowed and adds
+"Cancelled". It also adds `users.reviewed_at` / `reviewed_by_user_id` for
+reviewing individual donor registrations. Upgrade and downgrade tested on
+Postgres with the same check as Neon.
 
 **Daniel**
 - The Disaster Unit has no pickup map any more. Pickup runs (asking DRRMO
@@ -184,6 +191,13 @@ No database change (no new migration; head stays `d8f3a1c6b2e4`).
   longer be validated or rejected).
 
 **Jenises**
+- Accounts > **Registrations** is the one place where the Administrator
+  reviews new registrations, individual donors and organizations alike:
+  Not Reviewed / Reviewed / All, Everyone / Individual donors /
+  Organizations, search, sort, and Mark Reviewed on each card
+  (`PATCH /admin/users/{id}/review` for donors). The separate
+  "Organizations" section is gone. The dashboard tile counts both
+  ("Registrations to review").
 - Tapping a notification moves to the page that already exists (the tab in
   the bottom menu, on the right view) instead of opening a second copy:
   `ui/home_nav.dart`. New report -> Admin Validate (Pending, the report

@@ -144,6 +144,9 @@ def _user_row(u: User, orgs: dict, barangays: dict) -> dict:
         # active, and for accounts deactivated before this was recorded).
         "deactivation_reason": u.deactivation_reason,
         "deactivated_at": u.deactivated_at,
+        # Individual donors: the Administrator reviewed the registration.
+        "reviewed_at": u.reviewed_at,
+        "reviewed_by_user_id": u.reviewed_by_user_id,
         "created_at": u.created_at,
     }
 
@@ -344,6 +347,52 @@ def list_organizations(
             "created_at": o.created_at,
         })
     return rows
+
+
+# Oct 11 notes (Jenises): the Administrator reviews individual donor
+# registrations too, in the same Registrations list as organizations.
+# Review only: donor accounts are active as soon as they register.
+DONOR = "Individual Donor"
+
+
+@router.patch("/users/{user_id}/review")
+def review_donor(
+    user_id: int,
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """Mark an individual donor's registration Reviewed or Not Reviewed."""
+    reviewed = payload.get("reviewed")
+    if not isinstance(reviewed, bool):
+        raise HTTPException(status_code=422, detail="'reviewed' must be true or false")
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not user.role or user.role.role_name != DONOR:
+        raise HTTPException(
+            status_code=409,
+            detail="Only individual donor registrations are reviewed here. "
+                   "Organizations are reviewed in their own list.",
+        )
+    old = {"reviewed_at": user.reviewed_at.isoformat() if user.reviewed_at else None}
+    if reviewed:
+        user.reviewed_at = user.reviewed_at or datetime.now(timezone.utc)
+        user.reviewed_by_user_id = user.reviewed_by_user_id or current_user.user_id
+    else:
+        user.reviewed_at = None
+        user.reviewed_by_user_id = None
+    new = {"reviewed_at": user.reviewed_at.isoformat() if user.reviewed_at else None}
+    if old != new:
+        log_action(db, current_user, "REVIEW DONOR", "users", user.user_id,
+                   old=old, new=new, request=request)
+    db.flush()
+    return {
+        "user_id": user.user_id,
+        "reviewed_at": user.reviewed_at,
+        "reviewed_by_user_id": user.reviewed_by_user_id,
+    }
 
 
 @router.patch("/organizations/{organization_id}/review")
