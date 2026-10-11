@@ -117,6 +117,12 @@ class DisasterReport(Base):
 
     __table_args__ = (
         CheckConstraint("source IN ('Web','Mobile','SMS')", name="disaster_reports_source_check"),
+        # Cancelled = withdrawn by the reporter before validation (kept for
+        # the record). Migration a7c3e5f19b42.
+        CheckConstraint(
+            "status IN ('Cancelled', 'Pending', 'Rejected', 'Validated')",
+            name="chk_disaster_reports_status",
+        ),
     )
 
     # Relationships

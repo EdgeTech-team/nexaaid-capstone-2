@@ -46,8 +46,8 @@ class AdminDashboard extends StatelessWidget {
               // The Administrator now only reviews organizations (accounts
               // activate automatically), so this says "review", not "approve".
               StatTile(
-                'Organizations to review',
-                '${m['pending_organizations']}',
+                'Registrations to review',
+                '${m['pending_registrations'] ?? m['pending_organizations']}',
                 Icons.apartment_outlined,
                 color: const Color(0xFFEF6C00),
                 onTap: () => _go(context, 'Accounts', 'registrations'),
@@ -100,7 +100,7 @@ class AdminDashboard extends StatelessWidget {
 // ---------------------------------------------------------------------------
 class AccountsHub extends StatefulWidget {
   /// Which section to show first:
-  /// active, deactivated, registrations, orgs, donation, new.
+  /// active, deactivated, registrations (donors + organizations), donation, new.
   final String initialView;
   const AccountsHub({super.key, this.initialView = 'active'});
 
@@ -118,7 +118,9 @@ class _AccountsHubState extends State<AccountsHub>
 
   @override
   void applyHomeTarget(HomeTarget target) {
-    if (target.view != null) view = target.view!;
+    if (target.view != null) {
+      view = target.view == 'orgs' ? 'registrations' : target.view!;
+    }
   }
 
   @override
@@ -134,12 +136,11 @@ class _AccountsHubState extends State<AccountsHub>
             segments: const [
               ButtonSegment(value: 'active', label: Text('Active')),
               ButtonSegment(value: 'deactivated', label: Text('Deactivated')),
-              // New organizations and individual donors in one sortable list.
+              // Individual donors and organizations reviewed in one list.
               ButtonSegment(
                 value: 'registrations',
                 label: Text('Registrations'),
               ),
-              ButtonSegment(value: 'orgs', label: Text('Organizations')),
               // Adviser item 7: any barangay's donation-sending info, e.g.
               // a barangay without a representative yet, or a wrong number.
               ButtonSegment(value: 'donation', label: Text('Donation info')),
@@ -152,7 +153,6 @@ class _AccountsHubState extends State<AccountsHub>
         Expanded(
           child: switch (view) {
             'registrations' => const RegistrationsScreen(),
-            'orgs' => const OrganizationsReview(),
             'donation' => const BarangayDonationInfoScreen(),
             'new' => const AccountsScreen(),
             'deactivated' => const UsersScreen(
@@ -288,10 +288,10 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 }
 
-/// New registrations: organizations and individual donors in one list,
-/// with a type filter and sorting. Tapping an organization opens the
-/// Organizations review (Reviewed / Not Reviewed); tapping a donor opens
-/// the account details.
+/// UC-A2 + Oct 11 notes (Jenises): new registrations of individual donors
+/// and organizations in one list. Accounts are active as soon as they
+/// register; the Administrator reviews each registration here (Reviewed /
+/// Not Reviewed), with a type filter, search and sorting.
 class RegistrationsScreen extends StatefulWidget {
   const RegistrationsScreen({super.key});
 
@@ -300,52 +300,91 @@ class RegistrationsScreen extends StatefulWidget {
 }
 
 class _RegistrationsScreenState extends State<RegistrationsScreen> {
-  String kind = 'all'; // all | orgs | donors
+  String review = 'not'; // not | done | all
+  String kind = 'all'; // all | donors | orgs
   String sort = 'newest'; // newest | oldest | name
+  String search = '';
+  final Set<String> _busy = {};
+  int _loads = 0;
 
   DateTime? _when(dynamic v) =>
       v == null ? null : DateTime.tryParse('$v')?.toLocal();
 
-  String _fmt(DateTime? d) {
-    if (d == null) return 'Unknown date';
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+  Future<void> _setReviewed(Map<String, dynamic> i, bool value) async {
+    final key = '${i['type']}-${i['id']}';
+    if (_busy.contains(key)) return;
+    setState(() => _busy.add(key));
+    final r = await api.patch(
+      i['type'] == 'org'
+          ? '/admin/organizations/${i['id']}/review'
+          : '/admin/users/${i['id']}/review',
+      body: {'reviewed': value},
+    );
+    if (!mounted) return;
+    setState(() {
+      _busy.remove(key);
+      if (r.ok) _loads++;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          !r.ok
+              ? 'Could not update the review: ${r.errorText}'
+              : value
+              ? '${i['name']} marked Reviewed'
+              : '${i['name']} marked Not Reviewed',
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Loader(
+      key: ValueKey(_loads),
       load: [
         () => api.get('/admin/organizations'),
         () => api.get('/admin/users', query: {'role': Roles.donor}),
       ],
       builder: (context, data) {
-        final orgs = (data[0] as List).cast<Map>();
-        final donors = (data[1] as List).cast<Map>();
-
-        final items = <Map<String, dynamic>>[
-          if (kind != 'donors')
-            for (final o in orgs)
-              {
-                'type': 'org',
-                'name': '${o['org_name']}',
-                'when': _when(o['created_at']),
-                'detail':
-                    '${o['organization_type'] ?? 'Organization'}'
-                    ' · ${o['contact_email'] ?? 'No email'}',
-                'reviewed': o['reviewed_at'] != null,
-              },
-          if (kind != 'orgs')
-            for (final u in donors)
-              {
-                'type': 'donor',
-                'user_id': u['user_id'],
-                'name': '${u['name']}',
-                'when': _when(u['created_at']),
-                'detail': 'Individual donor · ${u['email']}',
-                'reviewed': null,
-              },
+        final all = <Map<String, dynamic>>[
+          for (final o in (data[0] as List).cast<Map>())
+            {
+              'type': 'org',
+              'id': o['organization_id'],
+              'name': '${o['org_name']}',
+              'email': '${o['contact_email'] ?? 'No email'}',
+              'when': _when(o['created_at']),
+              'reviewed': o['reviewed_at'] != null,
+              'org': o,
+            },
+          for (final u in (data[1] as List).cast<Map>())
+            {
+              'type': 'donor',
+              'id': u['user_id'],
+              'name': '${u['name']}',
+              'email': '${u['email']}',
+              'when': _when(u['created_at']),
+              'reviewed': u['reviewed_at'] != null,
+            },
         ];
+        final notReviewed = all.where((i) => i['reviewed'] != true).length;
+        final q = search.trim().toLowerCase();
+        final items = all
+            .where(
+              (i) =>
+                  review == 'all' ||
+                  (review == 'done') == (i['reviewed'] == true),
+            )
+            .where(
+              (i) => kind == 'all' || (kind == 'orgs') == (i['type'] == 'org'),
+            )
+            .where(
+              (i) =>
+                  q.isEmpty ||
+                  '${i['name']} ${i['email']}'.toLowerCase().contains(q),
+            )
+            .toList();
 
         int byDate(Map a, Map b) {
           final x = a['when'] as DateTime?;
@@ -356,37 +395,64 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
           return x.compareTo(y);
         }
 
-        items.sort((a, b) {
-          switch (sort) {
-            case 'oldest':
-              return byDate(a, b);
-            case 'name':
-              return (a['name'] as String).toLowerCase().compareTo(
-                (b['name'] as String).toLowerCase(),
-              );
-            default:
-              return byDate(b, a);
-          }
-        });
+        items.sort(
+          (a, b) => switch (sort) {
+            'oldest' => byDate(a, b),
+            'name' => (a['name'] as String).toLowerCase().compareTo(
+              (b['name'] as String).toLowerCase(),
+            ),
+            _ => byDate(b, a),
+          },
+        );
 
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
             const PageHeader(
-              'New registrations',
-              subtitle: 'Organizations and individual donors together. Tap an organization to review it.',
+              'Registrations',
+              subtitle:
+                  'Individual donors and organizations. Their accounts are '
+                  'active as soon as they register; review each one here.',
             ),
             SegmentedButton<String>(
               showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(value: 'all', label: Text('All')),
-                ButtonSegment(value: 'orgs', label: Text('Organizations')),
-                ButtonSegment(value: 'donors', label: Text('Donors')),
+              segments: [
+                ButtonSegment(
+                  value: 'not',
+                  label: Text('Not Reviewed ($notReviewed)'),
+                ),
+                ButtonSegment(
+                  value: 'done',
+                  label: Text('Reviewed (${all.length - notReviewed})'),
+                ),
+                const ButtonSegment(value: 'all', label: Text('All')),
               ],
-              selected: {kind},
-              onSelectionChanged: (s) => setState(() => kind = s.first),
+              selected: {review},
+              onSelectionChanged: (s) => setState(() => review = s.first),
             ),
-            const SizedBox(height: 10),
+            Gaps.v12,
+            Wrap(
+              spacing: Space.xs,
+              children: [
+                for (final (value, label) in const [
+                  ('all', 'Everyone'),
+                  ('donors', 'Individual donors'),
+                  ('orgs', 'Organizations'),
+                ])
+                  ChoiceChip(
+                    label: Text(label),
+                    selected: kind == value,
+                    onSelected: (_) => setState(() => kind = value),
+                  ),
+              ],
+            ),
+            Gaps.v12,
+            AppTextField(
+              label: 'Search name or email',
+              icon: Icons.search,
+              onChanged: (v) => setState(() => search = v),
+            ),
+            Gaps.v12,
             DropdownButtonFormField<String>(
               initialValue: sort,
               isExpanded: true,
@@ -398,51 +464,20 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
               ],
               onChanged: (v) => setState(() => sort = v ?? 'newest'),
             ),
-            const SizedBox(height: 12),
-            Text(
-              '${items.length} registrations',
-              style: const TextStyle(color: Brand.muted),
-            ),
-            const SizedBox(height: 6),
-            if (items.isEmpty) const EmptyState('No registrations yet.'),
+            Gaps.v16,
+            if (items.isEmpty)
+              EmptyState(
+                review == 'not'
+                    ? 'Every registration has been reviewed.'
+                    : 'No registrations to show.',
+              ),
             for (final i in items)
-              Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  leading: Icon(
-                    i['type'] == 'org'
-                        ? Icons.apartment_outlined
-                        : Icons.person_outline,
-                  ),
-                  title: Text('${i['name']}'),
-                  subtitle: Text(
-                    '${i['detail']}\nRegistered ${_fmt(i['when'])}',
-                  ),
-                  isThreeLine: true,
-                  trailing: i['reviewed'] == null
-                      ? const Icon(Icons.chevron_right)
-                      : Badge2.status(
-                          i['reviewed'] == true ? 'Reviewed' : 'Not Reviewed',
-                        ),
-                  onTap: () {
-                    if (i['type'] == 'org') {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => Scaffold(
-                            appBar: AppBar(title: const Text('Organizations')),
-                            body: const OrganizationsReview(),
-                          ),
-                        ),
-                      );
-                    } else if (i['user_id'] is int) {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              AccountDetailScreen(userId: i['user_id'] as int),
-                        ),
-                      );
-                    }
-                  },
+              Padding(
+                padding: const EdgeInsets.only(bottom: Space.sm),
+                child: _RegistrationCard(
+                  item: i,
+                  busy: _busy.contains('${i['type']}-${i['id']}'),
+                  onReview: (v) => _setReviewed(i, v),
                 ),
               ),
           ],
@@ -452,167 +487,112 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
   }
 }
 
-class OrganizationsReview extends StatefulWidget {
-  const OrganizationsReview({super.key});
-
-  @override
-  State<OrganizationsReview> createState() => _OrganizationsReviewState();
-}
-
-class _OrganizationsReviewState extends State<OrganizationsReview> {
-  bool reviewed = false;
-  final Set<int> busyIds = {};
-
-  Future<void> _setReviewed(int organizationId, bool value) async {
-    if (busyIds.contains(organizationId)) return;
-    setState(() => busyIds.add(organizationId));
-
-    final result = await api.patch(
-      '/admin/organizations/$organizationId/review',
-      body: {'reviewed': value},
-    );
-
-    if (!mounted) return;
-
-    setState(() => busyIds.remove(organizationId));
-
-    if (!result.ok) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not update review: ${result.errorText}')),
-      );
-      return;
-    }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          value
-              ? 'Organization marked Reviewed.'
-              : 'Organization marked Not Reviewed.',
-        ),
-      ),
-    );
-  }
+/// One registration: who, when, Reviewed or not, and the review button.
+/// Organizations show their details and supporting document; donors open
+/// their account (with their valid ID).
+class _RegistrationCard extends StatelessWidget {
+  final Map<String, dynamic> item;
+  final bool busy;
+  final ValueChanged<bool> onReview;
+  const _RegistrationCard({
+    required this.item,
+    required this.busy,
+    required this.onReview,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Loader(
-      key: ValueKey(reviewed),
-      load: [
-        () => api.get(
-          '/admin/organizations',
-          query: {'reviewed': reviewed ? 'true' : 'false'},
-        ),
-      ],
-      builder: (context, data) {
-        final orgs = (data[0] as List).cast<Map>();
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            const PageHeader(
-              'Organization Registrations',
-              subtitle: 'Organizations activate automatically. Review records here without changing account access.',
-            ),
-            SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: false, label: Text('Not Reviewed')),
-                ButtonSegment(value: true, label: Text('Reviewed')),
-              ],
-              selected: {reviewed},
-              onSelectionChanged: (selection) {
-                setState(() => reviewed = selection.first);
-              },
-            ),
-            const SizedBox(height: 12),
-            if (orgs.isEmpty)
-              EmptyState(
-                reviewed
-                    ? 'No reviewed organizations.'
-                    : 'No organizations waiting for review.',
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final muted = t.bodySmall?.copyWith(color: cs.onSurfaceVariant);
+    final org = item['type'] == 'org';
+    final o = item['org'] as Map?;
+    final reviewed = item['reviewed'] == true;
+    final when = item['when'] as DateTime?;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                org ? Icons.apartment_outlined : Icons.person_outline,
+                color: cs.primary,
               ),
-            for (final o in orgs)
-              Builder(
-                builder: (context) {
-                  final id = o['organization_id'] as int;
-                  final isReviewed = o['reviewed_at'] != null;
-                  final busy = busyIds.contains(id);
-
-                  return Card(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    child: Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  '${o['org_name']}',
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                              Badge2.status(
-                                isReviewed ? 'Reviewed' : 'Not Reviewed',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text('${o['organization_type'] ?? 'Organization'}'),
-                          Text(
-                            'Registration no.: ${o['registration_no'] ?? 'Not provided'}',
-                          ),
-                          if ((o['address'] ?? '').toString().trim().isNotEmpty)
-                            Text('Address: ${o['address']}'),
-                          Text(
-                            'Contact: ${o['contact_person'] ?? 'Not provided'}',
-                          ),
-                          Text(
-                            'Email: ${o['contact_email'] ?? 'Not provided'}',
-                          ),
-                          if (o['created_at'] != null)
-                            Text('Registered: ${o['created_at']}'),
-                          const SizedBox(height: 12),
-                          _OrgDocument(id),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            width: double.infinity,
-                            child: OutlinedButton.icon(
-                              onPressed: busy
-                                  ? null
-                                  : () => _setReviewed(id, !isReviewed),
-                              icon: busy
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : Icon(
-                                      isReviewed
-                                          ? Icons.mark_email_unread_outlined
-                                          : Icons.fact_check_outlined,
-                                    ),
-                              label: Text(
-                                isReviewed
-                                    ? 'Mark Not Reviewed'
-                                    : 'Mark Reviewed',
-                              ),
-                            ),
-                          ),
-                        ],
+              Gaps.h12,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${item['name']}', style: t.titleMedium),
+                    Text(
+                      org
+                          ? '${o?['organization_type'] ?? 'Organization'}'
+                          : 'Individual donor',
+                      style: muted,
+                    ),
+                  ],
+                ),
+              ),
+              Gaps.h8,
+              StatusChip(reviewed ? 'Reviewed' : 'Not Reviewed'),
+            ],
+          ),
+          Gaps.v8,
+          Text('${item['email']}', style: t.bodyMedium),
+          Text(
+            when == null
+                ? 'Registered: unknown date'
+                : 'Registered ${niceDate(when.toIso8601String())}',
+            style: muted,
+          ),
+          if (org) ...[
+            Gaps.v8,
+            Text(
+              'Registration no.: ${o?['registration_no'] ?? 'Not provided'}'
+              '\nContact: ${o?['contact_person'] ?? 'Not provided'}'
+              '${(o?['address'] ?? '').toString().trim().isEmpty ? '' : '\nAddress: ${o!['address']}'}',
+              style: t.bodyMedium,
+            ),
+            Gaps.v12,
+            _OrgDocument(item['id'] as int),
+          ],
+          Gaps.v12,
+          Row(
+            children: [
+              if (!org)
+                Expanded(
+                  child: AppButton(
+                    'View account',
+                    icon: Icons.badge_outlined,
+                    variant: AppButtonVariant.text,
+                    expand: true,
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            AccountDetailScreen(userId: item['id'] as int),
                       ),
                     ),
-                  );
-                },
+                  ),
+                ),
+              if (!org) Gaps.h8,
+              Expanded(
+                child: AppButton(
+                  reviewed ? 'Mark Not Reviewed' : 'Mark Reviewed',
+                  icon: reviewed ? Icons.undo : Icons.fact_check_outlined,
+                  variant: reviewed
+                      ? AppButtonVariant.secondary
+                      : AppButtonVariant.tonal,
+                  loading: busy,
+                  expand: true,
+                  onPressed: () => onReview(!reviewed),
+                ),
               ),
-          ],
-        );
-      },
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

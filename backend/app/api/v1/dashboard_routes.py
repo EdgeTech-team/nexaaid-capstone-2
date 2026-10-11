@@ -103,6 +103,7 @@ from models.inventory_model import Inventory
 from models.item_model import Item
 from models.delivery import DeliveryItem
 from models.user_rbac_model import User
+from models.role_model import Role
 from models.report import DisasterType, Barangay
 from models.donation_confirmation_model import DonationConfirmation
 from core.auth import barangay_scope
@@ -254,11 +255,20 @@ def admin_dashboard(
     held = len(_held_donation_ids(db))
     total_users = db.query(func.count(User.user_id)).scalar() or 0
     active_users = db.query(func.count(User.user_id)).filter(User.is_active.is_(True)).scalar() or 0
+    pending_orgs = db.query(func.count(Organization.organization_id)).filter(
+        Organization.reviewed_at.is_(None)).scalar() or 0
+    pending_donors = (
+        db.query(func.count(User.user_id))
+        .join(Role, Role.role_id == User.role_id)
+        .filter(Role.role_name == "Individual Donor", User.reviewed_at.is_(None))
+        .scalar() or 0
+    )
     return {
         "total_users": total_users,
         "active_users": active_users,
-        "pending_organizations": db.query(func.count(Organization.organization_id))
-            .filter(Organization.reviewed_at.is_(None)).scalar() or 0,
+        "pending_organizations": pending_orgs,
+        # Organizations + individual donors not reviewed yet (Registrations).
+        "pending_registrations": pending_orgs + pending_donors,
         "pending_validations": db.query(func.count(DisasterReport.report_id))
             .filter(DisasterReport.status == "Pending").scalar() or 0,
         "validated_reports": db.query(func.count(DisasterReport.report_id))
