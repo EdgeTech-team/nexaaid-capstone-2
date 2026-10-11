@@ -1,17 +1,24 @@
 # models/user_rbac_model.py
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from core.database import Base
 
 class User(Base):
     __tablename__ = "users"
+    # Usernames are saved in lowercase (core/usernames.py), so a plain unique
+    # constraint is case-insensitive in practice. NULLs don't clash, so donors
+    # and older accounts can leave it empty.
+    __table_args__ = (UniqueConstraint("username", name="uq_users_username"),)
 
     user_id = Column(Integer, primary_key=True, autoincrement=True)
     first_name = Column(String(50), nullable=False)
     last_name = Column(String(50), nullable=False)
     contact_number = Column(String(15), nullable=False)  # real column is VARCHAR(15)
     email = Column(String(150), unique=True, nullable=False)  # length matches real column
+    # Login name for organization accounts (the contact person's email is not
+    # always the person using the account). Lowercase, 4 to 30 characters.
+    username = Column(String(30), nullable=True)
     password_hash = Column(String(255), nullable=False)
     role_id = Column(Integer, ForeignKey("roles.role_id", ondelete="RESTRICT"), nullable=False)
     organization_id = Column(Integer, ForeignKey("organizations.organization_id", ondelete="SET NULL"), nullable=True)

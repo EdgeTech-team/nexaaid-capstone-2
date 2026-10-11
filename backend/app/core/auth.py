@@ -45,9 +45,20 @@ def user_payload(user: User) -> dict:
 
 
 def authenticate_user(db: Session, email: str, password: str) -> User:
-    """Shared login check used by /token (Swagger) and /auth/login (Flutter)."""
-    user = db.query(User).filter(func.lower(User.email) == email.strip().lower()).first()
-    # Same message for unknown email and wrong password, so emails can't be probed
+    """Shared login check used by /token (Swagger) and /auth/login (Flutter).
+
+    The first argument is still called `email` so existing callers keep
+    working, but it may also be an organization's username. A value with an
+    "@" is looked up as an email; anything else as a username (usernames can
+    never contain "@", and are saved in lowercase)."""
+    login = (email or "").strip()
+    if "@" in login:
+        user = db.query(User).filter(func.lower(User.email) == login.lower()).first()
+    elif login:
+        user = db.query(User).filter(User.username == login.lower()).first()
+    else:
+        user = None
+    # Same message for unknown email/username and wrong password, so accounts can't be probed
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

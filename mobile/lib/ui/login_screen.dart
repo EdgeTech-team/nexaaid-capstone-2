@@ -26,6 +26,7 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
+  // Holds the email, or the username of an organization account.
   final emailC = TextEditingController();
   final passC = TextEditingController();
   bool busy = false;
@@ -37,7 +38,7 @@ class _LoginScreenState extends State<LoginScreen> {
       busy = true;
       error = null;
     });
-    final r = await api.login(emailC.text, passC.text);
+    final r = await api.login(emailC.text.trim(), passC.text);
     if (!mounted) return;
     if (r.ok && widget.popup) {
       // Close the pop-up so the signed-in screens show.
@@ -50,17 +51,21 @@ class _LoginScreenState extends State<LoginScreen> {
         error = r.status == 0
             ? 'Cannot reach the server at ${api.baseUrl}'
             : r.status == 401
-            ? 'Incorrect email or password'
+            ? 'Incorrect email/username or password'
             : r.errorText;
       }
     });
   }
 
   /// UI concern: "Forgot password?" asks for the email (code by email).
+  /// A typed username is not passed on, because the code goes to an email.
   Future<void> _forgot() async {
+    final typed = emailC.text.trim();
     final email = await Navigator.of(context).push<String>(
       MaterialPageRoute(
-        builder: (_) => ForgotPasswordScreen(initialEmail: emailC.text.trim()),
+        builder: (_) => ForgotPasswordScreen(
+          initialEmail: typed.contains('@') ? typed : '',
+        ),
       ),
     );
     if (email != null && mounted) {
@@ -123,9 +128,10 @@ class _LoginScreenState extends State<LoginScreen> {
         TextField(
           controller: emailC,
           keyboardType: TextInputType.emailAddress,
+          autofillHints: const [AutofillHints.username],
           decoration: const InputDecoration(
-            labelText: 'Email',
-            prefixIcon: Icon(Icons.mail_outline),
+            labelText: 'Email or username',
+            prefixIcon: Icon(Icons.person_outline),
           ),
         ),
         const SizedBox(height: 12),
