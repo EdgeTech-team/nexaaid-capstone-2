@@ -6,6 +6,7 @@ import 'csws_screens.dart';
 import 'donor_dashboard.dart';
 import 'donation_info.dart';
 import 'donor_screens.dart';
+import 'my_giving.dart';
 import 'notifications_screen.dart';
 import 'ops_screens.dart';
 import 'pickup_map.dart';
@@ -137,10 +138,12 @@ List<_Tab> _tabsFor(String? role) {
     case Roles.donor:
     case Roles.org:
       return const [
-        _Tab('Dashboard', Icons.dashboard_outlined, DonorDashboard()), // 9.4
-               // Ivan's note #2: every report, Active and Done (2.4, 2.5, 3.3).
-        // Donating still starts from a report's Donate button (Module 4).  
-        _Tab('Reports', Icons.article_outlined, DonorReportsTab()),
+        // Ivan (simple donor screens): Dashboard = landing-page banner and
+        // the barangays that need help (9.4). Reports = the donor's own
+        // giving: 4 cards, donation status, delivery status (UC-D3 / UC-R3).
+        // Every report, active and done, is behind "See all reports".
+        _Tab('Dashboard', Icons.dashboard_outlined, DonorDashboard()),
+        _Tab('Reports', Icons.article_outlined, MyGivingScreen()),
       ];
     default: // guest: public homepage (1.4)
       return const [
