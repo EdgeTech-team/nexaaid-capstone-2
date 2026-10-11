@@ -168,7 +168,7 @@ class _SaveQrButtonState extends State<SaveQrButton> {
       // returns nothing, so null there still means it was saved.
       message = where == null && !kIsWeb
           ? 'Not saved.'
-          : 'QR image saved. You can show it even without internet.';
+          : 'Saved. You can show this QR even without internet.';
     } catch (_) {
       message = 'Could not save the QR image. Take a screenshot instead.';
     }
