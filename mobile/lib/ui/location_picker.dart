@@ -259,7 +259,9 @@ class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
 }
 
 // ---------------------------------------------------------------------------
-// Door to Door: preferred pickup date and time (UC-D2 alt 7c)
+// Door to Door: when CSWS picks up (UC-D2 alt 7c). The donor now chooses
+// pickup days (pickup_days.dart); the date and time picker below is kept for
+// reopening older entries that had one preferred time.
 // ---------------------------------------------------------------------------
 
 /// When CSWS does pickups. Loaded from GET /donations/pickup-rules (set in
@@ -274,22 +276,22 @@ class PickupRules {
 
   const PickupRules({
     this.days = const {1, 2, 3, 4, 5},
-    this.startHour = 8,
+    this.startHour = 9,
     this.endHour = 17,
     this.minLeadHours = 1,
     this.maxDaysAhead = 30,
-    this.label = 'Monday to Friday, 8:00 AM to 5:00 PM',
+    this.label = 'Monday to Friday, 9:00 AM to 5:00 PM',
   });
 
   factory PickupRules.fromJson(Map<String, dynamic> j) => PickupRules(
     days: {
       for (final d in (j['days'] as List? ?? const [])) (d as num).toInt(),
     },
-    startHour: (j['start_hour'] as num?)?.toInt() ?? 8,
+    startHour: (j['start_hour'] as num?)?.toInt() ?? 9,
     endHour: (j['end_hour'] as num?)?.toInt() ?? 17,
     minLeadHours: (j['min_lead_hours'] as num?)?.toInt() ?? 1,
     maxDaysAhead: (j['max_days_ahead'] as num?)?.toInt() ?? 30,
-    label: '${j['label'] ?? 'Monday to Friday, 8:00 AM to 5:00 PM'}',
+    label: '${j['label'] ?? 'Monday to Friday, 9:00 AM to 5:00 PM'}',
   );
 
   static Future<PickupRules> load() async {

@@ -25,29 +25,43 @@ from models.guest_donor_model import GuestDonor
 from models.physical_donation_model import PhysicalDonation
 from models.received_goods_model import ReceivedGoods
 from models.item_model import Item
+from models.logistics_request_model import LogisticsRequest
+from models.notification import Notification
 from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
 from schemas.physical_donation_schema import (
     DonationBatchCreate,
+    DonationEntryEdit,
     PhysicalDonationCreate,
     PhysicalDonationResponse,
     pickup_rules,
+    pickup_area,
+    km_from_office,
+    encode_pickup_days,
+    decode_pickup_days,
+    pickup_days_label,
 )
+from core.audit import log_action
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 from services.donation_entries import build_entries, filter_and_sort, group_by_report
 from services.donation_expiry import (
-    entry_expiry_info, entry_status, expire_overdue, set_deadline,
+    entry_expiry_info, entry_status, expire_overdue, set_deadline, now_utc,
 )
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
 CSWS_ROLES = ("CSWS Main Office", "Administrator")
+# The Door to Door pickup list and map. The CSWS Disaster Unit plans the
+# pickup runs on the map (Oct 10 notes); Main Office still receives the goods.
+PICKUP_ROLES = (*CSWS_ROLES, "CSWS Disaster Unit")
 
 # Address search (UC-D2 alt 7c) uses OpenStreetMap data through Photon:
 # free, no API key, no billing. GEOCODER_URL can point to a self-hosted
 # Photon server later without any app change.
 SEARCH_CENTER = (10.3300, 123.9300)             # (lat, lng) Mandaue City centre: results near here rank first
-SEARCH_BBOX = "123.25,9.40,124.10,11.30"        # minLon,minLat,maxLon,maxLat: all of Cebu province
+# minLon,minLat,maxLon,maxLat: the pickup area (all of Cebu province unless
+# PICKUP_AREA_BBOX says otherwise), so landmark suggestions stay inside it.
+SEARCH_BBOX = ",".join(str(x) for x in pickup_area()["bbox"])
 _GEO_CACHE: dict = {}
 _GEO_CACHE_TTL = 24 * 3600                      # seconds
 _GEO_CACHE_MAX = 1000
@@ -161,6 +175,23 @@ def _donor_info(db: Session, d: PhysicalDonation) -> dict:
     }
 
 
+def _pickup_days_view(d: PhysicalDonation) -> dict:
+    """Door to Door pickup days for the screens: [1, 3], "Mon, Wed" and
+    the pickup hours they apply to ("9:00 AM to 5:00 PM")."""
+    return {
+        "pickup_days": decode_pickup_days(d.pickup_days),
+        "pickup_days_label": pickup_days_label(d.pickup_days),
+        "pickup_hours": pickup_rules()["hours_label"] if d.pickup_days else None,
+    }
+
+
+def _distance_view(d: PhysicalDonation) -> dict:
+    """How far the pickup is from the CSWS office, and whether that is
+    farther than PICKUP_MAX_KM (Main Office may decline it)."""
+    km = km_from_office(d.pickup_lat, d.pickup_lng)
+    return {"distance_km": km, "too_far": km is not None and km > pickup_area()["max_km"]}
+
+
 def _batch_status(statuses: set) -> str:
     # Shared with the entry screens; also knows Expired / Cancelled.
     return entry_status(statuses)
@@ -207,6 +238,7 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         "pickup_lng": _num(first.pickup_lng),
         "pickup_landmark": first.pickup_landmark,
         "pickup_notes": first.pickup_notes,
+        **_pickup_days_view(first),
         "preferred_pickup_at": _iso(first.preferred_pickup_at),
         "created_at": first.created_at,
         # Handover deadline / why it was closed (services/donation_expiry.py)
@@ -264,6 +296,7 @@ def create_donation_batch(
             pickup_lng=payload.pickup_lng,
             pickup_landmark=payload.pickup_landmark,
             pickup_notes=payload.pickup_notes,
+            pickup_days=encode_pickup_days(payload.pickup_days),
             preferred_pickup_at=payload.preferred_pickup_at,
             qr_reference=f"{batch_reference}-{n}",
             batch_reference=batch_reference,
@@ -313,6 +346,7 @@ def create_donation(
         pickup_lng=payload.pickup_lng,
         pickup_landmark=payload.pickup_landmark,
         pickup_notes=payload.pickup_notes,
+        pickup_days=encode_pickup_days(payload.pickup_days),
         preferred_pickup_at=payload.preferred_pickup_at,
         qr_reference=reference,
         batch_reference=reference,
@@ -331,6 +365,148 @@ def create_donation(
     db.commit()
     db.refresh(donation)
     return donation
+
+
+# ---------------------------------------------------------------------------
+# Oct 11 notes: the donor edits or deletes their own donation while nothing
+# of it was received yet. Staff screens update by themselves (the entry
+# changes or disappears from their lists); no notifications are sent.
+# ---------------------------------------------------------------------------
+_DONOR_EDITABLE = {"Pending", "Cancelled"}   # a declined donation can be fixed
+_DONOR_DELETABLE = {"Pending", "Cancelled", "Expired"}
+
+
+def _own_entry(db: Session, reference: str, user: User, allowed: set, action: str) -> list:
+    rows = _batch_rows(db, reference)
+    if rows[0].user_id != user.user_id:
+        raise HTTPException(status_code=403, detail=f"You can only {action} your own donations.")
+    if any(r.status not in allowed for r in rows):
+        raise HTTPException(
+            status_code=409,
+            detail=f"CSWS already received part of this donation, so it can no longer be {action}d.",
+        )
+    return rows
+
+
+def _drop_from_pickup_runs(db: Session, reference: str) -> None:
+    """Take the entry out of open DRRMO pickup runs. A run left with no stop
+    is cancelled; nothing else changes for DRRMO."""
+    for req in (db.query(LogisticsRequest)
+                .filter(LogisticsRequest.request_type == "Pickup",
+                        LogisticsRequest.status.in_(("Pending", "Accepted"))).all()):
+        refs = req.batch_list
+        if reference not in refs:
+            continue
+        refs = [r for r in refs if r != reference]
+        req.pickup_batches = ",".join(refs) or None
+        if not refs:
+            req.status = "Cancelled"
+            note = "Cancelled: the donor changed or removed the only stop."
+            req.notes = f"{req.notes}\n{note}" if req.notes else note
+            req.pickup_batches = reference  # keep the history readable
+
+
+@router.put("/entries/{reference}")
+def edit_my_entry(
+    reference: str,
+    payload: DonationEntryEdit,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Change the items, the handover method or the pickup details. The QR
+    reference stays the same, so a saved QR image still works. A donation
+    that was declined (Cancelled) is waiting again after the change."""
+    rows = _own_entry(db, reference, current_user, _DONOR_EDITABLE, "change")
+    first = rows[0]
+    ref = first.batch_reference
+    before = {
+        "handover_method": first.handover_method, "pickup_days": first.pickup_days,
+        "pickup_lat": _num(first.pickup_lat), "pickup_lng": _num(first.pickup_lng),
+        "items": [(r.item_id, r.quantity, r.packaging) for r in rows],
+        "statuses": sorted({r.status for r in rows}),
+    }
+    reopened = any(r.status == "Cancelled" for r in rows)
+    days = encode_pickup_days(payload.pickup_days)
+
+    def apply(row, line):
+        row.item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
+        row.packaging = line.packaging
+        row.quantity = line.quantity
+        row.estimated_value = line.estimated_value
+        row.handover_method = payload.handover_method
+        row.pickup_address = payload.pickup_address
+        row.pickup_lat = payload.pickup_lat
+        row.pickup_lng = payload.pickup_lng
+        row.pickup_landmark = payload.pickup_landmark
+        row.pickup_notes = payload.pickup_notes
+        row.pickup_days = days
+        row.preferred_pickup_at = payload.preferred_pickup_at
+        row.status = "Pending"
+        row.closed_at = None
+        row.close_reason = None
+        row.closed_by_user_id = None
+
+    kept = rows[:len(payload.items)]
+    for row, line in zip(kept, payload.items):
+        apply(row, line)
+    for row in rows[len(payload.items):]:
+        db.delete(row)  # Pending / Cancelled only: nothing refers to it
+    next_n = max(int(r.qr_reference.rsplit("-", 1)[-1]) if r.qr_reference.rsplit("-", 1)[-1].isdigit() else 0
+                 for r in rows) + 1
+    for line in payload.items[len(kept):]:
+        row = PhysicalDonation(
+            user_id=first.user_id, guest_donor_id=first.guest_donor_id,
+            report_id=first.report_id, item_id=0, packaging="", quantity=1,
+            handover_method=payload.handover_method,
+            qr_reference=f"{ref}-{next_n}", batch_reference=ref, status="Pending",
+            created_at=first.created_at,
+        )
+        next_n += 1
+        apply(row, line)
+        db.add(row)
+        kept.append(row)
+    # A changed donation keeps its original deadline; a declined one that
+    # is fixed gets a fresh one from today.
+    set_deadline(kept, start=now_utc() if reopened else first.created_at)
+    if (before["handover_method"] != payload.handover_method or before["pickup_days"] != days
+            or before["pickup_lat"] != payload.pickup_lat or before["pickup_lng"] != payload.pickup_lng):
+        _drop_from_pickup_runs(db, ref)
+    db.flush()
+    log_action(db, current_user, "EDIT DONATION", "physical_donations", kept[0].donation_id,
+               old=before, new={
+                   "handover_method": payload.handover_method, "pickup_days": days,
+                   "items": [(r.item_id, r.quantity, r.packaging) for r in kept],
+                   "reopened": reopened,
+               })
+    db.commit()
+    return _batch_view(db, _batch_rows(db, ref), staff=False)
+
+
+@router.delete("/entries/{reference}")
+def delete_my_entry(
+    reference: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove a donation nothing of which was received yet. It disappears
+    from the donor's and the staff's lists, with its notifications; the
+    audit log keeps what it was."""
+    rows = _own_entry(db, reference, current_user, _DONOR_DELETABLE, "delete")
+    ref = rows[0].batch_reference
+    ids = [r.donation_id for r in rows]
+    log_action(db, current_user, "DELETE DONATION", "physical_donations", ids[0], old={
+        "batch_reference": ref, "report_id": rows[0].report_id,
+        "handover_method": rows[0].handover_method,
+        "items": [(r.item_id, r.quantity, r.packaging, r.status) for r in rows],
+    })
+    _drop_from_pickup_runs(db, ref)
+    db.query(Notification).filter(
+        Notification.entity_type == "donation", Notification.entity_id.in_(ids)
+    ).delete(synchronize_session=False)
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    return {"batch_reference": ref, "deleted_items": len(ids)}
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +558,7 @@ def find_by_batch(
 @router.get("/pickups")
 def door_to_door_pickups(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(*CSWS_ROLES)),
+    current_user: User = Depends(require_role(*PICKUP_ROLES)),
 ):
     expire_overdue(db)  # overdue pickups leave the board
     waiting = (
@@ -434,6 +610,8 @@ def door_to_door_pickups(
             "pickup_lng": _num(first.pickup_lng),
             "pickup_landmark": first.pickup_landmark,
             "pickup_notes": first.pickup_notes,
+            **_pickup_days_view(first),
+            **_distance_view(first),
             "report_id": first.report_id,
             "report_label": labels[first.report_id],
             "total_items": len(lines),
@@ -443,6 +621,20 @@ def door_to_door_pickups(
             **entry_expiry_info(lines),
             **_donor_info(db, first),
         })
+
+    # Pickup runs already sent to DRRMO, so the map can mark those stops.
+    runs = {}
+    for req in (db.query(LogisticsRequest)
+                .filter(LogisticsRequest.request_type == "Pickup",
+                        LogisticsRequest.status.in_(("Pending", "Accepted"))).all()):
+        for ref in req.batch_list:
+            runs[ref] = {
+                "request_id": req.request_id,
+                "status": req.status,
+                "pickup_date": req.pickup_date.isoformat() if req.pickup_date else None,
+            }
+    for b in out:
+        b["pickup_request"] = runs.get(b["batch_reference"])
 
     # Soonest preferred time first; donations without a time go last.
     out.sort(key=lambda b: (b["preferred_pickup_at"] is None,
@@ -486,7 +678,12 @@ def drop_off_info():
 # ---------------------------------------------------------------------------
 @router.get("/pickup-rules")
 def get_pickup_rules():
-    return pickup_rules()
+    area = pickup_area()
+    return {**pickup_rules(), "area": {
+        "name": area["name"], "bbox": area["bbox"],
+        "office_lat": area["office"][0], "office_lng": area["office"][1],
+        "max_km": area["max_km"],
+    }}
 
 
 # ---------------------------------------------------------------------------
@@ -626,6 +823,9 @@ def my_donations(
         return {
             "report_id": r.report_id,
             "label": f"{types.get(r.disaster_type_id, 'Disaster')} in {barangays.get(r.barangay_id, 'Barangay')}",
+            "disaster": types.get(r.disaster_type_id, "Disaster"),
+            "barangay": barangays.get(r.barangay_id, "Barangay"),
+            "assistance_needed": r.assistance_needed,
             "status": r.status,
             "priority_level": r.priority_level,
             "total_items_needed": f.total_items_needed if f else r.estimated_quantity,
@@ -679,6 +879,7 @@ def my_donations(
                 "pickup_address": d.pickup_address,
                 "pickup_landmark": d.pickup_landmark,
                 "pickup_notes": d.pickup_notes,
+                **_pickup_days_view(d),
                 "preferred_pickup_at": _iso(d.preferred_pickup_at),
                 "status": d.status,
                 "close_reason": d.close_reason,
@@ -701,7 +902,10 @@ def my_donations(
                 **e,
                 "pickup_address": by_ref[e["batch_reference"]].pickup_address,
                 "pickup_landmark": by_ref[e["batch_reference"]].pickup_landmark,
+                "pickup_lat": _num(by_ref[e["batch_reference"]].pickup_lat),
+                "pickup_lng": _num(by_ref[e["batch_reference"]].pickup_lng),
                 "pickup_notes": by_ref[e["batch_reference"]].pickup_notes,
+                **_pickup_days_view(by_ref[e["batch_reference"]]),
                 "preferred_pickup_at": _iso(by_ref[e["batch_reference"]].preferred_pickup_at),
                 "report": report_info(reports[e["report_id"]]) if e["report_id"] in reports else None,
             }

@@ -6,6 +6,7 @@ import 'delivery_widgets.dart';
 import 'trip_screens.dart';
 import 'widgets.dart';
 import 'entry_report_views.dart' show EntrySummaryList;
+import 'logistics_cards.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 
@@ -171,7 +172,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     if (picked != null) setState(() => dates = picked);
   }
   Future<void> _requestTransport(BuildContext context, Map d) async {
-    // I4: pick the numbers, no typing.
+    // I4: pick the numbers, no typing. Appendix H 7.1 (Oct 10 notes): no
+    // driver count (a truck comes with its driver); each need can be None.
+    String none(int i) => i == 0 ? 'None' : '$i';
     final v = await formDialog(
       context,
       title: 'Request DRRMO logistics support',
@@ -181,33 +184,42 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'trucks',
           'Trucks needed',
           initial: '1',
-          options: [for (var i = 1; i <= 10; i++) '$i'],
-        ),
-        DialogField(
-          'drivers',
-          'Drivers needed',
-          initial: '1',
-          options: [for (var i = 0; i <= 10; i++) '$i'],
+          options: [for (var i = 0; i <= 10; i++) none(i)],
         ),
         DialogField(
           'volunteers',
-          'Volunteers needed',
-          initial: '0',
-          options: [for (var i = 0; i <= 20; i++) '$i'],
+          'Manpower (volunteers)',
+          initial: 'None',
+          options: [for (var i = 0; i <= 20; i++) none(i)],
+        ),
+        DialogField(
+          'pushcarts',
+          'Pushcarts',
+          initial: 'None',
+          options: [for (var i = 0; i <= 10; i++) none(i)],
         ),
       ],
       confirm: 'Send request',
     );
     if (v == null || !context.mounted) return;
+    int n(String key) => int.tryParse(v[key] ?? '') ?? 0;
+    if (n('trucks') + n('volunteers') + n('pushcarts') == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Choose at least one: a truck, volunteers or a pushcart.'),
+        ),
+      );
+      return;
+    }
     await act(
       context,
       () => api.post(
         '/logistics/requests',
         body: {
           'delivery_id': d['delivery_id'],
-          'trucks': int.parse(v['trucks']!),
-          'drivers': int.parse(v['drivers']!),
-          'volunteers': int.parse(v['volunteers']!),
+          'trucks': n('trucks'),
+          'volunteers': n('volunteers'),
+          'pushcarts': n('pushcarts'),
         },
       ),
       success: 'Logistics request sent to DRRMO',
@@ -1325,8 +1337,9 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
       context,
       title: 'Accept request #${r['request_id']}?',
       message:
-          '${r['notes'] ?? 'No details'}\n'
-          'Destination: ${r['destination'] ?? '-'}',
+          '${r['needs'] ?? r['notes'] ?? 'No details'}\n'
+          '${r['request_type'] == 'Pickup' ? 'Pickup run on ${pickupDay(r['pickup_date'])}: ${r['destination'] ?? '-'}' : 'Destination: ${r['destination'] ?? '-'}'}\n'
+          'Requested ${requestWhen(r['created_at'])}',
       fields: const [],
       confirm: 'Accept',
     );
@@ -1444,7 +1457,7 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
               ),
               StatTile(
                 'Accepted',
-                '${dash['Scheduled']}',
+                '${dash['scheduled']}',
                 Icons.event_available,
               ),
               StatTile(
@@ -1482,79 +1495,34 @@ class _DrrmoScreenState extends State<DrrmoScreen> {
             const SizedBox(height: 12),
             if (rows.isEmpty) const EmptyState('No requests here.'),
             for (final r in rows)
-              Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              'Request #${r['request_id']} · to ${r['destination']}',
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          Badge2.status('${r['stage']}'),
-                        ],
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: LogisticsRequestCard(
+                  r,
+                  actions: [
+                    if (r['stage'] == 'Pending') ...[
+                      OutlinedButton(
+                        onPressed: () => _decline(r),
+                        child: const Text('Decline'),
                       ),
-                      Text('${r['report_label'] ?? ''}'),
-                      Text('Goods: ${(r['goods'] as List).join(', ')}'),
-                      if (r['scheduled_date'] != null)
-                        Text('Scheduled: ${niceDate(r['scheduled_date'])}'),
-                      if (r['notes'] != null)
-                        Text(
-                          '${r['notes']}',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Brand.muted,
-                          ),
-                        ),
-                      Text(
-                        'Requested ${niceDate(r['created_at'])}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: 0,
-                        runSpacing: 6,
-                        children: [
-                          if (r['stage'] == 'Pending') ...[
-                            OutlinedButton(
-                              onPressed: () => _decline(r),
-                              child: const Text('Decline'),
-                            ),
-                            const SizedBox(width: 8),
-                            FilledButton.icon(
-                              onPressed: () => _accept(r),
-                              icon: const Icon(Icons.check),
-                              label: const Text('Accept'),
-                            ),
-                          ],
-                          if (r['stage'] == 'Accepted') ...[
-                            TextButton(
-                              onPressed: () => _withdraw(r),
-                              child: const Text('Can no longer do this'),
-                            ),
-                            const SizedBox(width: 8),
-                          ],
-                          if (r['stage'] == 'Accepted' ||
-                              r['stage'] == 'In Transit')
-                            FilledButton.icon(
-                              onPressed: () => _complete(r),
-                              icon: const Icon(Icons.done_all),
-                              label: const Text('Mark completed'),
-                            ),
-                        ],
+                      FilledButton.icon(
+                        onPressed: () => _accept(r),
+                        icon: const Icon(Icons.check),
+                        label: const Text('Accept'),
                       ),
                     ],
-                  ),
+                    if (r['stage'] == 'Accepted')
+                      TextButton(
+                        onPressed: () => _withdraw(r),
+                        child: const Text('Can no longer do this'),
+                      ),
+                    if (r['stage'] == 'Accepted' || r['stage'] == 'In Transit')
+                      FilledButton.icon(
+                        onPressed: () => _complete(r),
+                        icon: const Icon(Icons.done_all),
+                        label: const Text('Mark completed'),
+                      ),
+                  ],
                 ),
               ),
           ],
