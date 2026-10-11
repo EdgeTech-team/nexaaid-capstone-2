@@ -9,6 +9,7 @@ import 'package:http/testing.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/profile_screen.dart';
+import 'package:mobile/ui/theme_toggle.dart';
 
 final _server = MockClient((req) async {
   final body = switch (req.url.path) {
@@ -60,7 +61,9 @@ void main() {
       expect(find.text('Barangay Receiving Representative'), findsOneWidget);
       expect(find.text('ana.test@example.com'), findsOneWidget);
       expect(find.text('Tipolo'), findsOneWidget);
-      expect(find.text('Appearance'), findsOneWidget);
+      // Light/dark: the sun/moon button in the top-right corner.
+      expect(find.byType(SunMoonToggle), findsOneWidget);
+      expect(find.text('Appearance'), findsNothing);
       expect(find.text('Log out'), findsOneWidget);
       expect(find.text('Developer tools'), findsNothing);
       expect(find.text('API console'), findsNothing);

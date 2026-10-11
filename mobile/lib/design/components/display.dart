@@ -81,6 +81,9 @@ class StatCard extends StatelessWidget {
   final Color? color;
   final String? note;
 
+  /// Makes the card a button (e.g. opens the list behind the number).
+  final VoidCallback? onTap;
+
   const StatCard({
     super.key,
     required this.label,
@@ -88,6 +91,7 @@ class StatCard extends StatelessWidget {
     required this.icon,
     this.color,
     this.note,
+    this.onTap,
   });
 
   @override
@@ -99,8 +103,10 @@ class StatCard extends StatelessWidget {
     final iconFg = dark ? Color.lerp(c, Colors.white, 0.35)! : c;
     return Semantics(
       label: '$label: $value${note == null ? '' : ', $note'}',
+      button: onTap != null,
       excludeSemantics: true,
       child: AppCard(
+        onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
