@@ -12,6 +12,7 @@ import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/disaster_art.dart';
 import 'package:mobile/ui/donation_entries_view.dart';
+import 'package:mobile/ui/donor_feed.dart';
 import 'package:mobile/ui/donor_dashboard.dart';
 import 'package:mobile/ui/item_art.dart';
 import 'package:mobile/ui/my_giving.dart';
@@ -147,6 +148,21 @@ final _newMine = <String, dynamic>{
 final _server = MockClient((req) async {
   final body = switch (req.url.path) {
     '/donations/mine' => _mine,
+    '/public/recent-deliveries' => [
+      {
+        'summary': 'Rice and 2 more',
+        'barangay': 'Tipolo',
+        'confirmed_at': '2026-10-10T09:00:00Z',
+      },
+    ],
+    '/public/stats' => {
+      'active_reports': 6,
+      'families_affected': 214,
+      'urgent_reports': 3,
+      'barangays': 4,
+      'donations_received': 20,
+      'deliveries_completed': 9,
+    },
     '/lookups' => {
       'barangays': [
         {'id': 1, 'name': 'Tipolo'},
@@ -210,13 +226,15 @@ void main() {
       // Most urgent first; the fully supplied one (Looc) is hidden.
       final cards = find.byType(NeedCard);
       expect(cards, findsNWidgets(2));
+      Finder inCard(String text) =>
+          find.descendant(of: cards, matching: find.text(text));
       expect(
-        tester.getTopLeft(find.text('Barangay Banilad')).dx,
-        lessThan(tester.getTopLeft(find.text('Barangay Tipolo')).dx),
+        tester.getTopLeft(inCard('Barangay Banilad')).dx,
+        lessThan(tester.getTopLeft(inCard('Barangay Tipolo')).dx),
       );
-      expect(find.text('Barangay Looc'), findsNothing);
+      expect(inCard('Barangay Looc'), findsNothing);
       expect(find.text('Still needs 60 of 100 items'), findsOneWidget);
-      expect(find.text('Donate'), findsNWidgets(2));
+      expect(inCard('Donate'), findsNWidgets(2));
       // Kept short: no status cards or lists on the dashboard.
       expect(find.text('Donations made'), findsNothing);
       expect(find.text('Most urgent right now'), findsNothing);
@@ -237,10 +255,96 @@ void main() {
       expect(find.text('Relief organization · Church'), findsOneWidget);
       expect(find.text('Barangays that need help'), findsOneWidget);
       expect(
-        find.text('Donate as Sto. Nino Parish Relief'),
+        find.descendant(
+          of: find.byType(NeedCard),
+          matching: find.text('Donate as Sto. Nino Parish Relief'),
+        ),
         findsNWidgets(2),
       );
     }, () => _server);
+  });
+
+  testWidgets('Dashboard: latest updates, then About NexaAid', (
+    tester,
+  ) async {
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await _pump(tester, const DonorDashboard());
+      // The page scrolls down; the barangay box scrolls sideways.
+      final page = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(
+        find.text('Latest updates'),
+        400,
+        scrollable: page,
+      );
+      expect(find.byType(DonorFeed), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('How NexaAid works'),
+        400,
+        scrollable: page,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('How NexaAid works'), findsOneWidget);
+    }, () => _server);
+  });
+
+  testWidgets('Feed: report, donation update, arrived, finished, Mandaue', (
+    tester,
+  ) async {
+    Api.instance.token = 'test-token';
+    final reports = [
+      {..._report(2, 'Banilad', 'Critical', 40), 'created_at': null},
+      {..._report(3, 'Looc', 'Critical', 100), 'created_at': null},
+    ];
+    await http.runWithClient(() async {
+      await _pump(
+        tester,
+        SingleChildScrollView(
+          child: DonorFeed(
+            validated: reports,
+            entries: (_mine['entries'] as List).cast<Map>(),
+            supported: [
+              {'label': 'Flood in Looc', 'fulfillment_percentage': 100.0},
+            ],
+            donateLabel: 'Donate',
+            onDonate: (_) {},
+            onChanged: () {},
+          ),
+        ),
+      );
+      // New validated report (Looc is full, so only Banilad).
+      expect(find.byType(ReportPost), findsOneWidget);
+      expect(find.text('CSWS Disaster Unit'), findsOneWidget);
+      // Both of Ana's open donations.
+      expect(find.byType(DonationUpdatePost), findsNWidgets(2));
+      expect(
+        find.textContaining('CSWS received your 10 kg Rice'),
+        findsOneWidget,
+      );
+      // Goods the barangay confirmed.
+      expect(find.text('Barangay Tipolo'), findsOneWidget);
+      expect(
+        find.text(
+          'Rice and 2 more reached Barangay Tipolo. The barangay confirmed '
+          'they arrived.',
+        ),
+        findsOneWidget,
+      );
+      // A supported report at 100%.
+      expect(find.text('You helped finish a report'), findsOneWidget);
+      // City numbers last.
+      expect(find.text('Right now in Mandaue'), findsOneWidget);
+      expect(find.text('214'), findsOneWidget);
+    }, () => _server);
+  });
+
+  test('Post times read like a feed', () {
+    final now = DateTime.utc(2026, 10, 11, 12);
+    expect(timeAgo('2026-10-11T10:00:00Z', now: now), '2h');
+    expect(timeAgo('2026-10-11T11:30:00Z', now: now), '30m');
+    expect(timeAgo('2026-10-10T08:00:00Z', now: now), 'Yesterday');
+    expect(timeAgo('2026-10-08T12:00:00Z', now: now), '3 days ago');
+    expect(timeAgo(null, now: now), '');
   });
 
   testWidgets('Reports tab: 4 cards, donation status, delivery status', (

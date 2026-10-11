@@ -307,7 +307,7 @@ class _LandingScreenState extends State<LandingScreen> {
                   ),
               ]),
         const SectionHeader('How it works'),
-        const _Steps(),
+        const HowItWorksSteps(),
         const _PriorityGuide(),
         SectionHeader(
           'Reports that need help',
@@ -690,8 +690,9 @@ class _PulseDotState extends State<_PulseDot>
   }
 }
 
-class _Steps extends StatelessWidget {
-  const _Steps();
+/// The three "How it works" steps. Also on the donor Dashboard (Ivan).
+class HowItWorksSteps extends StatelessWidget {
+  const HowItWorksSteps({super.key});
 
   static const _steps = [
     (
