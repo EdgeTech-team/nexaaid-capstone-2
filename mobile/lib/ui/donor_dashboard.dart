@@ -330,9 +330,9 @@ class _Centered extends StatelessWidget {
 /// The relief photo, darkened so white text stays readable. Falls back to
 /// the plain dark color if the image can't load.
 class _HeroPhoto extends StatelessWidget {
-  final double opacity;
+  static const _darken = 0.74;
   final Alignment alignment;
-  const _HeroPhoto({this.opacity = 0.74, this.alignment = Alignment.center});
+  const _HeroPhoto({this.alignment = Alignment.center});
 
   @override
   Widget build(BuildContext context) => Stack(
@@ -345,7 +345,7 @@ class _HeroPhoto extends StatelessWidget {
         excludeFromSemantics: true,
         errorBuilder: (_, _, _) => const ColoredBox(color: AppColors.harborDeep),
       ),
-      ColoredBox(color: AppColors.harborDeep.withValues(alpha: opacity)),
+      ColoredBox(color: AppColors.harborDeep.withValues(alpha: _darken)),
     ],
   );
 }
