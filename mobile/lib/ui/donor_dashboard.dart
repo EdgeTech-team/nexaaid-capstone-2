@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult;
+import 'barangay_map.dart';
 import 'disaster_art.dart';
+import 'item_art.dart';
 import 'donation_entries_view.dart';
 import 'landing/landing_extras.dart' show kImpactImage;
 import 'donor_screens.dart' show DonateScreen, ReportsFeed;
@@ -78,6 +80,22 @@ class _DonorDashboardState extends State<DonorDashboard> {
     ),
   );
 
+  /// "View all": every donation entry, with QR and timeline (UC-D3 / UC-R3).
+  Future<void> _openDonations() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const MyDonationsScreen()),
+    );
+    // An edit or delete there changes these numbers too.
+    if (mounted) setState(() => _loads++);
+  }
+
+  Future<void> _openEntry(Map e) async {
+    final changed = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => DonationDetailScreen(entry: e)),
+    );
+    if (changed == true && mounted) setState(() => _loads++);
+  }
+
   void _donate(Map<String, dynamic> report, Names names) =>
       Navigator.of(context).push(
         MaterialPageRoute(
@@ -131,10 +149,14 @@ class _DonorDashboardState extends State<DonorDashboard> {
               profile: profile,
               isOrg: isOrg,
               summary: sum,
+              barangays: {for (final r in helped) _barangayOf(r)}.length,
               urgent: urgent == null
                   ? null
                   : _UrgentReportCard(
                       report: urgent,
+                      donateLabel: isOrg
+                          ? 'Donate as ${profile['organization']}'
+                          : 'Donate to this report',
                       onDonate: () => _donate(urgent, names),
                     ),
             ),
@@ -176,22 +198,28 @@ class _DonorDashboardState extends State<DonorDashboard> {
                     _ImpactRow(summary: sum, helped: helped),
                     if (helped.isNotEmpty) ...[
                       const SectionHeader(
-                        'Barangays your goods went to',
+                        'Where your goods went',
                         subtitle: 'From the reports you donated to.',
                       ),
-                      _BarangayPins(helped: helped),
+                      BarangayMap(
+                        pins: _pinsFor(helped, Theme.of(context).colorScheme),
+                        fallback: _BarangayPins(helped: helped),
+                      ),
                     ],
                   ],
 
-                  // ---- Status of each donation (7.3 item 2) -------------
-                  const SectionHeader('Your giving'),
-                  _GivingRing(entries: entries),
-
-                  // ---- Donations (one card per entry, 4.4 / 4.5) --------
-                  const SectionHeader(
-                    'Your donations',
-                    subtitle:
-                        'Tap a donation to see its QR code and full timeline.',
+                  // ---- Donation history and status (7.3 items 1, 2) ----
+                  // Canvas: donors see the ring and their latest donation,
+                  // organizations their recent donations with pictures.
+                  // Every donation is one tap away in "View all" (UC-D3).
+                  SectionHeader(
+                    isOrg ? 'Recent donations' : 'Your giving',
+                    action: entries.isEmpty
+                        ? null
+                        : TextButton(
+                            onPressed: _openDonations,
+                            child: Text('View all ${entries.length}'),
+                          ),
                   ),
                   if (entries.isEmpty)
                     AppCard(
@@ -209,25 +237,22 @@ class _DonorDashboardState extends State<DonorDashboard> {
                         ),
                       ),
                     )
-                  else
-                    DonationEntriesView(
-                      entries: entries,
-                      footer: (e) => StatusTimeline(
-                        steps: donationLifecycle,
-                        labels: donationLifecycleLabels,
-                        current: _lifecycleStatus(e),
+                  else if (isOrg)
+                    for (final e in entries.take(3)) ...[
+                      _RecentDonationCard(
+                        entry: e,
+                        onTap: () => _openEntry(e),
                       ),
-                      onTap: (e) async {
-                        final changed = await Navigator.of(context).push<bool>(
-                          MaterialPageRoute(
-                            builder: (_) => DonationDetailScreen(entry: e),
-                          ),
-                        );
-                        if (changed == true && mounted) {
-                          setState(() => _loads++);
-                        }
-                      },
+                      Gaps.v8,
+                    ]
+                  else ...[
+                    _GivingRing(entries: entries),
+                    Gaps.v12,
+                    _LatestDonationCard(
+                      entry: entries.first,
+                      onTap: () => _openEntry(entries.first),
                     ),
+                  ],
 
                   // ---- Supported reports --------------------------------
                   const SectionHeader(
@@ -312,11 +337,13 @@ class _DashboardHero extends StatelessWidget {
   final Map profile;
   final Map summary;
   final bool isOrg;
+  final int barangays; // barangays of the reports this donor supported
   final Widget? urgent;
   const _DashboardHero({
     required this.profile,
     required this.summary,
     required this.isOrg,
+    required this.barangays,
     required this.urgent,
   });
 
@@ -390,7 +417,11 @@ class _DashboardHero extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-                  'Relief organization',
+                  [
+                    'Relief organization',
+                    if ('${profile['organization_type'] ?? ''}'.isNotEmpty)
+                      '${profile['organization_type']}',
+                  ].join(' · '),
                   style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
                 ),
                 StatusChip(status),
@@ -410,9 +441,10 @@ class _DashboardHero extends StatelessWidget {
             ),
             Gaps.v4,
             Text(
-              n('supported_reports') > 0
-                  ? 'Thank you for helping families get back on their feet. '
-                        'Here is who needs help next.'
+              barangays > 0
+                  ? 'Your donations are helping $barangays '
+                        '${barangays == 1 ? 'barangay' : 'barangays'} in '
+                        'Mandaue. Here is who needs help next.'
                   : 'Thank you for being here. Here is who needs help first.',
               style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
             ),
@@ -489,8 +521,13 @@ class _DashboardHero extends StatelessWidget {
 /// The hero's highlighted report, with its disaster picture on top.
 class _UrgentReportCard extends StatelessWidget {
   final Map<String, dynamic> report;
+  final String donateLabel;
   final VoidCallback onDonate;
-  const _UrgentReportCard({required this.report, required this.onDonate});
+  const _UrgentReportCard({
+    required this.report,
+    required this.onDonate,
+    this.donateLabel = 'Donate to this report',
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -588,7 +625,7 @@ class _UrgentReportCard extends StatelessWidget {
                 ),
                 Gaps.v16,
                 AppButton(
-                  'Donate to this report',
+                  donateLabel,
                   icon: Icons.volunteer_activism_outlined,
                   variant: AppButtonVariant.donate,
                   expand: true,
@@ -900,6 +937,191 @@ String _barangayOf(Map r) {
   if (b != null) return '$b';
   final parts = '${r['label'] ?? ''}'.split(' in ');
   return parts.length > 1 ? parts.last : '${r['label'] ?? '-'}';
+}
+
+/// Pins for the organization's map: one per barangay, colored like the
+/// pin list (critical, in progress, fulfilled).
+List<BarangayPin> _pinsFor(List<Map> helped, ColorScheme cs) {
+  final byBarangay = <String, Map>{};
+  for (final r in helped) {
+    final k = _barangayOf(r);
+    final old = byBarangay[k];
+    if (old == null || _percent(r) < _percent(old)) byBarangay[k] = r;
+  }
+  return [
+    for (final e in byBarangay.entries)
+      BarangayPin(
+        e.key,
+        _percent(e.value) >= 100
+            ? StatusColors.base('Fulfilled')
+            : e.value['priority_level'] == 'Critical'
+            ? PriorityColors.base('Critical')
+            : cs.primary,
+        '${_percent(e.value).round()}% supplied',
+      ),
+  ];
+}
+
+/// Donors: the newest donation with its item picture and where it is now.
+class _LatestDonationCard extends StatelessWidget {
+  final Map entry;
+  final VoidCallback onTap;
+  const _LatestDonationCard({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final e = entry;
+    final items = (e['items'] as List? ?? const []).cast<Map>();
+    final n = items.length;
+    return AppCard(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              ItemArt(items.isEmpty ? null : items.first['item_name']),
+              Gaps.h12,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Latest donation · $n ${n == 1 ? 'item' : 'items'}',
+                      style: t.titleSmall,
+                    ),
+                    Gaps.v4,
+                    Text(
+                      [
+                        itemsSummary(e),
+                        if (e['handover_method'] != null)
+                          '${e['handover_method']}',
+                      ].join(' · '),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+            ],
+          ),
+          Gaps.v12,
+          StatusTimeline(
+            steps: donationLifecycle,
+            labels: donationLifecycleLabels,
+            current: _lifecycleStatus(e),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Organizations: one recent donation with its item picture and status.
+class _RecentDonationCard extends StatelessWidget {
+  final Map entry;
+  final VoidCallback onTap;
+  const _RecentDonationCard({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final e = entry;
+    final items = (e['items'] as List? ?? const []).cast<Map>();
+    return AppCard(
+      onTap: onTap,
+      child: Row(
+        children: [
+          ItemArt(items.isEmpty ? null : items.first['item_name'], size: 56),
+          Gaps.h12,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  itemsSummary(e),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: t.titleSmall,
+                ),
+                Gaps.v4,
+                Text(
+                  [
+                    entryReportLabel(e),
+                    if (e['handover_method'] != null) '${e['handover_method']}',
+                  ].join(' · '),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          Gaps.h8,
+          StatusChip('${e['status']}'),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// "View all": every donation entry with filters, QR and timeline
+// (UC-D3 / UC-R3, Appendix H 4.4 / 4.5). Edits and deletes reload it.
+// ---------------------------------------------------------------------------
+class MyDonationsScreen extends StatefulWidget {
+  const MyDonationsScreen({super.key});
+
+  @override
+  State<MyDonationsScreen> createState() => _MyDonationsScreenState();
+}
+
+class _MyDonationsScreenState extends State<MyDonationsScreen> {
+  int _loads = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('My donations')),
+      body: Loader(
+        key: ValueKey(_loads),
+        load: [() => api.get('/donations/mine')],
+        builder: (context, data) {
+          final entries = ((data[0] as Map)['entries'] as List).cast<Map>();
+          return ListView(
+            padding: Space.page,
+            children: [
+              DonationEntriesView(
+                entries: entries,
+                emptyTitle: 'No donations yet',
+                emptyMessage:
+                    'Pick a report that needs help and pledge goods. Your '
+                    'donations and their progress will show here.',
+                footer: (e) => StatusTimeline(
+                  steps: donationLifecycle,
+                  labels: donationLifecycleLabels,
+                  current: _lifecycleStatus(e),
+                ),
+                onTap: (e) async {
+                  final changed = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute(
+                      builder: (_) => DonationDetailScreen(entry: e),
+                    ),
+                  );
+                  if (changed == true && mounted) setState(() => _loads++);
+                },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 /// Organizations: one pin per barangay their goods went to, colored by how
