@@ -20,6 +20,7 @@ from core.notifications import notify_event_many, user_ids_with_role
 router = APIRouter(prefix="/logistics", tags=["logistics"])
 
 DISASTER_UNIT = "CSWS Disaster Unit"
+MAIN_OFFICE = "CSWS Main Office"
 OPEN = ("Pending", "Accepted")
 _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
@@ -71,10 +72,10 @@ def submit_logistics_request(
 def submit_pickup_request(
     payload: SubmitPickupLogisticsRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(DISASTER_UNIT)),
+    current_user: User = Depends(require_role(MAIN_OFFICE)),
 ):
-    """The CSWS Disaster Unit asks DRRMO to help with a Door to Door pickup
-    run it planned on the pickup map (Oct 10 notes): one day, the donation
+    """CSWS Main Office asks DRRMO to help with a Door to Door pickup run planned on the
+    pickup map (Oct 10 notes; since Oct 11 the map is Main Office's): one day, the donation
     entries in stop order, and what is needed (trucks, volunteers,
     pushcarts). Like UC-CM2 alt 3a, but for collecting instead of delivering.
 

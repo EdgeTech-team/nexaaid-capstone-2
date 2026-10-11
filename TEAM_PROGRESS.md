@@ -164,6 +164,68 @@ delivery).
 
 ---
 
+## Daniel — NEW_CONCERNS (Oct 11), on `copy-develop`
+
+**Status:** Built and tested on `copy-develop`
+**Last updated:** Oct 11, 2026
+
+No database change (no new migration; head stays `d8f3a1c6b2e4`).
+
+**Daniel**
+- The Disaster Unit has no pickup map any more. Pickup runs (asking DRRMO
+  for trucks/volunteers for a pickup day) now come from the Main Office
+  "Pickups" tab, because that is where the map is. `POST
+  /logistics/pickup-requests` and `/donations/pickups` are Main Office only.
+- The Disaster Unit edits or withdraws its own report while the
+  Administrator has not validated it (Reports > Status > "Only my reports").
+  `GET /reports/mine`, `PUT /reports/{id}/mine` (a Rejected report goes back
+  to Pending and the Administrators are told again), `POST
+  /reports/{id}/withdraw` (status "Cancelled": kept for the record, can no
+  longer be validated or rejected).
+
+**Jenises**
+- Tapping a notification moves to the page that already exists (the tab in
+  the bottom menu, on the right view) instead of opening a second copy:
+  `ui/home_nav.dart`. New report -> Admin Validate (Pending, the report
+  outlined first); new organization / donor -> Accounts > Registrations;
+  donations -> Receive / Acknowledge / donor Dashboard; deliveries ->
+  Deliveries / Incoming aid; logistics -> DRRMO Logistics. Admin and Main
+  Office dashboard tiles do the same.
+
+**Ivan** (donor dashboard left to Ivan)
+- Fulfillment status chips and sort on every staff report list: Validated
+  Reports for CMO, DRRMO and Barangay Rep (no priority chips there), and
+  the Administrator's Validate > Validated. No Done sections in staff lists.
+
+**Dave**
+- New internal account form uses the app's own cards, fields and buttons.
+  The separate "Employee ID" number is gone; the employee ID card stays
+  (required on create). A temporary password is still emailed.
+- The CMO "Acknowledges" one donation entry (one QR) with one tap, not per
+  item: `GET /cmo/entries/pending`, `/cmo/entries/acknowledged`, `POST
+  /cmo/entries/{ref}/decide`, `/cmo/entries/{ref}/revert`. The donor's
+  status changes to "Acknowledged" by itself (stored as Confirmed, shown as
+  "Acknowledged" everywhere). Dave2 items were already done.
+
+**Reminder items (4.4)**
+- Barangay Rep has donation records (new "Records" tab): only its own
+  barangay's reports, enforced in `GET /donations/records`, without donor
+  names or CMO notes.
+- Records per report: Records > "Per report" lists each report with its
+  status mix; tapping one opens its entries with a status summary on top and
+  the same status chips, search, handover filter and sort.
+
+**Tests:** `pytest` 161 passed, including the Postgres models-vs-migrations
+check (new: `test_report_edit_withdraw.py`, `test_cmo_entries.py`, barangay
+records in `test_donation_records.py`). `flutter test`: fixed the account
+form, report filter, accounts, entries and role menu tests. Still failing,
+and failing on `copy-develop` without these changes too: 3 in
+`donation_info_test`, 1 in `registration_test`, and 2 login tests
+(`forgot_password_test`, `widget_test` "Log in on the landing page") since
+the username login commits.
+
+---
+
 ## Hoyohoy — Auth/Registration (3.3)
 
 **Status:** Done

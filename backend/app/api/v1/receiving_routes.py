@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from core.database import get_db
-from core.auth import require_role
+from core.auth import barangay_scope, require_role
 from models.physical_donation_model import PhysicalDonation
 from models.received_goods_model import ReceivedGoods
 from schemas.physical_donation_schema import PhysicalDonationResponse
@@ -179,8 +179,8 @@ def receive_donation(
 
     receipt = _receive_line(db, current_user, donation, payload.actual_quantity, payload.notes)
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
-                "donation_awaiting_confirmation", "Donation awaiting confirmation",
-                f"Donation #{donation.donation_id} was received by CSWS and needs a decision.")
+                "donation_awaiting_confirmation", "Donation awaiting acknowledgement",
+                f"Donation #{donation.donation_id} was received by CSWS and needs the CMO's acknowledgement.")
     if donation.user_id:
         notify(db, donation.user_id, "donation_received",
                title=f"Donation entry {donation.batch_reference or donation.qr_reference} received",
@@ -231,8 +231,8 @@ def receive_entry(
 
     first = next(iter(rows.values()))
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
-                "donation_awaiting_confirmation", "Donation awaiting confirmation",
-                f"Donation {ref} ({len(ids)} item(s)) was received by CSWS and needs a decision.")
+                "donation_awaiting_confirmation", "Donation awaiting acknowledgement",
+                f"Donation {ref} ({len(ids)} item(s)) was received by CSWS and needs the CMO's acknowledgement.")
     if first.user_id:
         notify(db, first.user_id, "donation_received",
                title=f"Donation entry {ref} received",
@@ -265,10 +265,17 @@ def donation_records(
     sort: str = Query("newest", pattern="^(" + "|".join(ENTRY_SORTS) + ")$"),
     include_closed: bool = False,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role("Administrator", "CSWS Main Office", "CMO Representative")),
+    current_user: User = Depends(require_role(
+        "Administrator", "CSWS Main Office", "CMO Representative", "barangay_receiving_rep",
+    )),
 ):
     """Appendix H, Module 4.4 / 4.5: View donation records and monitor
-    donation status (Administrator, CSWS Main Office, CMO).
+    donation status (Administrator, CSWS Main Office, CMO, Barangay
+    Receiving Representative).
+
+    A Barangay Receiving Representative only gets the donations for reports
+    in its own assigned barangay (UC-B1 alt 3a), without donor names or CMO
+    notes: it follows what is coming for its barangay, not who gave it.
 
     One record per donation entry (one QR / batch_reference) with its items.
     Filters: status (entry status), report_id, handover_method, q (QR
@@ -280,10 +287,16 @@ def donation_records(
     everyday list only shows donations that still need work.
     """
     expire_overdue(db)
+    own_barangay = barangay_scope(current_user)
     query = db.query(PhysicalDonation)
+    if own_barangay is not None:
+        query = query.join(
+            DisasterReport, DisasterReport.report_id == PhysicalDonation.report_id
+        ).filter(DisasterReport.barangay_id == own_barangay)
     if report_id is not None:
         query = query.filter(PhysicalDonation.report_id == report_id)
-    entries = build_entries(db, query.all(), include_donor=True, include_cmo=True)
+    staff = own_barangay is None
+    entries = build_entries(db, query.all(), include_donor=staff, include_cmo=staff)
     group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
     if not status and not include_closed:
         entries = [e for e in entries if e["status"] not in CLOSED]

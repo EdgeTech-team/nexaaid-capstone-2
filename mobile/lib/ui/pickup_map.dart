@@ -12,8 +12,8 @@ import 'pickup_route.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
-// Door to Door pickups on a map (Oct 10-11 notes). Used as the CSWS Main
-// Office "Pickups" tab and the CSWS Disaster Unit "Pickup map" tab.
+// Door to Door pickups on a map (Oct 10-11 notes): the CSWS Main Office
+// "Pickups" tab.
 //
 // Every Door to Door donation still waiting to be collected, as a numbered
 // pin at the landmark the donor chose. Above the map: the days the donors
@@ -23,9 +23,9 @@ import 'widgets.dart';
 // the pickup area (Cebu province), and pickups farther than PICKUP_MAX_KM
 // from the CSWS office are marked "Far" so Main Office can decline them.
 //
-// Main Office opens an entry to receive the goods, or declines a far one.
-// The Disaster Unit asks DRRMO for logistics support for a run (trucks,
-// volunteers, pushcarts), like Main Office does for deliveries.
+// Main Office opens an entry to receive the goods, declines a far one, and
+// asks DRRMO for logistics support for a run (trucks, volunteers,
+// pushcarts), like it does for deliveries.
 // ---------------------------------------------------------------------------
 
 const _osmTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -105,7 +105,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   Map<String, dynamic>? _focusRun; // "show this request on the map"
   String? _selected; // batch_reference of the tapped pin
 
-  bool get _canRequest => api.role == Roles.cswsUnit;
+  // Oct 11 notes: Door to Door pickups belong to CSWS Main Office (the
+  // Disaster Unit no longer has this map), so Main Office asks DRRMO for
+  // help with a pickup run.
+  bool get _canRequest => api.role == Roles.cswsMain;
   // Main Office (and the Administrator) receive the goods and may decline.
   bool get _canReceive => api.role == Roles.cswsMain || api.role == Roles.admin;
   double _maxKm = 20;

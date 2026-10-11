@@ -63,6 +63,8 @@ from schemas.report import (
     ReportValidate,
     ReportReject,
     ReportMonitoringResponse,
+    DisasterReportEdit,
+    ReportWithdraw,
 )
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -293,6 +295,95 @@ def list_validated_reports(
 
 
 # ---------------------------------------------------------------------------
+# Oct 11 notes (Daniel): the CSWS Disaster Unit edits or withdraws its own
+# report while the Administrator has not validated it yet (Pending, or
+# Rejected and being corrected). A withdrawn report is kept as "Cancelled"
+# for the record and can no longer be validated.
+# ---------------------------------------------------------------------------
+_EDITABLE_REPORT = ("Pending", "Rejected")
+
+
+@router.get("/mine", response_model=List[ReportMonitoringResponse])
+def my_reports(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """The reports this user submitted, newest first, with their status."""
+    query = (
+        db.query(DisasterReport)
+        .options(joinedload(DisasterReport.fulfillment))
+        .filter(DisasterReport.user_id == current_user.user_id)
+    )
+    return _monitoring_rows(query, 0, 200)
+
+
+def _own_open_report(db: Session, report_id: int, user, action: str) -> DisasterReport:
+    report = db.get(DisasterReport, report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if report.user_id != user.user_id:
+        raise HTTPException(status_code=403, detail=f"You can only {action} reports you submitted")
+    if report.status not in _EDITABLE_REPORT:
+        done = {"edit": "edited", "withdraw": "withdrawn"}[action]
+        raise HTTPException(
+            status_code=409,
+            detail=f"This report is already {report.status}, so it can no longer be {done}",
+        )
+    return report
+
+
+@router.put("/{report_id}/mine", response_model=DisasterReportResponse)
+def edit_my_report(
+    report_id: int,
+    payload: DisasterReportEdit,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Correct a report before validation. A rejected report that is
+    corrected goes back to the Administrator as Pending."""
+    report = _own_open_report(db, report_id, current_user, "edit")
+    before = {k: getattr(report, k) for k in payload.model_dump()}
+    before["status"] = report.status
+    for field, value in payload.model_dump().items():
+        setattr(report, field, value)
+    resubmitted = report.status == "Rejected"
+    if resubmitted:
+        report.status = "Pending"
+        report.rejection_reason = None
+        report.validated_by = None
+    log_action(db, current_user, "EDIT REPORT", "disaster_reports", report.report_id,
+               old={k: (str(v) if v is not None else None) for k, v in before.items()},
+               new={**{k: (str(v) if v is not None else None) for k, v in payload.model_dump().items()},
+                    "status": report.status})
+    if resubmitted:
+        # Back in the validation queue, so the Administrators hear about it.
+        _notify_new_report(db, report, current_user.user_id)
+    db.flush()
+    db.refresh(report)
+    return report
+
+
+@router.post("/{report_id}/withdraw", response_model=DisasterReportResponse)
+def withdraw_my_report(
+    report_id: int,
+    payload: Optional[ReportWithdraw] = None,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """The reporter cancels a report that is not validated. It is kept with
+    status Cancelled (and leaves the validation queue); nothing is deleted."""
+    report = _own_open_report(db, report_id, current_user, "withdraw")
+    old = report.status
+    report.status = "Cancelled"
+    reason = (payload.reason or "").strip() if payload else ""
+    log_action(db, current_user, "WITHDRAW REPORT", "disaster_reports", report.report_id,
+               old={"status": old}, new={"status": "Cancelled", "reason": reason or None})
+    db.flush()
+    db.refresh(report)
+    return report
+
+
+# ---------------------------------------------------------------------------
 # Retrieve one — also the target of every report notification tap
 # (Concerns2.txt 2.1). Returns the report plus fulfillment progress so the
 # detail screen can show the elaborated view.
@@ -362,6 +453,8 @@ def validate_report(
         raise HTTPException(status_code=404, detail="Report not found")
     if report.status == "Validated":
         raise HTTPException(status_code=400, detail="Report is already validated")
+    if report.status == "Cancelled":
+        raise HTTPException(status_code=409, detail="The reporter withdrew this report")
 
     report.status = "Validated"
     report.validated_by = current_user.user_id
@@ -433,6 +526,8 @@ def reject_report(
     report = db.get(DisasterReport, report_id)
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
+    if report.status == "Cancelled":
+        raise HTTPException(status_code=409, detail="The reporter withdrew this report")
 
     report.status = "Rejected"
     report.validated_by = current_user.user_id  # who made the rejection call

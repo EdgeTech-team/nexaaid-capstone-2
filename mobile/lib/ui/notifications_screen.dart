@@ -5,120 +5,105 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../report_detail_screen.dart';
 import '../report_model.dart';
-import 'admin_screens.dart';
 import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
-import 'ops_screens.dart';
-import 'pickup_map.dart';
+import 'home_nav.dart';
 import 'widgets.dart';
 
-/// Where each notification type opens. Every module owner adds their own entry
-/// when their detail screen exists, e.g.:
-///
-///   'donation_batch': (c, id) => Navigator.of(c).push(
-///       MaterialPageRoute(builder: (_) => DonationBatchScreen(batchId: id))),
-///
-/// Unknown entity types simply mark the notification read and stay on the inbox.
-typedef EntityOpener = void Function(BuildContext context, int entityId);
+/// Where each notification opens (Oct 11 notes, Jenises): always the page
+/// that already exists in the app, a tab of the bottom menu with the right
+/// view, never a second copy of it. A pop-up (report summary, donation
+/// sheet) or a detail page that is normally opened from that tab can follow
+/// on top. See home_nav.dart.
+typedef EntityOpener =
+    void Function(BuildContext context, int entityId, String? event);
 
-/// Tab-body screens have no Scaffold of their own, so wrap them to get an app
-/// bar and a back button when they are pushed from the inbox.
-Widget _withAppBar(String title, Widget body) => Scaffold(
-  appBar: AppBar(title: Text(title)),
-  body: body,
-);
-
-void _push(BuildContext c, Widget screen) {
-  Navigator.of(c).push(MaterialPageRoute(builder: (_) => screen));
-}
+void _go(
+  BuildContext c,
+  String tab, {
+  String? view,
+  int? id,
+  void Function(BuildContext context)? then,
+}) => HomeNav.go(c, HomeTarget(tab, view: view, id: id, then: then));
 
 final Map<String, EntityOpener> notificationDestinations = {
-  // Concerns2.txt 2.1: every report notification (submitted, validated,
-  // open for donations, rejected) opens a clear pop-up summary of the
-  // report. "See full details" inside it opens ReportDetailScreen.
-  'report': (c, id) => showReportSheet(c, id),
-  // Donation notifications open the right screen for each role:
-  //   CSWS Main Office / Administrator: that donation's details sheet
-  //     (items, donor, deadline, Receive / Reopen / Cancel buttons)
-  //   CMO: the confirmations list
-  //   Donor / Relief Organization: their own donations
-  'donation': (c, id) => _openDonation(c, id),
-  // delivery_status_changed goes to the barangay representative and the
-  // reporter; delivery_receipt_confirmed goes to CSWS Main Office and the
-  // reporter. Only the barangay representative and CSWS Main Office have a
-  // deliveries screen in the app. Every other role (the Administrator, or a
-  // donor or CSWS Disaster Unit user who filed the report) stays on the
-  // inbox, since the Administrator has no deliveries tab to land on and the
-  // reporter would get a 403 from the delivery routes.
-  'delivery': (c, id) {
-    final Widget? screen;
+  // Reports: the role's own reports page, then the report pop-up over it
+  // (Concerns2.txt 2.1). The Administrator lands on Validate, on the list
+  // the report is in, with that report first.
+  'report': (c, id, event) async {
+    switch (api.role) {
+      case Roles.admin:
+        var view = 'Pending';
+        if (event != 'report_submitted') {
+          final r = await api.get('/reports/$id');
+          if (r.ok && r.json is Map) view = '${(r.json as Map)['status']}';
+        }
+        if (c.mounted) _go(c, 'Validate', view: view, id: id);
+      case Roles.cswsUnit:
+        _go(
+          c,
+          'Reports',
+          view: 'status',
+          then: (ctx) => showReportSheet(ctx, id),
+        );
+      default:
+        _go(
+          c,
+          'Reports',
+          view: 'validated',
+          then: (ctx) => showReportSheet(ctx, id),
+        );
+    }
+  },
+  'donation': (c, id, event) => _openDonation(c, id),
+  'delivery': (c, id, event) {
     switch (api.role) {
       case Roles.barangay:
-        screen = _withAppBar(
-          'Incoming aid',
-          const DeliveriesScreen(barangay: true),
-        );
-        break;
+        _go(c, 'Incoming aid');
       case Roles.cswsMain:
-        screen = _withAppBar('Deliveries', const DeliveriesScreen());
-        break;
-
       case Roles.drrmo:
-        screen = _withAppBar('Logistics requests', const DrrmoScreen());
-        break;
+        _go(c, 'Deliveries');
       default:
-        screen = null;
+        break; // no deliveries page for this role: stay on the inbox
     }
-    if (screen != null) _push(c, screen);
   },
-
-  // logistics_requested goes to DRRMO; logistics_scheduled and
-  // logistics_declined go back to the CSWS user who asked: Main Office for a
-  // delivery, the Disaster Unit for a Door to Door pickup run.
-  'logistics_request': (c, id) {
-    final Widget? screen;
+  // DRRMO: its Logistics list. CSWS Main Office: Deliveries for a delivery
+  // request, Pickups for a Door to Door pickup run.
+  'logistics_request': (c, id, event) async {
     switch (api.role) {
       case Roles.drrmo:
-        screen = _withAppBar('Logistics requests', const DrrmoScreen());
-        break;
+        _go(
+          c,
+          'Logistics',
+          view: event == 'logistics_requested' ? 'Pending' : null,
+        );
       case Roles.cswsMain:
-        screen = _withAppBar('Deliveries', const DeliveriesScreen());
-        break;
-      case Roles.cswsUnit:
-        screen = const PickupMapScreen(standalone: true);
-        break;
+        final r = await api.get('/logistics/requests');
+        final pickup =
+            r.ok &&
+            r.json is List &&
+            (r.json as List).any(
+              (x) =>
+                  (x as Map)['request_id'] == id &&
+                  x['request_type'] == 'Pickup',
+            );
+        if (c.mounted) _go(c, pickup ? 'Pickups' : 'Deliveries');
       default:
-        screen = null;
+        break;
     }
-    if (screen != null) _push(c, screen);
   },
-  // org_registered goes to every Administrator. org_approved and org_rejected
-  // go to the organization's own account, which has no screen for this, so it
-  // stays on the inbox.
-  'organization': (c, id) {
+  // New organization / new donor: Accounts > Registrations, where both are
+  // listed together with sorting and Reviewed / Not Reviewed.
+  'organization': (c, id, event) {
+    if (api.role == Roles.admin) _go(c, 'Accounts', view: 'registrations');
+  },
+  'user': (c, id, event) {
     if (api.role == Roles.admin) {
-      _push(
-        c,
-        _withAppBar(
-          'Accounts',
-          const AccountsHub(initialView: 'registrations'),
-        ),
-      );
+      _go(c, 'Accounts', view: 'registrations');
+    } else {
+      _go(c, 'Profile'); // account created / password changed: your profile
     }
   },
-  // donor_registered points at the new user account.
-  'user': (c, id) {
-    if (api.role == Roles.admin) {
-      _push(
-        c,
-        _withAppBar(
-          'Accounts',
-          const AccountsHub(initialView: 'registrations'),
-        ),
-      );
-    }
-  },
-  // 'donation_batch': (c, id) => ...,
 };
 
 Future<void> _openDonation(BuildContext c, int donationId) async {
@@ -126,7 +111,8 @@ Future<void> _openDonation(BuildContext c, int donationId) async {
     case Roles.cswsMain:
     case Roles.admin:
       // The notification points at one item; its QR reference opens the
-      // whole donation entry.
+      // whole donation entry, as a sheet over Receive (Main Office) or
+      // Records (Administrator).
       final r = await api.get('/donations/$donationId/qr');
       if (!c.mounted) return;
       if (!r.ok || r.json is! Map) {
@@ -135,15 +121,21 @@ Future<void> _openDonation(BuildContext c, int donationId) async {
         );
         return;
       }
-      await openDonationByQr(c, '${(r.json as Map)['batch_reference']}');
+      final ref = '${(r.json as Map)['batch_reference']}';
+      _go(
+        c,
+        api.role == Roles.admin ? 'Records' : 'Receive',
+        then: (ctx) => openDonationByQr(ctx, ref),
+      );
     case Roles.cmo:
-      _push(c, _withAppBar('Confirmations', const CmoScreen()));
+      _go(c, 'Acknowledge', view: 'pending');
     case Roles.donor:
     case Roles.org:
-      // Straight to that donation's page (its status, reason and QR).
-      await openMyDonation(c, donationId);
+      // The Reports tab (the donor's own giving, Ivan's screens), then that
+      // donation's page, as when it is tapped in that list.
+      _go(c, 'Reports', then: (ctx) => openMyDonation(ctx, donationId));
     default:
-      break; // other roles have no donation screen: stay on the inbox
+      break; // other roles have no donation page: stay on the inbox
   }
 }
 
@@ -533,7 +525,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     // Open from this screen's context: refreshing the list rebuilds the
     // tiles, so the tapped tile's context would be gone and nothing opened.
     if (opener != null && id != null && mounted) {
-      opener(context, id);
+      opener(context, id, n['type'] as String?);
     }
     _refreshList();
   }

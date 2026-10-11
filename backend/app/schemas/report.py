@@ -85,6 +85,23 @@ class DisasterReportCreate(BaseModel):
         return canonical_source(v)
 
 
+class DisasterReportEdit(BaseModel):
+    """The reporter (CSWS Disaster Unit) corrects their own report before the
+    Administrator validates it (Oct 11 notes). Same fields as a new report;
+    the source stays as it was."""
+    disaster_type_id: int
+    barangay_id: int
+    sitio_id: Optional[int] = None
+    description: Optional[str] = None
+    affected_families: AffectedFamilies = _families_field()
+    assistance_needed: Optional[str] = None
+    estimated_quantity: EstimatedQuantity = _quantity_field()
+
+
+class ReportWithdraw(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=300)
+
+
 class DisasterReportUpdate(BaseModel):
     """Staff-only fields. All optional — PATCH semantics.
 

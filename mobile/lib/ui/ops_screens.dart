@@ -7,6 +7,7 @@ import 'trip_screens.dart';
 import 'widgets.dart';
 import 'entry_report_views.dart' show EntrySummaryList;
 import 'logistics_cards.dart';
+import 'home_nav.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 
@@ -171,6 +172,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     );
     if (picked != null) setState(() => dates = picked);
   }
+
   Future<void> _requestTransport(BuildContext context, Map d) async {
     // I4: pick the numbers, no typing. Appendix H 7.1 (Oct 10 notes): no
     // driver count (a truck comes with its driver); each need can be None.
@@ -206,7 +208,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     if (n('trucks') + n('volunteers') + n('pushcarts') == 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Choose at least one: a truck, volunteers or a pushcart.'),
+          content: Text(
+            'Choose at least one: a truck, volunteers or a pushcart.',
+          ),
         ),
       );
       return;
@@ -1030,7 +1034,10 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
 }
 
 // ---------------------------------------------------------------------------
-// UC-C1 / UC-C2 City donation confirmation (CMO Representative)
+// UC-C1 / UC-C2 City donation acknowledgement (CMO Representative).
+// Oct 11 notes (Dave): the word is "Acknowledge", and the CMO decides per
+// donation entry (one QR, all its items), not per item. The donor's status
+// becomes "Acknowledged by CMO" by itself.
 // ---------------------------------------------------------------------------
 class CmoScreen extends StatefulWidget {
   const CmoScreen({super.key});
@@ -1039,12 +1046,23 @@ class CmoScreen extends StatefulWidget {
   State<CmoScreen> createState() => _CmoScreenState();
 }
 
-class _CmoScreenState extends State<CmoScreen> {
+class _CmoScreenState extends State<CmoScreen>
+    with HomeTargetListener<CmoScreen> {
   String view = 'pending';
+  int _loads = 0;
 
-  /// 5.1: null = all pending; 'On Hold' / 'Pending Review' = only those.
+  /// 5.1: null = all waiting; 'On Hold' / 'Pending Review' = only those.
   String? decision;
   final _listKey = GlobalKey();
+
+  @override
+  String get homeTab => 'Acknowledge';
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    view = target.view ?? 'pending';
+    decision = null;
+  }
 
   /// 5.1: a tile was tapped. Filter the list and scroll down to it.
   void _show(String v, [String? d]) {
@@ -1063,104 +1081,161 @@ class _CmoScreenState extends State<CmoScreen> {
     });
   }
 
-  Future<void> _decide(Map d, String decision) async {
+  String get _base => '/cmo/entries';
+
+  Future<void> _decide(Map e, String decision) async {
     String? notes;
-    if (decision != 'Confirmed') {
+    if (decision != 'Acknowledged') {
       final v = await formDialog(
         context,
-        title: decision == 'On Hold' ? 'Put on hold' : 'Keep for review',
+        title: decision == 'On Hold'
+            ? 'Put ${e['batch_reference']} on hold'
+            : 'Keep ${e['batch_reference']} for review',
+        message: 'Applies to all ${e['total_items']} item(s) of this donation.',
         fields: const [DialogField('notes', 'Reason', multiline: true)],
       );
       if (v == null) return;
       notes = v['notes'];
     }
     if (!mounted) return;
-    await act(
+    final r = await act(
       context,
       () => api.post(
-        '/cmo/donations/${d['donation_id']}/confirm',
+        '$_base/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
         body: {'status': decision, 'notes': notes},
       ),
-      success: decision == 'Confirmed'
-          ? '${d['qr_reference']} officially confirmed'
-          : '${d['qr_reference']} marked $decision',
+      success: decision == 'Acknowledged'
+          ? '${e['batch_reference']} acknowledged'
+          : '${e['batch_reference']} marked $decision',
     );
+    if (r.ok && mounted) setState(() => _loads++);
   }
 
-  Widget _donationCard(Map d) {
-    final confirmed = d['officially_recognized'] == true;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
+  Future<void> _revert(Map e) async {
+    final r = await act(
+      context,
+      () => api.post(
+        '$_base/${Uri.encodeComponent('${e['batch_reference']}')}/revert',
+      ),
+      success: 'Acknowledgement undone',
+    );
+    if (r.ok && mounted) setState(() => _loads++);
+  }
+
+  Widget _entryCard(Map e) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final done = e['acknowledged'] == true;
+    final items = (e['items'] as List).cast<Map>();
+    final value = (e['estimated_value'] as num?) ?? 0;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Space.sm),
+      child: AppCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
+                Icon(Icons.qr_code_2, color: cs.primary),
+                Gaps.h8,
                 Expanded(
                   child: Text(
-                    '${d['quantity']} ${d['unit']} ${d['item_name']}',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
+                    '${e['batch_reference']}',
+                    style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
                   ),
                 ),
-                if (confirmed)
-                  const Badge2(
-                    'City confirmed',
-                    Color(0xFF2E7D32),
-                    icon: Icons.verified,
-                  )
+                if (done)
+                  const StatusChip('Confirmed', label: 'Acknowledged')
                 else
-                  Badge2.status(d['cmo_decision'] as String? ?? 'Received'),
+                  StatusChip(
+                    e['cmo_decision'] as String? ?? 'Received',
+                    label: e['cmo_decision'] == null
+                        ? 'Waiting'
+                        : '${e['cmo_decision']}',
+                  ),
               ],
             ),
-            Text('${d['qr_reference']} · ${d['packaging']}'),
+            Gaps.v4,
             Text(
-              'For ${d['report_label'] ?? 'report'}',
-              style: Theme.of(context).textTheme.bodySmall,
+              'For ${e['report_label'] ?? 'report'} · ${e['handover_method']}',
+              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
-            if (d['cmo_notes'] != null && !confirmed)
-              Text(
-                'Note: ${d['cmo_notes']}',
-                style: const TextStyle(fontSize: 12, color: Brand.muted),
+            Gaps.v8,
+            for (final i in items)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      size: 16,
+                      color: cs.onSurfaceVariant,
+                    ),
+                    Gaps.h8,
+                    Expanded(
+                      child: Text(
+                        '${i['quantity']} ${i['unit']} ${i['item_name']} '
+                        '(${i['packaging']})',
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            const SizedBox(height: 8),
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              children: confirmed
-                  ? [
-                      OutlinedButton.icon(
-                        onPressed: () => act(
-                          context,
-                          () => api.post(
-                            '/cmo/donations/${d['donation_id']}/revert',
-                          ),
-                          success: 'Confirmation reversed',
-                        ),
-                        icon: const Icon(Icons.undo),
-                        label: const Text('Revert'),
-                      ),
-                    ]
-                  : [
-                      TextButton(
-                        onPressed: () => _decide(d, 'Pending Review'),
-                        child: const Text('Review'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () => _decide(d, 'On Hold'),
-                        child: const Text('Hold'),
-                      ),
-                      FilledButton.icon(
-                        onPressed: () => _decide(d, 'Confirmed'),
-                        icon: const Icon(Icons.verified),
-                        label: const Text('Confirm'),
-                      ),
-                    ],
-            ),
+            if (value > 0)
+              Text(
+                'Estimated value PHP ${value.toStringAsFixed(0)}',
+                style: t.bodySmall,
+              ),
+            if (e['hold_reason'] != null && !done) ...[
+              Gaps.v8,
+              Text(
+                'On hold: ${e['hold_reason']}',
+                style: t.bodyMedium?.copyWith(color: AppColors.danger),
+              ),
+            ],
+            Gaps.v12,
+            if (done)
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: () => _revert(e),
+                  icon: const Icon(Icons.undo),
+                  label: const Text('Undo'),
+                ),
+              )
+            else ...[
+              // One tap acknowledges the whole entry (every item in it).
+              AppButton(
+                'Acknowledge',
+                icon: Icons.verified,
+                expand: true,
+                onPressed: () => _decide(e, 'Acknowledged'),
+              ),
+              Gaps.v8,
+              Row(
+                children: [
+                  Expanded(
+                    child: AppButton(
+                      'Hold',
+                      icon: Icons.pause_circle_outline,
+                      variant: AppButtonVariant.secondary,
+                      expand: true,
+                      onPressed: () => _decide(e, 'On Hold'),
+                    ),
+                  ),
+                  Gaps.h8,
+                  Expanded(
+                    child: AppButton(
+                      'Review',
+                      icon: Icons.rate_review_outlined,
+                      variant: AppButtonVariant.text,
+                      expand: true,
+                      onPressed: () => _decide(e, 'Pending Review'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -1170,28 +1245,34 @@ class _CmoScreenState extends State<CmoScreen> {
   @override
   Widget build(BuildContext context) {
     return Loader(
+      key: ValueKey(_loads),
       load: [
         () => api.get('/cmo/dashboard'),
-        () => api.get('/cmo/donations/pending'),
-        () => api.get('/cmo/donations/confirmed'),
+        () => api.get('$_base/pending'),
+        () => api.get('$_base/acknowledged'),
         () => api.get('/donations/entries'),
       ],
       builder: (context, data) {
         final dash = data[0] as Map;
         final pending = (data[1] as List).cast<Map>();
-        final confirmed = (data[2] as List).cast<Map>();
+        final acknowledged = (data[2] as List).cast<Map>();
         final perReport = (dash['per_report'] as List).cast<Map>();
         final rows = view == 'pending'
             ? pending
                   .where(
-                    (d) => decision == null || d['cmo_decision'] == decision,
+                    (e) => decision == null || e['cmo_decision'] == decision,
                   )
                   .toList()
-            : confirmed;
+            : acknowledged;
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            PageHeader('City Donation Confirmation', subtitle: roleLine()),
+            PageHeader(
+              'Acknowledge Donations',
+              subtitle:
+                  'Donation entries CSWS received, one QR at a time • '
+                  '${roleLine()}',
+            ),
             // Appendix H 4.4 / 4.5: the CMO also views donation records.
             Align(
               alignment: Alignment.centerRight,
@@ -1210,30 +1291,30 @@ class _CmoScreenState extends State<CmoScreen> {
             ),
             StatGrid([
               StatTile(
-                'Pending city confirmation',
-                '${dash['pending_confirmation']}',
+                'Waiting for acknowledgement',
+                '${dash['pending_entries'] ?? pending.length}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
                 onTap: () => _show('pending'),
               ),
               StatTile(
                 'On hold',
-                '${dash['on_hold']}',
+                '${dash['on_hold_entries'] ?? 0}',
                 Icons.pause_circle_outline,
                 onTap: () => _show('pending', 'On Hold'),
               ),
               StatTile(
                 'Pending review',
-                '${dash['pending_review']}',
+                '${dash['review_entries'] ?? 0}',
                 Icons.rate_review_outlined,
                 onTap: () => _show('pending', 'Pending Review'),
               ),
               StatTile(
-                'Officially confirmed',
-                '${dash['confirmed']}',
+                'Acknowledged',
+                '${dash['acknowledged_entries'] ?? acknowledged.length}',
                 Icons.verified,
                 color: const Color(0xFF2E7D32),
-                onTap: () => _show('confirmed'),
+                onTap: () => _show('acknowledged'),
               ),
             ]),
             const SizedBox(height: 14),
@@ -1242,14 +1323,14 @@ class _CmoScreenState extends State<CmoScreen> {
               segments: [
                 ButtonSegment(
                   value: 'pending',
-                  label: Text('Pending (${pending.length})'),
+                  label: Text('Waiting (${pending.length})'),
                 ),
                 ButtonSegment(
-                  value: 'confirmed',
-                  label: Text('Confirmed (${confirmed.length})'),
+                  value: 'acknowledged',
+                  label: Text('Acknowledged (${acknowledged.length})'),
                 ),
               ],
-              selected: {view},
+              selected: {view == 'pending' ? 'pending' : 'acknowledged'},
               onSelectionChanged: (s) => setState(() {
                 view = s.first;
                 decision = null;
@@ -1270,13 +1351,13 @@ class _CmoScreenState extends State<CmoScreen> {
             if (rows.isEmpty)
               EmptyState(
                 view == 'pending'
-                    ? 'No donations waiting for confirmation.'
-                    : 'No confirmed donations yet.',
+                    ? 'No donations waiting for acknowledgement.'
+                    : 'No acknowledged donations yet.',
               ),
-            for (final d in rows) _donationCard(d),
+            for (final e in rows) _entryCard(e),
             const SectionTitle('Donation entries per report'),
             EntrySummaryList(data[3] as Map),
-            const SectionTitle('City confirmation per report'),
+            const SectionTitle('Acknowledged per report'),
             if (perReport.isEmpty) const EmptyState('No donations yet.'),
             for (final r in perReport)
               Card(
@@ -1297,10 +1378,10 @@ class _CmoScreenState extends State<CmoScreen> {
                         ),
                       const SizedBox(height: 4),
                       Text(
-                        '${r['confirmed_count']} confirmed '
+                        '${r['confirmed_count']} item(s) acknowledged '
                         '(${r['confirmed_quantity']} units'
                         '${(r['confirmed_value'] as num) > 0 ? ', PHP ${(r['confirmed_value'] as num).toStringAsFixed(0)}' : ''}'
-                        ') · ${r['pending_count']} pending',
+                        ') · ${r['pending_count']} waiting',
                       ),
                       const SizedBox(height: 8),
                       Progress(
@@ -1329,8 +1410,17 @@ class DrrmoScreen extends StatefulWidget {
   State<DrrmoScreen> createState() => _DrrmoScreenState();
 }
 
-class _DrrmoScreenState extends State<DrrmoScreen> {
+class _DrrmoScreenState extends State<DrrmoScreen>
+    with HomeTargetListener<DrrmoScreen> {
   String stage = 'Pending';
+
+  @override
+  String get homeTab => 'Logistics';
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    if (target.view != null) stage = target.view!;
+  }
 
   Future<void> _accept(Map r) async {
     final v = await formDialog(

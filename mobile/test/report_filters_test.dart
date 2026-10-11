@@ -14,7 +14,12 @@ import 'package:mobile/ui/report_screens.dart';
 
 /// A row as GET /reports/monitoring and /reports/validated send it:
 /// fulfillment_percentage is a Decimal, so it arrives as text.
-Map<String, dynamic> _row(int id, int barangayId, String priority, String pct) => {
+Map<String, dynamic> _row(
+  int id,
+  int barangayId,
+  String priority,
+  String pct,
+) => {
   'report_id': id,
   'disaster_type_id': 1,
   'barangay_id': barangayId,
@@ -55,7 +60,10 @@ Future<void> _pump(WidgetTester tester, Widget body) async {
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
-    MaterialApp(theme: AppTheme.light(), home: Scaffold(body: body)),
+    MaterialApp(
+      theme: AppTheme.light(),
+      home: Scaffold(body: body),
+    ),
   );
   await tester.pumpAndSettle();
 }
@@ -65,25 +73,30 @@ void main() {
   tearDown(() => Api.instance.token = null);
 
   test('Percent sent as text or as a number gives the same status', () {
-    expect(fulfillmentState({'fulfillment_percentage': '40.00'}), 'In Progress');
+    expect(
+      fulfillmentState({'fulfillment_percentage': '40.00'}),
+      'In Progress',
+    );
     expect(fulfillmentState({'fulfillment_percentage': 100}), 'Fulfilled');
     expect(fulfillmentState({'fulfillment_percentage': '0'}), 'Not Started');
     expect(fulfillmentState({'fulfillment_percentage': null}), isNull);
   });
 
   test('Sort: most urgent puts open reports first, fulfilled last', () {
-    final ids = sortAndFilterReports(_rows)
-        .map((r) => r['report_id'])
-        .toList();
+    final ids = sortAndFilterReports(_rows).map((r) => r['report_id']).toList();
     expect(ids, [2, 1, 3]);
     expect(
-      sortAndFilterReports(_rows, sort: ReportSort.mostFulfilled)
-          .map((r) => r['report_id']),
+      sortAndFilterReports(
+        _rows,
+        sort: ReportSort.mostFulfilled,
+      ).map((r) => r['report_id']),
       [3, 2, 1],
     );
     expect(
-      sortAndFilterReports(_rows, fulfillment: 'Not Started')
-          .map((r) => r['report_id']),
+      sortAndFilterReports(
+        _rows,
+        fulfillment: 'Not Started',
+      ).map((r) => r['report_id']),
       [1],
     );
   });
@@ -91,6 +104,9 @@ void main() {
   for (final (name, screen) in [
     ('Report Status', const MonitoringScreen()),
     ('Validated Reports', const ValidatedReportsScreen(filter: true)),
+    // CMO, DRRMO and Barangay Rep: no priority chips, same fulfillment
+    // filter and sort.
+    ('Validated Reports (no priority filter)', const ValidatedReportsScreen()),
   ]) {
     testWidgets('$name: Fulfilled chip shows only fulfilled reports', (
       tester,
@@ -103,6 +119,8 @@ void main() {
         expect(find.text('#2  Flood in Banilad'), findsOneWidget);
         expect(find.text('#3  Flood in Looc'), findsOneWidget);
 
+        await tester.ensureVisible(find.textContaining('Fulfilled ('));
+        await tester.pumpAndSettle();
         await tester.tap(find.textContaining('Fulfilled ('));
         await tester.pumpAndSettle();
         expect(find.text('#3  Flood in Looc'), findsOneWidget);

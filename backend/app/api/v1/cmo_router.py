@@ -75,6 +75,46 @@ def _rows(db: Session, donations) -> list:
     return out
 
 
+def _decide(db: Session, user: User, donation: PhysicalDonation, decision: str,
+            notes) -> DonationConfirmation:
+    """Record one CMO decision on one received item (no notification)."""
+    confirmation = DonationConfirmation(
+        donation_id=donation.donation_id,
+        confirmed_by_user_id=user.user_id,
+        status=decision,
+        notes=notes,
+    )
+    db.add(confirmation)
+    if decision == "Confirmed":
+        donation.status = "Confirmed"
+    db.flush()
+    log_action(db, user, f"CMO {decision.upper()}", "physical_donations", donation.donation_id,
+               old={"status": "Received"}, new={"status": donation.status, "decision": decision,
+                                               "notes": notes})
+    return confirmation
+
+
+def _tell_donor(db: Session, donation: PhysicalDonation, decision: str, notes) -> None:
+    # Daniel (Oct 10): the donor hears about the whole donation entry, in
+    # order: submitted -> received by CSWS -> acknowledged by the CMO. One
+    # "acknowledged" notice per entry, sent when its last received item is
+    # acknowledged (not one per item).
+    if not donation.user_id:  # guests have no account
+        return
+    ref = donation.batch_reference or donation.qr_reference
+    if decision == "Confirmed":
+        waiting = (db.query(PhysicalDonation)
+                   .filter(PhysicalDonation.batch_reference == donation.batch_reference,
+                           PhysicalDonation.status == "Received")
+                   .count())
+        if waiting == 0:
+            notify_event(db, donation.user_id, "donation_confirmed", "donation",
+                         donation.donation_id, batch_no=ref)
+    elif decision == "On Hold":
+        notify_event(db, donation.user_id, "donation_held", "donation",
+                     donation.donation_id, batch_no=ref, reason=notes or "")
+
+
 @router.post("/donations/{donation_id}/confirm", response_model=DonationConfirmationResponse, status_code=status.HTTP_201_CREATED)
 def confirm_donation(
     donation_id: int,
@@ -82,51 +122,143 @@ def confirm_donation(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(CMO)),
 ):
+    """One item. The app now acknowledges whole entries (below); this stays
+    for older clients and tests."""
     donation = db.query(PhysicalDonation).filter(PhysicalDonation.donation_id == donation_id).first()
     if donation is None:
         raise HTTPException(status_code=404, detail="Donation not found")
 
     if donation.status == "Confirmed":
-        raise HTTPException(status_code=400, detail="Donation is already confirmed")
+        raise HTTPException(status_code=400, detail="Donation is already acknowledged")
     if donation.status != "Received":
         # UC-C1 precondition: only goods CSWS has actually received
-        raise HTTPException(status_code=400, detail="Only donations received by CSWS can be confirmed")
+        raise HTTPException(status_code=400, detail="Only donations received by CSWS can be acknowledged")
 
-    confirmation = DonationConfirmation(
-        donation_id=donation_id,
-        confirmed_by_user_id=current_user.user_id,
-        status=payload.status,
-        notes=payload.notes,
-    )
-    db.add(confirmation)
-
-    if payload.status == "Confirmed":
-        donation.status = "Confirmed"
-
-    db.flush()
-    log_action(db, current_user, f"CMO {payload.status.upper()}", "physical_donations", donation_id,
-               old={"status": "Received"}, new={"status": donation.status, "decision": payload.status,
-                                               "notes": payload.notes})
-    # Daniel (Oct 10): the donor hears about the whole donation entry, in
-    # order: submitted -> received by CSWS -> acknowledged by the CMO. One
-    # "acknowledged" notice per entry, sent when its last received item is
-    # acknowledged (not one per item).
-    ref = donation.batch_reference or donation.qr_reference
-    if donation.user_id:  # guests have no account
-        if payload.status == "Confirmed":
-            waiting = (db.query(PhysicalDonation)
-                       .filter(PhysicalDonation.batch_reference == donation.batch_reference,
-                               PhysicalDonation.status == "Received")
-                       .count())
-            if waiting == 0:
-                notify_event(db, donation.user_id, "donation_confirmed", "donation",
-                             donation_id, batch_no=ref)
-        elif payload.status == "On Hold":
-            notify_event(db, donation.user_id, "donation_held", "donation",
-                         donation_id, batch_no=ref, reason=payload.notes or "")
+    confirmation = _decide(db, current_user, donation, payload.status, payload.notes)
+    _tell_donor(db, donation, payload.status, payload.notes)
     db.commit()
     db.refresh(confirmation)
     return confirmation
+
+
+# ---------------------------------------------------------------------------
+# Oct 11 notes (Dave): the CMO acknowledges by donation entry (one QR), not
+# per item. Every item of the entry that CSWS received gets the decision at
+# once; items still waiting to be handed over are left alone.
+# ---------------------------------------------------------------------------
+def _entry(db: Session, reference: str) -> list:
+    ref = reference.strip().upper()
+    rows = (db.query(PhysicalDonation)
+            .filter((PhysicalDonation.batch_reference == ref) | (PhysicalDonation.qr_reference == ref))
+            .first())
+    if rows is None:
+        raise HTTPException(status_code=404, detail=f"No donation entry {reference}")
+    return (db.query(PhysicalDonation)
+            .filter(PhysicalDonation.batch_reference == rows.batch_reference)
+            .order_by(PhysicalDonation.donation_id).all())
+
+
+def _entry_rows(db: Session, donations) -> list:
+    """Items grouped into entries (one per QR) for the CMO screen."""
+    items = _rows(db, donations)
+    by_ref: dict = {}
+    for d, row in zip(donations, items):
+        by_ref.setdefault(d.batch_reference or d.qr_reference, (d, []))[1].append(row)
+    out = []
+    for ref, (first, rows) in by_ref.items():
+        decisions = {r["cmo_decision"] for r in rows if r["status"] == "Received"}
+        holds = [r["hold_reason"] for r in rows if r["hold_reason"]]
+        out.append({
+            "batch_reference": ref,
+            "report_id": first.report_id,
+            "report_label": rows[0]["report_label"],
+            "handover_method": first.handover_method,
+            "total_items": len(rows),
+            "total_quantity": sum(r["quantity"] for r in rows),
+            "estimated_value": float(sum((r["estimated_value"] or 0) for r in rows)),
+            # One decision for the entry while it waits; "Acknowledged" once done.
+            "cmo_decision": (next(iter(decisions)) if len(decisions) == 1 else
+                             ("Mixed" if decisions else None)),
+            "hold_reason": holds[0] if holds else None,
+            "acknowledged": all(r["status"] == "Confirmed" for r in rows),
+            "items": rows,
+        })
+    return out
+
+
+class EntryDecision(ConfirmDonationRequest):
+    pass
+
+
+@router.get("/entries/pending")
+def pending_entries(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(CMO)),
+):
+    """Entries with items CSWS received that wait for the CMO (incl. on hold
+    / under review), newest first."""
+    donations = (db.query(PhysicalDonation)
+                 .filter(PhysicalDonation.status == "Received")
+                 .order_by(PhysicalDonation.donation_id.desc()).all())
+    return _entry_rows(db, donations)
+
+
+@router.get("/entries/acknowledged")
+def acknowledged_entries(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(CMO)),
+):
+    donations = (db.query(PhysicalDonation)
+                 .filter(PhysicalDonation.status == "Confirmed")
+                 .order_by(PhysicalDonation.donation_id.desc()).all())
+    return _entry_rows(db, donations)
+
+
+@router.post("/entries/{reference}/decide")
+def decide_entry(
+    reference: str,
+    payload: EntryDecision,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(CMO)),
+):
+    """Acknowledge (or put on hold / keep for review) every received item of
+    one donation entry. The donor's status follows by itself."""
+    rows = _entry(db, reference)
+    received = [r for r in rows if r.status == "Received"]
+    if not received:
+        raise HTTPException(
+            status_code=409,
+            detail="Nothing to acknowledge: CSWS has not received this donation yet, "
+                   "or it is already acknowledged.",
+        )
+    for r in received:
+        _decide(db, current_user, r, payload.status, payload.notes)
+    _tell_donor(db, received[0], payload.status, payload.notes)
+    db.commit()
+    return {
+        "batch_reference": rows[0].batch_reference,
+        "decision": payload.status,
+        "items": len(received),
+        "acknowledged": all(r.status == "Confirmed" for r in rows),
+    }
+
+
+@router.post("/entries/{reference}/revert")
+def revert_entry(
+    reference: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(CMO)),
+):
+    """Undo an acknowledgement for the whole entry (alt flow 4a)."""
+    rows = [r for r in _entry(db, reference) if r.status == "Confirmed"]
+    if not rows:
+        raise HTTPException(status_code=409, detail="This donation entry is not acknowledged.")
+    for r in rows:
+        r.status = "Received"
+        log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", r.donation_id,
+                   old={"status": "Confirmed"}, new={"status": "Received"})
+    db.commit()
+    return {"batch_reference": rows[0].batch_reference, "items": len(rows)}
 
 
 @router.post("/donations/{donation_id}/revert")
@@ -141,7 +273,7 @@ def revert_confirmation(
     if donation is None:
         raise HTTPException(status_code=404, detail="Donation not found")
     if donation.status != "Confirmed":
-        raise HTTPException(status_code=400, detail="Only confirmed donations can be reverted")
+        raise HTTPException(status_code=400, detail="Only acknowledged donations can be reverted")
     donation.status = "Received"
     log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", donation_id,
                old={"status": "Confirmed"}, new={"status": "Received"})
@@ -206,7 +338,17 @@ def cmo_dashboard(
             "confirmed_value": float(sum((d.estimated_value or 0) for d in mine if d.status == "Confirmed")),
             "fulfillment_percentage": float(f.fulfillment_percentage) if f else 0.0,
         })
+    # Oct 11: the CMO works by donation entry, so the counts are entries too.
+    def entries(rows, decision=None):
+        refs = {d.batch_reference for d in rows
+                if decision is None or (decisions.get(d.donation_id) and
+                                        decisions[d.donation_id].status == decision)}
+        return len(refs)
     return {
+        "pending_entries": entries(pending),
+        "on_hold_entries": entries(pending, "On Hold"),
+        "review_entries": entries(pending, "Pending Review"),
+        "acknowledged_entries": entries(confirmed),
         "pending_confirmation": len(pending),
         "on_hold": sum(1 for d in pending if decisions.get(d.donation_id) and decisions[d.donation_id].status == "On Hold"),
         "pending_review": sum(1 for d in pending if decisions.get(d.donation_id) and decisions[d.donation_id].status == "Pending Review"),

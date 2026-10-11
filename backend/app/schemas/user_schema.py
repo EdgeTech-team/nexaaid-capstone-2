@@ -136,8 +136,10 @@ class InternalAccountCreateRequest(BaseModel):
     contact_number: str
     role_name: str
     assigned_barangay_id: Optional[int] = Field(default=None, gt=0)
-    employee_id: str
-    # Uploaded first by the Administrator (purpose employee_id_card).
+    # Oct 11 notes (Dave): the typed employee ID number is no longer asked;
+    # the employee ID card (uploaded first, purpose employee_id_card) is the
+    # proof. Older clients may still send a number; it is kept if given.
+    employee_id: Optional[str] = None
     employee_id_card: UploadRef
 
     @field_validator("first_name")
@@ -158,7 +160,8 @@ class InternalAccountCreateRequest(BaseModel):
 
     @field_validator("employee_id")
     @classmethod
-    def _emp(cls, v): return clean_employee_id(v)  # 4-20 letters/numbers/hyphens, upper case
+    def _emp(cls, v):  # 4-20 letters/numbers/hyphens, upper case, when given
+        return None if v is None or not str(v).strip() else clean_employee_id(v)
 
     @model_validator(mode="after")
     def _check(self):
