@@ -477,12 +477,25 @@ class _DonateScreenState extends State<DonateScreen> {
           ],
           // 1. Landmark: suggestions appear as the donor types. Picking one
           //    also saves the map pin so CSWS can navigate.
+          // Required, and picked from the suggestions (Oct 11): that gives
+          // the pin on the CSWS pickup map, and suggestions only come from
+          // the pickup area (Cebu province).
           AddressAutocompleteField(
             controller: pickupLandmark,
             label: 'Landmark',
             hint: 'Start typing a nearby landmark, e.g. church, school, store',
             icon: Icons.place_outlined,
             onChanged: (p) => picked = p.lat == null ? null : p,
+            validator: (v) {
+              if (handover != 'Door to Door') return null;
+              final text = (v ?? '').trim();
+              if (text.isEmpty) return 'Enter a landmark near your address';
+              if (picked == null || picked!.address != text) {
+                return 'Choose your landmark from the suggestions, so CSWS '
+                    'can find you on the map';
+              }
+              return null;
+            },
           ),
           Gaps.v16,
           // 2. Address: plain typed text, no suggestions.

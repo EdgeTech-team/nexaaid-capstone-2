@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import '../design/design.dart';
@@ -163,7 +164,9 @@ class _SaveQrButtonState extends State<SaveQrButton> {
         mimeType: 'image/png',
         type: FileType.image,
       );
-      message = where == null
+      // On the web the browser downloads the file itself and the picker
+      // returns nothing, so null there still means it was saved.
+      message = where == null && !kIsWeb
           ? 'Not saved.'
           : 'QR image saved. You can show it even without internet.';
     } catch (_) {

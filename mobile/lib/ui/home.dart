@@ -8,7 +8,6 @@ import 'donation_info.dart';
 import 'donor_screens.dart';
 import 'notifications_screen.dart';
 import 'ops_screens.dart';
-import 'pickup_board.dart';
 import 'pickup_map.dart';
 import 'profile_screen.dart';
 import 'records_screens.dart';
@@ -89,8 +88,8 @@ List<_Tab> _tabsFor(String? role) {
         _Tab(
           'Pickups',
           Icons.door_front_door_outlined,
-          PickupBoardScreen(),
-        ), // Door to Door pickups (UC-CM1)
+          PickupMapScreen(),
+        ), // Door to Door pickups on the map (UC-CM1, Oct 11 notes)
         _Tab(
           'Deliveries',
           Icons.local_shipping_outlined,

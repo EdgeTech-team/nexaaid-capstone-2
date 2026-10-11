@@ -5,25 +5,27 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import 'location_picker.dart' show PickupRules;
-import 'pickup_actions.dart' show copyText, openNavigation;
+import 'batch_sheet.dart' show openDonationByQr;
+import 'pickup_actions.dart' show ContactButtons, copyText, openNavigation;
 import 'pickup_days.dart';
 import 'pickup_route.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
-// Pickup map (CSWS Disaster Unit; Oct 10 notes, "Very libog" section).
+// Door to Door pickups on a map (Oct 10-11 notes). Used as the CSWS Main
+// Office "Pickups" tab and the CSWS Disaster Unit "Pickup map" tab.
 //
 // Every Door to Door donation still waiting to be collected, as a numbered
 // pin at the landmark the donor chose. Above the map: the days the donors
-// are home (M / T / W / Th ...) and the landmarks, so the team can see who
-// is near whom on a given day. The pins are numbered in a suggested
+// are home (M / T / W / Th ...). The pins are numbered in a suggested
 // one-way order (nearest next stop, pickup_route.dart). Tapping a pin shows
-// its landmark and address inside the pin's bubble.
+// its landmark and address inside the pin's bubble. The map stays inside
+// the pickup area (Cebu province), and pickups farther than PICKUP_MAX_KM
+// from the CSWS office are marked "Far" so Main Office can decline them.
 //
-// The Disaster Unit can then ask DRRMO for logistics support for that run
-// (trucks, volunteers, pushcarts), like CSWS Main Office does for
-// deliveries. CSWS Main Office opens the same map from its Pickups tab
-// (view only).
+// Main Office opens an entry to receive the goods, or declines a far one.
+// The Disaster Unit asks DRRMO for logistics support for a run (trucks,
+// volunteers, pushcarts), like Main Office does for deliveries.
 // ---------------------------------------------------------------------------
 
 const _osmTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -35,13 +37,15 @@ class _Stop {
   final LatLng? point;
   final Set<int> days;
   final String landmark; // full landmark text
-  final String area; // short landmark name used by the filter chips
+  final String area; // short landmark name for the pin and its bubble
 
   _Stop(this.b, this.point, this.days, this.landmark, this.area);
 
   String get ref => '${b['batch_reference']}';
   String get address => '${b['pickup_address'] ?? ''}'.trim();
   Map? get run => b['pickup_request'] as Map?;
+  bool get tooFar => b['too_far'] == true;
+  double? get km => (b['distance_km'] as num?)?.toDouble();
 
   factory _Stop.of(Map<String, dynamic> b) {
     final lat = (b['pickup_lat'] as num?)?.toDouble();
@@ -66,8 +70,6 @@ class _Stop {
   }
 }
 
-enum _Order { route, landmark }
-
 /// How much of a phone screen the stops sheet covers when the map opens.
 const _sheetStart = 0.36;
 
@@ -79,6 +81,12 @@ class PickupMapScreen extends StatefulWidget {
   @override
   State<PickupMapScreen> createState() => _PickupMapScreenState();
 }
+
+/// All of Cebu province, until GET /donations/pickup-rules says otherwise.
+final _cebu = LatLngBounds(
+  const LatLng(9.40, 123.25),
+  const LatLng(11.30, 124.10),
+);
 
 class _PickupMapScreenState extends State<PickupMapScreen> {
   final _map = MapController();
@@ -94,12 +102,15 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
 
   // Filters above the map.
   Set<int> _days = {};
-  String? _area;
-  _Order _order = _Order.route;
   Map<String, dynamic>? _focusRun; // "show this request on the map"
   String? _selected; // batch_reference of the tapped pin
 
   bool get _canRequest => api.role == Roles.cswsUnit;
+  // Main Office (and the Administrator) receive the goods and may decline.
+  bool get _canReceive => api.role == Roles.cswsMain || api.role == Roles.admin;
+  double _maxKm = 20;
+  String _areaName = 'Cebu province';
+  LatLngBounds _areaBounds = _cebu;
 
   @override
   void initState() {
@@ -114,12 +125,12 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     });
     final results = await Future.wait([
       api.get('/donations/pickups'),
-      PickupRules.load().then((r) => r),
+      api.get('/donations/pickup-rules'),
       api.get('/donations/drop-off-info'),
       if (_canRequest) api.get('/logistics/requests'),
     ]);
     if (!mounted) return;
-    final pickups = results[0] as ApiResult;
+    final pickups = results[0];
     if (!pickups.ok || pickups.json is! List) {
       setState(() {
         _loading = false;
@@ -128,7 +139,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       });
       return;
     }
-    final info = results[2] as ApiResult;
+    final info = results[2];
     LatLng? office;
     if (info.ok && info.json is Map) {
       final lat = (info.json['lat'] as num?)?.toDouble();
@@ -137,7 +148,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     }
     var runs = <Map<String, dynamic>>[];
     if (_canRequest) {
-      final r = results[3] as ApiResult;
+      final r = results[3];
       if (r.ok && r.json is List) {
         runs = [
           for (final e in r.json as List) Map<String, dynamic>.from(e as Map),
@@ -150,7 +161,23 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
         for (final e in pickups.json as List)
           _Stop.of(Map<String, dynamic>.from(e as Map)),
       ];
-      _rules = results[1] as PickupRules;
+      final rr = results[1];
+      if (rr.ok && rr.json is Map) {
+        final j = Map<String, dynamic>.from(rr.json as Map);
+        _rules = PickupRules.fromJson(j);
+        final area = j['area'] as Map?;
+        if (area != null) {
+          _maxKm = (area['max_km'] as num?)?.toDouble() ?? _maxKm;
+          _areaName = '${area['name'] ?? _areaName}';
+          final bb = (area['bbox'] as List?)?.cast<num>();
+          if (bb != null && bb.length == 4) {
+            _areaBounds = LatLngBounds(
+              LatLng(bb[1].toDouble(), bb[0].toDouble()),
+              LatLng(bb[3].toDouble(), bb[2].toDouble()),
+            );
+          }
+        }
+      }
       _office = office;
       _runs = runs;
       _selected = null; // the camera refits, so close any open bubble
@@ -166,9 +193,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   // ----- filtering and order ------------------------------------------------
 
   bool _matches(_Stop s) {
-    if (_days.isNotEmpty && s.days.intersection(_days).isEmpty) return false;
-    if (_area != null && s.area != _area) return false;
-    return true;
+    return _days.isEmpty || s.days.intersection(_days).isNotEmpty;
   }
 
   /// Stops shown on the map, in the order they are numbered.
@@ -185,40 +210,22 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       ];
     }
     final list = _all.where(_matches).toList();
-    if (_order == _Order.landmark) {
-      list.sort(
-        (a, b) => a.landmark.toLowerCase().compareTo(b.landmark.toLowerCase()),
-      );
-      return list;
-    }
-    final pinned = list.where((s) => s.point != null).toList();
+    // Far pickups stay on the map (red) but out of the route: Main Office
+    // decides first whether to decline them.
+    final pinned = list.where((s) => s.point != null && !s.tooFar).toList();
+    final far = list.where((s) => s.point != null && s.tooFar).toList();
     final unpinned = list.where((s) => s.point == null).toList();
     final order = planOneWayRoute([
       for (final s in pinned) s.point!,
     ], start: _office);
-    return [for (final i in order) pinned[i], ...unpinned];
+    return [for (final i in order) pinned[i], ...far, ...unpinned];
   }
 
   Map<int, int> get _dayCounts {
-    final base = _all.where((s) => _area == null || s.area == _area);
     return {
       for (var d = 1; d <= 7; d++)
-        d: base.where((s) => s.days.contains(d)).length,
+        d: _all.where((s) => s.days.contains(d)).length,
     };
-  }
-
-  List<MapEntry<String, int>> get _areas {
-    final counts = <String, int>{};
-    for (final s in _all) {
-      if (_days.isNotEmpty && s.days.intersection(_days).isEmpty) continue;
-      counts[s.area] = (counts[s.area] ?? 0) + 1;
-    }
-    final list = counts.entries.toList()
-      ..sort((a, b) {
-        final c = b.value.compareTo(a.value);
-        return c != 0 ? c : a.key.compareTo(b.key);
-      });
-    return list;
   }
 
   void _setFilter(VoidCallback change) {
@@ -237,10 +244,22 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
 
   void _fit() {
     if (!_mapReady || !mounted) return;
-    final pts = [
+    // Zoom to the pickups inside the limit; far ones (red) only when there
+    // is nothing else, so the city stops are not squeezed into a corner.
+    final near = [
       for (final s in _shown)
-        if (s.point != null) s.point!,
-      if (_office != null && _order == _Order.route) _office!,
+        if (s.point != null && !s.tooFar) s.point!,
+    ];
+    final pts = [
+      if (near.isNotEmpty || _focusRun != null)
+        ...near
+      else
+        for (final s in _shown)
+          if (s.point != null) s.point!,
+      if (_focusRun != null)
+        for (final s in _shown)
+          if (s.point != null && s.tooFar) s.point!,
+      if (_office != null && _focusRun == null) _office!,
     ];
     if (pts.isEmpty) {
       _map.move(mandaueCenter, 13);
@@ -282,7 +301,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   // ----- DRRMO logistics support -------------------------------------------
 
   Future<void> _requestSupport(List<_Stop> stops) async {
-    final free = stops.where((s) => s.run == null).toList();
+    final free = stops.where((s) => s.run == null && !s.tooFar).toList();
     if (free.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -297,7 +316,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       isScrollControlled: true,
       builder: (_) => _RunRequestSheet(
         stops: free,
-        skipped: stops.length - free.length,
+        skipped: stops.where((s) => s.run != null).length,
         rules: _rules,
         preferredDays: _days,
       ),
@@ -333,6 +352,49 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       if (_focusRun?['request_id'] == run['request_id']) _focusRun = null;
       await _load();
     }
+  }
+
+  // ----- Main Office: receive or decline -----------------------------------
+
+  Future<void> _receive(_Stop s) async {
+    await openDonationByQr(context, s.ref);
+    if (mounted) await _load(); // goods may have been received in the sheet
+  }
+
+  /// A pickup farther than PICKUP_MAX_KM: cancel it with a reason the donor
+  /// reads in their notification, and ask them to drop it off instead.
+  Future<void> _decline(_Stop s) async {
+    final km = s.km?.round();
+    final v = await formDialog(
+      context,
+      title: 'Decline this pickup?',
+      message:
+          '${s.landmark.isEmpty ? s.address : s.landmark} is about $km km '
+          'from the CSWS office, outside the pickup area. The donor is told '
+          'and can still bring the goods to the office.',
+      fields: [
+        DialogField(
+          'reason',
+          'Message to the donor',
+          multiline: true,
+          initial:
+              'Sorry, your address is too far for a Door to Door pickup '
+              '(about $km km from the CSWS office). Please drop off your '
+              'donation at the CSWS office instead.',
+        ),
+      ],
+      confirm: 'Decline pickup',
+    );
+    if (v == null || !mounted) return;
+    final r = await act(
+      context,
+      () => api.post(
+        '/donations/entries/${Uri.encodeComponent(s.ref)}/cancel',
+        body: {'reason': v['reason']},
+      ),
+      success: 'Pickup declined. The donor was told.',
+    );
+    if (r.ok && mounted) await _load();
   }
 
   // ----- build ---------------------------------------------------------------
@@ -410,10 +472,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
         if (s.point != null) s,
     ];
     final number = {for (var i = 0; i < shown.length; i++) shown[i].ref: i + 1};
-    final route = _order == _Order.route || _focusRun != null;
     final line = [
-      if (route && _office != null && _focusRun == null) _office!,
-      if (route) ...[for (final s in pinned) s.point!],
+      if (_office != null && _focusRun == null) _office!,
+      for (final s in pinned)
+        if (!s.tooFar || _focusRun != null) s.point!,
     ];
     final selected = pinned.where((s) => s.ref == _selected).firstOrNull;
 
@@ -424,6 +486,11 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
           options: MapOptions(
             initialCenter: centerOf([for (final s in pinned) s.point!]),
             initialZoom: 13,
+            // Oct 11: the map stays inside the pickup area (Cebu province).
+            minZoom: 8,
+            cameraConstraint: CameraConstraint.containCenter(
+              bounds: _areaBounds,
+            ),
             onMapReady: () {
               _mapReady = true;
               _fit();
@@ -486,6 +553,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                       label: 'Stop ${number[s.ref]}: ${s.area}',
                       selected: s.ref == _selected,
                       inRun: s.run != null,
+                      far: s.tooFar,
                       onTap: () => _select(s),
                     ),
                   ),
@@ -524,13 +592,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
             days: _days,
             rules: _rules,
             dayCounts: _dayCounts,
-            areas: _areas,
-            area: _area,
-            order: _order,
             focusRun: _focusRun,
+            farCount: _all.where((s) => s.tooFar).length,
+            maxKm: _maxKm,
             onDays: (d) => _setFilter(() => _days = d),
-            onArea: (a) => _setFilter(() => _area = a),
-            onOrder: (o) => _setFilter(() => _order = o),
             onClearRun: () => _setFilter(() => _focusRun = null),
             onFit: _fit,
           ),
@@ -550,7 +615,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     final t = Theme.of(context).textTheme;
     final pinned = [
       for (final s in shown)
-        if (s.point != null) s.point!,
+        if (s.point != null && (!s.tooFar || _focusRun != null)) s.point!,
     ];
     final path = [
       if (_office != null && _focusRun == null) _office!,
@@ -558,7 +623,6 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     ];
     final km = pathKm(path);
     final unpinned = shown.where((s) => s.point == null).length;
-    final routeOrder = _order == _Order.route || _focusRun != null;
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -595,17 +659,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                                 '${_days.isEmpty ? '' : ' on ${pickupDaysLabel(_days)}'}',
                       style: t.titleLarge,
                     ),
-                    if (pinned.length > 1 && routeOrder)
+                    if (pinned.length > 1)
                       Text(
                         'One way, nearest stop next · about ${niceKm(km)} '
                         'in a straight line',
-                        style: t.bodyMedium?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
-                      )
-                    else if (_order == _Order.landmark)
-                      Text(
-                        'Sorted by landmark, A to Z',
                         style: t.bodyMedium?.copyWith(
                           color: cs.onSurfaceVariant,
                         ),
@@ -658,7 +715,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                 compact: true,
                 icon: Icons.filter_alt_off_outlined,
                 title: 'No pickups match',
-                message: 'Try other days or All landmarks.',
+                message: 'Try other days, or tap Any day.',
               ),
             ),
           for (var i = 0; i < shown.length; i++)
@@ -669,7 +726,12 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                 number: i + 1,
                 fromPrev: _legKm(shown, i),
                 selected: shown[i].ref == _selected,
+                maxKm: _maxKm,
                 onTap: () => _select(shown[i]),
+                onReceive: _canReceive ? () => _receive(shown[i]) : null,
+                onDecline: _canReceive && shown[i].tooFar
+                    ? () => _decline(shown[i])
+                    : null,
               ),
             ),
           if (unpinned > 0)
@@ -706,9 +768,8 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
 
   /// Straight-line distance from the previous pinned stop (or the office).
   double? _legKm(List<_Stop> shown, int i) {
-    if (_order != _Order.route && _focusRun == null) return null;
     final p = shown[i].point;
-    if (p == null) return null;
+    if (p == null || (shown[i].tooFar && _focusRun == null)) return null;
     for (var k = i - 1; k >= 0; k--) {
       final q = shown[k].point;
       if (q != null) return kmBetween(q, p);
@@ -726,13 +787,10 @@ class _FilterCard extends StatelessWidget {
   final Set<int> days;
   final PickupRules rules;
   final Map<int, int> dayCounts;
-  final List<MapEntry<String, int>> areas;
-  final String? area;
-  final _Order order;
   final Map<String, dynamic>? focusRun;
+  final int farCount;
+  final double maxKm;
   final ValueChanged<Set<int>> onDays;
-  final ValueChanged<String?> onArea;
-  final ValueChanged<_Order> onOrder;
   final VoidCallback onClearRun;
   final VoidCallback onFit;
 
@@ -740,13 +798,10 @@ class _FilterCard extends StatelessWidget {
     required this.days,
     required this.rules,
     required this.dayCounts,
-    required this.areas,
-    required this.area,
-    required this.order,
     required this.focusRun,
+    required this.farCount,
+    required this.maxKm,
     required this.onDays,
-    required this.onArea,
-    required this.onOrder,
     required this.onClearRun,
     required this.onFit,
   });
@@ -833,64 +888,29 @@ class _FilterCard extends StatelessWidget {
               textAlign: TextAlign.center,
               style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
             ),
-            Gaps.v8,
-            SizedBox(
-              height: 36,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
+            if (farCount > 0) ...[
+              Gaps.v8,
+              Row(
                 children: [
-                  _OrderToggle(order: order, onChanged: onOrder),
-                  Gaps.h8,
-                  ChoiceChip(
-                    avatar: const Icon(Icons.place_outlined, size: 16),
-                    label: const Text('All landmarks'),
-                    selected: area == null,
-                    onSelected: (_) => onArea(null),
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    size: 16,
+                    color: AppColors.danger,
                   ),
-                  for (final a in areas) ...[
-                    Gaps.h4,
-                    ChoiceChip(
-                      label: Text('${a.key} (${a.value})'),
-                      selected: area == a.key,
-                      onSelected: (_) => onArea(area == a.key ? null : a.key),
+                  Gaps.h4,
+                  Expanded(
+                    child: Text(
+                      '$farCount pickup${farCount == 1 ? ' is' : 's are'} more '
+                      'than ${maxKm.round()} km from the CSWS office',
+                      style: t.labelMedium?.copyWith(color: AppColors.danger),
                     ),
-                  ],
+                  ),
                 ],
               ),
-            ),
+            ],
           ],
         ),
       ),
-    );
-  }
-}
-
-class _OrderToggle extends StatelessWidget {
-  final _Order order;
-  final ValueChanged<_Order> onChanged;
-  const _OrderToggle({required this.order, required this.onChanged});
-
-  @override
-  Widget build(BuildContext context) {
-    return SegmentedButton<_Order>(
-      showSelectedIcon: false,
-      style: const ButtonStyle(visualDensity: VisualDensity.compact),
-      segments: const [
-        ButtonSegment(
-          value: _Order.route,
-          icon: Icon(Icons.route, size: 16),
-          label: Text('Nearest'),
-          tooltip: 'Number the pins in a one-way order, nearest stop next',
-        ),
-        ButtonSegment(
-          value: _Order.landmark,
-          icon: Icon(Icons.sort_by_alpha, size: 16),
-          label: Text('A–Z'),
-          tooltip: 'Sort by landmark, A to Z',
-        ),
-      ],
-      selected: {order},
-      onSelectionChanged: (s) => onChanged(s.first),
     );
   }
 }
@@ -901,23 +921,33 @@ class _Pin extends StatelessWidget {
   final String label;
   final bool selected;
   final bool inRun;
+  final bool far;
   final VoidCallback onTap;
   const _Pin({
     required this.number,
     required this.label,
     required this.selected,
     required this.inRun,
+    required this.far,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final color = inRun ? AppColors.success : cs.primary;
+    final color = far
+        ? AppColors.danger
+        : inRun
+        ? AppColors.success
+        : cs.primary;
     return Semantics(
       button: true,
       selected: selected,
-      label: inRun ? '$label, in a DRRMO request' : label,
+      label: [
+        label,
+        if (far) 'far from the CSWS office',
+        if (inRun) 'in a DRRMO request',
+      ].join(', '),
       excludeSemantics: true,
       onTap: onTap,
       child: GestureDetector(
@@ -1077,13 +1107,19 @@ class _StopTile extends StatelessWidget {
   final int number;
   final double? fromPrev;
   final bool selected;
+  final double maxKm;
   final VoidCallback onTap;
+  final VoidCallback? onReceive; // Main Office: open the entry to receive
+  final VoidCallback? onDecline; // Main Office: decline a far pickup
   const _StopTile({
     required this.stop,
     required this.number,
     required this.fromPrev,
     required this.selected,
+    required this.maxKm,
     required this.onTap,
+    this.onReceive,
+    this.onDecline,
   });
 
   @override
@@ -1115,6 +1151,8 @@ class _StopTile extends StatelessWidget {
                   radius: 15,
                   backgroundColor: stop.point == null
                       ? cs.surfaceContainerHighest
+                      : stop.tooFar
+                      ? AppColors.danger
                       : run != null
                       ? AppColors.success
                       : cs.primary,
@@ -1153,6 +1191,66 @@ class _StopTile extends StatelessWidget {
                       stop.address,
                       style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                     ),
+                  if (stop.tooFar) ...[
+                    Gaps.v8,
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: Space.xs,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.danger.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(Radii.sm),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.warning_amber_rounded,
+                            size: 16,
+                            color: AppColors.danger,
+                          ),
+                          Gaps.h4,
+                          Flexible(
+                            child: Text(
+                              'Far: about ${stop.km?.round()} km from the CSWS '
+                              'office (limit ${maxKm.round()} km)',
+                              style: t.labelMedium?.copyWith(
+                                color: AppColors.danger,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (b['donor'] != null) ...[
+                    Gaps.v8,
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.person_outline,
+                          size: 18,
+                          color: cs.onSurfaceVariant,
+                        ),
+                        Gaps.h4,
+                        Flexible(
+                          child: Text(
+                            '${b['donor']}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: t.bodyMedium,
+                          ),
+                        ),
+                        if ('${b['donor_contact'] ?? ''}'
+                            .trim()
+                            .isNotEmpty) ...[
+                          Gaps.h8,
+                          ContactButtons(phone: '${b['donor_contact']}'),
+                        ],
+                      ],
+                    ),
+                  ],
                   Gaps.v8,
                   Wrap(
                     spacing: 4,
@@ -1230,6 +1328,31 @@ class _StopTile extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (onReceive != null || onDecline != null) ...[
+                    Gaps.v4,
+                    Wrap(
+                      spacing: Space.xs,
+                      runSpacing: Space.xs,
+                      children: [
+                        if (onReceive != null)
+                          FilledButton.tonalIcon(
+                            onPressed: onReceive,
+                            icon: const Icon(Icons.qr_code_scanner, size: 18),
+                            label: const Text('Open to receive goods'),
+                          ),
+                        if (onDecline != null)
+                          OutlinedButton.icon(
+                            onPressed: onDecline,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.danger,
+                              side: const BorderSide(color: AppColors.danger),
+                            ),
+                            icon: const Icon(Icons.block, size: 18),
+                            label: const Text('Decline: too far'),
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
