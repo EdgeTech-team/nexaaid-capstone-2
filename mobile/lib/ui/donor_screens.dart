@@ -1,45 +1,21 @@
 import 'package:flutter/material.dart';
 
+import 'report_filters.dart';
 import 'widgets.dart';
 import 'donate_screen.dart';
 export 'donate_screen.dart' show DonateScreen, DonationReceipt;
 
 /// Ivan's note #2: the signed-in donor / relief organization's middle tab.
-/// It shows every validated report, split into Active (still needs help,
-/// with Donate buttons) and Done (reached 100%, with its final progress).
-/// Reports stay "Validated" after they are fulfilled, so both lists come
-/// from GET /lookups `validated_reports`.
+/// It shows every validated report, active and done, in one list. There is
+/// no separate Done section (Ivan's note): fulfilled reports are found with
+/// the "Fulfilled" progress chip or by sorting. Reports stay "Validated"
+/// after they are fulfilled, so the list comes from GET /lookups
+/// `validated_reports`.
 class DonorReportsTab extends StatelessWidget {
   const DonorReportsTab({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return DefaultTabController(
-      length: 2,
-      child: Column(
-        children: [
-          Material(
-            color: cs.surface,
-            child: const TabBar(
-              tabs: [
-                Tab(text: 'Active'),
-                Tab(text: 'Done'),
-              ],
-            ),
-          ),
-          const Expanded(
-            child: TabBarView(
-              children: [
-                ReportsFeed(done: false),
-                ReportsFeed(done: true),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const ReportsFeed();
 }
 
 /// UC-D2 / UC-R2 step 1-3: browse validated reports and pick one to
@@ -58,6 +34,8 @@ class ReportsFeed extends StatefulWidget {
 class _ReportsFeedState extends State<ReportsFeed> {
   String search = '';
   String? barangay, type, priority;
+  String? progress; // fulfillment status, null = any
+  ReportSort sort = ReportSort.urgent;
 
   Widget _filter(
     String hint,
@@ -97,7 +75,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
           return done ? full : !full;
         }).toList();
         final q = search.toLowerCase();
-        final reports = all.where((r) {
+        final matching = all.where((r) {
           final text = [
             r['barangay'],
             r['sitio'],
@@ -110,6 +88,11 @@ class _ReportsFeedState extends State<ReportsFeed> {
               (type == null || r['disaster'] == type) &&
               (priority == null || r['priority_level'] == priority);
         }).toList();
+        final reports = sortAndFilterReports(
+          matching,
+          fulfillment: progress,
+          sort: sort,
+        );
         return ListView(
           padding: EdgeInsets.zero,
           children: [
@@ -122,7 +105,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 children: [
                   Text(
                     done == null
-                        ? 'Validated Disaster Reports'
+                        ? 'All Reports'
                         : done
                         ? 'Completed Reports'
                         : 'Active Reports',
@@ -135,8 +118,8 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   const SizedBox(height: 6),
                   Text(
                     done == null
-                        ? 'Browse and support relief efforts for validated '
-                              'disaster reports in Mandaue City'
+                        ? 'Every validated report in Mandaue City, active and '
+                              'done. Filter by progress or sort below.'
                         : done
                         ? 'Reports that received everything they needed. '
                               'Thank you to everyone who helped.'
@@ -207,6 +190,21 @@ class _ReportsFeedState extends State<ReportsFeed> {
                     'Low',
                     'Needs Review',
                   ], (v) => setState(() => priority = v)),
+                  // Fulfillment status filter and sort (Ivan's note):
+                  // replaces the separate Done section.
+                  if (done == null) ...[
+                    const SizedBox(height: 10),
+                    FulfillmentChips(
+                      rows: matching,
+                      value: progress,
+                      onChanged: (v) => setState(() => progress = v),
+                    ),
+                    const SizedBox(height: 10),
+                    ReportSortField(
+                      value: sort,
+                      onChanged: (v) => setState(() => sort = v),
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   Text.rich(
                     TextSpan(
@@ -357,7 +355,8 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 ),
               ),
             ),
-               if (widget.done != true) ...[
+            // A fulfilled report has what it needs: no Donate button.
+            if (widget.done != true && state != 'Fulfilled') ...[
               const SizedBox(height: 10),
               FilledButton(
                 onPressed: () => Navigator.of(context).push(
