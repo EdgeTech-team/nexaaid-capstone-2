@@ -76,7 +76,16 @@ class _Line {
 class DonateScreen extends StatefulWidget {
   final Map<String, dynamic> report;
   final Names names;
-  const DonateScreen({super.key, required this.report, required this.names});
+
+  /// Oct 11: the donor changes a donation still waiting (or declined). The
+  /// form opens filled in; saving keeps the same QR reference.
+  final Map? edit;
+  const DonateScreen({
+    super.key,
+    required this.report,
+    required this.names,
+    this.edit,
+  });
 
   @override
   State<DonateScreen> createState() => _DonateScreenState();
@@ -104,9 +113,46 @@ class _DonateScreenState extends State<DonateScreen> {
   final guestPhone = TextEditingController();
   bool busy = false;
 
+  bool get _editing => widget.edit != null;
+
+  /// Fill the form from the donation being changed.
+  void _fillFromEntry(Map e) {
+    lines
+      ..forEach((l) => l.dispose())
+      ..clear();
+    for (final i in (e['items'] as List? ?? const []).cast<Map>()) {
+      final l = _Line()
+        ..itemId = '${i['item_id']}'
+        ..qty.text = '${i['quantity']}';
+      final pack = '${i['packaging'] ?? ''}';
+      if (packagingOptions.contains(pack)) {
+        l.packaging = pack;
+      } else {
+        l.packaging = 'Other';
+        l.otherPackaging.text = pack;
+      }
+      final value = i['estimated_value'];
+      if (value != null) l.value.text = '$value';
+      lines.add(l);
+    }
+    if (lines.isEmpty) lines.add(_Line());
+    handover = '${e['handover_method'] ?? 'Drop Off'}';
+    pickupLandmark.text = '${e['pickup_landmark'] ?? ''}';
+    pickupAddress.text = '${e['pickup_address'] ?? ''}';
+    pickupNotes.text = '${e['pickup_notes'] ?? ''}';
+    pickupDays = pickupDaysOf(e['pickup_days']);
+    final lat = (e['pickup_lat'] as num?)?.toDouble();
+    final lng = (e['pickup_lng'] as num?)?.toDouble();
+    picked = lat != null && lng != null
+        ? PickedAddress(pickupLandmark.text, lat: lat, lng: lng)
+        : null;
+    useSavedAddress = false; // show the address that was given
+  }
+
   @override
   void initState() {
     super.initState();
+    if (_editing) _fillFromEntry(widget.edit!);
     PickupRules.load().then((rules) {
       if (mounted) setState(() => pickupRules = rules);
     });
@@ -117,7 +163,7 @@ class _DonateScreenState extends State<DonateScreen> {
         if (r.ok) a = r.json['profile']?['address'] as String?;
         setState(() {
           savedAddress = (a ?? '').trim().isEmpty ? null : a;
-          useSavedAddress = savedAddress != null;
+          useSavedAddress = savedAddress != null && !_editing;
         });
       });
     }
@@ -199,7 +245,7 @@ class _DonateScreenState extends State<DonateScreen> {
         : PickedAddress(landmarkText);
     setState(() => busy = true);
     final body = <String, dynamic>{
-      'report_id': widget.report['id'],
+      if (!_editing) 'report_id': widget.report['id'],
       'handover_method': handover,
       if (door) ...{
         'pickup_address': useSaved ? savedAddress : typedAddress,
@@ -213,13 +259,18 @@ class _DonateScreenState extends State<DonateScreen> {
           'pickup_notes': pickupNotes.text.trim(),
       },
       'items': [for (final l in lines) l.toJson()],
-      if (!api.loggedIn)
+      if (!api.loggedIn && !_editing)
         'guest_donor': {
           'full_name': guestName.text.trim(),
           'contact_number': guestPhone.text.trim(),
         },
     };
-    final r = await api.post('/donations/batch', body: body);
+    final r = _editing
+        ? await api.put(
+            '/donations/entries/${Uri.encodeComponent('${widget.edit!['batch_reference']}')}',
+            body: body,
+          )
+        : await api.post('/donations/batch', body: body);
     if (!mounted) return;
     setState(() => busy = false);
     if (!r.ok || r.json is! Map) {
@@ -227,6 +278,11 @@ class _DonateScreenState extends State<DonateScreen> {
         r.status == 0 ? 'Cannot reach the server' : r.errorText,
         error: true,
       );
+      return;
+    }
+    if (_editing) {
+      _snack('Donation updated. Same QR code.');
+      Navigator.of(context).pop(true);
       return;
     }
     Navigator.of(context).pushReplacement(
@@ -525,8 +581,7 @@ class _DonateScreenState extends State<DonateScreen> {
           ],
           // 3. Pickup days: a pop-out with M / T / W / Th / F buttons.
           FormField<Set<int>>(
-            validator: (_) =>
-                handover == 'Door to Door' && pickupDays.isEmpty
+            validator: (_) => handover == 'Door to Door' && pickupDays.isEmpty
                 ? 'Choose at least one day you are home'
                 : null,
             builder: (field) => InkWell(
@@ -538,7 +593,8 @@ class _DonateScreenState extends State<DonateScreen> {
                   prefixIcon: const Icon(Icons.event_available_outlined),
                   suffixIcon: const Icon(Icons.edit_calendar_outlined),
                   errorText: field.errorText,
-                  helperText: 'Pickup hours are ${pickupHoursLabel(pickupRules)}',
+                  helperText:
+                      'Pickup hours are ${pickupHoursLabel(pickupRules)}',
                 ),
                 child: pickupDays.isEmpty
                     ? Text(
@@ -668,8 +724,8 @@ class _DonateScreenState extends State<DonateScreen> {
               ),
               Gaps.h12,
               AppButton(
-                'Submit & get QR code',
-                icon: Icons.qr_code_2,
+                _editing ? 'Save changes' : 'Submit & get QR code',
+                icon: _editing ? Icons.check : Icons.qr_code_2,
                 variant: AppButtonVariant.donate,
                 loading: busy,
                 onPressed: busy ? null : _submit,
@@ -686,7 +742,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final side = _sidePadding(context);
     final door = handover == 'Door to Door';
     return Scaffold(
-      appBar: AppBar(title: const Text('Donate goods')),
+      appBar: AppBar(title: Text(_editing ? 'Edit donation' : 'Donate goods')),
       bottomNavigationBar: _submitBar(),
       body: Form(
         key: _form,

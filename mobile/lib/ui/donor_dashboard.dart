@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult;
 import 'donation_entries_view.dart';
-import 'expiry_widgets.dart';
 import 'donor_screens.dart' show DonateScreen, ReportsFeed;
 import 'qr_save.dart';
 import 'widgets.dart';
@@ -52,15 +51,13 @@ num _percent(Map r) => r['fulfillment_percentage'] as num? ?? 0;
 Map<String, dynamic>? mostUrgentReport(List<Map<String, dynamic>> reports) {
   final open = reports.where((r) => _percent(r) < 100).toList()
     ..sort((a, b) {
-      final byPriority = PriorityColors.rank(
-        a['priority_level'] as String?,
-      ).compareTo(PriorityColors.rank(b['priority_level'] as String?));
-      return byPriority != 0
-          ? byPriority
-          : _percent(a).compareTo(_percent(b));
+      final byPriority = PriorityColors.rank(a['priority_level'] as String?)
+          .compareTo(PriorityColors.rank(b['priority_level'] as String?));
+      return byPriority != 0 ? byPriority : _percent(a).compareTo(_percent(b));
     });
   return open.isEmpty ? null : open.first;
-} 
+}
+
 class DonorDashboard extends StatefulWidget {
   const DonorDashboard({super.key});
 
@@ -69,6 +66,7 @@ class DonorDashboard extends StatefulWidget {
 }
 
 class _DonorDashboardState extends State<DonorDashboard> {
+  int _loads = 0; // a new value reloads the page (after an edit or delete)
   void _openFeed() => Navigator.of(context).push(
     MaterialPageRoute(
       builder: (_) => Scaffold(
@@ -76,7 +74,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
         body: const ReportsFeed(done: false),
       ),
     ),
-   );
+  );
 
   void _donate(Map<String, dynamic> report, Names names) =>
       Navigator.of(context).push(
@@ -88,6 +86,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
   @override
   Widget build(BuildContext context) {
     return Loader(
+      key: ValueKey(_loads),
       load: [() => api.get('/donations/mine'), api.lookupsResult],
       builder: (context, data) {
         final m = data[0] as Map;
@@ -102,7 +101,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
         return ListView(
           padding: const EdgeInsets.only(bottom: Space.xl),
           children: [
-            _DashboardHero( 
+            _DashboardHero(
               profile: profile,
               isOrg: isOrg,
               urgent: urgent == null
@@ -166,17 +165,23 @@ class _DonorDashboardState extends State<DonorDashboard> {
                         labels: donationLifecycleLabels,
                         current: _lifecycleStatus(e),
                       ),
-                      onTap: (e) => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => DonationDetailScreen(entry: e),
-                        ),
-                      ),
+                      onTap: (e) async {
+                        final changed = await Navigator.of(context).push<bool>(
+                          MaterialPageRoute(
+                            builder: (_) => DonationDetailScreen(entry: e),
+                          ),
+                        );
+                        if (changed == true && mounted) {
+                          setState(() => _loads++);
+                        }
+                      },
                     ),
 
                   // ---- Supported reports --------------------------------
                   const SectionHeader(
                     'Reports you supported',
-                    subtitle: 'How close each report is to getting what it '
+                    subtitle:
+                        'How close each report is to getting what it '
                         'needs.',
                   ),
                   if (supported.isEmpty)
@@ -270,9 +275,7 @@ class _DashboardHero extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text(
-                  isOrg
-                      ? 'Relief organization'
-                      : 'Thank you for helping families get back on their feet.',
+                  isOrg ? 'Relief organization' : 'Thank you for helping families get back on their feet.',
                   textAlign: TextAlign.center,
                   style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
                 ),
@@ -304,6 +307,7 @@ class _DashboardHero extends StatelessWidget {
     );
   }
 }
+
 /// The hero's highlighted report (same look as the landing page's card).
 class _UrgentReportCard extends StatelessWidget {
   final Map<String, dynamic> report;
@@ -506,6 +510,71 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
     '/donations/batch/${widget.entry['batch_reference']}/qr',
   );
 
+  /// Opens the donate form filled in with this donation.
+  Future<void> _edit(BuildContext context, Map e) async {
+    final lookups = await api.lookupsResult();
+    if (!context.mounted) return;
+    final names = Names(
+      lookups.ok && lookups.json is Map
+          ? Map<String, dynamic>.from(lookups.json as Map)
+          : <String, dynamic>{},
+    );
+    final info = e['report'] as Map? ?? const {};
+    final report =
+        names
+            .rows('validated_reports')
+            .where((r) => '${r['id'] ?? r['report_id']}' == '${e['report_id']}')
+            .firstOrNull ??
+        {
+          'id': e['report_id'],
+          'disaster': info['disaster'] ?? 'Disaster',
+          'barangay': info['barangay'] ?? '',
+          'assistance_needed': info['assistance_needed'],
+          'priority_level': info['priority_level'],
+        };
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => DonateScreen(report: report, names: names, edit: e),
+      ),
+    );
+    // Back to the list, which reloads with the changes.
+    if (saved == true && context.mounted) Navigator.of(context).pop(true);
+  }
+
+  Future<void> _delete(BuildContext context, Map e) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.delete_outline, color: AppColors.danger),
+        title: const Text('Delete this donation?'),
+        content: Text(
+          '${e['batch_reference']} and its QR code will be removed. '
+          'CSWS will no longer wait for it.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep it'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (yes != true || !context.mounted) return;
+    final r = await act(
+      context,
+      () => api.delete(
+        '/donations/entries/${Uri.encodeComponent('${e['batch_reference']}')}',
+      ),
+      success: 'Donation deleted',
+    );
+    if (r.ok && context.mounted) Navigator.of(context).pop(true);
+  }
+
   @override
   Widget build(BuildContext context) {
     final e = widget.entry;
@@ -620,27 +689,81 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
             const SectionHeader('Report progress'),
             _ReportProgress(report: report),
           ],
-          // Withdraw while it is still waiting (only waiting items are
-          // cancelled; anything CSWS received stays received).
-          if (hasWaitingItems(e)) ...[
+          // Oct 11: while nothing of it was received, the donor can change
+          // or delete it. Staff lists follow by themselves (no notices).
+          if (canEditDonation(e) || canDeleteDonation(e)) ...[
             Gaps.v24,
-            OutlinedButton.icon(
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.danger,
-                minimumSize: const Size.fromHeight(48),
+            if (canEditDonation(e))
+              AppButton(
+                e['status'] == 'Cancelled'
+                    ? 'Fix and send again'
+                    : 'Edit donation',
+                icon: Icons.edit_outlined,
+                expand: true,
+                onPressed: () => _edit(context, e),
               ),
-              onPressed: () async {
-                if (await cancelDonation(context, e) && context.mounted) {
-                  Navigator.pop(context);
-                }
-              },
-              icon: const Icon(Icons.block),
-              label: const Text('I can no longer give this donation'),
-            ),
+            if (canDeleteDonation(e)) ...[
+              Gaps.v12,
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.danger,
+                  side: const BorderSide(color: AppColors.danger),
+                  minimumSize: const Size.fromHeight(48),
+                ),
+                onPressed: () => _delete(context, e),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Delete donation'),
+              ),
+            ],
           ],
           Gaps.v24,
         ],
       ),
     );
   }
+}
+
+/// Nothing of it was received yet: every item is waiting, or it was
+/// cancelled or declined (fixing it sends it again).
+bool canEditDonation(Map e) {
+  final items = (e['items'] as List? ?? const []).cast<Map>();
+  return items.isNotEmpty &&
+      items.every(
+        (i) => i['status'] == 'Pending' || i['status'] == 'Cancelled',
+      );
+}
+
+/// Same, and expired ones can be deleted too.
+bool canDeleteDonation(Map e) {
+  final items = (e['items'] as List? ?? const []).cast<Map>();
+  return items.isNotEmpty &&
+      items.every(
+        (i) => const {'Pending', 'Cancelled', 'Expired'}.contains(i['status']),
+      );
+}
+
+/// A donation notification was tapped: open that donation's own page
+/// (Oct 11), not the whole dashboard. If it was deleted, say so.
+Future<void> openMyDonation(BuildContext context, int donationId) async {
+  final r = await api.get('/donations/mine');
+  if (!context.mounted) return;
+  final entries = r.ok && r.json is Map
+      ? ((r.json as Map)['entries'] as List? ?? const []).cast<Map>()
+      : const <Map>[];
+  final entry = entries
+      .where(
+        (e) => (e['items'] as List? ?? const []).any(
+          (i) => (i as Map)['donation_id'] == donationId,
+        ),
+      )
+      .firstOrNull;
+  if (entry == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('This donation is no longer in your list.')),
+    );
+    return;
+  }
+  await Navigator.of(
+    context,
+  ).push(MaterialPageRoute(builder: (_) => DonationDetailScreen(entry: entry)));
 }
