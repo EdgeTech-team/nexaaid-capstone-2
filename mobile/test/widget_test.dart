@@ -6,6 +6,7 @@ import 'package:mobile/design/design.dart';
 import 'package:mobile/dev_console.dart';
 import 'package:mobile/main.dart';
 import 'package:mobile/modules.dart';
+import 'package:mobile/ui/theme_toggle.dart';
 
 void main() {
   // Tests cannot download fonts.
@@ -20,8 +21,8 @@ void main() {
     expect(find.text('Register as donor or organization'), findsOneWidget);
     expect(find.text('Donate as guest'), findsOneWidget);
     expect(find.text('How it works', skipOffstage: false), findsOneWidget);
-    // Light/dark picker: on the landing page header.
-    expect(find.byTooltip('Light or dark mode'), findsOneWidget);
+    // Light/dark toggle: on the landing page header.
+    expect(find.byType(SunMoonToggle), findsOneWidget);
   });
 
   testWidgets('Landing page questions open one at a time', (tester) async {
@@ -44,17 +45,20 @@ void main() {
     );
   });
 
-  testWidgets('Landing page light/dark picker switches the theme', (
+  testWidgets('Landing page sun/moon toggle switches light and dark', (
     tester,
   ) async {
     await tester.pumpWidget(const NexaAidApp());
-    await tester.tap(find.byTooltip('Light or dark mode'));
+    // One tap, no menu: light -> dark -> light.
+    await tester.tap(find.byType(SunMoonToggle));
     await tester.pumpAndSettle();
-    expect(find.text('System'), findsOneWidget);
-    expect(find.text('Light'), findsOneWidget);
-    await tester.tap(find.text('Dark'));
-    await tester.pumpAndSettle();
+    expect(find.text('System'), findsNothing);
     expect(AppTheme.mode.value, ThemeMode.dark);
+    expect(find.byIcon(Icons.dark_mode), findsOneWidget);
+    await tester.tap(find.byType(SunMoonToggle));
+    await tester.pumpAndSettle();
+    expect(AppTheme.mode.value, ThemeMode.light);
+    expect(find.byIcon(Icons.light_mode), findsOneWidget);
     AppTheme.mode.value = ThemeMode.system;
   });
 
@@ -84,8 +88,7 @@ void main() {
     expect(find.byType(BackdropFilter), findsWidgets);
     expect(find.byTooltip('Close'), findsOneWidget);
     // No light/dark toggle inside the pop-up: only the landing page's one.
-    expect(find.byTooltip('Dark mode'), findsNothing);
-    expect(find.byTooltip('Light or dark mode'), findsOneWidget);
+    expect(find.byType(SunMoonToggle), findsOneWidget);
   });
 
   testWidgets('Guest lands on the donate tab', (tester) async {
