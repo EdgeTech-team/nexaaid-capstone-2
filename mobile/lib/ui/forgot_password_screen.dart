@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../api.dart' show ApiResult;
 import 'validators.dart';
 import 'widgets.dart';
+
 /// UI concern (login page): "Forgot password?" asks for the email.
 /// Backend (feat/password-reset): POST /auth/forgot-password emails a
 /// 6-digit code that expires in 15 minutes; POST /auth/reset-password sets
@@ -133,8 +134,10 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     );
   }
 
-  Widget _gap(Widget child) =>
-      Padding(padding: const EdgeInsets.only(bottom: Space.md), child: child);
+  Widget _gap(Widget child) => Padding(
+    padding: const EdgeInsets.only(bottom: Space.md),
+    child: child,
+  );
 
   @override
   Widget build(BuildContext context) {

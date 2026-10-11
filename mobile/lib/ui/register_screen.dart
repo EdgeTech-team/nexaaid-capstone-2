@@ -12,10 +12,11 @@ import 'widgets.dart';
 /// UC-D1 Register Individual Donor (adviser item 2) and organization
 /// registration (UC-A2).
 ///
-/// Capstone 2 adviser comments 1.1 and 1.3: the registration number and
-/// supporting document are optional for every organization type, and are
-/// hidden for Government (which is verified through a separate pathway).
-/// Both donor and organization accounts are validated automatically. The
+/// Capstone 2 adviser comments 1.1 and 1.3: the supporting document is
+/// optional for every organization type and is hidden for Government (which
+/// is verified through a separate pathway). The organization no longer
+/// enters a registration number. Both donor and organization accounts are
+/// validated automatically and sign in right after registering. The
 /// Administrator's view is for review only.
 ///
 /// Every rule here is repeated by the backend (schemas/user_schema.py,
@@ -38,7 +39,8 @@ class RegisterScreen extends StatefulWidget {
 /// Opens donor ([org] false) or organization registration as a pop-up
 /// over the landing page. Only the close button closes it, so a stray tap
 /// outside doesn't lose what was typed. After a successful registration
-/// the login pop-up opens so the new account can sign in right away.
+/// the new account is signed in automatically and goes straight to its
+/// home screen. The login pop-up only opens if that sign-in fails.
 Future<void> showRegisterPopup(
   BuildContext context, {
   required bool org,
@@ -79,8 +81,8 @@ const organizationTypes = [
 ];
 
 /// Same list as backend TYPES_WITHOUT_REGISTRATION. These organization types
-/// are not registered like private organizations, so the registration number
-/// and supporting document are hidden for them.
+/// are not registered like private organizations, so the supporting document
+/// is hidden for them.
 const organizationTypesWithoutRegistration = ['Government'];
 
 /// D3: Terms and Conditions shown in the dialog. Edit the wording with the
@@ -102,6 +104,33 @@ const termsAndConditionsText =
     'relief.\n\n'
     '6. Account security. Keep your password private. You are responsible '
     'for activity under your account.';
+
+/// Same list as backend RESERVED_USERNAMES (core/usernames.py).
+const reservedUsernames = [
+  'admin',
+  'administrator',
+  'nexaaid',
+  'support',
+  'root',
+];
+
+/// Organization login username. Same rules as backend clean_username():
+/// 4 to 30 characters, starts with a letter, then letters, numbers,
+/// underscores or periods. Saved in lowercase. Returns null when valid.
+String? usernameError(String raw) {
+  final u = raw.trim().toLowerCase();
+  if (u.isEmpty) return 'Username is required';
+  if (u.length < 4 || u.length > 30) return 'Use 4 to 30 characters';
+  if (!RegExp(r'^[a-z][a-z0-9_.]*$').hasMatch(u)) {
+    return 'Start with a letter, then use only letters, numbers, '
+        'underscores or periods';
+  }
+  if (u.contains('..') || u.endsWith('.')) {
+    return 'No two periods in a row, and do not end with a period';
+  }
+  if (reservedUsernames.contains(u)) return 'That username is not available';
+  return null;
+}
 
 class _RegisterScreenState extends State<RegisterScreen> {
   final _form = GlobalKey<FormState>();
@@ -141,10 +170,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Validators.personName(c('first_name').text, label: 'First name'),
       'last_name': () =>
           Validators.personName(c('last_name').text, label: 'Last name'),
-      // Optional: only checked when the organization typed something.
-      'registration_no': () => _showDocs && v('registration_no').isNotEmpty
-          ? Validators.registrationNo(c('registration_no').text)
-          : null,
+      'username': () => usernameError(c('username').text),
     } else ...{
       'first_name': () =>
           Validators.personName(c('first_name').text, label: 'First name'),
@@ -165,8 +191,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ),
   };
 
-  /// True when the registration number and supporting document fields are
-  /// shown: any chosen type except Government. Both are optional.
+  /// True when the supporting document field is shown: any chosen type
+  /// except Government. It is optional.
   bool get _showDocs =>
       orgType != null &&
       !organizationTypesWithoutRegistration.contains(orgType);
@@ -219,9 +245,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'contact_first_name': v('first_name'),
                 'contact_last_name': v('last_name'),
                 'contact_email': c('email').text.trim(),
-                // Optional: only sent when the organization filled them in.
-                if (_showDocs && v('registration_no').isNotEmpty)
-                  'registration_no': v('registration_no'),
+                // The organization's login name, saved in lowercase.
+                'username': v('username').toLowerCase(),
+                // Optional: only sent when the organization uploaded one.
                 if (_showDocs && legitimacyDoc != null)
                   'legitimacy_document': _ref(legitimacyDoc!),
               },
@@ -240,7 +266,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
               },
             ),
       // Adviser comment 1.3: validated automatically for both.
-      success: 'Account created.',
+      success: widget.org
+          ? 'Welcome to NexaAid! Your organization account is ready.'
+          : 'Account created.',
     );
     if (!mounted) return;
     setState(() => busy = false);
@@ -494,8 +522,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           children: [
             Text(
               widget.org
-                  ? 'Your organization account is active right away. The '
-                        'Administrator may review your details later.'
+                  ? 'Your organization account is active as soon as you '
+                        'register, and you\'ll go straight to your dashboard. '
+                        'The Administrator may review your details afterward.'
                   : 'Your account is active right away. The Administrator '
                         'may review your ID later.',
               style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
@@ -511,9 +540,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               _dropdown('Organization type', orgType, organizationTypes, (x) {
                 orgType = x;
-                // Clear the hidden values when the type does not use them.
+                // Clear the hidden upload when the type does not use it.
                 if (organizationTypesWithoutRegistration.contains(x)) {
-                  c('registration_no').clear();
                   legitimacyDoc = null;
                 }
               }),
@@ -521,15 +549,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 _text('org_type_other', 'Please specify the type'),
               _address(),
               // Optional for every type except Government (hidden).
-              if (_showDocs) ...[
-                _text(
-                  'registration_no',
-                  'Registration number (optional)',
-                  icon: Icons.badge_outlined,
-                  helper:
-                      'SEC, DTI, CDA or DSWD number, if your '
-                      'organization has one.',
-                ),
+              if (_showDocs)
                 _upload(
                   'Supporting document (optional)',
                   'legitimacy_document',
@@ -541,7 +561,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       'only if you have one. Only the Administrator can see '
                       'it.',
                 ),
-              ],
               SectionHeader('Contact person'),
             ] else
               SectionHeader('About you'),
@@ -581,7 +600,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     'Administrator can see your ID.',
               ),
             ],
-            SectionHeader('Password'),
+            SectionHeader(widget.org ? 'Log in details' : 'Password'),
+            if (widget.org)
+              _text(
+                'username',
+                'Username',
+                icon: Icons.person_outline,
+                helper:
+                    '4 to 30 characters: letters, numbers, underscore or '
+                    'period. Starts with a letter. You can use it or your '
+                    'email to log in.',
+                formatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_.]')),
+                  LengthLimitingTextInputFormatter(30),
+                ],
+                autofill: const [AutofillHints.newUsername],
+              ),
             _text('password', 'Password', password: true),
             _passwordRules(context),
             _text('confirm_password', 'Confirm password', password: true),

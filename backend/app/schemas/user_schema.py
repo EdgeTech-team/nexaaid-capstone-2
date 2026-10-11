@@ -226,7 +226,10 @@ class AccountUpdateRequest(BaseModel):
 class LoginRequest(BaseModel):
     # Fields must be indented under the class line, or Python raises
     # "IndentationError: expected an indented block after class definition".
-    email: EmailStr
+    # Despite the name, this holds an email OR an organization's username
+    # (core/auth.authenticate_user decides which). The name stays "email" so
+    # the app's request body doesn't change.
+    email: str = Field(..., min_length=1, max_length=150)
     password: str
 
 class ForgotPasswordRequest(BaseModel):

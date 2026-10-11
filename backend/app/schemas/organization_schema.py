@@ -5,6 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 from core.names import capitalize_org_words
 from core.passwords import validate_password_strength
+from core.usernames import clean_username
 from core.validators import (
     clean_email, clean_org_name, clean_ph_mobile, clean_registration_no, clean_text,
 )
@@ -23,9 +24,10 @@ TYPES_WITHOUT_REGISTRATION = ("Government",)
 
 class OrganizationRegisterRequest(BaseModel):
     """UC-A2 (the organization side). Capstone 2 adviser comments 1.1 and
-    1.3: the registration number and supporting document are optional (and
-    ignored for Government), and the account is validated automatically. The
-    Administrator's view is for review only."""
+    1.3: the supporting document is optional (and ignored for Government),
+    and the account is validated automatically. The registration form no
+    longer asks for a registration number, but the field is still accepted.
+    The Administrator's view is for review only."""
 
     org_name: str
     organization_type: Literal[ORGANIZATION_TYPES]
@@ -37,6 +39,12 @@ class OrganizationRegisterRequest(BaseModel):
     contact_last_name: str
     registration_no: Optional[str] = None
     contact_email: EmailStr
+    # Login name for the organization account (the contact person's email is
+    # not always the person using the account). The app requires it; the API
+    # still accepts a request without it so older clients and tests keep
+    # working. To make it required here too, change the default to "..." and
+    # remove the None handling in _un below.
+    username: Optional[str] = None
     contact_number: str
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
@@ -81,6 +89,15 @@ class OrganizationRegisterRequest(BaseModel):
     @field_validator("contact_email")
     @classmethod
     def _ce(cls, v): return clean_email(str(v))
+
+    # Optional here, but a filled one must follow the username rules and is
+    # saved in lowercase.
+    @field_validator("username")
+    @classmethod
+    def _un(cls, v):
+        if v is None or not v.strip():
+            return None
+        return clean_username(v)
 
     @field_validator("contact_number")
     @classmethod

@@ -30,14 +30,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 RESET_CODE_MINUTES = 15
 MAX_RESET_ATTEMPTS = 5
 
-# Both endpoints never call db.commit() themselves: get_db commits once at
-# the end, and rolls back if anything raised. So when an uploaded file
-# can't be claimed (expired, wrong token, wrong purpose), the account is
-# not created either.
+# The two register endpoints commit before they answer, because the app signs
+# the new account in right after registering and get_db() would only commit
+# after the response and the email task. Everything is still saved in one
+# commit at the end, so when an uploaded file can't be claimed (expired,
+# wrong token, wrong purpose), the account is not created either: the error
+# is raised first and get_db rolls everything back.
 
 
 def _email_taken(db: Session, email: str) -> bool:
     return db.query(User).filter(func.lower(User.email) == email.lower()).first() is not None
+
+
+def _username_taken(db: Session, username: str) -> bool:
+    # Usernames are saved in lowercase (core/usernames.py), and the schema
+    # already lowercased this one.
+    return db.query(User).filter(User.username == username.lower()).first() is not None
 
 
 def _flush_or_409(db: Session, detail: str) -> None:
@@ -57,10 +65,10 @@ def register_donor(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-  
     """UC-D1 Register Individual Donor (adviser item 2). The account is
-    validated automatically (Capstone 2 adviser comment 1.3); the
-    Administrator is notified and may review the ID afterwards."""
+    validated automatically (Capstone 2 adviser comment 1.3) and the app
+    signs it in right after registering. The Administrator is notified and
+    may review the ID afterwards."""
     if _email_taken(db, payload.email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
@@ -123,13 +131,20 @@ def register_organization(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """UC-A2: the organization registers and is validated automatically
-    (Capstone 2 adviser comment 1.3). The supporting document is optional
-    (comment 1.1); the Administrator reviews the registration afterwards."""
+    """UC-A2: the organization registers, is validated automatically
+    (Capstone 2 adviser comment 1.3) and does not wait for the
+    Administrator: the app signs it in right after registering and it goes
+    straight to its dashboard. The supporting document is optional (comment
+    1.1). The registration form no longer asks for a registration number;
+    the field is still accepted here and stored as NULL when missing. The
+    Administrator reviews the registration afterwards."""
     if _email_taken(db, payload.contact_email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    # Only check for duplicates when a number was given. Religious and Other
-    # organizations may leave it blank (stored as NULL).
+    # The organization's login name. Optional for the API, required by the app.
+    if payload.username and _username_taken(db, payload.username):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
+    # Only check for duplicates when a number was given. The app no longer
+    # sends one, so normally this is skipped (the value is stored as NULL).
     if payload.registration_no and db.query(Organization).filter(
         Organization.registration_no == payload.registration_no
     ).first():
@@ -159,12 +174,15 @@ def register_organization(
         email=payload.contact_email,
         password_hash=hash_password(payload.password),
         contact_number=payload.contact_number,
+        username=payload.username,
         role_id=org_role.role_id,
         organization_id=new_org.organization_id,
         terms_accepted_at=datetime.now(timezone.utc),
     )
     db.add(new_user)
-    _flush_or_409(db, "Email already registered")
+    # Two people taking the same email or username at the same moment end up
+    # here, so the message names both.
+    _flush_or_409(db, "Email or username already registered")
 
     # Adviser comment 1.1: the supporting document is optional. Some
     # organization types (e.g. churches) have no documents.
@@ -187,11 +205,16 @@ def register_organization(
     # Registration confirmation email (never includes the password).
     # authenticate_user() lets the organization sign in right away because
     # its status is already Approved.
+    # The organization can sign in with its username or this email address.
+    login_hint = (
+        f"your username ({new_user.username}) or this email address"
+        if new_user.username else "this email address"
+    )
     background_tasks.add_task(
         send_email, new_user.email, "Welcome to NexaAid",
         f"Hello {new_user.first_name},\n\n"
         f"Your organization, {new_org.org_name}, was registered and is active. "
-        "You can now sign in with this email address.\n\nNexaAid",
+        f"You can now sign in with {login_hint}.\n\nNexaAid",
     )
     # Commit before answering (see register_donor): the app signs in at once.
     db.commit()
