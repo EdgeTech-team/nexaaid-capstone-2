@@ -11,6 +11,7 @@ from api.v1.dashboard_routes import router as dashboard_router
 from api.v1.reports import router as report_router
 from api.v1.deliveries import router as delivery_router
 from api.v1.donation_routes import router as donation_router
+from api.v1.pickup_plan_routes import router as pickup_plan_router
 from api.v1.receiving_routes import router as receiving_router
 from api.v1.session_router import router as session_router
 from api.v1.auth_router import router as auth_router
@@ -71,6 +72,7 @@ app.include_router(delivery_router)
 app.include_router(trips_router)
 app.include_router(delivery_problems_router)   # reschedule / return / cancel
 app.include_router(donation_lifecycle_router)   # before donation_router: fixed paths first
+app.include_router(pickup_plan_router)          # Door to Door pickup plan (Oct 12 pickup logic v2)
 app.include_router(donation_router)
 app.include_router(receiving_router)
 app.include_router(session_router)
