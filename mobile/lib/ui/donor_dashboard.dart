@@ -71,8 +71,6 @@ class DonorDashboard extends StatefulWidget {
 }
 
 class _DonorDashboardState extends State<DonorDashboard> {
-  int _loads = 0; // a new value reloads (after an edit or delete)
-
   /// "See all reports": every validated report, active and done, with the
   /// priority and progress filters (2.4, 3.3).
   void _openAllReports() => Navigator.of(context).push(
@@ -94,14 +92,12 @@ class _DonorDashboardState extends State<DonorDashboard> {
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey(_loads),
       load: [() => api.get('/donations/mine'), api.lookupsResult],
       builder: (context, data) {
         final m = data[0] as Map;
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         final profile = m['profile'] as Map;
         final sum = m['summary'] as Map;
-        final entries = (m['entries'] as List? ?? const []).cast<Map>();
         final supported = (m['supported_reports'] as List).cast<Map>();
         final isOrg = profile['organization'] != null;
         final validated = names.rows('validated_reports');
@@ -180,16 +176,13 @@ class _DonorDashboardState extends State<DonorDashboard> {
                 children: [
                   const SectionHeader(
                     'Latest updates',
-                    subtitle: 'New reports, your donations, and goods that '
-                        'arrived.',
+                    subtitle: 'New reports and goods that arrived.',
                   ),
                   DonorFeed(
                     validated: validated,
-                    entries: entries,
                     supported: helped,
                     donateLabel: donateLabel,
                     onDonate: (r) => _donate(r, names),
-                    onChanged: () => setState(() => _loads++),
                   ),
 
                   // ---- About NexaAid, like the landing page -------------
