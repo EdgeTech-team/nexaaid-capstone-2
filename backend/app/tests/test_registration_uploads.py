@@ -205,6 +205,11 @@ def test_organization_registers_with_document_and_split_contact(api):
     # Registration is active immediately; admin review is tracked separately.
     r = client.post("/token", data={"username": "ops@relief.ph", "password": STRONG_PASSWORD})
     assert r.status_code == 200
+    # The dashboard shows the type under the organization's name (Ivan).
+    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    profile = ok(client.get("/donations/mine", headers=h))["profile"]
+    assert profile["organization"] == "Relief PH"
+    assert profile["organization_type"] == "Other: Cooperative"
     rows = ok(client.get("/admin/organizations?reviewed=false", headers=t["admin"]))
     row = next(o for o in rows if o["organization_id"] == org["organization_id"])
     assert row["reviewed_at"] is None

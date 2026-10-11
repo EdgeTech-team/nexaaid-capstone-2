@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../design/gallery_screen.dart';
 import '../dev_console.dart';
+import 'theme_toggle.dart';
 import 'widgets.dart';
 import 'change_password_screen.dart';
 
@@ -57,13 +58,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (context, devTools, _) => ListView(
         padding: Space.page,
         children: [
-                    header,
+          // Ivan: light / dark mode in the top-right corner.
+          const Align(alignment: Alignment.centerRight, child: SunMoonToggle()),
+          header,
           if (api.loggedIn) ...[
             const SectionHeader('Security'),
             const _SecurityCard(),
           ],
-          const SectionHeader('Appearance'),
-          const _ThemePicker(),
           const SectionHeader('About'),
           AppCard(
             padding: EdgeInsets.zero,
@@ -217,38 +218,6 @@ class _GuestHeader extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _ThemePicker extends StatelessWidget {
-  const _ThemePicker();
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: AppTheme.mode,
-      builder: (context, mode, _) => SegmentedButton<ThemeMode>(
-        segments: const [
-          ButtonSegment(
-            value: ThemeMode.system,
-            icon: Icon(Icons.brightness_auto_outlined),
-            label: Text('System'),
-          ),
-          ButtonSegment(
-            value: ThemeMode.light,
-            icon: Icon(Icons.light_mode_outlined),
-            label: Text('Light'),
-          ),
-          ButtonSegment(
-            value: ThemeMode.dark,
-            icon: Icon(Icons.dark_mode_outlined),
-            label: Text('Dark'),
-          ),
-        ],
-        selected: {mode},
-        onSelectionChanged: (s) => AppTheme.mode.value = s.first,
       ),
     );
   }
