@@ -68,7 +68,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
       load: [api.lookupsResult],
       builder: (context, data) {
         final names = Names(Map<String, dynamic>.from(data[0] as Map));
-        final done = widget.done;
+                final done = widget.done;
         final all = names.rows('validated_reports').where((r) {
           if (done == null) return true;
           final full = (r['fulfillment_percentage'] as num? ?? 0) >= 100;
@@ -93,16 +93,14 @@ class _ReportsFeedState extends State<ReportsFeed> {
           fulfillment: progress,
           sort: sort,
         );
-        final cs = Theme.of(context).colorScheme;
-        final t = Theme.of(context).textTheme;
         return ListView(
           padding: EdgeInsets.zero,
           children: [
             Container(
               width: double.infinity,
-              color: cs.primaryContainer,
+              color: Brand.pinkSoft,
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-              child: Column(
+                            child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
@@ -111,9 +109,10 @@ class _ReportsFeedState extends State<ReportsFeed> {
                         : done
                         ? 'Completed Reports'
                         : 'Active Reports',
-                    style: t.headlineSmall?.copyWith(
+                    style: const TextStyle(
+                      fontSize: 24,
                       fontWeight: FontWeight.w800,
-                      color: cs.onPrimaryContainer,
+                      color: Brand.ink,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -126,7 +125,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                               'Thank you to everyone who helped.'
                         : 'Reports that still need help. Pick one and '
                               'pledge goods.',
-                    style: TextStyle(color: cs.onPrimaryContainer),
+                    style: const TextStyle(color: Brand.muted),
                   ),
                 ],
               ),
@@ -136,25 +135,24 @@ class _ReportsFeedState extends State<ReportsFeed> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  StatCardGrid([
-                    StatCard(
-                      label: done == null
+                  StatGrid([
+                                        StatTile(
+                      done == null
                           ? 'Validated reports'
                           : done
                           ? 'Completed reports'
                           : 'Active reports',
-                      value: '${all.length}',
-                      icon: done == true
+                      '${all.length}',
+                      done == true
                           ? Icons.task_alt_outlined
                           : Icons.report_outlined,
                     ),
                     if (done != true)
-                      StatCard(
-                        label: 'High / critical priority',
-                        value:
-                            '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
-                        icon: Icons.trending_up,
-                        color: PriorityColors.base('High'),
+                      StatTile(
+                        'High / critical priority',
+                        '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
+                        Icons.trending_up,
+                        color: const Color(0xFFE65100),
                       ),
                   ]),
                   const SizedBox(height: 14),
@@ -211,13 +209,13 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   Text.rich(
                     TextSpan(
                       text: 'Showing ',
-                      style: TextStyle(color: cs.onSurfaceVariant),
+                      style: const TextStyle(color: Brand.muted),
                       children: [
                         TextSpan(
                           text: '${reports.length}',
-                          style: TextStyle(
+                          style: const TextStyle(
                             fontWeight: FontWeight.w700,
-                            color: cs.onSurface,
+                            color: Brand.ink,
                           ),
                         ),
                         const TextSpan(text: ' reports'),
@@ -226,7 +224,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   ),
                   const SizedBox(height: 10),
                   if (reports.isEmpty)
-                    EmptyState(
+                     EmptyState(
                       done == true && all.isEmpty
                           ? 'No completed reports yet.'
                           : 'No validated reports match.',
@@ -242,7 +240,6 @@ class _ReportsFeedState extends State<ReportsFeed> {
   }
 
   Widget _card(BuildContext context, Map<String, dynamic> r, Names names) {
-    final cs = Theme.of(context).colorScheme;
     final pct = (r['fulfillment_percentage'] as num? ?? 0).toDouble();
     final state = pct >= 100
         ? 'Fulfilled'
@@ -255,7 +252,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
         children: [
           Text(
             '$label:',
-            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            style: const TextStyle(fontSize: 12, color: Brand.muted),
           ),
           Text('${value ?? '-'}', style: const TextStyle(fontSize: 14)),
         ],
@@ -280,7 +277,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                PriorityChip(r['priority_level'] as String?),
+                Badge2.priority(r['priority_level'] as String?),
               ],
             ),
             const SizedBox(height: 12),

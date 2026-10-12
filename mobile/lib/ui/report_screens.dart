@@ -5,7 +5,6 @@ import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
 import 'input_formatters.dart';
 import 'report_filters.dart';
-import 'report_summary_card.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
@@ -35,9 +34,7 @@ String? Function(String?) _wholeNumber(int max) => (v) {
   return null;
 };
 
-/// Card for one disaster report (with fulfillment if available). Resolves
-/// the names and the role rule, then draws the shared [ReportSummaryCard]
-/// (the landing page uses the same card).
+/// Card for one disaster report (with fulfillment if available).
 class ReportCard extends StatelessWidget {
   final Map<String, dynamic> r;
   final Names names;
@@ -55,33 +52,125 @@ class ReportCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final type = names.of('disaster_types', r['disaster_type_id']);
+    final brgy = names.of('barangays', r['barangay_id']);
     final hasFulfillment = r['total_items_needed'] != null;
     // Appendix H 3.2: every role except DRRMO views priority guidance.
     final showPriority = api.role != Roles.drrmo;
-    final guidance = r['priority_guidance'] ?? r['ai_recommendation'];
-    return ReportSummaryCard(
-      reportId: (r['report_id'] as num?)?.toInt(),
-      disaster: names.of('disaster_types', r['disaster_type_id']),
-      barangay: names.of('barangays', r['barangay_id']),
-      status: r['status'] as String?,
-      priority: r['priority_level'] as String?,
-      source: r['source']?.toString(),
-      affectedFamilies: (r['affected_families'] as num?)?.toInt(),
-      assistanceNeeded: r['assistance_needed']?.toString(),
-      quantity: r['estimated_quantity'] as num?,
-      description: r['description']?.toString(),
-      guidance: guidance?.toString(),
-      rejectionReason: r['rejection_reason']?.toString(),
-      delivered: hasFulfillment
-          ? r['total_items_delivered'] as num? ?? 0
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: highlighted
+          ? RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Radii.lg),
+              side: BorderSide(
+                color: Theme.of(context).colorScheme.primary,
+                width: 2,
+              ),
+            )
           : null,
-      needed: hasFulfillment ? r['total_items_needed'] as num? ?? 0 : null,
-      percent: hasFulfillment
-          ? num.tryParse('${r['fulfillment_percentage']}')
-          : null,
-      showPriority: showPriority,
-      highlighted: highlighted,
-      actions: actions,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '#${r['report_id']}  $type in $brgy',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Badge2.status(r['status'] as String?),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if (showPriority && r['priority_level'] != null)
+                  Badge2.priority(r['priority_level'] as String?),
+                Badge2(
+                  'via ${r['source']}',
+                  Colors.blueGrey,
+                  icon: Icons.input,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              [
+                if (r['affected_families'] != null)
+                  '${r['affected_families']} families',
+                if (r['assistance_needed'] != null)
+                  'Needs: ${r['assistance_needed']}',
+                if (r['estimated_quantity'] != null)
+                  'Qty: ${r['estimated_quantity']}',
+              ].join('  ·  '),
+            ),
+            if (r['description'] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${r['description']}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            if (showPriority &&
+                (r['priority_guidance'] ?? r['ai_recommendation']) != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.auto_awesome,
+                      size: 16,
+                      color: Colors.deepPurple,
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        'AI guidance: ${r['priority_guidance'] ?? r['ai_recommendation']}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (r['rejection_reason'] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Rejected: ${r['rejection_reason']}',
+                  style: const TextStyle(color: Color(0xFFC62828)),
+                ),
+              ),
+            if (hasFulfillment) ...[
+              const SizedBox(height: 10),
+              Progress(
+                delivered: r['total_items_delivered'] as num? ?? 0,
+                needed: r['total_items_needed'] as num? ?? 0,
+                percent: num.tryParse('${r['fulfillment_percentage']}'),
+              ),
+            ],
+            if (actions.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  for (final a in actions)
+                    Padding(padding: const EdgeInsets.only(left: 8), child: a),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1252,9 +1341,7 @@ class DashboardScreen extends StatelessWidget {
                                 value: total == 0 ? 0 : r['count'] / total,
                                 minHeight: 10,
                                 color: tone(r[key] as String?),
-                                backgroundColor: Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
+                                backgroundColor: Colors.black12,
                               ),
                             ),
                           ),
@@ -1281,39 +1368,37 @@ class DashboardScreen extends StatelessWidget {
               '${api.role ?? 'System'} Dashboard',
               subtitle: roleLine(),
             ),
-            StatCardGrid([
-              StatCard(
-                label: 'Disaster reports',
-                value: '${s['total_reports']}',
-                icon: Icons.report_outlined,
+            StatGrid([
+              StatTile(
+                'Disaster reports',
+                '${s['total_reports']}',
+                Icons.report_outlined,
               ),
-              StatCard(
-                label: 'Physical donations',
-                value: '${s['total_donations']}',
-                icon: Icons.volunteer_activism_outlined,
+              StatTile(
+                'Physical donations',
+                '${s['total_donations']}',
+                Icons.volunteer_activism_outlined,
               ),
-              StatCard(
-                label: 'Deliveries',
-                value: '${s['total_deliveries']}',
-                icon: Icons.local_shipping_outlined,
+              StatTile(
+                'Deliveries',
+                '${s['total_deliveries']}',
+                Icons.local_shipping_outlined,
               ),
-              StatCard(
-                label: 'Logistics requests',
-                value: '${s['total_logistics_requests']}',
-                icon: Icons.fire_truck_outlined,
+              StatTile(
+                'Logistics requests',
+                '${s['total_logistics_requests']}',
+                Icons.fire_truck_outlined,
               ),
-              StatCard(
-                label: 'Average fulfillment',
-                value:
-                    '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
-                icon: Icons.pie_chart_outline,
-                color: AppColors.success,
+              StatTile(
+                'Average fulfillment',
+                '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
+                Icons.pie_chart_outline,
+                color: const Color(0xFF2E7D32),
               ),
-              StatCard(
-                label: 'Est. value of donations',
-                value:
-                    'PHP ${(b['total_estimated_value'] as num).toStringAsFixed(0)}',
-                icon: Icons.payments_outlined,
+              StatTile(
+                'Est. value of donations',
+                'PHP ${(b['total_estimated_value'] as num).toStringAsFixed(0)}',
+                Icons.payments_outlined,
               ),
             ]),
             const SizedBox(height: 12),
