@@ -1,17 +1,16 @@
 """
 app/api/v1/contacts.py
 
-GET /contacts/sms-receivers  (NEW, Scope 2.4 / UC-CD1 alt 11b / UC-A3 alt 8a)
-    The CSWS Disaster Unit sends SMS reports when it has no internet, and the
-    Administrator reviews and encodes them. So the Disaster Unit needs the
-    Administrators' numbers. The app saves this list on the phone so the
-    "Send report by SMS" screen still works offline.
+GET /contacts/disaster-unit  (Oct 12 team decision, claude/sms-reporting-decision.md)
+    Barangay Receiving Representatives with no internet send a structured SMS
+    report to a CSWS Disaster Unit member, who encodes it (POST /reports/sms).
+    So the rep needs the Disaster Unit's names and numbers. The app saves
+    this list on the phone so the "SMS report" screen still works offline.
+    Members without a contact number are left out.
 
-GET /contacts/disaster-unit  (EXISTING, unchanged)
-    Built for the panel idea that barangay reps send SMS reports. The team
-    decided to follow the manuscript instead (Scope 1.3 / UC-B1: barangay
-    reps do not create reports; see claude/sms-reporting-decision.md), so the
-    app no longer calls it. Kept so nothing else breaks; safe to remove later.
+GET /contacts/sms-receivers  (Oct 8, no longer used by the app)
+    The Administrators' numbers, from when the Disaster Unit texted the
+    Administrator. Kept so nothing else breaks; safe to remove later.
 
 Only names and contact numbers are returned, never the full user records.
 """
@@ -73,7 +72,7 @@ def disaster_unit_contacts(
 ):
     if _role_name(current_user) not in _ALLOWED:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed")
-    return _contacts_with_role(db, DISASTER_UNIT)
+    return _contacts_with_role(db, DISASTER_UNIT, skip_blank=True)
 
 
 @router.get("/sms-receivers", response_model=List[DisasterUnitContact])
