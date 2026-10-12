@@ -278,7 +278,7 @@ class LandingHeader extends StatelessWidget {
                       for (final s in LandingSection.values) ...[
                         if (s.index > 0) const SizedBox(width: 6),
                         Expanded(
-                          flex: s.label.length + 6,
+                          flex: s.label.length + 2,
                           child: _NavPill(
                             label: s.label,
                             selected: current == s,
@@ -357,7 +357,8 @@ class _NavLink extends StatelessWidget {
   }
 }
 
-/// Phone header link: a compact pill (44 px tall touch area).
+/// Phone header link: plain text (no button look), primary and underlined
+/// when its section is in view. The tap area is 44 px tall.
 class _NavPill extends StatelessWidget {
   final String label;
   final bool selected;
@@ -379,34 +380,31 @@ class _NavPill extends StatelessWidget {
       excludeSemantics: true,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(Radii.pill),
+        borderRadius: BorderRadius.circular(Radii.sm),
         child: SizedBox(
           height: 44,
-          child: Center(
-            child: AnimatedContainer(
-              duration: _motion(context),
-              height: 32,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: selected ? cs.primaryContainer : cs.surfaceContainerHigh,
-                borderRadius: BorderRadius.circular(Radii.pill),
-                border: Border.all(
-                  color: selected ? cs.primary : cs.outlineVariant,
-                ),
-              ),
-              child: FittedBox(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
                   label,
                   maxLines: 1,
-                  style: t.labelMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: selected ? cs.onPrimaryContainer : cs.onSurface,
+                  style: t.labelLarge?.copyWith(
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected ? cs.primary : cs.onSurface,
                   ),
                 ),
               ),
-            ),
+              AnimatedContainer(
+                duration: _motion(context),
+                margin: const EdgeInsets.only(top: 2),
+                height: 2,
+                width: selected ? 20 : 0,
+                color: cs.primary,
+              ),
+            ],
           ),
         ),
       ),
