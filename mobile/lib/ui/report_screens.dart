@@ -127,10 +127,10 @@ class ReportCard extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(
+                    Icon(
                       Icons.auto_awesome,
                       size: 16,
-                      color: Colors.deepPurple,
+                      color: Theme.of(context).colorScheme.primary,
                     ),
                     const SizedBox(width: 4),
                     Expanded(
@@ -147,7 +147,7 @@ class ReportCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   'Rejected: ${r['rejection_reason']}',
-                  style: const TextStyle(color: Color(0xFFC62828)),
+                  style: const TextStyle(color: AppColors.danger),
                 ),
               ),
             if (hasFulfillment) ...[
@@ -1341,7 +1341,9 @@ class DashboardScreen extends StatelessWidget {
                                 value: total == 0 ? 0 : r['count'] / total,
                                 minHeight: 10,
                                 color: tone(r[key] as String?),
-                                backgroundColor: Colors.black12,
+                                backgroundColor: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
                               ),
                             ),
                           ),
