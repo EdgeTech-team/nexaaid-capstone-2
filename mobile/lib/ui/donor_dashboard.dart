@@ -5,10 +5,6 @@ import 'package:flutter/material.dart';
 import '../api.dart' show ApiResult;
 import 'disaster_art.dart';
 import 'donation_entries_view.dart';
-import 'donor_feed.dart';
-import 'landing/about_section.dart';
-import 'landing/landing_screen.dart' show HowItWorksSteps;
-import 'landing/mission_section.dart';
 import 'landing/landing_extras.dart' show kImpactImage;
 import 'donor_screens.dart' show DonateScreen, DonorReportsTab;
 import 'qr_save.dart';
@@ -18,11 +14,9 @@ import 'widgets.dart';
 // Adviser item 10 / Module 9: donor and relief organization dashboard
 // (UC-D3, UC-D4, UC-R3, UC-R4; section 7.3).
 //
-// Ivan (simple donor screens): the Dashboard tab looks like the landing
-// page: a photo banner with the greeting, then a side-scrolling box of the
-// barangays that need help (most urgent first) with Donate buttons, and a
-// "See all reports" link. The donor's own giving (4 cards, donation status,
-// delivery status) is in the Reports tab (my_giving.dart).
+// Oct 12 (team, after the revert): back to the Oct 10 card dashboard:
+// photo banner, "Most urgent right now", three "Your giving" cards, the
+// donor's donations with their timeline, and the reports they supported.
 //
 // Data: GET /donations/mine (profile, summary, entries, supported_reports)
 // and GET /lookups (validated_reports). Donations are shown per entry (one
@@ -70,6 +64,9 @@ class DonorDashboard extends StatefulWidget {
   State<DonorDashboard> createState() => _DonorDashboardState();
 }
 
+/// The Oct 10 card dashboard (team's choice after the Oct 12 revert):
+/// banner, the most urgent report, three "Your giving" cards, the donor's
+/// donations with their timeline, and the reports they supported.
 class _DonorDashboardState extends State<DonorDashboard> {
   /// "See all reports": every validated report, active and done, with the
   /// priority and progress filters (2.4, 3.3).
@@ -98,23 +95,10 @@ class _DonorDashboardState extends State<DonorDashboard> {
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         final profile = m['profile'] as Map;
         final sum = m['summary'] as Map;
+        final entries = (m['entries'] as List).cast<Map>();
         final supported = (m['supported_reports'] as List).cast<Map>();
         final isOrg = profile['organization'] != null;
-        final validated = names.rows('validated_reports');
-
-        // Barangays that need help: most urgent first, fully supplied hidden.
-        final open = needsHelp(validated);
-
-        // Supported reports joined with /lookups for families and barangay.
-        final byId = {for (final r in validated) '${r['id']}': r};
-        final helped = [
-          for (final r in supported)
-            {...r, ...?byId['${r['report_id']}'], 'label': r['label']},
-        ];
-
-        final donateLabel = isOrg
-            ? 'Donate as ${profile['organization']}'
-            : 'Donate';
+        final urgent = mostUrgentReport(names.rows('validated_reports'));
 
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
@@ -123,80 +107,246 @@ class _DonorDashboardState extends State<DonorDashboard> {
             _DashboardHero(
               profile: profile,
               isOrg: isOrg,
-              summary: sum,
-              barangays: {for (final r in helped) _barangayOf(r)}.length,
+              barangays: {for (final r in supported) _barangayOf(r)}.length,
             ),
-            _Centered(
-              child: SectionHeader(
-                'Barangays that need help',
-                subtitle: open.isEmpty
-                    ? null
-                    : 'Most urgent first. Swipe to see more.',
-                action: TextButton(
-                  onPressed: _openAllReports,
-                  child: const Text('See all reports'),
-                ),
-              ),
-            ),
-            if (open.isEmpty)
-              const _Centered(
-                child: AppCard(
-                  child: EmptyView(
-                    compact: true,
-                    icon: Icons.verified_outlined,
-                    title: 'No barangay needs help right now',
-                    message:
-                        'When the City validates a new disaster report, it '
-                        'shows up here.',
-                  ),
-                ),
-              )
-            else
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: Space.md),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final r in open.take(10)) ...[
-                      NeedCard(
-                        report: r,
-                        donateLabel: donateLabel,
-                        onDonate: () => _donate(r, names),
-                      ),
-                      Gaps.h12,
-                    ],
-                  ],
-                ),
-              ),
-            // ---- Latest updates: a short newsfeed (canvas) ------------
             _Centered(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SectionHeader(
-                    'Latest updates',
-                    subtitle: 'New reports and goods that arrived.',
-                  ),
-                  DonorFeed(
-                    validated: validated,
-                    supported: helped,
-                    donateLabel: donateLabel,
-                    onDonate: (r) => _donate(r, names),
+                  // ---- The one report that needs help most -------------
+                  Gaps.v16,
+                  if (urgent == null)
+                    const AppCard(
+                      child: EmptyView(
+                        compact: true,
+                        icon: Icons.verified_outlined,
+                        title: 'No reports need help right now',
+                        message:
+                            'When the City validates a new disaster report, '
+                            'it shows up here.',
+                      ),
+                    )
+                  else
+                    _UrgentReportCard(
+                      report: urgent,
+                      donateLabel: isOrg
+                          ? 'Donate as ${profile['organization']}'
+                          : 'Donate to this report',
+                      onDonate: () => _donate(urgent, names),
+                    ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: _openAllReports,
+                      child: const Text('See all reports'),
+                    ),
                   ),
 
-                  // ---- About NexaAid, like the landing page -------------
-                  const SectionHeader('How NexaAid works'),
-                  const HowItWorksSteps(),
-                  Gaps.v8,
-                  const MissionSection(),
-                  const AboutSection(),
+                  // ---- Summary: only the three the manuscript needs -----
+                  const SectionHeader('Your giving'),
+                  StatCardGrid([
+                    StatCard(
+                      label: 'Donations made',
+                      value: '${sum['total_entries'] ?? 0}',
+                      icon: Icons.volunteer_activism_outlined,
+                    ),
+                    StatCard(
+                      label: 'Items given',
+                      value: '${sum['total_quantity'] ?? 0}',
+                      icon: Icons.inventory_outlined,
+                    ),
+                    StatCard(
+                      label: 'Reports supported',
+                      value: '${sum['supported_reports'] ?? 0}',
+                      icon: Icons.campaign_outlined,
+                    ),
+                  ]),
+
+                  // ---- Donations (one card per entry, 4.4 / 4.5) --------
+                  const SectionHeader(
+                    'Your donations',
+                    subtitle:
+                        'Tap a donation to see its QR code and full timeline.',
+                  ),
+                  if (entries.isEmpty)
+                    AppCard(
+                      child: EmptyView(
+                        compact: true,
+                        icon: Icons.volunteer_activism_outlined,
+                        title: 'No donations yet',
+                        message:
+                            'Pick a report that needs help and pledge goods. '
+                            'Your donations and their progress will show here.',
+                        action: AppButton(
+                          'Find a report to support',
+                          variant: AppButtonVariant.donate,
+                          onPressed: _openAllReports,
+                        ),
+                      ),
+                    )
+                  else
+                    DonationEntriesView(
+                      entries: entries,
+                      footer: (e) => StatusTimeline(
+                        steps: donationLifecycle,
+                        labels: donationLifecycleLabels,
+                        current: donationStep(e),
+                      ),
+                      onTap: (e) => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => DonationDetailScreen(entry: e),
+                        ),
+                      ),
+                    ),
+
+                  // ---- Supported reports --------------------------------
+                  const SectionHeader(
+                    'Reports you supported',
+                    subtitle:
+                        'How close each report is to getting what it needs.',
+                  ),
+                  if (supported.isEmpty)
+                    const AppCard(
+                      child: EmptyView(
+                        compact: true,
+                        icon: Icons.campaign_outlined,
+                        title: 'No reports supported yet',
+                        message:
+                            'When you donate to a report, its progress shows '
+                            'here.',
+                      ),
+                    ),
+                  for (final r in supported) ...[
+                    ReportProgressCard(report: r),
+                    Gaps.v12,
+                  ],
                 ],
               ),
             ),
           ],
         );
       },
+    );
+  }
+}
+
+/// The highlighted report under the banner, with a live pulse dot.
+class _UrgentReportCard extends StatelessWidget {
+  final Map<String, dynamic> report;
+  final String donateLabel;
+  final VoidCallback onDonate;
+  const _UrgentReportCard({
+    required this.report,
+    required this.donateLabel,
+    required this.onDonate,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final r = report;
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const _PulseDot(),
+              Gaps.h8,
+              Expanded(
+                child: Text(
+                  'Most urgent right now',
+                  style: t.labelLarge?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+              PriorityChip(r['priority_level'] as String?),
+            ],
+          ),
+          Gaps.v12,
+          Text(
+            '${r['disaster'] ?? 'Disaster'} in Barangay ${r['barangay'] ?? '-'}',
+            style: t.titleLarge,
+          ),
+          if ('${r['assistance_needed'] ?? ''}'.isNotEmpty) ...[
+            Gaps.v4,
+            Text(
+              'Needs: ${r['assistance_needed']}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+          ],
+          Gaps.v12,
+          FulfillmentBar(
+            delivered: r['total_items_delivered'] as num? ?? 0,
+            needed: r['total_items_needed'] as num? ?? 0,
+            percent: r['fulfillment_percentage'] as num?,
+          ),
+          Gaps.v16,
+          AppButton(
+            donateLabel,
+            icon: Icons.volunteer_activism_outlined,
+            variant: AppButtonVariant.donate,
+            expand: true,
+            onPressed: onDonate,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Small red dot that pulses to show the card is live data.
+class _PulseDot extends StatefulWidget {
+  const _PulseDot();
+
+  @override
+  State<_PulseDot> createState() => _PulseDotState();
+}
+
+class _PulseDotState extends State<_PulseDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1400),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = PriorityColors.base('Critical');
+    final dot = Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    );
+    if (MediaQuery.disableAnimationsOf(context)) return dot;
+    return SizedBox(
+      width: 20,
+      height: 20,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedBuilder(
+            animation: _c,
+            builder: (_, _) => Container(
+              width: 10 + 10 * _c.value,
+              height: 10 + 10 * _c.value,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: color.withValues(alpha: 0.35 * (1 - _c.value)),
+              ),
+            ),
+          ),
+          dot,
+        ],
+      ),
     );
   }
 }
@@ -347,12 +497,10 @@ class _HeroPhoto extends StatelessWidget {
 /// donors; cover photo, logo box and account status for organizations.
 class _DashboardHero extends StatelessWidget {
   final Map profile;
-  final Map summary;
   final bool isOrg;
   final int barangays; // barangays of the reports this donor supported
   const _DashboardHero({
     required this.profile,
-    required this.summary,
     required this.isOrg,
     required this.barangays,
   });
@@ -375,20 +523,6 @@ class _DashboardHero extends StatelessWidget {
     final pending = isOrg && status != 'Approved' && status != 'Active';
     final first = '${profile['name'] ?? ''}'.split(' ').first;
     final orgName = '${profile['organization'] ?? ''}';
-
-    int n(String k) => (summary[k] as num?)?.toInt() ?? 0;
-    Widget pill(String text) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(Radii.pill),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
-      ),
-      child: Text(
-        text,
-        style: t.labelLarge?.copyWith(color: onHero),
-      ),
-    );
 
     final greeting = isOrg
         ? <Widget>[
@@ -459,28 +593,10 @@ class _DashboardHero extends StatelessWidget {
               barangays > 0
                   ? 'Your donations are helping $barangays '
                         '${barangays == 1 ? 'barangay' : 'barangays'} in '
-                        'Mandaue. Here is who needs help next.'
-                  : 'Thank you for being here. Here is who needs help first.',
+                        'Mandaue. Thank you.'
+                  : 'Thank you for helping families get back on their feet.',
               style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
             ),
-            if (n('total_entries') > 0) ...[
-              Gaps.v12,
-              Wrap(
-                spacing: Space.xs,
-                runSpacing: Space.xs,
-                children: [
-                  pill(
-                    '${n('total_entries')} '
-                    '${n('total_entries') == 1 ? 'donation' : 'donations'}',
-                  ),
-                  pill('${n('total_quantity')} items given'),
-                  pill(
-                    '${n('supported_reports')} '
-                    '${n('supported_reports') == 1 ? 'report' : 'reports'} helped',
-                  ),
-                ],
-              ),
-            ],
           ];
 
     return Stack(

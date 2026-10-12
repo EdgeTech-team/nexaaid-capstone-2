@@ -214,34 +214,45 @@ void main() {
     expect(mostUrgentReport([_report(3, 'Looc', 'Critical', 100)]), isNull);
   });
 
-  testWidgets('Dashboard: banner, then barangays that need help', (
+  testWidgets('Dashboard: most urgent, 3 cards, donations, supported', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const DonorDashboard());
       expect(find.text('Hi, Ana'), findsOneWidget);
-      expect(find.text('Barangays that need help'), findsOneWidget);
+      // Most urgent: Critical Banilad (Looc is Critical too, but done).
+      expect(find.text('Most urgent right now'), findsOneWidget);
+      expect(find.text('Flood in Barangay Banilad'), findsOneWidget);
+      expect(find.text('Donate to this report'), findsOneWidget);
       expect(find.text('See all reports'), findsOneWidget);
-      // Most urgent first; the fully supplied one (Looc) is hidden.
-      final cards = find.byType(NeedCard);
-      expect(cards, findsNWidgets(2));
-      Finder inCard(String text) =>
-          find.descendant(of: cards, matching: find.text(text));
-      expect(
-        tester.getTopLeft(inCard('Barangay Banilad')).dx,
-        lessThan(tester.getTopLeft(inCard('Barangay Tipolo')).dx),
+      // Your giving: the three cards.
+      expect(find.text('Your giving'), findsOneWidget);
+      expect(find.byType(StatCard), findsNWidgets(3));
+      for (final label in [
+        'Donations made',
+        'Items given',
+        'Reports supported',
+      ]) {
+        expect(find.text(label), findsOneWidget, reason: label);
+      }
+      // The donor's donations and the reports they supported.
+      expect(find.text('Your donations'), findsOneWidget);
+      expect(find.byType(DonationEntriesView), findsOneWidget);
+      final page = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(
+        find.byType(ReportProgressCard),
+        400,
+        scrollable: page,
       );
-      expect(inCard('Barangay Looc'), findsNothing);
-      expect(find.text('Still needs 60 of 100 items'), findsOneWidget);
-      expect(inCard('Donate'), findsNWidgets(2));
-      // Kept short: no status cards or lists on the dashboard.
-      expect(find.text('Donations made'), findsNothing);
-      expect(find.text('Most urgent right now'), findsNothing);
+      expect(find.text('Reports you supported'), findsOneWidget);
+      // The Oct 11 sections are gone from the dashboard.
+      expect(find.text('Barangays that need help'), findsNothing);
+      expect(find.text('Latest updates'), findsNothing);
     }, () => _server);
   });
 
-  testWidgets('Organization: same layout, Donate as the organization', (
+  testWidgets('Organization: logo, type, Donate as the organization', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
@@ -253,38 +264,29 @@ void main() {
       expect(find.text('Sto. Nino Parish Relief'), findsOneWidget);
       expect(find.text('SN'), findsOneWidget); // logo box initials
       expect(find.text('Relief organization · Church'), findsOneWidget);
-      expect(find.text('Barangays that need help'), findsOneWidget);
-      expect(
-        find.descendant(
-          of: find.byType(NeedCard),
-          matching: find.text('Donate as Sto. Nino Parish Relief'),
-        ),
-        findsNWidgets(2),
-      );
+      expect(find.text('Donate as Sto. Nino Parish Relief'), findsOneWidget);
     }, () => _server);
   });
 
-  testWidgets('Dashboard: latest updates, then About NexaAid', (
+  testWidgets('New donor: empty donations point to the reports', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
+    final donor = _mine;
+    _mine = _newMine;
+    addTearDown(() => _mine = donor);
     await http.runWithClient(() async {
       await _pump(tester, const DonorDashboard());
-      // The page scrolls down; the barangay box scrolls sideways.
+      expect(find.text('Hi, Ben'), findsOneWidget);
+      expect(find.text('No donations yet'), findsOneWidget);
+      expect(find.text('Find a report to support'), findsOneWidget);
       final page = find.byType(Scrollable).first;
       await tester.scrollUntilVisible(
-        find.text('Latest updates'),
+        find.text('No reports supported yet'),
         400,
         scrollable: page,
       );
-      expect(find.byType(DonorFeed), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('How NexaAid works'),
-        400,
-        scrollable: page,
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('How NexaAid works'), findsOneWidget);
+      expect(find.text('No reports supported yet'), findsOneWidget);
     }, () => _server);
   });
 
