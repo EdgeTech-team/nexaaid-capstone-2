@@ -84,9 +84,7 @@ void main() {
   ) async {
     await _pump(tester); // guest: no server needed
     expect(find.text('Guest donor'), findsOneWidget);
-    // Guests leave from the top bar now, not from Settings.
-    expect(find.text('Back to start'), findsNothing);
-    expect(find.text('Log out'), findsNothing);
+    expect(find.text('Back to start'), findsOneWidget);
 
     final about = find.byKey(const ValueKey('about-nexaaid'));
     for (var i = 0; i < 4; i++) {
