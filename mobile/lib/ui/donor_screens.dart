@@ -136,24 +136,25 @@ class _ReportsFeedState extends State<ReportsFeed> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  StatGrid([
-                    StatTile(
-                      done == null
+                  StatCardGrid([
+                    StatCard(
+                      label: done == null
                           ? 'Validated reports'
                           : done
                           ? 'Completed reports'
                           : 'Active reports',
-                      '${all.length}',
-                      done == true
+                      value: '${all.length}',
+                      icon: done == true
                           ? Icons.task_alt_outlined
                           : Icons.report_outlined,
                     ),
                     if (done != true)
-                      StatTile(
-                        'High / critical priority',
-                        '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
-                        Icons.trending_up,
-                        color: const Color(0xFFE65100),
+                      StatCard(
+                        label: 'High / critical priority',
+                        value:
+                            '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
+                        icon: Icons.trending_up,
+                        color: PriorityColors.base('High'),
                       ),
                   ]),
                   const SizedBox(height: 14),
