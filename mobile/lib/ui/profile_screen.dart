@@ -87,7 +87,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                     Text(
                       'Manage your account',
-                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                      style: t.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -98,7 +100,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           Gaps.v24,
           account,
-          if (api.loggedIn) ...[Gaps.v16, const _SecurityCard()],
+          if (api.loggedIn) ...[
+            Gaps.v16,
+            const _SecurityCard(),
+          ],
           Gaps.v16,
           SettingsGroup(
             children: [
@@ -118,20 +123,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SectionHeader('Developer tools'),
             const _DevTools(),
           ],
-          // Guests go back with "Back to home page" at the top right.
-          if (api.loggedIn) ...[
-            Gaps.v16,
-            SettingsGroup(
-              children: [
-                SettingsRow(
-                  icon: Icons.logout,
-                  title: 'Log out',
-                  color: cs.error,
-                  onTap: api.logout,
-                ),
-              ],
-            ),
-          ],
+          Gaps.v16,
+          SettingsGroup(
+            children: [
+              SettingsRow(
+                icon: Icons.logout,
+                title: api.loggedIn ? 'Log out' : 'Back to start',
+                color: api.loggedIn ? cs.error : null,
+                onTap: api.logout,
+              ),
+            ],
+          ),
           Gaps.v24,
         ],
       ),
@@ -359,7 +361,9 @@ class ManageAccountScreen extends StatelessWidget {
               backgroundColor: cs.primaryContainer,
               child: Text(
                 _initials(name).isEmpty ? '?' : _initials(name),
-                style: t.headlineMedium?.copyWith(color: cs.onPrimaryContainer),
+                style: t.headlineMedium?.copyWith(
+                  color: cs.onPrimaryContainer,
+                ),
               ),
             ),
           ),

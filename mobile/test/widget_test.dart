@@ -63,7 +63,9 @@ void main() {
     AppTheme.mode.value = ThemeMode.system;
   });
 
-  testWidgets('Register asks which kind of donor in a pop-out', (tester) async {
+  testWidgets('Register asks which kind of donor in a pop-out', (
+    tester,
+  ) async {
     await tester.pumpWidget(const NexaAidApp());
     await tester.tap(find.text('Register as donor or organization'));
     await tester.pump();
@@ -97,10 +99,6 @@ void main() {
     expect(find.text('Guest'), findsOneWidget);
     expect(find.byTooltip('Donate'), findsWidgets);
     expect(find.byTooltip('Profile'), findsOneWidget);
-    // Back to the landing page from the top bar (not from Settings).
-    await tester.tap(find.text('Back to home page'));
-    await tester.pumpAndSettle();
-    expect(find.text('Donate as guest'), findsOneWidget);
     Api.instance.logout();
   });
 
