@@ -110,7 +110,31 @@ class ReportSummaryCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text(details.join('  ·  ')),
+          // The needs stand out (bold label), like "Assistance Needed" on
+          // the donor Reports tab.
+          Text.rich(
+            TextSpan(
+              children: [
+                for (var i = 0; i < details.length; i++) ...[
+                  if (i > 0) const TextSpan(text: '  ·  '),
+                  if (details[i].startsWith('Needs: ')) ...[
+                    TextSpan(
+                      text: 'Needs: ',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    TextSpan(
+                      text: details[i].substring(7),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ] else
+                    TextSpan(text: details[i]),
+                ],
+              ],
+            ),
+          ),
           if (description != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),

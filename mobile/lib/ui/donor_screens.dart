@@ -310,14 +310,18 @@ class _ReportsFeedState extends State<ReportsFeed> {
             Text.rich(
               TextSpan(
                 text: 'Assistance Needed: ',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
+                  color: cs.primary,
                 ),
                 children: [
                   TextSpan(
                     text: '${r['assistance_needed'] ?? '-'}',
-                    style: const TextStyle(fontWeight: FontWeight.normal),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface,
+                    ),
                   ),
                 ],
               ),
@@ -361,16 +365,16 @@ class _ReportsFeedState extends State<ReportsFeed> {
             // A fulfilled report has what it needs: no Donate button.
             if (widget.done != true && state != 'Fulfilled') ...[
               const SizedBox(height: 10),
-              FilledButton(
+              AppButton(
+                'Donate',
+                icon: Icons.volunteer_activism_outlined,
+                variant: AppButtonVariant.donate,
+                expand: true,
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => DonateScreen(report: r, names: names),
                   ),
                 ),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(46),
-                ),
-                child: const Text('Donate'),
               ),
             ],
           ],

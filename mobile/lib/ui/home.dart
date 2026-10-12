@@ -144,7 +144,11 @@ List<_Tab> _tabsFor(String? role) {
         // giving: 4 cards, donation status, delivery status (UC-D3 / UC-R3).
         // Every report, active and done, is behind "See all reports".
         _Tab('Dashboard', Icons.dashboard_outlined, DonorDashboard()),
-        _Tab('Reports', Icons.article_outlined, MyGivingScreen()),
+        // Oct 12 (team): the Disaster Reports view is a tab again (2.4,
+        // 3.3: filters, fulfillment chips, sort), and My giving holds every
+        // donation entry with its status and journey (UC-D3 / UC-R3).
+        _Tab('Reports', Icons.article_outlined, DonorReportsTab()),
+        _Tab('My giving', Icons.volunteer_activism_outlined, MyGivingScreen()),
       ];
     default: // guest: public homepage (1.4)
       return const [

@@ -146,8 +146,9 @@ void main() {
       'Reports',
       'Records',
     ]);
-    await menuFor(Roles.donor, ['Dashboard', 'Reports']);
-    await menuFor(Roles.org, ['Dashboard', 'Reports']);
+    // Oct 12 (team): Dashboard, the Disaster Reports view, and My giving.
+    await menuFor(Roles.donor, ['Dashboard', 'Reports', 'My giving']);
+    await menuFor(Roles.org, ['Dashboard', 'Reports', 'My giving']);
     api.logout();
   });
 

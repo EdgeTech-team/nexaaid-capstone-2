@@ -6,7 +6,7 @@ import '../api.dart' show ApiResult;
 import 'donation_entries_view.dart';
 import 'donor_dashboard.dart'
     show DonationDetailScreen, ReportProgressCard, donationStep;
-import 'donor_screens.dart' show DonorReportsTab;
+import 'home_nav.dart';
 import 'item_art.dart';
 import 'widgets.dart';
 
@@ -24,6 +24,46 @@ import 'widgets.dart';
 
 const _donationSteps = ['Pending', 'Received', 'Confirmed'];
 const _donationLabels = ['Pledged', 'Received by CSWS', 'Acknowledged by CMO'];
+
+/// Oct 12 (team): each donation entry shows its full journey again, as on
+/// develop: Pledged -> Received by CSWS -> Acknowledged by CMO -> In
+/// transit -> Delivered -> Barangay confirmed (design/status.dart), and
+/// "Show QR" while it still waits for drop-off or pickup.
+/// donationLifecycleLabels with line breaks, so six steps fit a phone.
+const _journeyLabels = [
+  'Pledged',
+  'Received\nby CSWS',
+  'Acknowledged\nby CMO',
+  'In transit',
+  'Delivered',
+  'Barangay\nconfirmed',
+];
+
+Widget entryJourney(BuildContext context, Map e) {
+  final status = '${e['status'] ?? 'Pending'}';
+  final closed = status == 'Expired' || status == 'Cancelled';
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (!closed)
+        StatusTimeline(
+          steps: donationLifecycle,
+          labels: _journeyLabels,
+          current: donationStep(e),
+        ),
+      if (isWaiting(e) && !closed)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => showDonationQr(context, '${e['batch_reference']}'),
+            icon: const Icon(Icons.qr_code_2),
+            label: const Text('Show QR'),
+          ),
+        ),
+    ],
+  );
+}
+
 const _deliverySteps = ['In Transit', 'Delivered', 'Confirmed'];
 const _deliveryLabels = ['In transit', 'Delivered', 'Barangay confirmed'];
 
@@ -51,15 +91,10 @@ bool isWaiting(Map e) => ((e['pending_items'] as num?) ?? 0) > 0;
 bool isInDelivery(Map d) =>
     d['status'] == 'Preparing' || d['status'] == 'In Transit';
 
-/// The page behind "See all reports" / "Find a barangay to help".
-void openAllReports(BuildContext context) => Navigator.of(context).push(
-  MaterialPageRoute(
-    builder: (_) => Scaffold(
-      appBar: AppBar(title: const Text('All reports')),
-      body: const DonorReportsTab(),
-    ),
-  ),
-);
+/// "See all reports" / "Find a barangay to help": the Reports tab (every
+/// validated report with its filters), not a second copy of it.
+void openAllReports(BuildContext context) =>
+    HomeNav.go(context, const HomeTarget('Reports'));
 
 class MyGivingScreen extends StatefulWidget {
   const MyGivingScreen({super.key});
@@ -136,7 +171,8 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
                   value: '${waiting.length}',
                   icon: Icons.schedule,
                   color: StatusColors.base('Pending'),
-                  onTap: () => _push(const MyDonationsScreen(waitingOnly: true)),
+                  onTap: () =>
+                      _push(const MyDonationsScreen(waitingOnly: true)),
                 ),
                 StatCard(
                   label: 'In delivery',
@@ -152,27 +188,24 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
                   value: '${supported.length}',
                   icon: Icons.campaign_outlined,
                   color: StatusColors.base('Confirmed'),
-                  onTap: () => _push(SupportedReportsScreen(reports: supported)),
+                  onTap: () =>
+                      _push(SupportedReportsScreen(reports: supported)),
                 ),
               ]),
 
               // ---- 2. Donation status ---------------------------------
-              SectionHeader(
+              const SectionHeader(
                 'Donation status',
-                action: entries.length > 3
-                    ? TextButton(
-                        onPressed: () => _push(const MyDonationsScreen()),
-                        child: Text('See all ${entries.length}'),
-                      )
-                    : null,
+                subtitle: 'Each donation and where it is now.',
               ),
-              for (final e in entries.take(3)) ...[
-                DonationStatusCard(
-                  entry: e,
-                  onTap: () => _push(DonationDetailScreen(entry: e)),
-                ),
-                Gaps.v8,
-              ],
+              // Every entry (one QR each) with the status chips, search,
+              // report and handover filters and the sort, as on develop.
+              DonationEntriesView(
+                entries: entries,
+                footer: (e) => entryJourney(context, e),
+                onTap: (e) => _push(DonationDetailScreen(entry: e)),
+              ),
+              Gaps.v8,
 
               // ---- 3. Delivery status ---------------------------------
               SectionHeader(
@@ -382,8 +415,10 @@ Future<void> showDonationQr(BuildContext context, String reference) =>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (b64 == null)
-                    Text('The QR code couldn\'t load. Your reference is '
-                        '$reference.')
+                    Text(
+                      'The QR code couldn\'t load. Your reference is '
+                      '$reference.',
+                    )
                   else
                     Semantics(
                       label: 'QR code for $reference',
@@ -447,7 +482,9 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          widget.waitingOnly ? 'Waiting for drop-off or pickup' : 'My donations',
+          widget.waitingOnly
+              ? 'Waiting for drop-off or pickup'
+              : 'My donations',
         ),
       ),
       body: Loader(
@@ -470,11 +507,7 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
                 emptyMessage: widget.waitingOnly
                     ? 'Every donation has been dropped off or picked up.'
                     : 'Pick a barangay that needs help and pledge goods.',
-                footer: (e) => StatusTimeline(
-                  steps: _donationSteps,
-                  labels: _donationLabels,
-                  current: donationStep(e),
-                ),
+                footer: (e) => entryJourney(context, e),
                 onTap: (e) async {
                   final changed = await Navigator.of(context).push<bool>(
                     MaterialPageRoute(
@@ -556,10 +589,7 @@ class SupportedReportsScreen extends StatelessWidget {
                     'When you donate to a report, its progress shows here.',
               ),
             ),
-          for (final r in reports) ...[
-            ReportProgressCard(report: r),
-            Gaps.v12,
-          ],
+          for (final r in reports) ...[ReportProgressCard(report: r), Gaps.v12],
         ],
       ),
     );
