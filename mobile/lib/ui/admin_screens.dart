@@ -99,10 +99,11 @@ class AdminDashboard extends StatelessWidget {
 // UC-A1 Manage internal accounts + UC-A2 Review organization registration
 // ---------------------------------------------------------------------------
 class AccountsHub extends StatefulWidget {
-  /// Which section to show first:
-  /// active, deactivated, registrations (donors + organizations), donation, new.
+  /// Which section to show first: accounts (with active / deactivated as a
+  /// filter), registrations (donors + organizations), donation, new.
+  /// The old names 'active' and 'deactivated' still work.
   final String initialView;
-  const AccountsHub({super.key, this.initialView = 'active'});
+  const AccountsHub({super.key, this.initialView = 'accounts'});
 
   @override
   State<AccountsHub> createState() => _AccountsHubState();
@@ -110,17 +111,41 @@ class AccountsHub extends StatefulWidget {
 
 class _AccountsHubState extends State<AccountsHub>
     with HomeTargetListener<AccountsHub> {
-  late String view = widget.initialView;
+  late String view = _section(widget.initialView);
+  late String status = _statusOf(widget.initialView);
 
-  // A registration notification opens Accounts > Registrations (home_nav).
+  /// The registration a notification points at: ('org' | 'donor', id).
+  (String, int)? _focus;
+  int _focusSeq = 0;
+
+  static String _section(String v) =>
+      const {'active', 'deactivated', 'all'}.contains(v) ? 'accounts' : v;
+
+  static String _statusOf(String v) =>
+      v == 'active' || v == 'deactivated' ? v : 'all';
+
+  // A registration notification opens Accounts > Registrations on that
+  // account (home_nav): view "registrations:org" or "registrations:donor".
   @override
   String get homeTab => 'Accounts';
 
   @override
   void applyHomeTarget(HomeTarget target) {
-    if (target.view != null) {
-      view = target.view == 'orgs' ? 'registrations' : target.view!;
+    final v = target.view;
+    if (v == null) return;
+    if (v.startsWith('registrations')) {
+      view = 'registrations';
+      final type = v.contains(':') ? v.split(':')[1] : null;
+      _focus = type != null && target.id != null ? (type, target.id!) : null;
+      _focusSeq++;
+      return;
     }
+    if (v == 'orgs') {
+      view = 'registrations';
+      return;
+    }
+    view = _section(v);
+    if (view == 'accounts') status = _statusOf(v);
   }
 
   @override
@@ -134,8 +159,9 @@ class _AccountsHubState extends State<AccountsHub>
           child: SegmentedButton<String>(
             showSelectedIcon: false,
             segments: const [
-              ButtonSegment(value: 'active', label: Text('Active')),
-              ButtonSegment(value: 'deactivated', label: Text('Deactivated')),
+              // problema_napud 1.2: Active and Deactivated are one section;
+              // the status is a filter beside the role.
+              ButtonSegment(value: 'accounts', label: Text('All accounts')),
               // Individual donors and organizations reviewed in one list.
               ButtonSegment(
                 value: 'registrations',
@@ -147,19 +173,22 @@ class _AccountsHubState extends State<AccountsHub>
               ButtonSegment(value: 'new', label: Text('New account')),
             ],
             selected: {view},
-            onSelectionChanged: (s) => setState(() => view = s.first),
+            onSelectionChanged: (s) => setState(() {
+              view = s.first;
+              _focus = null;
+            }),
           ),
         ),
         Expanded(
           child: switch (view) {
-            'registrations' => const RegistrationsScreen(),
+            'registrations' => RegistrationsScreen(
+              key: ValueKey('registrations-$_focusSeq'),
+              focusType: _focus?.$1,
+              focusId: _focus?.$2,
+            ),
             'donation' => const BarangayDonationInfoScreen(),
             'new' => const AccountsScreen(),
-            'deactivated' => const UsersScreen(
-              key: ValueKey('deactivated'),
-              active: false,
-            ),
-            _ => const UsersScreen(key: ValueKey('active')),
+            _ => UsersScreen(key: ValueKey('accounts-$status'), status: status),
           },
         ),
       ],
@@ -168,9 +197,10 @@ class _AccountsHubState extends State<AccountsHub>
 }
 
 class UsersScreen extends StatefulWidget {
-  /// I2: true = Active section, false = Deactivated section.
-  final bool active;
-  const UsersScreen({super.key, this.active = true});
+  /// I2 / problema_napud 1.2: 'all', 'active' or 'deactivated' to start
+  /// with; the Administrator changes it with the Status filter.
+  final String status;
+  const UsersScreen({super.key, this.status = 'all'});
 
   @override
   State<UsersScreen> createState() => _UsersScreenState();
@@ -179,13 +209,14 @@ class UsersScreen extends StatefulWidget {
 class _UsersScreenState extends State<UsersScreen> {
   String role = '';
   String q = '';
+  late String status = widget.status;
 
-  /// In the Deactivated section, a labeled line with the reason the
+  /// For a deactivated account, a labeled line with the reason the
   /// Administrator gave (or a note when none was recorded).
   String _reasonLine(Map u) {
-    if (widget.active) return '';
+    if (u['is_active'] == true) return '';
     final r = '${u['deactivation_reason'] ?? ''}'.trim();
-    return '\nReason: ${r.isEmpty ? 'No reason was recorded' : r}';
+    return '\nDeactivated · Reason: ${r.isEmpty ? 'No reason was recorded' : r}';
   }
 
   @override
@@ -195,23 +226,23 @@ class _UsersScreenState extends State<UsersScreen> {
         () => api.get(
           '/admin/users',
           query: {
-            'active': '${widget.active}',
+            if (status != 'all') 'active': '${status == 'active'}',
             if (role.isNotEmpty) 'role': role,
             if (q.isNotEmpty) 'q': q,
           },
         ),
       ],
-      key: ValueKey('${widget.active}|$role|$q'),
+      key: ValueKey('$status|$role|$q'),
       builder: (context, data) {
         final users = (data[0] as List).cast<Map>();
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            PageHeader(
-              widget.active ? 'User Management' : 'Deactivated accounts',
-              subtitle: widget.active
-                  ? 'Tap an account to see its details, edit it, or deactivate it.'
-                  : 'These accounts can\'t log in. Tap one to review it or activate it again.',
+            const PageHeader(
+              'All accounts',
+              subtitle:
+                  'Active and deactivated accounts. Tap one to see its '
+                  'details, edit it, deactivate it or activate it again.',
             ),
             TextField(
               decoration: const InputDecoration(
@@ -221,29 +252,58 @@ class _UsersScreenState extends State<UsersScreen> {
               onSubmitted: (v) => setState(() => q = v.trim()),
             ),
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              initialValue: role,
-              isExpanded: true,
-              decoration: const InputDecoration(labelText: 'Role'),
-              items: [
-                const DropdownMenuItem(value: '', child: Text('All roles')),
-                for (final r in const [
-                  Roles.admin,
-                  Roles.donor,
-                  Roles.org,
-                  Roles.cmo,
-                  Roles.cswsMain,
-                  Roles.cswsUnit,
-                  Roles.barangay,
-                  Roles.drrmo,
-                ])
-                  DropdownMenuItem(value: r, child: Text(r)),
+            Row(
+              children: [
+                Expanded(
+                  flex: 3,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: role,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Role'),
+                    items: [
+                      const DropdownMenuItem(
+                        value: '',
+                        child: Text('All roles'),
+                      ),
+                      for (final r in const [
+                        Roles.admin,
+                        Roles.donor,
+                        Roles.org,
+                        Roles.cmo,
+                        Roles.cswsMain,
+                        Roles.cswsUnit,
+                        Roles.barangay,
+                        Roles.drrmo,
+                      ])
+                        DropdownMenuItem(value: r, child: Text(r)),
+                    ],
+                    onChanged: (v) => setState(() => role = v ?? ''),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 2,
+                  child: DropdownButtonFormField<String>(
+                    key: const ValueKey('accounts-status'),
+                    initialValue: status,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'Status'),
+                    items: const [
+                      DropdownMenuItem(value: 'all', child: Text('All')),
+                      DropdownMenuItem(value: 'active', child: Text('Active')),
+                      DropdownMenuItem(
+                        value: 'deactivated',
+                        child: Text('Deactivated'),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => status = v ?? 'all'),
+                  ),
+                ),
               ],
-              onChanged: (v) => setState(() => role = v ?? ''),
             ),
             const SizedBox(height: 12),
             Text(
-              '${users.length} ${widget.active ? 'active' : 'deactivated'} accounts',
+              '${users.length} ${status == 'all' ? '' : '$status '}accounts',
               style: const TextStyle(color: Brand.muted),
             ),
             const SizedBox(height: 6),
@@ -293,14 +353,21 @@ class _UsersScreenState extends State<UsersScreen> {
 /// register; the Administrator reviews each registration here (Reviewed /
 /// Not Reviewed), with a type filter, search and sorting.
 class RegistrationsScreen extends StatefulWidget {
-  const RegistrationsScreen({super.key});
+  /// The registration a notification points at ('org' or 'donor' and its
+  /// id): the list opens on its type and Reviewed / Not Reviewed section,
+  /// scrolls to it and outlines it (problema_napud 1.1).
+  final String? focusType;
+  final int? focusId;
+  const RegistrationsScreen({super.key, this.focusType, this.focusId});
 
   @override
   State<RegistrationsScreen> createState() => _RegistrationsScreenState();
 }
 
 class _RegistrationsScreenState extends State<RegistrationsScreen> {
-  String review = 'not'; // not | done | all
+  String review = 'all'; // all | done | not
+  bool _focused = false;
+  final _focusKey = GlobalKey();
   String kind = 'all'; // all | donors | orgs
   String sort = 'newest'; // newest | oldest | name
   String search = '';
@@ -368,6 +435,25 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
               'reviewed': u['reviewed_at'] != null,
             },
         ];
+        // Open on the notified account: its type and review section.
+        final focus = widget.focusId == null
+            ? null
+            : all
+                  .where(
+                    (i) =>
+                        i['type'] == widget.focusType &&
+                        i['id'] == widget.focusId,
+                  )
+                  .firstOrNull;
+        if (focus != null && !_focused) {
+          _focused = true;
+          review = focus['reviewed'] == true ? 'done' : 'not';
+          kind = focus['type'] == 'org' ? 'orgs' : 'donors';
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final c = _focusKey.currentContext;
+            if (c != null) Scrollable.ensureVisible(c, alignment: 0.1);
+          });
+        }
         final notReviewed = all.where((i) => i['reviewed'] != true).length;
         final q = search.trim().toLowerCase();
         final items = all
@@ -417,15 +503,15 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
             SegmentedButton<String>(
               showSelectedIcon: false,
               segments: [
-                ButtonSegment(
-                  value: 'not',
-                  label: Text('Not Reviewed ($notReviewed)'),
-                ),
+                ButtonSegment(value: 'all', label: Text('All (${all.length})')),
                 ButtonSegment(
                   value: 'done',
                   label: Text('Reviewed (${all.length - notReviewed})'),
                 ),
-                const ButtonSegment(value: 'all', label: Text('All')),
+                ButtonSegment(
+                  value: 'not',
+                  label: Text('Not Reviewed ($notReviewed)'),
+                ),
               ],
               selected: {review},
               onSelectionChanged: (s) => setState(() => review = s.first),
@@ -475,6 +561,8 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: Space.sm),
                 child: _RegistrationCard(
+                  key: identical(i, focus) ? _focusKey : null,
+                  highlighted: identical(i, focus),
                   item: i,
                   busy: _busy.contains('${i['type']}-${i['id']}'),
                   onReview: (v) => _setReviewed(i, v),
@@ -493,11 +581,14 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
 class _RegistrationCard extends StatelessWidget {
   final Map<String, dynamic> item;
   final bool busy;
+  final bool highlighted;
   final ValueChanged<bool> onReview;
   const _RegistrationCard({
+    super.key,
     required this.item,
     required this.busy,
     required this.onReview,
+    this.highlighted = false,
   });
 
   @override
@@ -509,7 +600,12 @@ class _RegistrationCard extends StatelessWidget {
     final o = item['org'] as Map?;
     final reviewed = item['reviewed'] == true;
     final when = item['when'] as DateTime?;
+    // Donors: their account. Organizations: the organization's account.
+    final accountId = org
+        ? (o?['user_id'] as num?)?.toInt()
+        : (item['id'] as num?)?.toInt();
     return AppCard(
+      color: highlighted ? cs.primaryContainer.withValues(alpha: 0.35) : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -561,7 +657,7 @@ class _RegistrationCard extends StatelessWidget {
           Gaps.v12,
           Row(
             children: [
-              if (!org)
+              if (accountId != null) ...[
                 Expanded(
                   child: AppButton(
                     'View account',
@@ -570,13 +666,13 @@ class _RegistrationCard extends StatelessWidget {
                     expand: true,
                     onPressed: () => Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) =>
-                            AccountDetailScreen(userId: item['id'] as int),
+                        builder: (_) => AccountDetailScreen(userId: accountId),
                       ),
                     ),
                   ),
                 ),
-              if (!org) Gaps.h8,
+                Gaps.h8,
+              ],
               Expanded(
                 child: AppButton(
                   reviewed ? 'Mark Not Reviewed' : 'Mark Reviewed',

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'report_filters.dart';
+import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 import 'donate_screen.dart';
 export 'donate_screen.dart' show DonateScreen, DonationReceipt;
@@ -94,31 +95,23 @@ class _ReportsFeedState extends State<ReportsFeed> {
           sort: sort,
         );
         final cs = Theme.of(context).colorScheme;
-        final t = Theme.of(context).textTheme;
         return ListView(
           padding: EdgeInsets.zero,
           children: [
-            Container(
-              width: double.infinity,
-              color: cs.primaryContainer,
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+            Padding(
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  // problema_napud 3.3: the same header as every other
+                  // page, so it follows the light/dark theme.
+                  PageHeader(
                     done == null
                         ? 'All Reports'
                         : done
                         ? 'Completed Reports'
                         : 'Active Reports',
-                    style: t.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      color: cs.onPrimaryContainer,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    done == null
+                    subtitle: done == null
                         ? 'Every validated report in Mandaue City, active and '
                               'done. Filter by progress or sort below.'
                         : done
@@ -126,16 +119,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                               'Thank you to everyone who helped.'
                         : 'Reports that still need help. Pick one and '
                               'pledge goods.',
-                    style: TextStyle(color: cs.onPrimaryContainer),
                   ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
                   StatCardGrid([
                     StatCard(
                       label: done == null
@@ -307,25 +291,17 @@ class _ReportsFeedState extends State<ReportsFeed> {
               Text('${r['description']}'),
             ],
             const SizedBox(height: 8),
-            Text.rich(
-              TextSpan(
-                text: 'Assistance Needed: ',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: cs.primary,
-                ),
-                children: [
-                  TextSpan(
-                    text: '${r['assistance_needed'] ?? '-'}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: cs.onSurface,
-                    ),
-                  ),
-                ],
+            Text(
+              'Assistance Needed:',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w700,
+                color: cs.primary,
               ),
             ),
+            const SizedBox(height: 6),
+            // problema_napud 2.1 / 2.4: each need highlighted on its own.
+            NeedChips(NeedChips.split(r['assistance_needed'])),
             const SizedBox(height: 12),
             Progress(
               delivered: r['total_items_delivered'] as num? ?? 0,

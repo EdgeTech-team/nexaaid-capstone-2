@@ -9,6 +9,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api.dart';
 import 'input_formatters.dart';
 import 'report_screens.dart' show maxAffectedFamilies, maxEstimatedQuantity;
+import 'sitio_picker.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
 
@@ -17,10 +18,13 @@ import 'widgets.dart';
 // claude/sms-reporting-decision.md).
 // The Barangay Receiving Representative, with no internet, fills this form
 // and sends the report as a text in the structured format
-// (sms_report_format.dart) to a CSWS Disaster Unit member. The Disaster Unit
-// pastes it into "Encode SMS" and submits it as its report; the
-// Administrator validates it as usual. The rep does not create a report in
-// the system (Scope 1.3): NexaAid only builds the text.
+// (sms_report_format.dart). problema_napud 2.2: "Open SMS app" opens the
+// phone's messaging app with the text already written and EVERY CSWS
+// Disaster Unit number already filled in as recipients; the rep only taps
+// Send. Any Disaster Unit member who receives it pastes it into
+// "Encode SMS" and submits it as the unit's report; the Administrator
+// validates it as usual. The rep does not create a report in the system
+// (Scope 1.3): NexaAid only builds the text.
 //
 // Works offline: the dropdown lists and the Disaster Unit's SMS numbers are
 // saved on the phone every time this screen opens with internet.
@@ -55,8 +59,17 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   bool loading = true;
   bool online = false;
 
+  /// Typed by hand only when no Disaster Unit number is saved yet.
   final to = TextEditingController();
-  String? type, barangay, sitio;
+
+  /// The Disaster Unit numbers the text goes to: all of them, unless the
+  /// rep leaves some out.
+  final picked = <String>{};
+  bool _choseReceivers = false;
+  String? type, barangay;
+
+  /// Sitio names, one per row ('' = not chosen); see SitioPicker.
+  List<String> sitioRows = [''];
   final typeText = TextEditingController();
   final barangayText = TextEditingController();
   final sitioText = TextEditingController();
@@ -83,7 +96,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     } catch (e) {
       debugPrint('SMS screen: could not read saved data: $e');
     }
-    _pickFirstReceiver();
+    _pickAllReceivers();
     if (mounted) setState(() => loading = false);
 
     try {
@@ -98,18 +111,33 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       await prefs?.setString(_cacheLookups, jsonEncode(lookups));
       await prefs?.setString(_cacheReceivers, jsonEncode(receivers));
       await prefs?.setString(_cacheSavedAt, savedAt!);
-      _pickFirstReceiver();
+      _pickAllReceivers();
     } catch (_) {
       online = false; // No internet: keep using what is saved.
     }
     if (mounted) setState(() {});
   }
 
-  void _pickFirstReceiver() {
-    if (to.text.isEmpty && receivers.isNotEmpty) {
-      to.text = '${receivers.first['contact_number'] ?? ''}';
-    }
+  void _pickAllReceivers() {
+    if (_choseReceivers) return;
+    picked
+      ..clear()
+      ..addAll(_receiverNumbers);
   }
+
+  List<String> get _receiverNumbers => [
+    for (final r in receivers)
+      if ('${r['contact_number'] ?? ''}'.trim().isNotEmpty)
+        '${r['contact_number']}'.trim(),
+  ];
+
+  /// Who the text goes to, in the saved order.
+  List<String> get _recipients => _receiverNumbers.isEmpty
+      ? [to.text.trim()]
+      : [
+          for (final n in _receiverNumbers)
+            if (picked.contains(n)) n,
+        ];
 
   Names get _names => Names(lookups);
 
@@ -198,7 +226,9 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     disasterType: _val(type, typeText),
     barangay: _val(barangay, barangayText),
     sitio: () {
-      final s = _val(sitio, sitioText);
+      final s = _sitiosOf(barangay).isEmpty
+          ? sitioText.text.trim()
+          : sitioRows.where((r) => r.isNotEmpty).join(', ');
       return s.isEmpty ? null : s;
     }(),
     families: int.tryParse(families.text.trim()),
@@ -217,6 +247,14 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
 
   bool _check() {
     if (!_form.currentState!.validate()) return false;
+    if (_recipients.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Choose at least one Disaster Unit number.'),
+        ),
+      );
+      return false;
+    }
     final missing = _report.missing;
     if (missing.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -229,26 +267,18 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
 
   Future<void> _openSmsApp() async {
     if (!_check()) return;
-    final number = to.text.trim();
-    final body = Uri.encodeComponent(_report.toMessage());
-    final ok = await launchUrl(Uri.parse('sms:$number?body=$body'))
+    final ok = await launchUrl(smsUri(_recipients, _report.toMessage()))
         .catchError((_) => false);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Could not open the messaging app. Tap "Copy text" and send it manually.',
+            'Could not open the messaging app. Type the text above in a '
+            'new message to the Disaster Unit numbers.',
           ),
         ),
       );
     }
-  }
-
-  void _copy() {
-    if (!_check()) return;
-    Clipboard.setData(ClipboardData(text: _report.toMessage()));
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Report text copied')));
   }
 
   Widget _needRow(int i, List<String> items) {
@@ -372,39 +402,52 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             ),
           ),
           const SectionTitle('Send to'),
-          if (receivers.isNotEmpty)
+          if (_receiverNumbers.isNotEmpty) ...[
+            Text(
+              'The text goes to every CSWS Disaster Unit number below, filled '
+              'in for you. Tap a number to leave it out.',
+              style: t.bodySmall,
+            ),
+            const SizedBox(height: 8),
             Wrap(
               spacing: 6,
               runSpacing: 6,
               children: [
                 for (final r in receivers)
-                  ChoiceChip(
-                    label: Text('${r['name']} · ${r['contact_number']}'),
-                    selected: to.text == '${r['contact_number']}',
-                    onSelected: (_) =>
-                        setState(() => to.text = '${r['contact_number']}'),
-                  ),
+                  if ('${r['contact_number'] ?? ''}'.trim().isNotEmpty)
+                    FilterChip(
+                      label: Text('${r['name']} · ${r['contact_number']}'),
+                      selected: picked.contains(
+                        '${r['contact_number']}'.trim(),
+                      ),
+                      onSelected: (on) => setState(() {
+                        _choseReceivers = true;
+                        final n = '${r['contact_number']}'.trim();
+                        on ? picked.add(n) : picked.remove(n);
+                      }),
+                    ),
               ],
             ),
-          if (receivers.isEmpty)
+          ] else ...[
             Text(
               'No Disaster Unit numbers saved yet. Open this screen once with '
               'internet, or type the number you were given.',
               style: t.bodySmall,
             ),
-          const SizedBox(height: 8),
-          TextFormField(
-            controller: to,
-            keyboardType: TextInputType.phone,
-            inputFormatters: phoneFormatters,
-            decoration: const InputDecoration(
-              labelText: 'CSWS Disaster Unit SMS number',
-              hintText: '09XXXXXXXXX',
+            const SizedBox(height: 8),
+            TextFormField(
+              controller: to,
+              keyboardType: TextInputType.phone,
+              inputFormatters: phoneFormatters,
+              decoration: const InputDecoration(
+                labelText: 'CSWS Disaster Unit SMS number',
+                hintText: '09XXXXXXXXX',
+              ),
+              validator: (v) => RegExp(r'^09\d{9}$').hasMatch((v ?? '').trim())
+                  ? null
+                  : 'Mobile number, 11 digits, e.g. 09171234567',
             ),
-            validator: (v) => RegExp(r'^09\d{9}$').hasMatch((v ?? '').trim())
-                ? null
-                : 'Mobile number, 11 digits, e.g. 09171234567',
-          ),
+          ],
           const SectionTitle('Disaster and location'),
           _choice(
             label: 'Disaster type',
@@ -421,21 +464,33 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             text: barangayText,
             onChanged: (v) => setState(() {
               barangay = v;
-              sitio = null;
+              sitioRows = [''];
             }),
           ),
-          const SizedBox(height: 12),
-          _choice(
-            key: ValueKey('sitio-$barangay'),
-            label: 'Sitio',
-            options: sitios,
-            value: sitio ?? (sitios.isEmpty ? null : ''),
-            text: sitioText,
-            required: false,
-            firstOption: smsWholeBarangay,
-            onChanged: (v) =>
-                setState(() => sitio = (v ?? '').isEmpty ? null : v),
-          ),
+          // problema_napud 2.2: only the chosen barangay's sitios, and
+          // "Add another sitio" when more than one was hit.
+          if (sitios.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            SitioPicker(
+              key: ValueKey('sitios-$barangay'),
+              options: {for (final n in sitios) n: n},
+              rows: sitioRows,
+              onChanged: (rows) => setState(() => sitioRows = rows),
+            ),
+          ] else if (_namesOf('barangays').isEmpty) ...[
+            // Nothing saved on the phone: type the sitio names.
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: sitioText,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                labelText: 'Sitio',
+                helperText:
+                    'Leave empty for the whole barangay. Several? Separate '
+                    'them with commas.',
+              ),
+            ),
+          ],
           const SectionTitle('Situation (DROMIC)'),
           TextFormField(
             controller: families,
@@ -492,15 +547,6 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             label: const Text('Open SMS app'),
           ),
           const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _copy,
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-            ),
-            icon: const Icon(Icons.copy_outlined),
-            label: const Text('Copy text'),
-          ),
-          const SizedBox(height: 8),
           Text(
             'Keypad phone? Type the same lines by hand: NEXAAID REPORT, '
             'TYPE:, BRGY:, SITIO:, FAMILIES:, NEEDS:, DETAILS:',
@@ -511,3 +557,9 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     );
   }
 }
+
+/// sms: link with every recipient and the text already written (RFC 5724:
+/// recipients separated by commas). The phone's messaging app opens with
+/// both filled in; NexaAid itself never sends anything.
+Uri smsUri(List<String> numbers, String body) =>
+    Uri.parse('sms:${numbers.join(',')}?body=${Uri.encodeComponent(body)}');

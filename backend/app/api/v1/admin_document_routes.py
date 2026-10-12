@@ -19,8 +19,7 @@ from sqlalchemy.orm import Session
 
 from core.auth import require_role
 from core.database import get_db
-from core.storage import get_storage
-from core.uploads import file_url
+from core.uploads import file_url, local_path
 from models.barangay_model import Barangay
 from models.organization_model import Organization
 from models.upload_model import Upload
@@ -106,7 +105,7 @@ def document_status(db: Session, url: Optional[str]) -> dict:
     if m is None:
         return {"status": "external", "url": url, "content_type": None}
     up = db.query(Upload).filter(Upload.file_id == m.group(1)).first()
-    if up is None or not get_storage().path(up.storage_key).exists():
+    if up is None or local_path(db, up) is None:
         return {"status": "unreadable", "url": url, "content_type": None}
     return {"status": "ok", **_doc(up)}
 

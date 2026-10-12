@@ -22,7 +22,7 @@ CHANGE LOG
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, Literal
+from typing import List, Optional, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -73,6 +73,9 @@ class DisasterReportCreate(BaseModel):
     disaster_type_id: int
     barangay_id: int
     sitio_id: Optional[int] = None
+    # Several sitios of the barangay (problema_napud 2.2). When given, it
+    # wins over sitio_id; empty = the whole barangay.
+    sitio_ids: Optional[List[int]] = None
     description: Optional[str] = None
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
@@ -92,6 +95,9 @@ class DisasterReportEdit(BaseModel):
     disaster_type_id: int
     barangay_id: int
     sitio_id: Optional[int] = None
+    # Several sitios of the barangay (problema_napud 2.2). When given, it
+    # wins over sitio_id; empty = the whole barangay.
+    sitio_ids: Optional[List[int]] = None
     description: Optional[str] = None
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
@@ -128,6 +134,8 @@ class DisasterReportResponse(BaseModel):
     disaster_type_id: int
     barangay_id: int
     sitio_id: Optional[int]
+    sitio_ids: List[int] = []
+    sitio_names: List[str] = []
     description: Optional[str]
     affected_families: Optional[int]
     assistance_needed: Optional[str]
@@ -184,6 +192,7 @@ class SmsReportIngest(BaseModel):
     disaster_type_id: int
     barangay_id: int
     sitio_id: Optional[int] = None
+    sitio_ids: Optional[List[int]] = None
     description: Optional[str] = None
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None

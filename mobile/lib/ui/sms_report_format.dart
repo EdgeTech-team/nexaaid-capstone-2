@@ -12,7 +12,7 @@
 ///   NEXAAID REPORT
 ///   TYPE: Flood
 ///   BRGY: Banilad
-///   SITIO: Whole barangay
+///   SITIO: Whole barangay      (or several: "SITIO: Riverside, Proper")
 ///   FAMILIES: 150
 ///   NEEDS: Rice 50 kg; Drinking Water 20 gallons
 ///   DETAILS: Waist-deep flood near the chapel
@@ -40,7 +40,8 @@ class SmsReport {
   final String? disasterType;
   final String? barangay;
 
-  /// null means the whole barangay.
+  /// null means the whole barangay. Several sitios are separated by commas
+  /// ("Riverside, Proper"); [sitios] splits them.
   final String? sitio;
   final int? families;
   final List<SmsNeed> needs;
@@ -59,6 +60,13 @@ class SmsReport {
     this.details,
     this.problems = const [],
   });
+
+  /// Every sitio named, in order. Empty means the whole barangay.
+  List<String> get sitios => (sitio ?? '')
+      .split(',')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
 
   /// The text the Barangay Representative sends.
   String toMessage() {

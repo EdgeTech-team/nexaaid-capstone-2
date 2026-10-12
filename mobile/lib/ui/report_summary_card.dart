@@ -16,11 +16,8 @@ class ReportSummaryCard extends StatelessWidget {
   final String? status;
   final String? priority;
 
-  /// How the report came in (Web / Mobile / SMS). Null hides the chip.
-  final String? source;
   final int? affectedFamilies;
   final String? assistanceNeeded;
-  final num? quantity;
   final String? description;
   final String? guidance;
   final String? rejectionReason;
@@ -51,10 +48,8 @@ class ReportSummaryCard extends StatelessWidget {
     required this.barangay,
     this.status,
     this.priority,
-    this.source,
     this.affectedFamilies,
     this.assistanceNeeded,
-    this.quantity,
     this.description,
     this.guidance,
     this.rejectionReason,
@@ -71,11 +66,7 @@ class ReportSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final details = [
-      if (affectedFamilies != null) '$affectedFamilies families',
-      if (assistanceNeeded != null) 'Needs: $assistanceNeeded',
-      if (quantity != null) 'Qty: $quantity',
-    ];
+    final needs = NeedChips.split(assistanceNeeded);
     final body = Padding(
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -101,40 +92,19 @@ class ReportSummaryCard extends StatelessWidget {
             runSpacing: 6,
             children: [
               if (showPriority && priority != null) PriorityChip(priority),
-              if (source != null)
-                Chip(
-                  avatar: const Icon(Icons.input, size: 16),
-                  label: Text('via $source'),
-                  visualDensity: VisualDensity.compact,
-                ),
             ],
           ),
           const SizedBox(height: 8),
-          // The needs stand out (bold label), like "Assistance Needed" on
-          // the donor Reports tab.
-          Text.rich(
-            TextSpan(
-              children: [
-                for (var i = 0; i < details.length; i++) ...[
-                  if (i > 0) const TextSpan(text: '  ·  '),
-                  if (details[i].startsWith('Needs: ')) ...[
-                    TextSpan(
-                      text: 'Needs: ',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w700,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                    TextSpan(
-                      text: details[i].substring(7),
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ] else
-                    TextSpan(text: details[i]),
-                ],
-              ],
+          if (affectedFamilies != null)
+            Text(
+              '$affectedFamilies ${affectedFamilies == 1 ? 'family' : 'families'} affected',
             ),
-          ),
+          // problema_napud 2.1 / 2.4: every need on its own, highlighted,
+          // instead of one total quantity.
+          if (needs.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            NeedChips(needs),
+          ],
           if (description != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -214,6 +184,65 @@ class ReportSummaryCard extends StatelessWidget {
             )
           : null,
       child: onTap == null ? body : InkWell(onTap: onTap, child: body),
+    );
+  }
+}
+
+/// The items a report needs, each one highlighted on its own
+/// ("Rice: 150 sacks", "Drinking Water: 500 gallons").
+class NeedChips extends StatelessWidget {
+  final List<String> needs;
+  const NeedChips(this.needs, {super.key});
+
+  /// "Rice: 50 kg, Drinking Water: 20 gallons" -> one entry per need.
+  static List<String> split(Object? raw) => (raw ?? '')
+      .toString()
+      .split(',')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Semantics(
+      label: 'Needs: ${needs.join(', ')}',
+      excludeSemantics: true,
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final n in needs)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: cs.primaryContainer,
+                borderRadius: BorderRadius.circular(Radii.sm),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.inventory_2_outlined,
+                    size: 15,
+                    color: cs.onPrimaryContainer,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      n,
+                      style: t.labelLarge?.copyWith(
+                        color: cs.onPrimaryContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

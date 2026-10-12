@@ -7,6 +7,7 @@ import 'home_nav.dart';
 import 'widgets.dart';
 import 'batch_sheet.dart';
 import 'inventory_view.dart';
+import 'input_formatters.dart' show pesos;
 import 'donation_entries_view.dart' show DonationEntryCard;
 import 'receive_filters.dart';
 export 'batch_sheet.dart' show openDonationByQr, BatchSheet;
@@ -208,10 +209,7 @@ class DonationSheet extends StatelessWidget {
           row('Item', '${d['item_name']}'),
           row('Declared quantity', '${d['quantity']} ${d['unit']}'),
           row('Packaging', d['packaging']),
-          row(
-            'Estimated value',
-            d['estimated_value'] == null ? null : 'PHP ${d['estimated_value']}',
-          ),
+          row('Estimated value', pesos(d['estimated_value'])),
           row('Handover', d['handover_method']),
           if (d['pickup_address'] != null)
             row('Pickup at', d['pickup_address']),
@@ -692,7 +690,7 @@ class CswsMainDashboard extends StatelessWidget {
                   ),
                   subtitle: Text(
                     '${d['qr_reference']} · ${d['handover_method']}'
-                    '${d['estimated_value'] != null ? ' · PHP ${d['estimated_value']}' : ''}'
+                    '${d['estimated_value'] != null ? ' · ${pesos(d['estimated_value'])}' : ''}'
                     '\n${d['report_label'] ?? ''}',
                   ),
                   isThreeLine: true,

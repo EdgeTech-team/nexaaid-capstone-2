@@ -20,6 +20,29 @@ const entryStatuses = [
 ];
 const handoverMethods = ['Drop Off', 'Door to Door'];
 
+/// problema_napud 4.4 / 4.5: the statuses that need someone to act, each
+/// with what it means, in their own section above the list. 'On Hold' is
+/// not an entry status: it is an entry with an item the CMO put on hold.
+const attentionStatuses = <(String, String)>[
+  (
+    'Partly Received',
+    'CSWS received some items of the entry. The rest are still expected.',
+  ),
+  (
+    'On Hold',
+    "The City Mayor's Office paused the acknowledgement. The reason is on the entry.",
+  ),
+  (
+    'Expired',
+    'Not handed over by its deadline. CSWS can reopen it when the goods come.',
+  ),
+];
+
+/// [status] matches the entry's status, or 'On Hold' = has an item on hold.
+bool entryHasStatus(Map e, String status) => status == 'On Hold'
+    ? (e['on_hold_items'] as num? ?? 0) > 0
+    : e['status'] == status;
+
 enum EntrySort {
   newest('Newest first'),
   oldest('Oldest first'),
@@ -55,7 +78,7 @@ List<Map> filterEntries(
 }) {
   final q = search.trim().toLowerCase();
   final shown = entries
-      .where((e) => status == null || e['status'] == status)
+      .where((e) => status == null || entryHasStatus(e, status))
       .where((e) => reportId == null || e['report_id'] == reportId)
       .where((e) => handover == null || e['handover_method'] == handover)
       .where(
@@ -149,7 +172,7 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
       reports.putIfAbsent(e['report_id'] as int, () => entryReportLabel(e));
     }
     int countOf(String s) =>
-        widget.entries.where((e) => e['status'] == s).length;
+        widget.entries.where((e) => entryHasStatus(e, s)).length;
     final shown = filterEntries(
       widget.entries,
       search: search,
@@ -161,6 +184,12 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _AttentionCard(
+          counts: {for (final (s, _) in attentionStatuses) s: countOf(s)},
+          selected: status,
+          onSelect: (s) => setState(() => status = status == s ? null : s),
+        ),
+        Gaps.v12,
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
@@ -259,6 +288,92 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// "Needs attention": Partly Received, On Hold and Expired with their
+/// counts and meaning. Tap one to show only those entries; tap it again
+/// to show all.
+class _AttentionCard extends StatelessWidget {
+  final Map<String, int> counts;
+  final String? selected;
+  final ValueChanged<String> onSelect;
+  const _AttentionCard({
+    required this.counts,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return AppCard(
+      key: const ValueKey('needs-attention'),
+      padding: const EdgeInsets.symmetric(vertical: Space.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              Space.md,
+              Space.xs,
+              Space.md,
+              Space.xxs,
+            ),
+            child: Text('Needs attention', style: t.titleMedium),
+          ),
+          for (final (status, meaning) in attentionStatuses)
+            InkWell(
+              key: ValueKey('attention-$status'),
+              onTap: () => onSelect(status),
+              child: Container(
+                color: selected == status
+                    ? cs.primaryContainer.withValues(alpha: 0.6)
+                    : null,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Space.md,
+                  vertical: Space.xs,
+                ),
+                child: Row(
+                  children: [
+                    Icon(switch (status) {
+                      'Partly Received' => Icons.incomplete_circle,
+                      'On Hold' => Icons.pause_circle_outline,
+                      _ => Icons.timer_off_outlined,
+                    }, color: StatusColors.base(status)),
+                    Gaps.h12,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(donationStatusText(status), style: t.titleSmall),
+                          Text(
+                            meaning,
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Gaps.h8,
+                    Text(
+                      '${counts[status] ?? 0}',
+                      style: t.titleLarge?.copyWith(
+                        color: (counts[status] ?? 0) > 0
+                            ? StatusColors.base(status)
+                            : cs.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

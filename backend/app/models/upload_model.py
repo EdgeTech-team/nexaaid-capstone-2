@@ -1,8 +1,12 @@
 """
 models/upload_model.py — Sprint 0 foundation: upload service (Castillo).
  
-One row per uploaded file. The bytes live in storage (core/storage.py),
-never in Postgres, so Neon stays small.
+One row per uploaded file. The bytes live in storage (core/storage.py)
+and, since problema_napud 2.1, a copy in upload_blobs: the team runs one
+shared Neon database from several machines, and a file saved on one
+machine's disk was missing ("QR image unavailable") on every other one.
+Uploads are capped at MAX_UPLOAD_MB and images are re-encoded, so the
+copies stay small.
  
 Private files (valid ID front/back, organization legitimacy documents)
 are sensitive personal information under the Data Privacy Act
@@ -19,6 +23,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     UniqueConstraint,
 )
@@ -60,3 +65,20 @@ class Upload(Base):
     
     claimed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class UploadBlob(Base):
+    """The bytes of one upload, shared by every machine that uses the
+    database. GET /uploads/{file_id} serves the local file when there is
+    one and otherwise copies these bytes back to local storage first
+    (core/uploads.local_path). Deleting the upload deletes this row.
+
+    Migration b4e7c2d9f1a6."""
+    __tablename__ = "upload_blobs"
+
+    upload_id = Column(
+        Integer,
+        ForeignKey("uploads.upload_id", ondelete="CASCADE", name="fk_upload_blobs_upload_id"),
+        primary_key=True,
+    )
+    data = Column(LargeBinary, nullable=False)
