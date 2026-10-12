@@ -107,64 +107,109 @@ class StatCard extends StatelessWidget {
       excludeSemantics: true,
       child: AppCard(
         onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: c.withValues(alpha: dark ? 0.24 : 0.12),
-                borderRadius: BorderRadius.circular(Radii.sm),
+        // The grid gives each card its full share of the row (Expanded);
+        // a minimum height keeps short rows of cards lined up.
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: StatCard.minHeight),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: c.withValues(alpha: dark ? 0.24 : 0.12),
+                  borderRadius: BorderRadius.circular(Radii.sm),
+                ),
+                child: Icon(icon, size: 20, color: iconFg),
               ),
-              child: Icon(icon, size: 20, color: iconFg),
-            ),
-            Gaps.v12,
-            FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.centerLeft,
-              child: CountUpText(value, style: t.headlineMedium),
-            ),
-            Gaps.v4,
-            Text(
-              label,
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (note != null)
+              Gaps.v12,
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: CountUpText(value, style: t.headlineMedium),
+              ),
+              Gaps.v4,
               Text(
-                note!,
-                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                label,
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-          ],
+              if (note != null)
+                Text(
+                  note!,
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
+
+  /// Inner height (inside the card padding) every stat card reaches.
+  static const double minHeight = 118;
 }
 
-/// Lays stat cards out 2 per row on phones, 3 on large phones, 4 on tablets.
+/// Lays stat cards out in full rows: up to 2 per row on phones, 3 on large
+/// phones and 4 on tablets and Chrome. Every card in a row has the same width
+/// and height, and the column count is picked so the last row is not left
+/// ragged (6 cards: 3 + 3); a shorter last row stretches to the full width
+/// (7 cards on Chrome: 4 + 3).
 class StatCardGrid extends StatelessWidget {
   final List<Widget> cards;
   const StatCardGrid(this.cards, {super.key});
+
+  /// Columns for [n] cards when at most [maxCols] fit.
+  static int columnsFor(int n, int maxCols) {
+    if (n <= maxCols) return n < 1 ? 1 : n;
+    for (var c = maxCols; c >= 2; c--) {
+      if (n % c == 0) return c;
+    }
+    var best = maxCols, fewest = maxCols;
+    for (var c = maxCols; c >= 2; c--) {
+      final empty = (c - n % c) % c;
+      if (empty < fewest) {
+        fewest = empty;
+        best = c;
+      }
+    }
+    return best;
+  }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, c) {
-        final cols = c.maxWidth >= 900
+        final maxCols = c.maxWidth >= 900
             ? 4
             : c.maxWidth >= Breakpoints.medium
             ? 3
             : 2;
-        final w = ((c.maxWidth - Space.sm * (cols - 1)) / cols)
-            .clamp(0.0, double.infinity)
-            .toDouble();
-        return Wrap(
-          spacing: Space.sm,
-          runSpacing: Space.sm,
-          children: [for (final x in cards) SizedBox(width: w, child: x)],
+        final cols = columnsFor(cards.length, maxCols);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (var start = 0; start < cards.length; start += cols) ...[
+              if (start > 0) const SizedBox(height: Space.sm),
+              IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (
+                      var i = start;
+                      i < start + cols && i < cards.length;
+                      i++
+                    ) ...[
+                      if (i > start) const SizedBox(width: Space.sm),
+                      Expanded(child: cards[i]),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
         );
       },
     );
@@ -363,11 +408,20 @@ class StatusTimeline extends StatelessWidget {
     Widget line(bool on) => Expanded(
       child: Container(height: 2, color: on ? cs.primary : cs.outlineVariant),
     );
+    // Labels with line breaks: each step gets room for its longest word.
+    final split = [for (var i = 0; i < n; i++) _label(i)]
+        .any((l) => l.contains('\n'));
+    int flex(int i) => !split
+        ? 1
+        : _label(i)
+              .split(RegExp(r'[\n ]'))
+              .fold(4, (m, w) => w.length > m ? w.length : m);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var i = 0; i < n; i++)
           Expanded(
+            flex: flex(i),
             child: Column(
               children: [
                 SizedBox(
@@ -381,16 +435,35 @@ class StatusTimeline extends StatelessWidget {
                   ),
                 ),
                 Gaps.v4,
-                Text(
-                  _label(i),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: t.labelSmall?.copyWith(
-                    color: i <= at ? cs.onSurface : cs.onSurfaceVariant,
-                    fontWeight: i == at ? FontWeight.w800 : FontWeight.w500,
+                // A label with its own line break ("Acknowledged\nby CMO")
+                // keeps each line whole: a word too wide for a narrow phone
+                // shrinks a little instead of being cut in the middle.
+                if (_label(i).contains('\n'))
+                  for (final part in _label(i).split('\n'))
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        part,
+                        maxLines: 1,
+                        style: t.labelSmall?.copyWith(
+                          color: i <= at ? cs.onSurface : cs.onSurfaceVariant,
+                          fontWeight: i == at
+                              ? FontWeight.w800
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    )
+                else
+                  Text(
+                    _label(i),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.labelSmall?.copyWith(
+                      color: i <= at ? cs.onSurface : cs.onSurfaceVariant,
+                      fontWeight: i == at ? FontWeight.w800 : FontWeight.w500,
+                    ),
                   ),
-                ),
               ],
             ),
           ),

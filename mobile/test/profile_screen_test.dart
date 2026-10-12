@@ -50,24 +50,32 @@ void main() {
   setUp(() => ProfileScreen.devToolsShown.value = false);
   tearDown(() => Api.instance.token = null);
 
-  testWidgets('Logged in: name, role, barangay; no developer tools', (
+  testWidgets('Logged in: settings list, then Manage account details', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester);
+      expect(find.text('Settings'), findsOneWidget);
       expect(find.text('Ana Reyes'), findsOneWidget);
       expect(find.text('AR'), findsOneWidget); // initials
-      expect(find.text('Barangay Receiving Representative'), findsOneWidget);
       expect(find.text('ana.test@example.com'), findsOneWidget);
-      expect(find.text('Tipolo'), findsOneWidget);
       // Light/dark: the sun/moon button in the top-right corner.
       expect(find.byType(SunMoonToggle), findsOneWidget);
-      expect(find.text('Appearance'), findsNothing);
+      expect(find.text('Security'), findsOneWidget);
       expect(find.text('Log out'), findsOneWidget);
       expect(find.text('Developer tools'), findsNothing);
       expect(find.text('API console'), findsNothing);
       expect(find.text('Design system gallery'), findsNothing);
+
+      // The account card opens Manage account (view only).
+      await tester.tap(find.text('Ana Reyes'));
+      await tester.pumpAndSettle();
+      expect(find.text('Manage account'), findsOneWidget);
+      expect(find.text('Barangay Receiving Representative'), findsOneWidget);
+      expect(find.text('Tipolo'), findsOneWidget);
+      expect(find.text('Private information'), findsOneWidget);
+      expect(find.text('ana.test@example.com'), findsOneWidget);
     }, () => _server);
   });
 
@@ -76,7 +84,9 @@ void main() {
   ) async {
     await _pump(tester); // guest: no server needed
     expect(find.text('Guest donor'), findsOneWidget);
-    expect(find.text('Back to start'), findsOneWidget);
+    // Guests leave from the top bar now, not from Settings.
+    expect(find.text('Back to start'), findsNothing);
+    expect(find.text('Log out'), findsNothing);
 
     final about = find.byKey(const ValueKey('about-nexaaid'));
     for (var i = 0; i < 4; i++) {

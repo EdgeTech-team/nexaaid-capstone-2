@@ -96,11 +96,7 @@ final _orgMine = {
 
 var _mine = <String, dynamic>{
   'profile': {'name': 'Ana Reyes', 'organization': null},
-  'summary': {
-    'total_entries': 1,
-    'total_quantity': 12,
-    'supported_reports': 1,
-  },
+  'summary': {'total_entries': 1, 'total_quantity': 12, 'supported_reports': 1},
   'entries': [
     _entry('BATCH-ANA-1', 'Received', [
       ['Rice', 10, 'kg'],
@@ -264,9 +260,7 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('Dashboard: latest updates, then About NexaAid', (
-    tester,
-  ) async {
+  testWidgets('Dashboard: latest updates, then About NexaAid', (tester) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const DonorDashboard());
@@ -342,7 +336,7 @@ void main() {
     expect(timeAgo(null, now: now), '');
   });
 
-  testWidgets('Reports tab: 4 cards, donation status, delivery status', (
+  testWidgets('My giving tab: 4 cards, every donation entry, delivery status', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
@@ -357,10 +351,16 @@ void main() {
         expect(find.text(label), findsOneWidget, reason: label);
       }
       expect(find.byType(StatCard), findsNWidgets(4));
-      // Donation status: each donation with its step; QR only when waiting.
+      // Donation status: every entry with the status chips, search and
+      // sort, each with its full journey; QR only when waiting.
       expect(find.text('Donation status'), findsOneWidget);
-      expect(find.byType(DonationStatusCard), findsNWidgets(2));
-      expect(find.text('Received by CSWS'), findsWidgets);
+      expect(find.byType(DonationEntriesView), findsOneWidget);
+      expect(find.byKey(const ValueKey('entries-sort')), findsOneWidget);
+      expect(find.textContaining('BATCH-ANA-1'), findsWidgets);
+      expect(find.textContaining('BATCH-ANA-2'), findsWidgets);
+      expect(find.text('by CSWS'), findsWidgets);
+      expect(find.text('confirmed'), findsWidgets); // full journey, 6 steps
+      expect(find.text('by CMO'), findsWidgets);
       expect(find.text('Show QR'), findsOneWidget); // only BATCH-ANA-2
       // Delivery status.
       expect(find.text('Delivery status'), findsOneWidget);
@@ -369,7 +369,7 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('Reports tab cards open their lists', (tester) async {
+  testWidgets('My giving tab cards open their lists', (tester) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const MyGivingScreen());
@@ -417,11 +417,13 @@ void main() {
     expect(itemLook('Hygiene kit').$1, Icons.soap_outlined);
     expect(itemLook('Something else').$1, Icons.inventory_2_outlined);
     expect(
-      itemsSummary(_entry('X', 'Pending', [
-        ['Rice', 5, 'kg'],
-        ['Water', 2, 'jugs'],
-        ['Soap', 3, 'bars'],
-      ])),
+      itemsSummary(
+        _entry('X', 'Pending', [
+          ['Rice', 5, 'kg'],
+          ['Water', 2, 'jugs'],
+          ['Soap', 3, 'bars'],
+        ]),
+      ),
       '5 kg Rice, 2 jugs Water +1 more',
     );
   });
@@ -448,6 +450,14 @@ void main() {
       // Active and fulfilled reports are in the same list.
       expect(find.text('Flood in Barangay Banilad'), findsOneWidget);
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
+      // The Disaster Reports view as on develop: search, filters, sort,
+      // the report count, the details grid and the highlighted needs.
+      expect(find.text('Sort by'), findsOneWidget);
+      expect(find.text('All Priorities'), findsOneWidget);
+      expect(find.textContaining('Showing '), findsOneWidget);
+      expect(find.text('Barangay:'), findsWidgets);
+      expect(find.text('Sitio:'), findsWidgets);
+      expect(find.textContaining('Assistance Needed: '), findsWidgets);
 
       // The chips scroll sideways: bring "Fulfilled" into view first.
       final fulfilled = find.textContaining('Fulfilled (');

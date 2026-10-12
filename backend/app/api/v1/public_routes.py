@@ -4,7 +4,7 @@ Only validated reports are exposed, and never who reported them
 (no user_id, source, contact number or SMS text).
 """
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from core.database import get_db
@@ -48,6 +48,9 @@ def public_reports(db: Session = Depends(get_db)):
             "barangay": barangays.get(r.barangay_id, "Barangay"),
             "sitio": sitios.get(r.sitio_id),
             "priority_level": r.priority_level,
+            # How the report came in (Web / Mobile / SMS), for the "via"
+            # chip on the landing report cards. Never who reported it.
+            "source": r.source,
             "priority_guidance": explain_priority(r),
             "assistance_needed": r.assistance_needed,
             "affected_families": r.affected_families,
@@ -59,30 +62,59 @@ def public_reports(db: Session = Depends(get_db)):
     return out
 
 
+
 @router.get("/stats")
 def public_stats(db: Session = Depends(get_db)):
     validated = DisasterReport.status == "Validated"
 
-    active = db.query(func.count(DisasterReport.report_id)).filter(validated).scalar() or 0
-    families = (db.query(func.coalesce(func.sum(DisasterReport.affected_families), 0))
-                .filter(validated).scalar() or 0)
-    urgent = (db.query(func.count(DisasterReport.report_id))
-              .filter(validated, DisasterReport.priority_level.in_(URGENT_LEVELS))
-              .scalar() or 0)
-    brgys = (db.query(func.count(func.distinct(DisasterReport.barangay_id)))
-             .filter(validated).scalar() or 0)
-    donations = (db.query(func.count(PhysicalDonation.donation_id))
-                 .filter(PhysicalDonation.status.in_(RECEIVED_STATUSES)).scalar() or 0)
-    delivered = (db.query(func.count(Delivery.delivery_id))
-                 .filter(Delivery.status == DELIVERED_STATUS).scalar() or 0)
+    stats_query = select(
+        db.query(func.count(DisasterReport.report_id))
+        .filter(validated)
+        .scalar_subquery()
+        .label("active_reports"),
+
+        db.query(
+            func.coalesce(
+                func.sum(DisasterReport.affected_families), 0
+            )
+        )
+        .filter(validated)
+        .scalar_subquery()
+        .label("families_affected"),
+
+        db.query(func.count(DisasterReport.report_id))
+        .filter(
+            validated,
+            DisasterReport.priority_level.in_(URGENT_LEVELS),
+        )
+        .scalar_subquery()
+        .label("urgent_reports"),
+
+        db.query(func.count(func.distinct(DisasterReport.barangay_id)))
+        .filter(validated)
+        .scalar_subquery()
+        .label("barangays"),
+
+        db.query(func.count(PhysicalDonation.donation_id))
+        .filter(PhysicalDonation.status.in_(RECEIVED_STATUSES))
+        .scalar_subquery()
+        .label("donations_received"),
+
+        db.query(func.count(Delivery.delivery_id))
+        .filter(Delivery.status == DELIVERED_STATUS)
+        .scalar_subquery()
+        .label("deliveries_completed"),
+    )
+
+    row = db.execute(stats_query).one()
 
     return {
-        "active_reports": active,
-        "families_affected": int(families),
-        "urgent_reports": urgent,
-        "barangays": brgys,
-        "donations_received": donations,
-        "deliveries_completed": delivered,
+        "active_reports": row.active_reports or 0,
+        "families_affected": int(row.families_affected or 0),
+        "urgent_reports": row.urgent_reports or 0,
+        "barangays": row.barangays or 0,
+        "donations_received": row.donations_received or 0,
+        "deliveries_completed": row.deliveries_completed or 0,
     }
 
 @router.get("/recent-deliveries")

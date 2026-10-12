@@ -10,8 +10,9 @@ import 'landing/about_section.dart';
 import 'landing/landing_screen.dart' show HowItWorksSteps;
 import 'landing/mission_section.dart';
 import 'landing/landing_extras.dart' show kImpactImage;
-import 'donor_screens.dart' show DonateScreen, DonorReportsTab;
+import 'donor_screens.dart' show DonateScreen;
 import 'qr_save.dart';
+import 'home_nav.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -71,16 +72,9 @@ class DonorDashboard extends StatefulWidget {
 }
 
 class _DonorDashboardState extends State<DonorDashboard> {
-  /// "See all reports": every validated report, active and done, with the
-  /// priority and progress filters (2.4, 3.3).
-  void _openAllReports() => Navigator.of(context).push(
-    MaterialPageRoute(
-      builder: (_) => Scaffold(
-        appBar: AppBar(title: const Text('All reports')),
-        body: const DonorReportsTab(),
-      ),
-    ),
-  );
+  /// "See all reports": the Reports tab, every validated report, active and
+  /// done, with the priority and progress filters (2.4, 3.3).
+  void _openAllReports() => HomeNav.go(context, const HomeTarget('Reports'));
 
   void _donate(Map<String, dynamic> report, Names names) =>
       Navigator.of(context).push(
@@ -336,7 +330,8 @@ class _HeroPhoto extends StatelessWidget {
         fit: BoxFit.cover,
         alignment: alignment,
         excludeFromSemantics: true,
-        errorBuilder: (_, _, _) => const ColoredBox(color: AppColors.harborDeep),
+        errorBuilder: (_, _, _) =>
+            const ColoredBox(color: AppColors.harborDeep),
       ),
       ColoredBox(color: AppColors.harborDeep.withValues(alpha: _darken)),
     ],
@@ -384,10 +379,7 @@ class _DashboardHero extends StatelessWidget {
         borderRadius: BorderRadius.circular(Radii.pill),
         border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
       ),
-      child: Text(
-        text,
-        style: t.labelLarge?.copyWith(color: onHero),
-      ),
+      child: Text(text, style: t.labelLarge?.copyWith(color: onHero)),
     );
 
     final greeting = isOrg

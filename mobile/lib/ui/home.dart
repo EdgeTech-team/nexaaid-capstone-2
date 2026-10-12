@@ -145,7 +145,11 @@ List<_Tab> _tabsFor(String? role) {
         // giving: 4 cards, donation status, delivery status (UC-D3 / UC-R3).
         // Every report, active and done, is behind "See all reports".
         _Tab('Dashboard', Icons.dashboard_outlined, DonorDashboard()),
-        _Tab('Reports', Icons.article_outlined, MyGivingScreen()),
+        // Oct 12 (team): the Disaster Reports view is a tab again (2.4,
+        // 3.3: filters, fulfillment chips, sort), and My giving holds every
+        // donation entry with its status and journey (UC-D3 / UC-R3).
+        _Tab('Reports', Icons.article_outlined, DonorReportsTab()),
+        _Tab('My giving', Icons.volunteer_activism_outlined, MyGivingScreen()),
       ];
     default: // guest: public homepage (1.4)
       return const [
@@ -157,7 +161,16 @@ List<_Tab> _tabsFor(String? role) {
 /// Extra buttons in the signed-in app bar.
 /// Mariquit (Sprint 0): add the notification bell here, e.g.
 /// `const NotificationBell()`.
-List<Widget> _shellActions(BuildContext context) => const [];
+List<Widget> _shellActions(BuildContext context) => [
+  // A guest leaves from here, back to the landing page (not Settings).
+  if (!api.loggedIn)
+    TextButton.icon(
+      onPressed: api.logout,
+      style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+      icon: const Icon(Icons.home_outlined),
+      label: const Text('Back to home page'),
+    ),
+];
 
 /// The app shell: role-based navigation (bottom bar on phones, side rail
 /// on tablets and Chrome) around the role's screens.
