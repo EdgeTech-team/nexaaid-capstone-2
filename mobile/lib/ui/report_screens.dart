@@ -1368,37 +1368,39 @@ class DashboardScreen extends StatelessWidget {
               '${api.role ?? 'System'} Dashboard',
               subtitle: roleLine(),
             ),
-            StatGrid([
-              StatTile(
-                'Disaster reports',
-                '${s['total_reports']}',
-                Icons.report_outlined,
+            StatCardGrid([
+              StatCard(
+                label: 'Disaster reports',
+                value: '${s['total_reports']}',
+                icon: Icons.report_outlined,
               ),
-              StatTile(
-                'Physical donations',
-                '${s['total_donations']}',
-                Icons.volunteer_activism_outlined,
+              StatCard(
+                label: 'Physical donations',
+                value: '${s['total_donations']}',
+                icon: Icons.volunteer_activism_outlined,
               ),
-              StatTile(
-                'Deliveries',
-                '${s['total_deliveries']}',
-                Icons.local_shipping_outlined,
+              StatCard(
+                label: 'Deliveries',
+                value: '${s['total_deliveries']}',
+                icon: Icons.local_shipping_outlined,
               ),
-              StatTile(
-                'Logistics requests',
-                '${s['total_logistics_requests']}',
-                Icons.fire_truck_outlined,
+              StatCard(
+                label: 'Logistics requests',
+                value: '${s['total_logistics_requests']}',
+                icon: Icons.fire_truck_outlined,
               ),
-              StatTile(
-                'Average fulfillment',
-                '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
-                Icons.pie_chart_outline,
-                color: const Color(0xFF2E7D32),
+              StatCard(
+                label: 'Average fulfillment',
+                value:
+                    '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
+                icon: Icons.pie_chart_outline,
+                color: AppColors.success,
               ),
-              StatTile(
-                'Est. value of donations',
-                'PHP ${(b['total_estimated_value'] as num).toStringAsFixed(0)}',
-                Icons.payments_outlined,
+              StatCard(
+                label: 'Est. value of donations',
+                value:
+                    'PHP ${(b['total_estimated_value'] as num).toStringAsFixed(0)}',
+                icon: Icons.payments_outlined,
               ),
             ]),
             const SizedBox(height: 12),
