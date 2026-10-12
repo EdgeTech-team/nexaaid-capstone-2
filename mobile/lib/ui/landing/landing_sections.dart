@@ -1,16 +1,16 @@
 import 'package:flutter/material.dart';
 
 import '../../design/design.dart';
-import '../disaster_art.dart';
 import '../theme_toggle.dart';
+import '../widgets.dart' show api;
 import 'landing_extras.dart' show kImpactImage;
 import 'public_data.dart';
 
-// Ivan: landing page redesign ("NexaAid landing page redesign" canvas).
-// A charity-site layout: header, big two-line headline with a photo, a
-// stats strip, "How it works" with a circle photo collage, report cards,
-// questions that open and close, and a closing band. Side by side on
-// Chrome and tablets, stacked on phones.
+// Landing page redesign (approved mockups, Oct 12): a pinned header with
+// the section links, the headline with a photo, "Our impact so far", an
+// interactive "How it works", the report cards (same card as the signed-in
+// report lists), questions that open one at a time, and a closing band.
+// Colors come from the theme (light and dark) and the design tokens.
 
 /// Widest the landing content gets on Chrome.
 const double kLandingMax = 1200;
@@ -22,14 +22,32 @@ bool landingWide(BuildContext context) =>
 String _fmt(int n) =>
     n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
 
+Duration _motion(BuildContext context, [Duration d = Motion.normal]) =>
+    MediaQuery.disableAnimationsOf(context) ? Duration.zero : d;
+
+/// A theme color for large numbers and icons that reads well on both
+/// backgrounds: the life-vest yellow is too light on white, so it is
+/// darkened in light mode.
+Color landingVest(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? AppColors.vest
+    : Color.lerp(AppColors.vest, AppColors.vestInk, 0.45)!;
+
+Color landingSuccess(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+    ? Color.lerp(AppColors.success, Colors.white, 0.3)!
+    : AppColors.success;
+
 /// Centers a section at [kLandingMax] with side padding.
 class LandingWidth extends StatelessWidget {
   final Widget child;
   final EdgeInsets padding;
+  final double maxWidth;
   const LandingWidth({
     super.key,
     required this.child,
     this.padding = EdgeInsets.zero,
+    this.maxWidth = kLandingMax,
   });
 
   @override
@@ -37,7 +55,7 @@ class LandingWidth extends StatelessWidget {
     final side = landingWide(context) ? Space.lg : Space.md + 4;
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: kLandingMax),
+        constraints: BoxConstraints(maxWidth: maxWidth),
         child: Padding(
           padding: EdgeInsets.symmetric(horizontal: side).add(padding),
           child: child,
@@ -47,28 +65,39 @@ class LandingWidth extends StatelessWidget {
   }
 }
 
-/// Small teal label above a section title, e.g. "How it works".
+/// Small label above a section title, e.g. "OUR IMPACT SO FAR".
 class LandingEyebrow extends StatelessWidget {
   final String text;
   const LandingEyebrow(this.text, {super.key});
 
   @override
-  Widget build(BuildContext context) => Text(
-    text,
-    style: Theme.of(context).textTheme.labelLarge?.copyWith(
-      color: Theme.of(context).colorScheme.primary,
-      fontWeight: FontWeight.w700,
-      letterSpacing: 1.1,
+  Widget build(BuildContext context) => Semantics(
+    label: text,
+    excludeSemantics: true,
+    child: Text(
+      text.toUpperCase(),
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+        color: Theme.of(context).colorScheme.primary,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.2,
+      ),
     ),
   );
 }
 
-/// Section title with one word in teal: [before] [accent] [after].
+/// Section title: [before] [accent] [after], the accent in the primary color.
 class LandingTitle extends StatelessWidget {
   final String before;
   final String accent;
   final String after;
-  const LandingTitle(this.before, this.accent, {this.after = '', super.key});
+  final TextAlign? align;
+  const LandingTitle(
+    this.before, {
+    super.key,
+    this.accent = '',
+    this.after = '',
+    this.align,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -81,13 +110,15 @@ class LandingTitle extends StatelessWidget {
         TextSpan(
           children: [
             TextSpan(text: before),
-            TextSpan(
-              text: accent,
-              style: TextStyle(color: cs.primary),
-            ),
-            TextSpan(text: after),
+            if (accent.isNotEmpty)
+              TextSpan(
+                text: accent,
+                style: TextStyle(color: cs.primary),
+              ),
+            if (after.isNotEmpty) TextSpan(text: after),
           ],
         ),
+        textAlign: align,
         style: (wide ? t.headlineLarge : t.headlineSmall)?.copyWith(
           fontWeight: FontWeight.w700,
           height: 1.15,
@@ -97,90 +128,284 @@ class LandingTitle extends StatelessWidget {
   }
 }
 
+/// Muted line under a section title.
+class _Subtitle extends StatelessWidget {
+  final String text;
+  const _Subtitle(this.text);
+
+  @override
+  Widget build(BuildContext context) => Text(
+    text,
+    style: Theme.of(context).textTheme.bodyLarge
+        ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+  );
+}
+
+/// Rounded panel used by the cards of the landing sections.
+class _Panel extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  const _Panel({
+    required this.child,
+    this.padding = const EdgeInsets.all(Space.lg),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: cs.surfaceContainer,
+        borderRadius: BorderRadius.circular(Radii.lg),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: child,
+    );
+  }
+}
+
+/// Small rounded square with a tinted icon (trust rows, deliveries).
+class _IconSquare extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  const _IconSquare(this.icon, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: dark ? 0.2 : 0.12),
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Icon(icon, size: 20, color: color),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Header
+// Header: pinned, with the section links at every width
 // ---------------------------------------------------------------------------
+
+/// The sections the header links scroll to.
+enum LandingSection {
+  impact('Impact'),
+  how('How it works'),
+  reports('Reports'),
+  questions('Questions');
+
+  final String label;
+  const LandingSection(this.label);
+}
 
 class LandingHeader extends StatelessWidget {
-  final VoidCallback onLogIn;
-  final VoidCallback onHowItWorks;
-  final VoidCallback onReports;
-  final VoidCallback onQuestions;
+  final ValueChanged<LandingSection> onJump;
 
-  const LandingHeader({
-    super.key,
-    required this.onLogIn,
-    required this.onHowItWorks,
-    required this.onReports,
-    required this.onQuestions,
-  });
+  /// The section in view, highlighted in the links (null = the hero).
+  final LandingSection? current;
+
+  const LandingHeader({super.key, required this.onJump, this.current});
+
+  /// Height of the header below the status bar.
+  static double heightFor(BuildContext context) =>
+      landingWide(context) ? 68 : 104;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final wide = landingWide(context);
+
+    final brand = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: AppColors.harbor,
+            borderRadius: BorderRadius.circular(Radii.sm + 2),
+          ),
+          child: const Icon(
+            Icons.volunteer_activism,
+            size: 20,
+            color: Colors.white,
+          ),
+        ),
+        Gaps.h12,
+        Text(
+          'NexaAid',
+          style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+
+    final Widget content;
+    if (wide) {
+      content = Row(
+        children: [
+          brand,
+          const Spacer(),
+          for (final s in LandingSection.values)
+            _NavLink(
+              label: s.label,
+              selected: current == s,
+              onTap: () => onJump(s),
+            ),
+          Gaps.h8,
+          // Rightmost (Ivan's note).
+          const SunMoonToggle(),
+        ],
+      );
+    } else {
+      // Phones (Oct 12): the links sit beside the sun/moon button, and they
+      // share the row width so there is nothing to scroll sideways.
+      content = Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(height: 44, child: brand),
+          SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      for (final s in LandingSection.values) ...[
+                        if (s.index > 0) const SizedBox(width: 6),
+                        Expanded(
+                          flex: s.label.length + 6,
+                          child: _NavPill(
+                            label: s.label,
+                            selected: current == s,
+                            onTap: () => onJump(s),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Gaps.h8,
+                const SunMoonToggle(),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
     return Material(
       color: cs.surfaceContainerLowest,
       child: SafeArea(
         bottom: false,
         child: Container(
+          height: heightFor(context),
           decoration: BoxDecoration(
             border: Border(bottom: BorderSide(color: cs.outlineVariant)),
           ),
           child: LandingWidth(
-            padding: const EdgeInsets.symmetric(vertical: Space.sm),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: AppColors.harbor,
-                    borderRadius: BorderRadius.circular(Radii.sm + 2),
-                  ),
-                  child: const Icon(
-                    Icons.volunteer_activism,
-                    size: 20,
-                    color: Colors.white,
+            padding: EdgeInsets.symmetric(vertical: wide ? Space.xs : 4),
+            child: content,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Wide header link: a text button, primary and underlined when selected.
+class _NavLink extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _NavLink({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Semantics(
+      selected: selected,
+      child: TextButton(
+        onPressed: onTap,
+        style: TextButton.styleFrom(
+          minimumSize: const Size(0, 44),
+          foregroundColor: selected ? cs.primary : cs.onSurface,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label),
+            AnimatedContainer(
+              duration: _motion(context),
+              margin: const EdgeInsets.only(top: 2),
+              height: 2,
+              width: selected ? 24 : 0,
+              color: cs.primary,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Phone header link: a compact pill (44 px tall touch area).
+class _NavPill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _NavPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(Radii.pill),
+        child: SizedBox(
+          height: 44,
+          child: Center(
+            child: AnimatedContainer(
+              duration: _motion(context),
+              height: 32,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: selected ? cs.primaryContainer : cs.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(Radii.pill),
+                border: Border.all(
+                  color: selected ? cs.primary : cs.outlineVariant,
+                ),
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  style: t.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: selected ? cs.onPrimaryContainer : cs.onSurface,
                   ),
                 ),
-                Gaps.h12,
-                Text(
-                  'NexaAid',
-                  style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-                ),
-                const Spacer(),
-                if (wide) ...[
-                  TextButton(
-                    onPressed: onHowItWorks,
-                    child: const Text('How it works'),
-                  ),
-                  TextButton(
-                    onPressed: onReports,
-                    child: const Text('Reports'),
-                  ),
-                  TextButton(
-                    onPressed: onQuestions,
-                    child: const Text('Questions'),
-                  ),
-                  Gaps.h8,
-                ],
-                // One tap switches light and dark (sun in light mode,
-                // moon in dark), same button as Profile. Not inside the
-                // login pop-up.
-                FilledButton(
-                  onPressed: onLogIn,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(0, 44),
-                    shape: const StadiumBorder(),
-                  ),
-                  child: const Text('Log in'),
-                ),
-                Gaps.h8,
-                // Rightmost (Ivan's note).
-                const SunMoonToggle(),
-              ],
+              ),
             ),
           ),
         ),
@@ -190,7 +415,7 @@ class LandingHeader extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Hero: headline, photo and the three ways in
+// Hero: headline, photo and the ways in
 // ---------------------------------------------------------------------------
 
 class LandingHero extends StatelessWidget {
@@ -229,6 +454,7 @@ class LandingHero extends StatelessWidget {
       ),
     );
 
+    final big = wide ? t.displayMedium : t.headlineLarge;
     final headline = Semantics(
       header: true,
       child: Text.rich(
@@ -251,7 +477,7 @@ class LandingHero extends StatelessWidget {
                 ),
                 child: Text(
                   'most',
-                  style: (wide ? t.displayMedium : t.headlineLarge)?.copyWith(
+                  style: big?.copyWith(
                     color: AppColors.vestInk,
                     fontWeight: FontWeight.w700,
                     height: 1.15,
@@ -261,10 +487,7 @@ class LandingHero extends StatelessWidget {
             ),
           ],
         ),
-        style: (wide ? t.displayMedium : t.headlineLarge)?.copyWith(
-          fontWeight: FontWeight.w700,
-          height: 1.15,
-        ),
+        style: big?.copyWith(fontWeight: FontWeight.w700, height: 1.15),
       ),
     );
 
@@ -278,46 +501,101 @@ class LandingHero extends StatelessWidget {
       ),
     );
 
-    // Register stands out (yellow), Log in is outlined, guest is a link.
-    final register = FilledButton.icon(
-      onPressed: onCreateAccount,
-      style: FilledButton.styleFrom(
-        backgroundColor: AppColors.vest,
-        foregroundColor: AppColors.vestInk,
-        minimumSize: const Size(0, 52),
-        shape: const StadiumBorder(),
-        padding: const EdgeInsets.symmetric(horizontal: 24),
+    // Register (yellow) and Log in (outlined) side by side.
+    final buttons = ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 560),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final short = box.maxWidth < 500;
+          return Row(
+            children: [
+              Expanded(
+                flex: short ? 1 : 3,
+                child: AppButton(
+                  short ? 'Register' : 'Register as donor or organization',
+                  icon: Icons.favorite_border,
+                  variant: AppButtonVariant.donate,
+                  large: true,
+                  expand: true,
+                  onPressed: onCreateAccount,
+                ),
+              ),
+              Gaps.h12,
+              Expanded(
+                flex: short ? 1 : 2,
+                child: OutlinedButton.icon(
+                  onPressed: onLogIn,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: cs.primary,
+                    side: BorderSide(color: cs.primary, width: 1.5),
+                    minimumSize: const Size(double.infinity, 56),
+                  ),
+                  icon: const Icon(Icons.login),
+                  label: const Text('Log in'),
+                ),
+              ),
+            ],
+          );
+        },
       ),
-      icon: const Icon(Icons.favorite_border),
-      label: const Text('Register as donor or organization'),
     );
-    final logIn = OutlinedButton.icon(
-      onPressed: onLogIn,
-      style: OutlinedButton.styleFrom(
-        foregroundColor: cs.primary,
-        side: BorderSide(color: cs.primary, width: 2),
-        minimumSize: const Size(0, 52),
-        shape: const StadiumBorder(),
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-      ),
-      icon: const Icon(Icons.login),
-      label: const Text('Log in to your account'),
-    );
-    final guest = TextButton.icon(
+
+    final guest = TextButton(
       onPressed: onDonateAsGuest,
-      icon: const Icon(Icons.volunteer_activism_outlined, size: 18),
-      label: const Text('Donate as guest'),
+      style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
+      // Wraps instead of overflowing on narrow phones.
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        alignment: WrapAlignment.center,
+        children: [
+          Text(
+            'Donate as guest',
+            style: t.labelLarge?.copyWith(
+              color: cs.primary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Text(
+            ' · no account needed',
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.h4,
+          Icon(Icons.arrow_forward, size: 16, color: cs.primary),
+        ],
+      ),
     );
-    final guestNote = Text(
-      'No account needed',
-      style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+
+    final trust = Wrap(
+      spacing: Space.md,
+      runSpacing: Space.xxs,
+      alignment: wide ? WrapAlignment.start : WrapAlignment.center,
+      children: [
+        for (final line in const [
+          'Reports checked by the City',
+          'A QR code for every pledge',
+          'Goods only, no money',
+        ])
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.check, size: 16, color: landingSuccess(context)),
+              Gaps.h4,
+              Flexible(
+                child: Text(
+                  line,
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+      ],
     );
 
     final photo = _HeroPhoto(height: wide ? 440 : 230);
 
     if (wide) {
       return LandingWidth(
-        padding: const EdgeInsets.only(top: Space.xxl + 16, bottom: Space.xl),
+        padding: const EdgeInsets.only(top: Space.xxl + 16, bottom: 72),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
@@ -331,13 +609,11 @@ class LandingHero extends StatelessWidget {
                   Gaps.v24,
                   intro,
                   Gaps.v32,
-                  Wrap(
-                    spacing: Space.sm,
-                    runSpacing: Space.sm,
-                    children: [register, logIn],
-                  ),
+                  buttons,
                   Gaps.v12,
-                  Row(children: [guest, Gaps.h4, guestNote]),
+                  guest,
+                  Gaps.v12,
+                  trust,
                 ],
               ),
             ),
@@ -348,7 +624,7 @@ class LandingHero extends StatelessWidget {
       );
     }
     return LandingWidth(
-      padding: const EdgeInsets.only(top: Space.lg + 4),
+      padding: const EdgeInsets.only(top: Space.lg + 4, bottom: Space.xl),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -359,13 +635,12 @@ class LandingHero extends StatelessWidget {
           intro,
           Gaps.v24,
           // Buttons before the photo so they are on the first screen.
-          register,
-          Gaps.v12,
-          logIn,
+          Align(child: buttons),
           Gaps.v8,
           Center(child: guest),
-          Center(child: guestNote),
-          Gaps.v16,
+          Gaps.v8,
+          trust,
+          Gaps.v24,
           photo,
         ],
       ),
@@ -397,7 +672,7 @@ class _HeroPhoto extends StatelessWidget {
                     'Volunteers handing out relief goods to families in a '
                     'barangay',
                 errorBuilder: (_, _, _) =>
-                    const ColoredBox(color: AppColors.harborMist),
+                    ColoredBox(color: cs.surfaceContainerHigh),
               ),
             ),
           ),
@@ -458,82 +733,239 @@ class _HeroPhoto extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Stats strip: live numbers from /public/stats (or the reports)
+// Section 1: Our impact so far
 // ---------------------------------------------------------------------------
 
-class LandingStatsBand extends StatelessWidget {
+class LandingImpactSection extends StatelessWidget {
   final PublicStats? stats;
-  const LandingStatsBand({super.key, required this.stats});
+  final DateTime? asOf;
+
+  const LandingImpactSection({super.key, required this.stats, this.asOf});
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     final wide = landingWide(context);
     final s = stats;
-    final items = <(String, String)>[
-      (s == null ? '–' : _fmt(s.activeReports), 'Reports needing help'),
-      (s == null ? '–' : _fmt(s.familiesAffected), 'Families affected'),
-      if (s?.deliveriesCompleted != null)
-        (_fmt(s!.deliveriesCompleted!), 'Deliveries completed')
-      else
-        (s == null ? '–' : _fmt(s.barangays), 'Barangays with reports'),
-    ];
-    return LandingWidth(
-      padding: EdgeInsets.only(
-        top: wide ? 0 : Space.md,
-        bottom: wide ? Space.xxl + 16 : Space.xl,
+    String n(int? v) => s == null ? '–' : _fmt(v ?? 0);
+    final deliveries = s?.deliveriesCompleted ?? 0;
+    final reached = s?.barangaysReached ?? 0;
+
+    final tiles = [
+      _ImpactTile(
+        number: n(s?.familiesAffected),
+        label: 'Families covered',
+        note: 'by reports the City validated',
+        color: cs.primary,
       ),
-      child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: wide ? Space.xl : Space.md,
-          vertical: wide ? Space.lg + 4 : Space.md + 4,
-        ),
-        decoration: BoxDecoration(
-          color: AppColors.harborDeep,
-          borderRadius: BorderRadius.circular(wide ? 24 : 20),
-        ),
-        child: Column(
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final (value, label) in items)
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: wide
-                          ? CrossAxisAlignment.start
-                          : CrossAxisAlignment.center,
-                      children: [
-                        Text(
-                          value,
-                          style: (wide ? t.displaySmall : t.headlineSmall)
-                              ?.copyWith(
-                                color: AppColors.vest,
-                                fontWeight: FontWeight.w700,
-                              ),
-                        ),
-                        Text(
-                          label,
-                          textAlign: wide ? TextAlign.start : TextAlign.center,
-                          style: (wide ? t.bodyLarge : t.bodySmall)?.copyWith(
-                            color: Colors.white,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-            if (kDemoData) ...[
-              Gaps.v12,
-              Align(
-                alignment: wide ? Alignment.centerLeft : Alignment.center,
-                child: Text(
-                  'Demo data: test numbers until the system goes live.',
-                  style: t.bodySmall?.copyWith(color: AppColors.harborMist),
+      _ImpactTile(
+        number: n(s?.donationsReceived),
+        label: 'Donated items received',
+        note: 'checked in by CSWS',
+        color: landingVest(context),
+      ),
+      _ImpactTile(
+        number: n(s?.deliveriesCompleted),
+        label: deliveries == 1 ? 'Delivery completed' : 'Deliveries completed',
+        note: 'confirmed by the barangay',
+        color: landingSuccess(context),
+      ),
+      _ImpactTile(
+        number: n(s?.barangaysReached),
+        label: reached == 1 ? 'Barangay reached' : 'Barangays reached',
+        note: 'with at least one delivery',
+        color: cs.onSurface,
+      ),
+    ];
+
+    final asOfLine = asOf == null
+        ? const SizedBox.shrink()
+        : Wrap(
+            spacing: Space.xs,
+            runSpacing: Space.xxs,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: landingSuccess(context),
+                  shape: BoxShape.circle,
                 ),
               ),
+              Text(
+                'As of ${formatAsOf(asOf!)}',
+                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              if (kDemoData) const LandingDemoBadge(),
             ],
+          );
+
+    final heading = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const LandingEyebrow('Our impact so far'),
+        Gaps.v8,
+        const LandingTitle('Every pledge is counted until it reaches a family'),
+        Gaps.v8,
+        const _Subtitle(
+          'Numbers come straight from NexaAid records, not estimates.',
+        ),
+      ],
+    );
+
+    // Reloads with the rest of the page (pull to refresh).
+    final recent = _RecentDeliveriesCard(key: ValueKey(asOf));
+    final cards = wide
+        ? IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(flex: 3, child: recent),
+                Gaps.h16,
+                const Expanded(flex: 2, child: _WhyTrustCard()),
+              ],
+            ),
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [recent, Gaps.v16, const _WhyTrustCard()],
+          );
+
+    return Material(
+      color: cs.surfaceContainerLowest,
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: cs.outlineVariant)),
+        ),
+        child: LandingWidth(
+          padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (wide)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(child: heading),
+                    Gaps.h16,
+                    asOfLine,
+                  ],
+                )
+              else ...[
+                heading,
+                Gaps.v12,
+                asOfLine,
+              ],
+              Gaps.v24,
+              _EvenGrid(columns: wide ? 4 : 2, gap: Space.sm, children: tiles),
+              Gaps.v16,
+              cards,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Demo data" label while the numbers come from test data.
+class LandingDemoBadge extends StatelessWidget {
+  const LandingDemoBadge({super.key});
+
+  @override
+  Widget build(BuildContext context) => const Tooltip(
+    message: 'These numbers come from test data, not real donations.',
+    child: StatusChip('On Hold', label: 'Demo data', showIcon: false),
+  );
+}
+
+/// Rows of [columns] equal-width, equal-height cells.
+class _EvenGrid extends StatelessWidget {
+  final int columns;
+  final double gap;
+  final List<Widget> children;
+  const _EvenGrid({
+    required this.columns,
+    required this.gap,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cols = columns < 1 ? 1 : columns;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var start = 0; start < children.length; start += cols) ...[
+          if (start > 0) SizedBox(height: gap),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = start; i < start + cols; i++) ...[
+                  if (i > start) SizedBox(width: gap),
+                  Expanded(
+                    child: i < children.length
+                        ? children[i]
+                        : const SizedBox.shrink(),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ImpactTile extends StatelessWidget {
+  final String number;
+  final String label;
+  final String note;
+  final Color color;
+  const _ImpactTile({
+    required this.number,
+    required this.label,
+    required this.note,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Semantics(
+      label: '$number $label, $note',
+      excludeSemantics: true,
+      child: _Panel(
+        padding: const EdgeInsets.all(Space.md + 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                number,
+                style: t.headlineLarge?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            Gaps.v4,
+            Text(
+              label,
+              style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            Gaps.v4,
+            Text(
+              note,
+              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
           ],
         ),
       ),
@@ -541,29 +973,165 @@ class LandingStatsBand extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// How it works: circle photo collage + three numbered steps
-// ---------------------------------------------------------------------------
+/// Latest deliveries confirmed by barangays (GET /public/recent-deliveries,
+/// newest first, max 5). Only the goods and the barangay, never donors.
+class _RecentDeliveriesCard extends StatefulWidget {
+  const _RecentDeliveriesCard({super.key});
 
-class LandingHowItWorks extends StatelessWidget {
-  final PublicStats? stats;
-  const LandingHowItWorks({super.key, required this.stats});
+  @override
+  State<_RecentDeliveriesCard> createState() => _RecentDeliveriesCardState();
+}
 
-  static const _steps = [
+class _RecentDeliveriesCardState extends State<_RecentDeliveriesCard> {
+  late final Future<List<Map<String, dynamic>>> _future = _load();
+
+  Future<List<Map<String, dynamic>>> _load() async {
+    final r = await api.get('/public/recent-deliveries');
+    if (!r.ok || r.json is! List) return const [];
+    return [
+      for (final e in (r.json as List).take(5))
+        if (e is Map) Map<String, dynamic>.from(e),
+    ];
+  }
+
+  /// "Oct 11, 2026 · 11:51 PM"
+  static String _when(Object? iso) {
+    final d = DateTime.tryParse('${iso ?? ''}')?.toLocal();
+    if (d == null) return 'Confirmed by the barangay';
+    return formatAsOf(d).replaceFirst('${d.year}, ', '${d.year} · ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final muted = t.bodySmall?.copyWith(color: cs.onSurfaceVariant);
+    final green = landingSuccess(context);
+    return _Panel(
+      child: FutureBuilder<List<Map<String, dynamic>>>(
+        future: _future,
+        builder: (context, snap) {
+          final items = snap.data ?? const [];
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: Space.sm,
+                children: [
+                  Text('Recently delivered', style: t.titleMedium),
+                  Text('Confirmed by the barangay', style: muted),
+                ],
+              ),
+              Gaps.v16,
+              if (snap.connectionState != ConnectionState.done)
+                for (var i = 0; i < 3; i++)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: Space.sm),
+                    child: Skeleton(height: 40),
+                  )
+              else if (items.isEmpty)
+                Text(
+                  'No deliveries confirmed yet. They appear here once a '
+                  'barangay confirms receipt.',
+                  style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                )
+              else
+                for (var i = 0; i < items.length; i++) ...[
+                  if (i > 0) const Divider(height: Space.lg),
+                  Row(
+                    children: [
+                      _IconSquare(Icons.home_outlined, green),
+                      Gaps.h12,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text.rich(
+                              TextSpan(
+                                children: [
+                                  TextSpan(
+                                    text:
+                                        '${items[i]['summary'] ?? 'Relief goods'}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text: ' to ',
+                                    style: TextStyle(
+                                      color: cs.onSurfaceVariant,
+                                    ),
+                                  ),
+                                  TextSpan(
+                                    text:
+                                        'Barangay ${items[i]['barangay'] ?? '-'}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              style: t.bodyMedium,
+                            ),
+                            Text(_when(items[i]['confirmed_at']), style: muted),
+                          ],
+                        ),
+                      ),
+                      Gaps.h8,
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: green.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(Radii.pill),
+                        ),
+                        child: Text(
+                          'Arrived',
+                          style: t.labelMedium?.copyWith(
+                            color: green,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              Gaps.v16,
+              Text(
+                'Only the goods and the barangay are shown. Donor names stay '
+                'private.',
+                style: muted,
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _WhyTrustCard extends StatelessWidget {
+  const _WhyTrustCard();
+
+  static const _rows = [
     (
-      'Pick a barangay',
-      'The City checks each disaster report and shows what the families '
-          'still need.',
+      Icons.verified_user_outlined,
+      'The City checks every report',
+      'Only reports the administrator validated appear here.',
     ),
     (
-      'Pledge your items',
-      'Choose food, water or supplies. Drop them off at the CSWS Main Office '
-          'or ask for a pickup, and show your QR code.',
+      Icons.qr_code_2,
+      'Every pledge has a QR code',
+      'CSWS scans it and records what actually arrived.',
     ),
     (
-      'Follow it to the families',
-      'See when CSWS receives it, when the delivery leaves, and when the '
-          'barangay confirms it arrived.',
+      Icons.card_giftcard,
+      'Goods only, no money',
+      'NexaAid never collects or holds cash.',
     ),
   ];
 
@@ -571,173 +1139,521 @@ class LandingHowItWorks extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final wide = landingWide(context);
-
-    final steps = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const LandingEyebrow('How it works'),
-        Gaps.v12,
-        const LandingTitle('From your pledge to a ', "family's door"),
-        Gaps.v24,
-        for (var i = 0; i < _steps.length; i++) ...[
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              CircleAvatar(
-                radius: wide ? 24 : 20,
-                backgroundColor: AppColors.harbor,
-                child: Text(
-                  '${i + 1}',
-                  style: t.titleMedium?.copyWith(color: Colors.white),
+    return _Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Why donors trust it', style: t.titleMedium),
+          Gaps.v16,
+          for (var i = 0; i < _rows.length; i++) ...[
+            if (i > 0) Gaps.v16,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _IconSquare(_rows[i].$1, cs.primary),
+                Gaps.h12,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _rows[i].$2,
+                        style: t.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Gaps.v4,
+                      Text(
+                        _rows[i].$3,
+                        style: t.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              Gaps.h16,
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_steps[i].$1, style: t.titleMedium),
-                    Gaps.v4,
-                    Text(
-                      _steps[i].$2,
-                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (i < _steps.length - 1) Gaps.v24,
+              ],
+            ),
+          ],
         ],
-      ],
-    );
-
-    return Material(
-      color: cs.surfaceContainerLowest,
-      child: LandingWidth(
-        padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
-        child: wide
-            ? Row(
-                children: [
-                  Expanded(child: _Collage(stats: stats, size: 460)),
-                  const SizedBox(width: Space.xxl + 8),
-                  Expanded(child: steps),
-                ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _Collage(stats: stats, size: 260),
-                  Gaps.v24,
-                  steps,
-                ],
-              ),
       ),
     );
   }
 }
 
-/// Big circle photo, a small flood picture circle (wide only) and a yellow
-/// circle with the items delivered so far.
-class _Collage extends StatelessWidget {
-  final PublicStats? stats;
-  final double size; // height of the collage
-  const _Collage({required this.stats, required this.size});
+// ---------------------------------------------------------------------------
+// Section 2: How it works (tap a step to see the details)
+// ---------------------------------------------------------------------------
+
+class LandingHowItWorks extends StatefulWidget {
+  /// "See reports that need help": scrolls to the reports.
+  final VoidCallback onSeeReports;
+  final VoidCallback onDonateAsGuest;
+
+  const LandingHowItWorks({
+    super.key,
+    required this.onSeeReports,
+    required this.onDonateAsGuest,
+  });
+
+  /// (title, short label for phones, question, paragraph 1, paragraph 2)
+  static const steps = [
+    (
+      'Pick a report',
+      'Pick a report',
+      'How do I choose where to help?',
+      'Every report here was checked by the City first. Each one shows the '
+          'barangay, how many families are affected, what they still need and '
+          'how close it is to complete.',
+      'Critical reports are listed first, so the most urgent barangays get '
+          'help sooner.',
+    ),
+    (
+      'Pledge your items',
+      'Pledge items',
+      'What can I give?',
+      'Choose the items the report asks for, like food, water, clothing, '
+          'sleeping mats or medicine kits, and how many you can give.',
+      'Register to keep a history of your donations, or donate as a guest '
+          'with no account. NexaAid handles goods only, never money.',
+    ),
+    (
+      'Hand them over',
+      'Hand over',
+      'How do the goods reach CSWS?',
+      'Bring them to the CSWS Main Office, or ask for a door-to-door pickup. '
+          'Either way you get a QR code for your donation.',
+      'CSWS scans the code, checks the goods and records what actually '
+          'arrived.',
+    ),
+    (
+      'Follow it to the families',
+      'Follow it',
+      'How do I know it arrived?',
+      'You see each step with its date, from your pledge to the barangay.',
+      'The last step is confirmed by the barangay itself, not by us.',
+    ),
+  ];
+
+  /// The donation status steps shown on step 4.
+  static const statuses = [
+    'Pledged',
+    'Received by CSWS',
+    'Confirmed by the City',
+    'Out for delivery',
+    'Received by the barangay',
+  ];
+
+  @override
+  State<LandingHowItWorks> createState() => _LandingHowItWorksState();
+}
+
+class _LandingHowItWorksState extends State<LandingHowItWorks> {
+  int _step = 0;
+
+  void _select(int i) => setState(() => _step = i);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final wide = landingWide(context);
+
+    final heading = Column(
+      children: [
+        const LandingTitle('How it works', align: TextAlign.center),
+        Gaps.v12,
+        Container(
+          width: 72,
+          height: 3,
+          decoration: BoxDecoration(
+            color: AppColors.vest,
+            borderRadius: BorderRadius.circular(Radii.pill),
+          ),
+        ),
+        Gaps.v12,
+        Text(
+          "Four steps from your pledge to a family's door. Tap a step to see "
+          'the details.',
+          textAlign: TextAlign.center,
+          style: t.bodyLarge?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+
+    final panel = AnimatedSwitcher(
+      duration: _motion(context),
+      switchInCurve: Motion.curve,
+      child: _StepPanel(
+        key: ValueKey(_step),
+        index: _step,
+        onSeeReports: widget.onSeeReports,
+        onDonateAsGuest: widget.onDonateAsGuest,
+      ),
+    );
+
+    final Widget body;
+    if (wide) {
+      body = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var i = 0; i < LandingHowItWorks.steps.length; i++) ...[
+                  if (i > 0) Gaps.v8,
+                  _StepButton(
+                    index: i,
+                    title: LandingHowItWorks.steps[i].$1,
+                    selected: _step == i,
+                    onTap: () => _select(i),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: Space.lg),
+          Expanded(flex: 3, child: panel),
+        ],
+      );
+    } else {
+      body = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < LandingHowItWorks.steps.length; i++)
+                Expanded(
+                  child: _StepColumn(
+                    index: i,
+                    label: LandingHowItWorks.steps[i].$2,
+                    selected: _step == i,
+                    onTap: () => _select(i),
+                  ),
+                ),
+            ],
+          ),
+          Gaps.v16,
+          panel,
+        ],
+      );
+    }
+
+    return LandingWidth(
+      padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          heading,
+          SizedBox(height: wide ? 48 : 24),
+          body,
+        ],
+      ),
+    );
+  }
+}
+
+/// The numbered circle of a step.
+class _StepNumber extends StatelessWidget {
+  final int index;
+  final bool selected;
+  final double size;
+  const _StepNumber({
+    required this.index,
+    required this.selected,
+    required this.size,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return AnimatedContainer(
+      duration: _motion(context),
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: selected ? AppColors.vest : cs.surfaceContainerHigh,
+        border: Border.all(
+          color: selected ? AppColors.vest : cs.outlineVariant,
+        ),
+      ),
+      child: Text(
+        '${index + 1}',
+        style: (size > 48 ? t.titleLarge : t.titleMedium)?.copyWith(
+          color: selected ? AppColors.vestInk : cs.onSurface,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// The short yellow line under the selected step.
+class _Underline extends StatelessWidget {
+  final bool selected;
+  final double width;
+  const _Underline({required this.selected, required this.width});
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+    duration: _motion(context),
+    margin: const EdgeInsets.only(top: 6),
+    width: selected ? width : 0,
+    height: 3,
+    decoration: BoxDecoration(
+      color: AppColors.vest,
+      borderRadius: BorderRadius.circular(Radii.pill),
+    ),
+  );
+}
+
+/// Wide layout: a step in the left column.
+class _StepButton extends StatelessWidget {
+  final int index;
+  final String title;
+  final bool selected;
+  final VoidCallback onTap;
+  const _StepButton({
+    required this.index,
+    required this.title,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: 'Step ${index + 1}: $title',
+      excludeSemantics: true,
+      child: AnimatedContainer(
+        duration: _motion(context),
+        decoration: BoxDecoration(
+          color: selected ? cs.surfaceContainer : Colors.transparent,
+          borderRadius: BorderRadius.circular(Radii.lg),
+          border: Border.all(
+            color: selected ? cs.outlineVariant : Colors.transparent,
+          ),
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(Radii.lg),
+            child: Padding(
+              padding: const EdgeInsets.all(Space.sm),
+              child: Row(
+                children: [
+                  _StepNumber(index: index, selected: selected, size: 52),
+                  Gaps.h16,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          title,
+                          style: t.titleMedium?.copyWith(
+                            fontWeight: selected
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                          ),
+                        ),
+                        _Underline(selected: selected, width: 64),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Phone layout: one of the four equal step columns.
+class _StepColumn extends StatelessWidget {
+  final int index;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+  const _StepColumn({
+    required this.index,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: 'Step ${index + 1}: $label',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(Radii.md),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            vertical: Space.xs,
+            horizontal: 2,
+          ),
+          child: Column(
+            children: [
+              _StepNumber(index: index, selected: selected, size: 44),
+              Gaps.v8,
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                style: t.labelMedium?.copyWith(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+              _Underline(selected: selected, width: 32),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The selected step: its question, the two paragraphs and the actions.
+class _StepPanel extends StatelessWidget {
+  final int index;
+  final VoidCallback onSeeReports;
+  final VoidCallback onDonateAsGuest;
+  const _StepPanel({
+    super.key,
+    required this.index,
+    required this.onSeeReports,
+    required this.onDonateAsGuest,
+  });
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final big = size > 300;
-    final photo = big ? 340.0 : 220.0;
-    final yellow = big ? 200.0 : 140.0;
-    final delivered = stats?.itemsDelivered;
-    return SizedBox(
-      height: size,
-      child: Stack(
+    final wide = landingWide(context);
+    final s = LandingHowItWorks.steps[index];
+    return _Panel(
+      padding: EdgeInsets.all(wide ? Space.xl : Space.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Positioned(
-            left: 0,
-            top: 0,
-            child: Container(
-              width: photo,
-              height: photo,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: cs.primaryContainer, width: 8),
-              ),
-              child: ClipOval(
-                child: Image.asset(
-                  kImpactImage,
-                  fit: BoxFit.cover,
-                  semanticLabel: 'Relief goods being handed to a family',
-                  errorBuilder: (_, _, _) =>
-                      const ColoredBox(color: AppColors.harborMist),
-                ),
+          Text(
+            'Step ${index + 1} of ${LandingHowItWorks.steps.length}',
+            style: t.labelLarge?.copyWith(
+              color: cs.primary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Gaps.v8,
+          Semantics(
+            header: true,
+            child: Text(
+              s.$3,
+              style: (wide ? t.headlineSmall : t.titleLarge)?.copyWith(
+                fontWeight: FontWeight.w700,
               ),
             ),
           ),
-          if (big)
-            Positioned(
-              right: 20,
-              top: 40,
-              child: Container(
-                width: 170,
-                height: 170,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: cs.surfaceContainerLowest,
-                    width: 6,
-                  ),
-                ),
-                child: const ClipOval(
-                  child: DisasterArt(DisasterKind.flood, height: 170),
-                ),
+          Gaps.v12,
+          Text(s.$4, style: t.bodyLarge),
+          Gaps.v12,
+          Text(s.$5, style: t.bodyLarge?.copyWith(color: cs.onSurfaceVariant)),
+          if (index == LandingHowItWorks.steps.length - 1) ...[
+            Gaps.v16,
+            Wrap(
+              spacing: Space.xs,
+              runSpacing: Space.xs,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                for (var i = 0; i < LandingHowItWorks.statuses.length; i++) ...[
+                  if (i > 0)
+                    Icon(
+                      Icons.arrow_forward,
+                      size: 14,
+                      color: cs.onSurfaceVariant,
+                    ),
+                  _StatusStep(i + 1, LandingHowItWorks.statuses[i]),
+                ],
+              ],
+            ),
+          ],
+          Gaps.v24,
+          Wrap(
+            spacing: Space.sm,
+            runSpacing: Space.sm,
+            children: [
+              AppButton(
+                'See reports that need help',
+                icon: Icons.search,
+                variant: AppButtonVariant.donate,
+                onPressed: onSeeReports,
+              ),
+              // "a guest", so it is not mistaken for the hero's link.
+              AppButton(
+                'Donate as a guest',
+                icon: Icons.volunteer_activism_outlined,
+                variant: AppButtonVariant.secondary,
+                onPressed: onDonateAsGuest,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusStep extends StatelessWidget {
+  final int number;
+  final String label;
+  const _StatusStep(this.number, this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(4, 4, 10, 4),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(Radii.pill),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircleAvatar(
+            radius: 10,
+            backgroundColor: cs.primary,
+            child: Text(
+              '$number',
+              style: t.labelSmall?.copyWith(
+                color: cs.onPrimary,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          if (delivered != null && delivered > 0)
-            Positioned(
-              right: big ? 60 : 0,
-              bottom: 0,
-              child: Container(
-                width: yellow,
-                height: yellow,
-                padding: const EdgeInsets.all(Space.md),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.vest,
-                  border: Border.all(
-                    color: cs.surfaceContainerLowest,
-                    width: 6,
-                  ),
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    FittedBox(
-                      child: Text(
-                        _fmt(delivered),
-                        style: (big ? t.headlineLarge : t.headlineSmall)
-                            ?.copyWith(
-                              color: AppColors.vestInk,
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                    ),
-                    Text(
-                      big ? 'items delivered to families' : 'items delivered',
-                      textAlign: TextAlign.center,
-                      style: t.labelMedium?.copyWith(
-                        color: AppColors.vestInk,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+          ),
+          Gaps.h8,
+          Flexible(child: Text(label, style: t.labelMedium)),
         ],
       ),
     );
@@ -745,10 +1661,11 @@ class _Collage extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Report cards: picture, priority tag, progress, Donate
+// Section 3: Reports (same card as the signed-in report lists)
 // ---------------------------------------------------------------------------
 
-/// Lays report cards out 3 across on Chrome, 2 on tablets, 1 on phones.
+/// Report cards in rows: as many 360 px columns as fit (1 to 3), and every
+/// card in a row as tall as the tallest.
 class LandingReportGrid extends StatelessWidget {
   final List<Widget> children;
   const LandingReportGrid({super.key, required this.children});
@@ -757,33 +1674,22 @@ class LandingReportGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, box) {
-        final cols = box.maxWidth >= 960
-            ? 3
-            : box.maxWidth >= 600
-            ? 2
-            : 1;
-        const gap = Space.lg;
-        final w = (box.maxWidth - gap * (cols - 1)) / cols;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [for (final c in children) SizedBox(width: w, child: c)],
-        );
+        final cols = (box.maxWidth / 360).floor().clamp(1, 3);
+        return _EvenGrid(columns: cols, gap: Space.md, children: children);
       },
     );
   }
 }
 
-class LandingReportCard extends StatelessWidget {
+/// The report pop-out: a centered dialog on Chrome and tablets, a bottom
+/// sheet on phones. Shows what donors need to decide, never who reported.
+class LandingReportDetails extends StatelessWidget {
   final Map<String, dynamic> report;
   final VoidCallback onDonate;
-  final VoidCallback onOpen;
-
-  const LandingReportCard({
+  const LandingReportDetails({
     super.key,
     required this.report,
     required this.onDonate,
-    required this.onOpen,
   });
 
   @override
@@ -793,134 +1699,190 @@ class LandingReportCard extends StatelessWidget {
     final r = report;
     final needed = (r['total_items_needed'] as num?) ?? 0;
     final delivered = (r['total_items_delivered'] as num?) ?? 0;
-    final pct = needed > 0
-        ? (delivered / needed * 100).clamp(0, 100).round()
-        : 0;
-    final priority = r['priority_level'] as String?;
-    final needs = '${r['assistance_needed'] ?? ''}'.trim();
+    final percent = num.tryParse('${r['fulfillment_percentage'] ?? ''}');
+    final pct = (percent ?? (needed > 0 ? delivered * 100 / needed : 0))
+        .clamp(0, 100)
+        .round();
+    final guidance = '${r['priority_guidance'] ?? ''}'.trim();
+    final description = '${r['description'] ?? ''}'.trim();
+    final source = r['source'];
     final families = r['affected_families'];
-    return Card(
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: cs.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Stack(
-            children: [
-              DisasterArt(disasterKind(r['disaster']), height: 170),
-              if (priority != null)
-                Positioned(
-                  left: Space.sm,
-                  top: Space.sm,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: PriorityColors.base(priority),
-                      borderRadius: BorderRadius.circular(Radii.pill),
-                    ),
-                    child: Text(
-                      priority,
-                      style: t.labelMedium?.copyWith(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+
+    Widget label(String text) => Padding(
+      padding: const EdgeInsets.only(top: Space.lg, bottom: Space.xs),
+      child: Text(text, style: t.titleSmall),
+    );
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Report #${r['report_id'] ?? r['id']}'
+                    '${source == null ? '' : ' · via $source'}',
+                    style: t.labelLarge?.copyWith(color: cs.onSurfaceVariant),
                   ),
-                ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.all(Space.md + 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${r['disaster'] ?? 'Disaster'}'
-                  '${families == null ? '' : ' · $families families'}',
-                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                ),
-                Gaps.v4,
-                Text(
-                  'Barangay ${r['barangay'] ?? '-'}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: t.titleLarge,
-                ),
-                if (needs.isNotEmpty) ...[
                   Gaps.v4,
                   Text(
-                    'Needs $needs',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    '${r['disaster'] ?? 'Disaster'} in Barangay '
+                    '${r['barangay'] ?? '-'}',
+                    style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ],
-                Gaps.v12,
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(Radii.pill),
-                  child: LinearProgressIndicator(
-                    value: pct / 100,
-                    minHeight: 10,
-                    backgroundColor: cs.surfaceContainerHighest,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Close',
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+        Gaps.v8,
+        Wrap(
+          spacing: Space.xs,
+          runSpacing: Space.xs,
+          children: [
+            PriorityChip(r['priority_level'] as String?),
+            const StatusChip('Validated'),
+          ],
+        ),
+        Gaps.v16,
+        Row(
+          children: [
+            Expanded(
+              child: _StatBox(
+                families == null ? '–' : _fmt((families as num).toInt()),
+                'families affected',
+              ),
+            ),
+            Gaps.h8,
+            Expanded(child: _StatBox(_fmt(needed.toInt()), 'items needed')),
+            Gaps.h8,
+            Expanded(child: _StatBox('$pct%', 'delivered')),
+          ],
+        ),
+        if (_NeedChips.split(r['assistance_needed']).isNotEmpty) ...[
+          label('Reported needs'),
+          _NeedChips(r['assistance_needed']),
+        ],
+        label('Fulfillment progress'),
+        FulfillmentBar(
+          delivered: delivered,
+          needed: needed,
+          percent: percent,
+          label: 'Delivered so far',
+        ),
+        if (description.isNotEmpty) ...[
+          label('About this report'),
+          Text(description, style: t.bodyMedium),
+        ],
+        if (guidance.isNotEmpty) ...[
+          Gaps.v16,
+          Container(
+            padding: const EdgeInsets.all(Space.sm),
+            decoration: BoxDecoration(
+              color: cs.primaryContainer.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(Radii.md),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.auto_awesome, size: 18, color: cs.primary),
+                Gaps.h8,
+                Expanded(
+                  child: Text(
+                    'AI guidance: $guidance',
+                    style: t.bodyMedium?.copyWith(color: cs.onPrimaryContainer),
                   ),
-                ),
-                Gaps.v8,
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        needed > 0
-                            ? '$delivered of $needed items'
-                            : 'No item count yet',
-                        style: t.bodyMedium,
-                      ),
-                    ),
-                    Text(
-                      '$pct%',
-                      style: t.titleSmall?.copyWith(color: cs.primary),
-                    ),
-                  ],
-                ),
-                Gaps.v16,
-                Row(
-                  children: [
-                    Expanded(
-                      child: AppButton(
-                        'Donate',
-                        icon: Icons.volunteer_activism_outlined,
-                        variant: AppButtonVariant.donate,
-                        expand: true,
-                        onPressed: onDonate,
-                      ),
-                    ),
-                    Gaps.h8,
-                    OutlinedButton(
-                      onPressed: onOpen,
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 48),
-                      ),
-                      child: const Text('Details'),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
+        ],
+        Gaps.v24,
+        AppButton(
+          'Donate to this report',
+          icon: Icons.volunteer_activism_outlined,
+          variant: AppButtonVariant.donate,
+          large: true,
+          expand: true,
+          onPressed: onDonate,
+        ),
+      ],
+    );
+  }
+}
+
+class _StatBox extends StatelessWidget {
+  final String value;
+  final String label;
+  const _StatBox(this.value, this.label);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(Space.sm),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+          Text(label, style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
         ],
       ),
     );
   }
 }
 
+class _NeedChips extends StatelessWidget {
+  final Object? raw;
+  const _NeedChips(this.raw);
+
+  /// "Water, ready-to-eat food" -> ['Water', 'ready-to-eat food']
+  static List<String> split(Object? raw) => (raw ?? '')
+      .toString()
+      .split(',')
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toList();
+
+  @override
+  Widget build(BuildContext context) {
+    final needs = split(raw);
+    if (needs.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: Space.xs,
+      runSpacing: Space.xs,
+      children: [
+        for (final n in needs)
+          Chip(label: Text(n), visualDensity: VisualDensity.compact),
+      ],
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Questions: tap to open, one at a time
+// Section 4: Questions, one open at a time
 // ---------------------------------------------------------------------------
 
 class LandingFaq extends StatefulWidget {
@@ -952,6 +1914,11 @@ class LandingFaq extends StatefulWidget {
           'approved, you donate under your organization\'s name.',
     ),
     (
+      'Will my name be shown publicly?',
+      'No. The public page only shows the goods and the barangay. Your name '
+          'stays inside NexaAid.',
+    ),
+    (
       'What do Critical, High, Medium and Low mean?',
       'Each report gets a score from the families affected (30%), how much '
           'is needed (20%), how severe the disaster is (25%) and how much is '
@@ -973,71 +1940,58 @@ class _LandingFaqState extends State<LandingFaq> {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     final wide = landingWide(context);
-    final duration = MediaQuery.disableAnimationsOf(context)
-        ? Duration.zero
-        : Motion.normal;
+    final duration = _motion(context);
 
-    final list = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    final heading = Row(
       children: [
-        for (var i = 0; i < LandingFaq.items.length; i++) ...[
-          if (i > 0) Gaps.v12,
-          _FaqItem(
-            question: LandingFaq.items[i].$1,
-            answer: LandingFaq.items[i].$2,
-            open: _open == i,
-            duration: duration,
-            onTap: () => setState(() => _open = _open == i ? null : i),
-          ),
-        ],
-      ],
-    );
-
-    final intro = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const LandingEyebrow('Questions'),
-        Gaps.v12,
-        const LandingTitle('Before you ', 'donate'),
-        Gaps.v12,
-        Text(
-          'Short answers to what donors and organizations ask most.',
-          style: t.bodyLarge?.copyWith(color: cs.onSurfaceVariant),
-        ),
-        if (wide) ...[
-          Gaps.v24,
-          ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: Image.asset(
-              kImpactImage,
-              height: 240,
-              width: double.infinity,
-              fit: BoxFit.cover,
-              semanticLabel: 'Relief goods packed and ready',
-              errorBuilder: (_, _, _) => const SizedBox.shrink(),
+        Expanded(child: Divider(color: cs.outlineVariant)),
+        Flexible(
+          flex: 6,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: Space.md),
+            child: Semantics(
+              header: true,
+              child: Text.rich(
+                const TextSpan(
+                  children: [
+                    TextSpan(text: 'Frequently asked '),
+                    TextSpan(
+                      text: 'questions',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+                textAlign: TextAlign.center,
+                style: (wide ? t.headlineSmall : t.titleLarge)?.copyWith(
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
             ),
           ),
-        ],
+        ),
+        Expanded(child: Divider(color: cs.outlineVariant)),
       ],
     );
 
-    return Material(
-      color: cs.surfaceContainerLowest,
-      child: LandingWidth(
-        padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
-        child: wide
-            ? Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: intro),
-                  const SizedBox(width: Space.xxl),
-                  Expanded(child: list),
-                ],
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [intro, Gaps.v16, list],
-              ),
+    return LandingWidth(
+      maxWidth: 760,
+      padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          heading,
+          Gaps.v24,
+          for (var i = 0; i < LandingFaq.items.length; i++) ...[
+            if (i > 0) Gaps.v12,
+            _FaqItem(
+              question: LandingFaq.items[i].$1,
+              answer: LandingFaq.items[i].$2,
+              open: _open == i,
+              duration: duration,
+              onTap: () => setState(() => _open = _open == i ? null : i),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -1062,24 +2016,28 @@ class _FaqItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final fg = open ? Colors.white : cs.onSurface;
     return AnimatedContainer(
       duration: duration,
       decoration: BoxDecoration(
-        color: open ? AppColors.harbor : cs.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: open ? AppColors.harbor : cs.outlineVariant),
+        color: cs.surfaceContainer,
+        borderRadius: BorderRadius.circular(Radii.lg),
+        border: Border.all(
+          color: open ? cs.primary.withValues(alpha: 0.6) : cs.outlineVariant,
+        ),
       ),
       child: Material(
         type: MaterialType.transparency,
         child: InkWell(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(Radii.lg),
           onTap: onTap,
           child: Semantics(
             button: true,
             expanded: open,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              padding: const EdgeInsets.symmetric(
+                horizontal: Space.md + 4,
+                vertical: Space.xs,
+              ),
               child: AnimatedSize(
                 duration: duration,
                 alignment: Alignment.topCenter,
@@ -1093,24 +2051,44 @@ class _FaqItem extends StatelessWidget {
                           Expanded(
                             child: Text(
                               question,
-                              style: t.titleMedium?.copyWith(color: fg),
+                              style: t.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                           Gaps.h8,
-                          Icon(
-                            open ? Icons.remove : Icons.add,
-                            color: open ? Colors.white : cs.primary,
+                          Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: open ? cs.primary : cs.outlineVariant,
+                              ),
+                            ),
+                            child: AnimatedRotation(
+                              turns: open ? 0.5 : 0,
+                              duration: duration,
+                              child: Icon(
+                                Icons.expand_more,
+                                size: 20,
+                                color: open ? cs.primary : cs.onSurfaceVariant,
+                              ),
+                            ),
                           ),
                         ],
                       ),
                     ),
                     if (open)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: Space.md),
+                        padding: const EdgeInsets.only(
+                          top: Space.xxs,
+                          bottom: Space.sm,
+                        ),
                         child: Text(
                           answer,
                           style: t.bodyMedium?.copyWith(
-                            color: const Color(0xFFE6F4F2),
+                            color: cs.onSurfaceVariant,
                           ),
                         ),
                       ),
@@ -1131,7 +2109,12 @@ class _FaqItem extends StatelessWidget {
 
 class LandingClosingBand extends StatelessWidget {
   final VoidCallback onStart;
-  const LandingClosingBand({super.key, required this.onStart});
+  final VoidCallback onRegister;
+  const LandingClosingBand({
+    super.key,
+    required this.onStart,
+    required this.onRegister,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1154,7 +2137,7 @@ class LandingClosingBand extends StatelessWidget {
         ),
       ],
     );
-    final button = FilledButton(
+    final start = FilledButton(
       onPressed: onStart,
       style: FilledButton.styleFrom(
         backgroundColor: AppColors.vest,
@@ -1164,6 +2147,17 @@ class LandingClosingBand extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 28),
       ),
       child: const Text('Start donating'),
+    );
+    final register = OutlinedButton(
+      onPressed: onRegister,
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        side: const BorderSide(color: Colors.white, width: 1.5),
+        minimumSize: const Size(0, 52),
+        shape: const StadiumBorder(),
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+      ),
+      child: const Text('Register'),
     );
     return LandingWidth(
       padding: EdgeInsets.symmetric(vertical: wide ? 72 : Space.xl),
@@ -1178,12 +2172,21 @@ class LandingClosingBand extends StatelessWidget {
                 children: [
                   Expanded(child: text),
                   Gaps.h16,
-                  button,
+                  start,
+                  Gaps.h12,
+                  register,
                 ],
               )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [text, Gaps.v16, button],
+                children: [
+                  text,
+                  Gaps.v16,
+                  // Stacked on phones so each label stays on one line.
+                  start,
+                  Gaps.v12,
+                  register,
+                ],
               ),
       ),
     );

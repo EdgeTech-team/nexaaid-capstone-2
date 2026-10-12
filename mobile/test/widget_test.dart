@@ -16,11 +16,12 @@ void main() {
     await tester.pumpWidget(const NexaAidApp());
     expect(find.text('NexaAid'), findsOneWidget);
     // UI concern (new notes): Log in and Register come first, above
-    // guest donation.
-    expect(find.text('Log in to your account'), findsOneWidget);
+    // guest donation. Oct 12 redesign: Log in is only in the hero now.
+    expect(find.text('Log in'), findsOneWidget);
     expect(find.text('Register as donor or organization'), findsOneWidget);
     expect(find.text('Donate as guest'), findsOneWidget);
-    expect(find.text('How it works', skipOffstage: false), findsOneWidget);
+    // In the header links and as the section title.
+    expect(find.text('How it works', skipOffstage: false), findsWidgets);
     // Light/dark toggle: on the landing page header.
     expect(find.byType(SunMoonToggle), findsOneWidget);
   });
@@ -79,7 +80,7 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(const NexaAidApp());
-    await tester.tap(find.text('Log in to your account'));
+    await tester.tap(find.text('Log in'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.text('Email or username'), findsOneWidget);
