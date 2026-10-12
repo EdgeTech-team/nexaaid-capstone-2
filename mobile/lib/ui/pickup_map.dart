@@ -4,74 +4,65 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
-import 'location_picker.dart' show PickupRules;
 import 'batch_sheet.dart' show openDonationByQr;
-import 'pickup_actions.dart' show ContactButtons, copyText, openNavigation;
+import 'home_nav.dart';
+import 'location_picker.dart' show PickupRules;
+import 'pickup_actions.dart' show openNavigation;
 import 'pickup_days.dart';
-import 'pickup_route.dart';
+import 'pickup_list.dart';
+import 'pickup_plan.dart';
+import 'pickup_route.dart'
+    show centerOf, kmBetween, mandaueCenter, niceKm, pathKm;
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
-// Door to Door pickups on a map (Oct 10-11 notes): the CSWS Main Office
-// "Pickups" tab.
+// Door to Door pickups: the CSWS Main Office "Pickups" tab (UC-D2 alt 7c,
+// UC-CM1 for Door to Door; Oct 12 notes, pickup logic v2).
 //
-// Every Door to Door donation still waiting to be collected, as a numbered
-// pin at the landmark the donor chose. Above the map: the days the donors
-// are home (M / T / W / Th ...). The pins are numbered in a suggested
-// one-way order (nearest next stop, pickup_route.dart). Tapping a pin shows
-// its landmark and address inside the pin's bubble. The map stays inside
-// the pickup area (Cebu province), and pickups farther than PICKUP_MAX_KM
-// from the CSWS office are marked "Far" so Main Office can decline them.
+// Two views of the same data (GET /donations/pickup-plan), switched with the
+// Map / List buttons:
 //
-// Main Office opens an entry to receive the goods, declines a far one, and
-// asks DRRMO for logistics support for a run (trucks, volunteers,
-// pushcarts), like it does for deliveries.
+// Map  "Who is home that day, and in which order do we go?"
+//   * Opens on TODAY automatically, with nothing to tap: only the stops with
+//     a donor home today (the next pickup day on weekends, with a note).
+//     The Filter button (top right) picks another day or All days, with
+//     how many stops each has; "Back to today" returns.
+//   * Without tapping anything: a summary of the day (donations, last
+//     chances, expiring soon, missed visits, heavy loads), and each stop's
+//     items and warnings in the sheet. Pins carry only the route number,
+//     so nearby pins don't cover each other. Choosing a day shows ONLY those stops (the same rule as
+//     the list's "Home on" filter), numbered by urgency: fewest dates left,
+//     then closest deadline, then oldest donation; distance from the
+//     previous stop only breaks an exact tie (_homeOn).
+//   * A short sheet under the map: the stops in that order, each with
+//     Navigate. Tapping a pin or a row opens the stop details (items as the
+//     donor wrote them, days, Navigate / Mark picked up / Not home).
+//
+// List "Who is waiting, where, and when are they home?" (pickup_list.dart)
+//   * Group by barangay, by day of availability or by the planner's
+//     suggested runs; "Home on" filter; search; stops needing attention,
+//     donations without a map pin, and the requests sent to DRRMO.
+//
+// Everything is a suggestion; CSWS staff confirm each run.
 // ---------------------------------------------------------------------------
 
 const _osmTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const _appId = 'nexaaid.mandauecity.app';
 
-/// One Door to Door donation on the map.
-class _Stop {
-  final Map<String, dynamic> b;
-  final LatLng? point;
-  final Set<int> days;
-  final String landmark; // full landmark text
-  final String area; // short landmark name for the pin and its bubble
+/// Show the "Ask DRRMO for help" button. The manuscript has DRRMO help only
+/// after goods are prepared for release (Scope 5.2 / 5.3); the Oct 11 notes
+/// added it for pickups. Set to false if the team decides DRRMO does not
+/// help with pickups. Requests already sent stay listed either way.
+const kDrrmoPickupSupport = true;
 
-  _Stop(this.b, this.point, this.days, this.landmark, this.area);
+/// How much of a phone screen the stop sheet covers when the map opens.
+const _sheetStart = 0.30;
 
-  String get ref => '${b['batch_reference']}';
-  String get address => '${b['pickup_address'] ?? ''}'.trim();
-  Map? get run => b['pickup_request'] as Map?;
-  bool get tooFar => b['too_far'] == true;
-  double? get km => (b['distance_km'] as num?)?.toDouble();
-
-  factory _Stop.of(Map<String, dynamic> b) {
-    final lat = (b['pickup_lat'] as num?)?.toDouble();
-    final lng = (b['pickup_lng'] as num?)?.toDouble();
-    var days = pickupDaysOf(b['pickup_days']);
-    // Older entries: one preferred time, so one day.
-    final at = DateTime.tryParse('${b['preferred_pickup_at'] ?? ''}');
-    if (days.isEmpty && at != null) {
-      days = {at.toUtc().add(const Duration(hours: 8)).weekday};
-    }
-    final landmark = '${b['pickup_landmark'] ?? ''}'.trim();
-    var area = landmark.split(',').first.trim();
-    if (area.isEmpty) area = 'No landmark';
-    if (area.length > 28) area = '${area.substring(0, 27)}…';
-    return _Stop(
-      b,
-      lat != null && lng != null ? LatLng(lat, lng) : null,
-      days,
-      landmark,
-      area,
-    );
-  }
-}
-
-/// How much of a phone screen the stops sheet covers when the map opens.
-const _sheetStart = 0.36;
+/// All of Cebu province, until GET /donations/pickup-rules says otherwise.
+final _cebu = LatLngBounds(
+  const LatLng(9.40, 123.25),
+  const LatLng(11.30, 124.10),
+);
 
 class PickupMapScreen extends StatefulWidget {
   /// True when pushed as its own page (from the CSWS Pickups tab).
@@ -82,12 +73,6 @@ class PickupMapScreen extends StatefulWidget {
   State<PickupMapScreen> createState() => _PickupMapScreenState();
 }
 
-/// All of Cebu province, until GET /donations/pickup-rules says otherwise.
-final _cebu = LatLngBounds(
-  const LatLng(9.40, 123.25),
-  const LatLng(11.30, 124.10),
-);
-
 class _PickupMapScreenState extends State<PickupMapScreen> {
   final _map = MapController();
   bool _mapReady = false;
@@ -95,25 +80,18 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   bool _loading = true;
   String? _error;
   int _errorStatus = 0;
-  List<_Stop> _all = [];
+  PickupPlan? _plan;
   List<Map<String, dynamic>> _runs = [];
   PickupRules _rules = const PickupRules();
-  LatLng? _office;
-
-  // Filters above the map.
-  Set<int> _days = {};
-  Map<String, dynamic>? _focusRun; // "show this request on the map"
-  String? _selected; // batch_reference of the tapped pin
-
-  // Oct 11 notes: Door to Door pickups belong to CSWS Main Office (the
-  // Disaster Unit no longer has this map), so Main Office asks DRRMO for
-  // help with a pickup run.
-  bool get _canRequest => api.role == Roles.cswsMain;
-  // Main Office (and the Administrator) receive the goods and may decline.
-  bool get _canReceive => api.role == Roles.cswsMain || api.role == Roles.admin;
-  double _maxKm = 20;
-  String _areaName = 'Cebu province';
   LatLngBounds _areaBounds = _cebu;
+
+  int? _day; // weekday shown on the map (1 = Mon); null = all days
+  bool _dayPicked = false; // the user chose a day (keep it on reload)
+  String? _selected; // stop id of the tapped pin
+  bool _listMode = false; // Map / List switch
+
+  bool get _canRequest => kDrrmoPickupSupport && api.role == Roles.cswsMain;
+  bool get _canReceive => api.role == Roles.cswsMain || api.role == Roles.admin;
 
   @override
   void initState() {
@@ -127,153 +105,200 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       _error = null;
     });
     final results = await Future.wait([
-      api.get('/donations/pickups'),
+      api.get('/donations/pickup-plan'),
       api.get('/donations/pickup-rules'),
-      api.get('/donations/drop-off-info'),
-      if (_canRequest) api.get('/logistics/requests'),
+      if (api.role == Roles.cswsMain) api.get('/logistics/requests'),
     ]);
     if (!mounted) return;
-    final pickups = results[0];
-    if (!pickups.ok || pickups.json is! List) {
+    final res = results[0];
+    if (!res.ok || res.json is! Map) {
       setState(() {
         _loading = false;
-        _error = pickups.errorText;
-        _errorStatus = pickups.status;
+        _error = res.errorText;
+        _errorStatus = res.status;
       });
       return;
     }
-    final info = results[2];
-    LatLng? office;
-    if (info.ok && info.json is Map) {
-      final lat = (info.json['lat'] as num?)?.toDouble();
-      final lng = (info.json['lng'] as num?)?.toDouble();
-      if (lat != null && lng != null) office = LatLng(lat, lng);
-    }
-    var runs = <Map<String, dynamic>>[];
-    if (_canRequest) {
-      final r = results[3];
-      if (r.ok && r.json is List) {
-        runs = [
-          for (final e in r.json as List) Map<String, dynamic>.from(e as Map),
-        ];
+    var rules = _rules;
+    var bounds = _areaBounds;
+    final rr = results[1];
+    if (rr.ok && rr.json is Map) {
+      final j = Map<String, dynamic>.from(rr.json as Map);
+      rules = PickupRules.fromJson(j);
+      final bb = ((j['area'] as Map?)?['bbox'] as List?)?.cast<num>();
+      if (bb != null && bb.length == 4) {
+        bounds = LatLngBounds(
+          LatLng(bb[1].toDouble(), bb[0].toDouble()),
+          LatLng(bb[3].toDouble(), bb[2].toDouble()),
+        );
       }
+    }
+    final plan = PickupPlan.fromJson(
+      Map<String, dynamic>.from(res.json as Map),
+      rules.days,
+    );
+    var runs = <Map<String, dynamic>>[];
+    if (results.length > 2 && results[2].ok && results[2].json is List) {
+      runs = [
+        for (final e in results[2].json as List)
+          Map<String, dynamic>.from(e as Map),
+      ];
     }
     setState(() {
       _loading = false;
-      _all = [
-        for (final e in pickups.json as List)
-          _Stop.of(Map<String, dynamic>.from(e as Map)),
-      ];
-      final rr = results[1];
-      if (rr.ok && rr.json is Map) {
-        final j = Map<String, dynamic>.from(rr.json as Map);
-        _rules = PickupRules.fromJson(j);
-        final area = j['area'] as Map?;
-        if (area != null) {
-          _maxKm = (area['max_km'] as num?)?.toDouble() ?? _maxKm;
-          _areaName = '${area['name'] ?? _areaName}';
-          final bb = (area['bbox'] as List?)?.cast<num>();
-          if (bb != null && bb.length == 4) {
-            _areaBounds = LatLngBounds(
-              LatLng(bb[1].toDouble(), bb[0].toDouble()),
-              LatLng(bb[3].toDouble(), bb[2].toDouble()),
-            );
-          }
-        }
-      }
-      _office = office;
+      _plan = plan;
+      _rules = rules;
+      _areaBounds = bounds;
       _runs = runs;
-      _selected = null; // the camera refits, so close any open bubble
-      if (_focusRun != null) {
-        _focusRun = runs
-            .where((r) => r['request_id'] == _focusRun!['request_id'])
-            .firstOrNull;
-      }
+      // Opens on TODAY automatically (who is home today). On a day without
+      // pickups (e.g. Saturday) it shows the next pickup day and says so.
+      // Later loads keep the day the user chose.
+      if (!_dayPicked) _day = _defaultDay(plan, rules);
+      if (!plan.stops.any((s) => s.id == _selected)) _selected = null;
     });
     _fitSoon();
   }
 
-  // ----- filtering and order ------------------------------------------------
-
-  bool _matches(_Stop s) {
-    return _days.isEmpty || s.days.intersection(_days).isNotEmpty;
+  /// Today's weekday, or the next CSWS pickup day when today has none.
+  int? _defaultDay(PickupPlan plan, PickupRules rules) {
+    final today = plan.today.weekday;
+    if (rules.days.contains(today)) return today;
+    return plan.dates.firstOrNull?.weekday;
   }
 
-  /// Stops shown on the map, in the order they are numbered.
-  List<_Stop> get _shown {
-    if (_focusRun != null) {
-      final refs = [
-        for (final s in (_focusRun!['stops'] as List? ?? const []))
-          '${(s as Map)['batch_reference']}',
-      ];
-      final byRef = {for (final s in _all) s.ref: s};
-      return [
-        for (final r in refs)
-          if (byRef[r] != null) byRef[r]!,
-      ];
+  /// Today is not a CSWS pickup day (e.g. a weekend).
+  bool get _noPickupsToday =>
+      _plan != null && !_rules.days.contains(_plan!.today.weekday);
+
+  // ----- what is shown --------------------------------------------------------
+
+  /// Stops with a donor home on [weekday] (far pickups left out), in
+  /// urgency order (Oct 12 notes), the same three rules as the planner:
+  ///   1. fewest pickup dates left in the next two weeks (a donor home only
+  ///      on Thursdays, with one Thursday left, goes first),
+  ///   2. closest handover deadline (days left before the donation expires),
+  ///   3. oldest donation first.
+  /// Only when two stops are exactly as urgent does distance decide: the
+  /// one nearest to the previous stop (or the CSWS office) goes first.
+  List<PlanStop> _homeOn(PickupPlan p, int weekday) {
+    final left = [
+      for (final s in p.stops)
+        if (!s.far && s.days.contains(weekday)) s,
+    ];
+    final from = _dateOf(weekday, p);
+    final key = {for (final s in left) s.id: _urgency(p, s, from)};
+    final out = <PlanStop>[];
+    var here = p.office;
+    while (left.isNotEmpty) {
+      final at = here;
+      left.sort((a, b) {
+        final c = _compareUrgency(key[a.id]!, key[b.id]!);
+        if (c != 0 || at == null) return c;
+        return kmBetween(at, a.point).compareTo(kmBetween(at, b.point));
+      });
+      final next = left.removeAt(0);
+      out.add(next);
+      here = next.point;
     }
-    final list = _all.where(_matches).toList();
-    // Far pickups stay on the map (red) but out of the route: Main Office
-    // decides first whether to decline them.
-    final pinned = list.where((s) => s.point != null && !s.tooFar).toList();
-    final far = list.where((s) => s.point != null && s.tooFar).toList();
-    final unpinned = list.where((s) => s.point == null).toList();
-    final order = planOneWayRoute([
-      for (final s in pinned) s.point!,
-    ], start: _office);
-    return [for (final i in order) pinned[i], ...far, ...unpinned];
+    return out;
   }
 
-  Map<int, int> get _dayCounts {
-    return {
-      for (var d = 1; d <= 7; d++)
-        d: _all.where((s) => s.days.contains(d)).length,
-    };
+  /// (dates left, days to deadline, oldest donation) for one stop.
+  (int, int, DateTime) _urgency(PickupPlan p, PlanStop s, DateTime? from) {
+    // A visit where nobody was home: only dates after it count.
+    DateTime? missed;
+    for (final d in s.donations) {
+      final m = DateTime.tryParse('${d.raw['not_home_date'] ?? ''}');
+      if (m != null && (missed == null || m.isAfter(missed))) missed = m;
+    }
+    final dates = p.dates.where(
+      (d) =>
+          s.days.contains(d.weekday) &&
+          (from == null || !d.isBefore(from)) &&
+          (missed == null || d.isAfter(missed)),
+    );
+    var oldest = DateTime(9999);
+    for (final d in s.donations) {
+      final c = DateTime.tryParse('${d.raw['created_at'] ?? ''}');
+      if (c != null && c.isBefore(oldest)) oldest = c;
+    }
+    return (dates.length, s.daysLeft ?? 1 << 20, oldest);
   }
 
-  void _setFilter(VoidCallback change) {
+  int _compareUrgency((int, int, DateTime) a, (int, int, DateTime) b) {
+    if (a.$1 != b.$1) return a.$1.compareTo(b.$1);
+    if (a.$2 != b.$2) return a.$2.compareTo(b.$2);
+    return a.$3.compareTo(b.$3);
+  }
+
+  /// Stops on the map and in the sheet.
+  List<PlanStop> get _shown {
+    final p = _plan;
+    if (p == null) return const [];
+    if (_day != null) return _homeOn(p, _day!);
+    return p.stops;
+  }
+
+  /// Route number when a day is chosen; none in "All".
+  Map<String, int> get _numbers {
+    if (_day == null) return const {};
+    final shown = _shown;
+    return {for (var i = 0; i < shown.length; i++) shown[i].id: i + 1};
+  }
+
+  /// The next date (today counts) with this weekday.
+  DateTime? _dateOf(int weekday, [PickupPlan? plan]) =>
+      (plan ?? _plan)?.dates.where((d) => d.weekday == weekday).firstOrNull;
+
+  Future<void> _openFilter() async {
+    final p = _plan;
+    if (p == null) return;
+    final v = await showDayFilter(
+      context,
+      current: _day,
+      todayWeekday: p.today.weekday,
+      pickupDays: _rules.days.toList(),
+      countOn: (wd) => _homeOn(p, wd).length,
+      allCount: p.stops.length,
+    );
+    if (v != null) _pickDay(v == kAllDays ? null : v);
+  }
+
+  void _pickDay(int? weekday) {
     setState(() {
-      change();
+      _day = weekday;
+      _dayPicked = true;
       _selected = null;
     });
     _fitSoon();
   }
 
-  // ----- camera --------------------------------------------------------------
+  // ----- camera ---------------------------------------------------------------
 
-  void _fitSoon() {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _fit());
-  }
+  void _fitSoon() =>
+      WidgetsBinding.instance.addPostFrameCallback((_) => _fit());
 
   void _fit() {
-    if (!_mapReady || !mounted) return;
-    // Zoom to the pickups inside the limit; far ones (red) only when there
-    // is nothing else, so the city stops are not squeezed into a corner.
+    if (!_mapReady || !mounted || _listMode) return;
+    final p = _plan;
+    final shown = _shown;
+    // Far pins only when nothing else is shown, so the city stays readable.
     final near = [
-      for (final s in _shown)
-        if (s.point != null && !s.tooFar) s.point!,
+      for (final s in shown)
+        if (!s.far) s.point,
     ];
     final pts = [
-      if (near.isNotEmpty || _focusRun != null)
-        ...near
-      else
-        for (final s in _shown)
-          if (s.point != null) s.point!,
-      if (_focusRun != null)
-        for (final s in _shown)
-          if (s.point != null && s.tooFar) s.point!,
-      if (_office != null && _focusRun == null) _office!,
+      if (near.isNotEmpty) ...near else for (final s in shown) s.point,
+      if (p?.office != null && _day != null) p!.office!,
     ];
     if (pts.isEmpty) {
-      _map.move(mandaueCenter, 13);
+      _map.move(p?.office ?? mandaueCenter, 13);
       return;
     }
     if (pts.length == 1) {
       _map.move(pts.first, 16);
       return;
     }
-    // Keep the pins clear of the filter card on top and, on phones, of the
-    // stops sheet at the bottom.
     final size = MediaQuery.sizeOf(context);
     final wide = size.width >= Breakpoints.expanded;
     _map.fitCamera(
@@ -281,7 +306,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
         bounds: LatLngBounds.fromPoints(pts),
         padding: EdgeInsets.fromLTRB(
           48,
-          wide ? 220 : 250,
+          wide ? 90 : 100,
           64,
           wide ? 48 : size.height * _sheetStart + 24,
         ),
@@ -290,25 +315,156 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     );
   }
 
-  void _select(_Stop s) {
-    setState(() => _selected = _selected == s.ref ? null : s.ref);
-    if (s.point != null && _mapReady) {
+  void _setListMode(bool list) {
+    if (list == _listMode) return;
+    setState(() {
+      _listMode = list;
+      _selected = null;
+      // The map is rebuilt when it comes back; onMapReady fits it again.
+      if (list) _mapReady = false;
+    });
+  }
+
+  void _focus(PlanStop s) {
+    setState(() => _selected = s.id);
+    if (_mapReady && !_listMode) {
       final zoom = _map.camera.zoom < 15 ? 15.0 : _map.camera.zoom;
-      // Put the pin a little below the middle so its bubble fits under the
-      // filter card (offset moves the pin down by that many pixels).
-      final wide = MediaQuery.sizeOf(context).width >= Breakpoints.expanded;
-      _map.move(s.point!, zoom, offset: Offset(0, wide ? 60 : 110));
+      _map.move(s.point, zoom);
     }
   }
 
-  // ----- DRRMO logistics support -------------------------------------------
+  // ----- stop details and its actions ------------------------------------------
 
-  Future<void> _requestSupport(List<_Stop> stops) async {
-    final free = stops.where((s) => s.run == null && !s.tooFar).toList();
+  Future<void> _openStop(PlanStop s) async {
+    _focus(s);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (sheet) => StopDetailsSheet(
+        stop: s,
+        number: _listMode ? null : _numbers[s.id],
+        onPickedUp: _canReceive
+            ? (d) async {
+                Navigator.pop(sheet);
+                _goScan();
+              }
+            : null,
+        onNotHome: _canReceive
+            ? () async {
+                Navigator.pop(sheet);
+                await _notHome(s);
+              }
+            : null,
+        onDecline: _canReceive
+            ? (d) async {
+                Navigator.pop(sheet);
+                await _decline(d);
+              }
+            : null,
+      ),
+    );
+  }
+
+  /// "Mark picked up": go to the Receive tab with the QR scanner open. The
+  /// picker scans the donor's QR and enters the actual quantity there, like
+  /// any other receipt (saved apart from what the donor declared).
+  void _goScan() {
+    HomeNav.go(context, const HomeTarget('Receive', view: 'scan'));
+  }
+
+  /// Opens a donation's QR entry directly (donations without a map pin).
+  Future<void> _receive(String ref) async {
+    await openDonationByQr(context, ref);
+    if (mounted) await _load();
+  }
+
+  /// Nobody home: the stop moves to the donors' next allowed day.
+  Future<void> _notHome(PlanStop s) async {
+    final next = s.nextDate == null ? null : planDateLabel(s.nextDate!);
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Nobody home?'),
+        content: Text(
+          'The pickup at ${s.area} moves to the '
+          '${s.donations.length == 1 ? 'donor\'s' : 'donors\''} next pickup '
+          'day${next == null ? '' : ' (about $next)'}. Registered donors are '
+          'told in the app.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Not home'),
+          ),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    final r = await act(
+      context,
+      () => api.post(
+        '/donations/pickup-plan/not-home',
+        body: {'batch_references': s.refs},
+      ),
+      success: 'Moved to the next pickup day',
+    );
+    if (r.ok && mounted) await _load();
+  }
+
+  /// A pickup farther than PICKUP_MAX_KM: cancel it with a reason the donor
+  /// reads, and ask them to drop it off instead.
+  Future<void> _decline(PlanDonation d) async {
+    final km = d.km?.round();
+    final v = await formDialog(
+      context,
+      title: 'Decline this pickup?',
+      message:
+          '${d.landmark.isEmpty ? d.address : d.landmark} is about $km km '
+          'from the CSWS office, outside the pickup area. The donor is told '
+          'and can still bring the goods to the office.',
+      fields: [
+        DialogField(
+          'reason',
+          'Message to the donor',
+          multiline: true,
+          initial:
+              'Sorry, your address is too far for a Door to Door pickup '
+              '(about $km km from the CSWS office). Please drop off your '
+              'donation at the CSWS office instead.',
+        ),
+      ],
+      confirm: 'Decline pickup',
+    );
+    if (v == null || !mounted) return;
+    final r = await act(
+      context,
+      () => api.post(
+        '/donations/entries/${Uri.encodeComponent(d.ref)}/cancel',
+        body: {'reason': v['reason']},
+      ),
+      success: 'Pickup declined. The donor was told.',
+    );
+    if (r.ok && mounted) await _load();
+  }
+
+  // ----- DRRMO logistics support -----------------------------------------------
+
+  Future<void> _requestSupport(DateTime day, List<PlanStop> stops) async {
+    final free = [
+      for (final s in stops)
+        for (final d in s.donations)
+          if (d.pickupRequest == null) d.ref,
+    ];
     if (free.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Every stop shown is already in a pickup request.'),
+          content: Text('Every stop on this day is already in a request.'),
         ),
       );
       return;
@@ -317,12 +473,8 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => _RunRequestSheet(
-        stops: free,
-        skipped: stops.where((s) => s.run != null).length,
-        rules: _rules,
-        preferredDays: _days,
-      ),
+      builder: (_) =>
+          _RunRequestSheet(day: day, stops: stops, refs: free, rules: _rules),
     );
     if (sent == true && mounted) await _load();
   }
@@ -351,76 +503,55 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       ),
       success: 'Pickup request cancelled. DRRMO was told.',
     );
-    if (r.ok && mounted) {
-      if (_focusRun?['request_id'] == run['request_id']) _focusRun = null;
-      await _load();
-    }
-  }
-
-  // ----- Main Office: receive or decline -----------------------------------
-
-  Future<void> _receive(_Stop s) async {
-    await openDonationByQr(context, s.ref);
-    if (mounted) await _load(); // goods may have been received in the sheet
-  }
-
-  /// A pickup farther than PICKUP_MAX_KM: cancel it with a reason the donor
-  /// reads in their notification, and ask them to drop it off instead.
-  Future<void> _decline(_Stop s) async {
-    final km = s.km?.round();
-    final v = await formDialog(
-      context,
-      title: 'Decline this pickup?',
-      message:
-          '${s.landmark.isEmpty ? s.address : s.landmark} is about $km km '
-          'from the CSWS office, outside the pickup area. The donor is told '
-          'and can still bring the goods to the office.',
-      fields: [
-        DialogField(
-          'reason',
-          'Message to the donor',
-          multiline: true,
-          initial:
-              'Sorry, your address is too far for a Door to Door pickup '
-              '(about $km km from the CSWS office). Please drop off your '
-              'donation at the CSWS office instead.',
-        ),
-      ],
-      confirm: 'Decline pickup',
-    );
-    if (v == null || !mounted) return;
-    final r = await act(
-      context,
-      () => api.post(
-        '/donations/entries/${Uri.encodeComponent(s.ref)}/cancel',
-        body: {'reason': v['reason']},
-      ),
-      success: 'Pickup declined. The donor was told.',
-    );
     if (r.ok && mounted) await _load();
   }
 
-  // ----- build ---------------------------------------------------------------
+  /// "Show on map" on a DRRMO request: its weekday on the map.
+  void _showRun(Map<String, dynamic> run) {
+    final d = DateTime.tryParse('${run['pickup_date'] ?? ''}');
+    _setListMode(false);
+    _pickDay(d?.weekday);
+  }
+
+  // ----- build ------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
     final body = _body(context);
     if (!widget.standalone) return body;
     return Scaffold(
-      appBar: AppBar(title: const Text('Pickup map')),
+      appBar: AppBar(title: const Text('Pickups')),
       body: body,
     );
   }
 
   Widget _body(BuildContext context) {
-    if (_loading && _all.isEmpty) {
+    if (_loading && _plan == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null) {
+    if (_error != null && _plan == null) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(Space.lg),
           child: ErrorView.forStatus(_errorStatus, _error!, onRetry: _load),
+        ),
+      );
+    }
+    if (_listMode) {
+      return Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: Breakpoints.expanded),
+          child: PickupListView(
+            plan: _plan!,
+            rules: _rules,
+            initialHomeOn: _day,
+            header: _listHeader(context),
+            footer: _requestsSection(),
+            onRefresh: _load,
+            onOpenStop: _openStop,
+            onOpenFollowUp: _canReceive ? (d) => _receive(d.ref) : null,
+          ),
         ),
       );
     }
@@ -431,10 +562,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       return Row(
         children: [
           SizedBox(
-            width: 420,
+            width: 400,
             child: Material(
               color: Theme.of(context).colorScheme.surface,
-              child: _panel(context, shown, null),
+              child: _sheet(context, shown, null),
             ),
           ),
           const VerticalDivider(width: 1),
@@ -447,10 +578,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
         Positioned.fill(child: map),
         DraggableScrollableSheet(
           initialChildSize: _sheetStart,
-          minChildSize: 0.16,
-          maxChildSize: 0.92,
+          minChildSize: 0.12,
+          maxChildSize: 0.9,
           snap: true,
-          snapSizes: const [0.16, _sheetStart, 0.92],
+          snapSizes: const [0.12, _sheetStart, 0.9],
           builder: (context, scroll) => Material(
             elevation: 12,
             color: Theme.of(context).colorScheme.surface,
@@ -460,36 +591,36 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
               ),
             ),
             clipBehavior: Clip.antiAlias,
-            child: _panel(context, shown, scroll, handle: true),
+            child: _sheet(context, shown, scroll, handle: true),
           ),
         ),
       ],
     );
   }
 
-  // The map, with the filter card floating on top.
-  Widget _mapView(BuildContext context, List<_Stop> shown) {
+  // The map, with the day card floating on top.
+  Widget _mapView(BuildContext context, List<PlanStop> shown) {
     final cs = Theme.of(context).colorScheme;
-    final pinned = [
-      for (final s in shown)
-        if (s.point != null) s,
-    ];
-    final number = {for (var i = 0; i < shown.length; i++) shown[i].ref: i + 1};
+    final p = _plan!;
+    final numbers = _numbers;
     final line = [
-      if (_office != null && _focusRun == null) _office!,
-      for (final s in pinned)
-        if (!s.tooFar || _focusRun != null) s.point!,
+      if (_day != null && p.office != null) p.office!,
+      if (_day != null)
+        for (final s in shown) s.point,
     ];
-    final selected = pinned.where((s) => s.ref == _selected).firstOrNull;
+    // The selected pin is drawn last so it sits on top.
+    final ordered = [
+      ...shown.where((s) => s.id != _selected),
+      ...shown.where((s) => s.id == _selected),
+    ];
 
     return Stack(
       children: [
         FlutterMap(
           mapController: _map,
           options: MapOptions(
-            initialCenter: centerOf([for (final s in pinned) s.point!]),
+            initialCenter: centerOf([for (final s in shown) s.point]),
             initialZoom: 13,
-            // Oct 11: the map stays inside the pickup area (Cebu province).
             minZoom: 8,
             cameraConstraint: CameraConstraint.containCenter(
               bounds: _areaBounds,
@@ -521,9 +652,9 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
               ),
             MarkerLayer(
               markers: [
-                if (_office != null)
+                if (p.office != null)
                   Marker(
-                    point: _office!,
+                    point: p.office!,
                     width: 44,
                     height: 44,
                     child: Tooltip(
@@ -538,38 +669,24 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                           ],
                         ),
                         child: const Icon(
-                          Icons.home_work,
+                          Icons.warehouse_outlined,
                           color: AppColors.vestInk,
                           size: 22,
                         ),
                       ),
                     ),
                   ),
-                for (final s in pinned)
+                for (final s in ordered)
                   Marker(
-                    point: s.point!,
-                    width: 44,
-                    height: 54,
+                    point: s.point,
+                    width: PlanPin.box.width,
+                    height: PlanPin.box.height,
                     alignment: Alignment.topCenter,
-                    child: _Pin(
-                      number: number[s.ref]!,
-                      label: 'Stop ${number[s.ref]}: ${s.area}',
-                      selected: s.ref == _selected,
-                      inRun: s.run != null,
-                      far: s.tooFar,
-                      onTap: () => _select(s),
-                    ),
-                  ),
-                if (selected != null)
-                  Marker(
-                    point: selected.point!,
-                    width: 240,
-                    height: 128,
-                    alignment: const Alignment(0, -2), // just above the pin
-                    child: _PinBubble(
-                      stop: selected,
-                      number: number[selected.ref]!,
-                      onClose: () => setState(() => _selected = null),
+                    child: PlanPin(
+                      stop: s,
+                      number: numbers[s.id],
+                      selected: s.id == _selected,
+                      onTap: () => _openStop(s),
                     ),
                   ),
               ],
@@ -591,41 +708,92 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
           left: Space.sm,
           right: Space.sm,
           top: Space.sm,
-          child: _FilterCard(
-            days: _days,
-            rules: _rules,
-            dayCounts: _dayCounts,
-            focusRun: _focusRun,
-            farCount: _all.where((s) => s.tooFar).length,
-            maxKm: _maxKm,
-            onDays: (d) => _setFilter(() => _days = d),
-            onClearRun: () => _setFilter(() => _focusRun = null),
+          child: _TopBar(
+            selected: _day,
+            todayWeekday: p.today.weekday,
+            onFilter: _openFilter,
             onFit: _fit,
+            onList: () => _setListMode(true),
           ),
         ),
       ],
     );
   }
 
-  // Route summary, the stops in order, and the DRRMO requests.
-  Widget _panel(
+  // Title and the Map / List switch at the top of the list view.
+  Widget _listHeader(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final p = _plan!;
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Pickups', style: t.titleLarge),
+              Text(
+                '${p.stops.length} stop${p.stops.length == 1 ? '' : 's'} '
+                'waiting',
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+        _ViewSwitch(list: true, onChanged: _setListMode),
+        IconButton(
+          tooltip: 'Refresh',
+          onPressed: _loading ? null : _load,
+          icon: _loading
+              ? const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.refresh),
+        ),
+      ],
+    );
+  }
+
+  /// Requests already sent to DRRMO (bottom of the list view).
+  Widget? _requestsSection() {
+    if (_runs.isEmpty) return null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SectionHeader('Requests to DRRMO'),
+        for (final r in _runs)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Space.xs),
+            child: _RunCard(
+              run: r,
+              onShow: () => _showRun(r),
+              onCancel: () => _cancelRun(r),
+            ),
+          ),
+      ],
+    );
+  }
+
+  // The short sheet under the map: the chosen day's stops in order.
+  Widget _sheet(
     BuildContext context,
-    List<_Stop> shown,
+    List<PlanStop> shown,
     ScrollController? scroll, {
     bool handle = false,
   }) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
-    final pinned = [
-      for (final s in shown)
-        if (s.point != null && (!s.tooFar || _focusRun != null)) s.point!,
-    ];
-    final path = [
-      if (_office != null && _focusRun == null) _office!,
-      ...pinned,
-    ];
-    final km = pathKm(path);
-    final unpinned = shown.where((s) => s.point == null).length;
+    final p = _plan!;
+    final numbers = _numbers;
+    final day = _day;
+    final date = day == null ? null : _dateOf(day);
+    final km = day == null
+        ? 0.0
+        : pathKm([
+            if (p.office != null) p.office!,
+            for (final s in shown) s.point,
+          ]);
 
     return RefreshIndicator(
       onRefresh: _load,
@@ -654,25 +822,31 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _focusRun != null
-                          ? 'Request #${_focusRun!['request_id']}'
-                          : shown.isEmpty
-                          ? 'No pickups here'
-                          : '${shown.length} pickup${shown.length == 1 ? '' : 's'}'
-                                '${_days.isEmpty ? '' : ' on ${pickupDaysLabel(_days)}'}',
+                      day == null
+                          ? 'All days'
+                          : '${sameDay(date, p.today) ? 'Today · ' : ''}'
+                                '${pickupDayNames[day - 1]}'
+                                '${date == null ? '' : ' · ${planDateLabel(date).split(', ').last}'}',
                       style: t.titleLarge,
                     ),
-                    if (pinned.length > 1)
-                      Text(
-                        'One way, nearest stop next · about ${niceKm(km)} '
-                        'in a straight line',
-                        style: t.bodyMedium?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
-                      ),
+                    Text(
+                      day == null
+                          ? '${shown.length} stop${shown.length == 1 ? '' : 's'} · pick a day to see the route'
+                          : shown.isEmpty
+                          ? 'No donor is home this day'
+                          : '${shown.length} stop${shown.length == 1 ? '' : 's'} · '
+                                '${niceKm(km)} one way from CSWS',
+                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    ),
                   ],
                 ),
               ),
+              if (_canRequest && date != null && shown.isNotEmpty)
+                IconButton.filledTonal(
+                  tooltip: 'Ask DRRMO for a truck or volunteers',
+                  onPressed: () => _requestSupport(date, shown),
+                  icon: const Icon(Icons.local_shipping_outlined),
+                ),
               IconButton(
                 tooltip: 'Refresh',
                 onPressed: _loading ? null : _load,
@@ -685,99 +859,54 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
               ),
             ],
           ),
-          Gaps.v12,
-          if (_canRequest && shown.isNotEmpty && _focusRun == null) ...[
-            AppButton(
-              'Request DRRMO support for this run',
-              icon: Icons.fire_truck_outlined,
-              expand: true,
-              onPressed: () => _requestSupport(shown),
+          if (_noPickupsToday && day != null && !_dayPicked && date != null)
+            _Banner(
+              icon: Icons.event_busy,
+              text:
+                  'No pickups on ${pickupDayNames[p.today.weekday - 1]}s. '
+                  'Showing the next pickup day, ${planDateLabel(date)}.',
             ),
-            Gaps.v4,
-            Text(
-              'Trucks, volunteers or pushcarts for these stops, like Main '
-              'Office asks for deliveries.',
-              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          if (day != p.today.weekday && !_noPickupsToday)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => _pickDay(p.today.weekday),
+                icon: const Icon(Icons.today, size: 18),
+                label: const Text('Back to today'),
+              ),
             ),
-            Gaps.v12,
-          ],
-          if (_all.isEmpty)
-            AppCard(
+          if (day != null && shown.isNotEmpty) _DaySummary(stops: shown),
+          Gaps.v8,
+          if (p.stops.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: Space.lg),
               child: EmptyView(
                 compact: true,
                 icon: Icons.door_front_door_outlined,
                 title: 'No Door to Door pickups waiting',
-                message:
-                    'When a donor chooses Door to Door, a pin appears at the '
-                    'landmark they picked.',
-              ),
-            )
-          else if (shown.isEmpty)
-            AppCard(
-              child: EmptyView(
-                compact: true,
-                icon: Icons.filter_alt_off_outlined,
-                title: 'No pickups match',
-                message: 'Try other days, or tap Any day.',
               ),
             ),
-          for (var i = 0; i < shown.length; i++)
-            Padding(
-              padding: const EdgeInsets.only(bottom: Space.xs),
-              child: _StopTile(
-                stop: shown[i],
-                number: i + 1,
-                fromPrev: _legKm(shown, i),
-                selected: shown[i].ref == _selected,
-                maxKm: _maxKm,
-                onTap: () => _select(shown[i]),
-                onReceive: _canReceive ? () => _receive(shown[i]) : null,
-                onDecline: _canReceive && shown[i].tooFar
-                    ? () => _decline(shown[i])
-                    : null,
+          for (final s in shown)
+            _MiniStopRow(
+              stop: s,
+              number: numbers[s.id],
+              selected: s.id == _selected,
+              onTap: () => _openStop(s),
+            ),
+          if (p.unplanned.isNotEmpty || p.followUp.isNotEmpty) ...[
+            Gaps.v8,
+            TextButton.icon(
+              onPressed: () => _setListMode(true),
+              icon: const Icon(Icons.error_outline, size: 18),
+              label: Text(
+                '${p.unplanned.length + p.followUp.length} need attention · '
+                'open the list',
               ),
             ),
-          if (unpinned > 0)
-            Padding(
-              padding: const EdgeInsets.only(top: Space.xs),
-              child: Text(
-                '$unpinned without a pin: the donor typed the landmark '
-                'without choosing a suggestion. Use the address.',
-                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-              ),
-            ),
-          if (_canRequest && _runs.isNotEmpty) ...[
-            const SectionHeader('Pickup requests to DRRMO'),
-            for (final run in _runs)
-              Padding(
-                padding: const EdgeInsets.only(bottom: Space.xs),
-                child: _RunCard(
-                  run: run,
-                  focused: _focusRun?['request_id'] == run['request_id'],
-                  onShow: () => _setFilter(
-                    () => _focusRun =
-                        _focusRun?['request_id'] == run['request_id']
-                        ? null
-                        : run,
-                  ),
-                  onCancel: () => _cancelRun(run),
-                ),
-              ),
           ],
         ],
       ),
     );
-  }
-
-  /// Straight-line distance from the previous pinned stop (or the office).
-  double? _legKm(List<_Stop> shown, int i) {
-    final p = shown[i].point;
-    if (p == null || (shown[i].tooFar && _focusRun == null)) return null;
-    for (var k = i - 1; k >= 0; k--) {
-      final q = shown[k].point;
-      if (q != null) return kmBetween(q, p);
-    }
-    return _office != null && _focusRun == null ? kmBetween(_office!, p) : null;
   }
 }
 
@@ -785,50 +914,169 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
 // Pieces
 // ---------------------------------------------------------------------------
 
-/// Days + landmarks + order, floating above the map.
-class _FilterCard extends StatelessWidget {
-  final Set<int> days;
-  final PickupRules rules;
-  final Map<int, int> dayCounts;
-  final Map<String, dynamic>? focusRun;
-  final int farCount;
-  final double maxKm;
-  final ValueChanged<Set<int>> onDays;
-  final VoidCallback onClearRun;
-  final VoidCallback onFit;
-
-  const _FilterCard({
-    required this.days,
-    required this.rules,
-    required this.dayCounts,
-    required this.focusRun,
-    required this.farCount,
-    required this.maxKm,
-    required this.onDays,
-    required this.onClearRun,
-    required this.onFit,
-  });
+/// A one-line notice in the sheet.
+class _Banner extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _Banner({required this.icon, required this.text});
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
-    if (focusRun != null) {
-      return Card(
-        margin: EdgeInsets.zero,
-        child: ListTile(
-          leading: const Icon(Icons.fire_truck_outlined),
-          title: Text('Showing request #${focusRun!['request_id']}'),
-          subtitle: Text(
-            '${focusRun!['report_label'] ?? ''} · ${focusRun!['status']}',
+    return Container(
+      margin: const EdgeInsets.only(top: Space.xs),
+      padding: const EdgeInsets.symmetric(
+        horizontal: Space.sm,
+        vertical: Space.xs,
+      ),
+      decoration: BoxDecoration(
+        color: cs.secondaryContainer.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: cs.onSecondaryContainer),
+          Gaps.h8,
+          Expanded(
+            child: Text(
+              text,
+              style: t.bodyMedium?.copyWith(color: cs.onSecondaryContainer),
+            ),
           ),
-          trailing: TextButton(
-            onPressed: onClearRun,
-            child: const Text('Show all'),
-          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What needs attention on the chosen day, at a glance (no tapping):
+/// donations, last chances, near deadlines, missed visits, heavy loads.
+class _DaySummary extends StatelessWidget {
+  final List<PlanStop> stops;
+  const _DaySummary({required this.stops});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    int count(bool Function(PlanStop) f) => stops.where(f).length;
+    final donations = stops.fold<int>(0, (n, s) => n + s.donations.length);
+    final chips = <(IconData, String, Color)>[
+      (
+        Icons.volunteer_activism_outlined,
+        '$donations donation${donations == 1 ? '' : 's'}',
+        cs.primary,
+      ),
+      if (count((s) => s.lastChance) > 0)
+        (
+          Icons.flag,
+          '${count((s) => s.lastChance)} last chance',
+          lastChanceInk,
         ),
-      );
-    }
+      if (count((s) => s.callDonor) > 0)
+        (
+          Icons.phone_in_talk_outlined,
+          '${count((s) => s.callDonor)} expiring soon',
+          cs.error,
+        ),
+      if (count((s) => s.missedBefore) > 0)
+        (
+          Icons.door_front_door_outlined,
+          '${count((s) => s.missedBefore)} missed before',
+          cs.onSurfaceVariant,
+        ),
+      if (count((s) => s.heavy) > 0)
+        (Icons.fitness_center, '${count((s) => s.heavy)} heavy', cs.error),
+      if (count((s) => s.inRun) > 0)
+        (
+          Icons.fire_truck,
+          '${count((s) => s.inRun)} with DRRMO',
+          AppColors.success,
+        ),
+    ];
+    return Padding(
+      padding: const EdgeInsets.only(top: Space.xs),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final (icon, text, c) in chips)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: c.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(Radii.pill),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(icon, size: 14, color: c),
+                  const SizedBox(width: 4),
+                  Text(
+                    text,
+                    style: t.labelMedium?.copyWith(
+                      color: c,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Map / List switch.
+class _ViewSwitch extends StatelessWidget {
+  final bool list;
+  final ValueChanged<bool> onChanged;
+  const _ViewSwitch({required this.list, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<bool>(
+      showSelectedIcon: false,
+      style: const ButtonStyle(visualDensity: VisualDensity.compact),
+      segments: const [
+        ButtonSegment(
+          value: false,
+          icon: Icon(Icons.map_outlined, size: 18),
+          label: Text('Map'),
+        ),
+        ButtonSegment(
+          value: true,
+          icon: Icon(Icons.format_list_bulleted, size: 18),
+          label: Text('List'),
+        ),
+      ],
+      selected: {list},
+      onSelectionChanged: (v) => onChanged(v.first),
+    );
+  }
+}
+
+/// The bar on top of the map: Map / List, the day filter, fit all pins.
+/// The map already shows TODAY; the filter is only for another day.
+class _TopBar extends StatelessWidget {
+  final int? selected;
+  final int todayWeekday;
+  final VoidCallback onFilter;
+  final VoidCallback onFit;
+  final VoidCallback onList;
+
+  const _TopBar({
+    required this.selected,
+    required this.todayWeekday,
+    required this.onFilter,
+    required this.onFit,
+    required this.onList,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     return Card(
       margin: EdgeInsets.zero,
       elevation: 4,
@@ -836,266 +1084,26 @@ class _FilterCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(Radii.lg),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          Space.sm,
-          Space.sm,
-          Space.sm,
-          Space.xs,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        padding: const EdgeInsets.all(Space.xs),
+        child: Row(
           children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.event_available_outlined,
-                  size: 18,
-                  color: cs.primary,
-                ),
-                Gaps.h8,
-                Expanded(
-                  child: Text(
-                    days.isEmpty
-                        ? 'Donors home on any day'
-                        : 'Home on ${pickupDaysLabel(days)}',
-                    style: t.titleSmall,
-                  ),
-                ),
-                if (days.isNotEmpty)
-                  TextButton(
-                    style: TextButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                    ),
-                    onPressed: () => onDays({}),
-                    child: const Text('Any day'),
-                  ),
-                IconButton(
-                  visualDensity: VisualDensity.compact,
-                  tooltip: 'Show all pins',
-                  onPressed: onFit,
-                  icon: const Icon(Icons.fit_screen_outlined),
-                ),
-              ],
-            ),
-            Gaps.v4,
-            PickupDayToggles(
-              dense: true,
-              selected: days,
-              counts: dayCounts,
-              onChanged: onDays,
-            ),
-            Gaps.v4,
-            Text(
-              'Pickup hours: ${pickupHoursLabel(rules)}',
-              textAlign: TextAlign.center,
-              style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            if (farCount > 0) ...[
-              Gaps.v8,
-              Row(
-                children: [
-                  const Icon(
-                    Icons.warning_amber_rounded,
-                    size: 16,
-                    color: AppColors.danger,
-                  ),
-                  Gaps.h4,
-                  Expanded(
-                    child: Text(
-                      '$farCount pickup${farCount == 1 ? ' is' : 's are'} more '
-                      'than ${maxKm.round()} km from the CSWS office',
-                      style: t.labelMedium?.copyWith(color: AppColors.danger),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A numbered map pin.
-class _Pin extends StatelessWidget {
-  final int number;
-  final String label;
-  final bool selected;
-  final bool inRun;
-  final bool far;
-  final VoidCallback onTap;
-  const _Pin({
-    required this.number,
-    required this.label,
-    required this.selected,
-    required this.inRun,
-    required this.far,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final color = far
-        ? AppColors.danger
-        : inRun
-        ? AppColors.success
-        : cs.primary;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: [
-        label,
-        if (far) 'far from the CSWS office',
-        if (inRun) 'in a DRRMO request',
-      ].join(', '),
-      excludeSemantics: true,
-      onTap: onTap,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedScale(
-          duration: Motion.fast,
-          scale: selected ? 1.18 : 1,
-          alignment: Alignment.bottomCenter,
-          child: Stack(
-            alignment: Alignment.topCenter,
-            clipBehavior: Clip.none,
-            children: [
-              Icon(Icons.location_on, size: 54, color: color),
-              Positioned(
-                top: 9,
-                child: Container(
-                  width: 24,
-                  height: 24,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: selected ? AppColors.vest : Colors.white,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Text(
-                    '$number',
-                    style: TextStyle(
-                      color: selected ? AppColors.vestInk : color,
-                      fontWeight: FontWeight.w800,
-                      fontSize: number > 99 ? 9 : 12,
-                    ),
-                  ),
-                ),
-              ),
-              if (inRun)
-                const Positioned(
-                  right: 0,
-                  top: 0,
-                  child: CircleAvatar(
-                    radius: 9,
-                    backgroundColor: Colors.white,
-                    child: Icon(
-                      Icons.fire_truck,
-                      size: 12,
-                      color: AppColors.success,
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The bubble above a tapped pin: landmark and the address text.
-class _PinBubble extends StatelessWidget {
-  final _Stop stop;
-  final int number;
-  final VoidCallback onClose;
-  const _PinBubble({
-    required this.stop,
-    required this.number,
-    required this.onClose,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    return Material(
-      elevation: 6,
-      color: cs.surface,
-      borderRadius: BorderRadius.circular(Radii.md),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          Space.sm,
-          Space.xs,
-          Space.xs,
-          Space.xs,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '$number. ${stop.landmark.isEmpty ? 'No landmark' : stop.area}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.titleSmall?.copyWith(color: cs.primary),
-                  ),
-                ),
-                InkWell(
-                  onTap: onClose,
-                  child: const Icon(Icons.close, size: 18),
-                ),
-              ],
-            ),
-            Gaps.v4,
-            Text(
-              stop.address.isEmpty ? 'No address' : stop.address,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: t.bodyMedium,
+            _ViewSwitch(
+              list: false,
+              onChanged: (v) {
+                if (v) onList();
+              },
             ),
             const Spacer(),
-            Row(
-              children: [
-                Icon(
-                  Icons.event_available,
-                  size: 14,
-                  color: cs.onSurfaceVariant,
-                ),
-                Gaps.h4,
-                Expanded(
-                  child: Text(
-                    stop.days.isEmpty ? 'Any day' : pickupDaysLabel(stop.days),
-                    style: t.labelMedium?.copyWith(color: cs.onSurfaceVariant),
-                  ),
-                ),
-                InkWell(
-                  onTap: () => openNavigation(
-                    context,
-                    lat: stop.point?.latitude,
-                    lng: stop.point?.longitude,
-                    address: stop.address,
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.directions, size: 16, color: cs.primary),
-                        Text(
-                          ' Go',
-                          style: t.labelLarge?.copyWith(color: cs.primary),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
+            DayFilterButton(
+              weekday: selected,
+              todayWeekday: todayWeekday,
+              onPressed: onFilter,
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Fit all pins',
+              onPressed: onFit,
+              icon: const Icon(Icons.zoom_out_map),
             ),
           ],
         ),
@@ -1104,286 +1112,153 @@ class _PinBubble extends StatelessWidget {
   }
 }
 
-/// One stop in the list under the map.
-class _StopTile extends StatelessWidget {
-  final _Stop stop;
-  final int number;
-  final double? fromPrev;
+/// One stop in the sheet under the map: number, place, Navigate.
+class _MiniStopRow extends StatelessWidget {
+  final PlanStop stop;
+  final int? number;
   final bool selected;
-  final double maxKm;
   final VoidCallback onTap;
-  final VoidCallback? onReceive; // Main Office: open the entry to receive
-  final VoidCallback? onDecline; // Main Office: decline a far pickup
-  const _StopTile({
+
+  const _MiniStopRow({
     required this.stop,
     required this.number,
-    required this.fromPrev,
     required this.selected,
-    required this.maxKm,
     required this.onTap,
-    this.onReceive,
-    this.onDecline,
   });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
-    final b = stop.b;
-    final summary = (b['items_summary'] as List? ?? const [])
-        .map((e) => '$e')
-        .toList();
-    final run = stop.run;
-    return AnimatedContainer(
-      duration: Motion.fast,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(Radii.lg),
-        border: Border.all(
-          color: selected ? cs.primary : Colors.transparent,
-          width: 2,
+    final s = stop;
+    final color = s.far ? farGrey : cs.primary;
+    final where = [
+      if (s.barangay != null) 'Brgy. ${s.barangay}',
+      s.countLine,
+    ].join(' · ');
+    final items = s.items;
+    final what = items.isEmpty
+        ? ''
+        : items.take(2).map((i) => i.line).join('; ') +
+              (items.length > 2 ? '; +${items.length - 2} more' : '');
+    final tags = <(IconData, String, Color)>[
+      if (s.lastChance) (Icons.flag, 'Last chance', lastChanceInk),
+      if (s.callDonor)
+        (
+          Icons.phone_in_talk_outlined,
+          s.daysLeft == null
+              ? 'Call donor'
+              : 'Expires in ${s.daysLeft} day${s.daysLeft == 1 ? '' : 's'}',
+          cs.error,
         ),
-      ),
-      child: AppCard(
+      if (s.missedBefore)
+        (Icons.door_front_door_outlined, 'Missed before', cs.onSurfaceVariant),
+      if (s.heavy) (Icons.fitness_center, 'Heavy', cs.error),
+      if (s.inRun) (Icons.fire_truck, 'DRRMO', AppColors.success),
+    ];
+    return Material(
+      color: selected
+          ? cs.primaryContainer.withValues(alpha: 0.4)
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(Radii.md),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(Radii.md),
         onTap: onTap,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Column(
-              children: [
-                CircleAvatar(
-                  radius: 15,
-                  backgroundColor: stop.point == null
-                      ? cs.surfaceContainerHighest
-                      : stop.tooFar
-                      ? AppColors.danger
-                      : run != null
-                      ? AppColors.success
-                      : cs.primary,
-                  child: Text(
-                    stop.point == null ? '–' : '$number',
-                    style: t.labelLarge?.copyWith(
-                      color: stop.point == null
-                          ? cs.onSurfaceVariant
-                          : Colors.white,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            vertical: Space.xs,
+            horizontal: 4,
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: s.lastChance
+                      ? Border.all(color: AppColors.vest, width: 3)
+                      : null,
                 ),
-                if (fromPrev != null) ...[
-                  Gaps.v4,
-                  Text(
-                    niceKm(fromPrev!),
-                    style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
-                  ),
-                ],
-              ],
-            ),
-            Gaps.h12,
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    stop.landmark.isEmpty ? 'No landmark' : stop.landmark,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: t.titleSmall,
-                  ),
-                  if (stop.address.isNotEmpty)
-                    Text(
-                      stop.address,
-                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                    ),
-                  if (stop.tooFar) ...[
-                    Gaps.v8,
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: Space.xs,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.danger.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(Radii.sm),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.warning_amber_rounded,
-                            size: 16,
-                            color: AppColors.danger,
-                          ),
-                          Gaps.h4,
-                          Flexible(
-                            child: Text(
-                              'Far: about ${stop.km?.round()} km from the CSWS '
-                              'office (limit ${maxKm.round()} km)',
-                              style: t.labelMedium?.copyWith(
-                                color: AppColors.danger,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  if (b['donor'] != null) ...[
-                    Gaps.v8,
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.person_outline,
-                          size: 18,
-                          color: cs.onSurfaceVariant,
+                child: number != null
+                    ? Text(
+                        '$number',
+                        style: t.labelLarge?.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
                         ),
-                        Gaps.h4,
-                        Flexible(
-                          child: Text(
-                            '${b['donor']}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: t.bodyMedium,
-                          ),
-                        ),
-                        if ('${b['donor_contact'] ?? ''}'
-                            .trim()
-                            .isNotEmpty) ...[
-                          Gaps.h8,
-                          ContactButtons(phone: '${b['donor_contact']}'),
-                        ],
-                      ],
-                    ),
-                  ],
-                  Gaps.v8,
-                  Wrap(
-                    spacing: 4,
-                    runSpacing: 4,
-                    children: [
-                      for (var d = 1; d <= 7; d++)
-                        if (stop.days.contains(d))
-                          _DayPill(pickupDayShort[d - 1]),
-                      if (stop.days.isEmpty) const _DayPill('Any day'),
-                    ],
-                  ),
-                  if (summary.isNotEmpty) ...[
-                    Gaps.v8,
-                    Text(
-                      summary.take(3).join(' · ') +
-                          (summary.length > 3
-                              ? ' and ${summary.length - 3} more'
-                              : ''),
-                      style: t.bodyMedium,
-                    ),
-                  ],
-                  if (run != null) ...[
-                    Gaps.v8,
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.fire_truck,
-                          size: 16,
-                          color: AppColors.success,
-                        ),
-                        Gaps.h4,
-                        Expanded(
-                          child: Text(
-                            'In DRRMO request #${run['request_id']} '
-                            '(${run['status']})',
-                            style: t.labelMedium?.copyWith(
-                              color: AppColors.success,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                  Gaps.v4,
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '${b['batch_reference']} · ${b['report_label'] ?? ''}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: t.bodySmall?.copyWith(
-                            color: cs.onSurfaceVariant,
-                          ),
-                        ),
+                      )
+                    : Icon(
+                        s.far ? Icons.priority_high : Icons.location_on,
+                        size: 16,
+                        color: Colors.white,
                       ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        tooltip: 'Copy address',
-                        onPressed: stop.address.isEmpty
-                            ? null
-                            : () => copyText(context, stop.address, 'Address'),
-                        icon: const Icon(Icons.copy, size: 18),
-                      ),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        tooltip: 'Directions',
-                        onPressed: () => openNavigation(
-                          context,
-                          lat: stop.point?.latitude,
-                          lng: stop.point?.longitude,
-                          address: stop.address,
-                        ),
-                        icon: const Icon(Icons.directions, size: 18),
-                      ),
-                    ],
-                  ),
-                  if (onReceive != null || onDecline != null) ...[
-                    Gaps.v4,
-                    Wrap(
-                      spacing: Space.xs,
-                      runSpacing: Space.xs,
-                      children: [
-                        if (onReceive != null)
-                          FilledButton.tonalIcon(
-                            onPressed: onReceive,
-                            icon: const Icon(Icons.qr_code_scanner, size: 18),
-                            label: const Text('Open to receive goods'),
-                          ),
-                        if (onDecline != null)
-                          OutlinedButton.icon(
-                            onPressed: onDecline,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.danger,
-                              side: const BorderSide(color: AppColors.danger),
-                            ),
-                            icon: const Icon(Icons.block, size: 18),
-                            label: const Text('Decline: too far'),
-                          ),
-                      ],
-                    ),
-                  ],
-                ],
               ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _DayPill extends StatelessWidget {
-  final String text;
-  const _DayPill(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: cs.primaryContainer,
-        borderRadius: BorderRadius.circular(Radii.pill),
-      ),
-      child: Text(
-        text,
-        style: Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: cs.onPrimaryContainer,
-          fontWeight: FontWeight.w700,
+              Gaps.h12,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      s.area,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: t.titleSmall,
+                    ),
+                    Text(
+                      where,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                    if (what.isNotEmpty)
+                      Text(
+                        what,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.bodySmall,
+                      ),
+                    if (tags.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 2,
+                        children: [
+                          for (final (icon, text, c) in tags)
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(icon, size: 13, color: c),
+                                const SizedBox(width: 2),
+                                Text(
+                                  text,
+                                  style: t.labelSmall?.copyWith(
+                                    color: c,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              IconButton.filledTonal(
+                tooltip: 'Navigate',
+                onPressed: () => openNavigation(
+                  context,
+                  lat: s.point.latitude,
+                  lng: s.point.longitude,
+                  address: s.address,
+                ),
+                icon: const Icon(Icons.navigation_outlined),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1393,12 +1268,10 @@ class _DayPill extends StatelessWidget {
 /// A pickup request already sent to DRRMO.
 class _RunCard extends StatelessWidget {
   final Map<String, dynamic> run;
-  final bool focused;
   final VoidCallback onShow;
   final VoidCallback onCancel;
   const _RunCard({
     required this.run,
-    required this.focused,
     required this.onShow,
     required this.onCancel,
   });
@@ -1441,8 +1314,8 @@ class _RunCard extends StatelessWidget {
             children: [
               TextButton.icon(
                 onPressed: onShow,
-                icon: Icon(focused ? Icons.layers_clear : Icons.map_outlined),
-                label: Text(focused ? 'Show all pins' : 'Show on map'),
+                icon: const Icon(Icons.map_outlined),
+                label: const Text('Show on map'),
               ),
               const Spacer(),
               if (open)
@@ -1460,19 +1333,19 @@ class _RunCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Ask DRRMO for support for a pickup run
+// Ask DRRMO for support for one day's run
 // ---------------------------------------------------------------------------
 
 class _RunRequestSheet extends StatefulWidget {
-  final List<_Stop> stops; // in route order, none already requested
-  final int skipped; // shown stops already in another request
+  final DateTime day;
+  final List<PlanStop> stops; // in route order
+  final List<String> refs; // QR references not already in a request
   final PickupRules rules;
-  final Set<int> preferredDays;
   const _RunRequestSheet({
+    required this.day,
     required this.stops,
-    required this.skipped,
+    required this.refs,
     required this.rules,
-    required this.preferredDays,
   });
 
   @override
@@ -1480,47 +1353,11 @@ class _RunRequestSheet extends StatefulWidget {
 }
 
 class _RunRequestSheetState extends State<_RunRequestSheet> {
-  late final List<DateTime> _dates = _nextDates();
-  DateTime? _date;
   int _trucks = 1;
   int _volunteers = 2;
   int _pushcarts = 0;
   final _notes = TextEditingController();
   bool _busy = false;
-
-  static const _months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    // Default: the soonest date when the most stops are home.
-    var best = 0;
-    for (final d in _dates) {
-      final n = _homeOn(d).length;
-      if (n > best || (n == best && _date == null && n > 0)) {
-        best = n;
-        _date = d;
-      }
-    }
-    final preferred = _dates
-        .where((d) => widget.preferredDays.contains(d.weekday))
-        .where((d) => _homeOn(d).length == best)
-        .firstOrNull;
-    if (preferred != null) _date = preferred;
-  }
 
   @override
   void dispose() {
@@ -1528,39 +1365,18 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
     super.dispose();
   }
 
-  /// CSWS pickup days from today (Philippine time), two weeks ahead.
-  List<DateTime> _nextDates() {
-    final now = PickupRules.phNow();
-    final today = DateTime(now.year, now.month, now.day);
-    return [
-      for (var i = 0; i < 15; i++)
-        if (widget.rules.days.contains(today.add(Duration(days: i)).weekday))
-          today.add(Duration(days: i)),
-    ];
-  }
-
-  List<_Stop> _homeOn(DateTime d) => widget.stops
-      .where((s) => s.days.isEmpty || s.days.contains(d.weekday))
-      .toList();
-
-  String _label(DateTime d) =>
-      '${pickupDayShort[d.weekday - 1]}, ${_months[d.month - 1]} ${d.day}';
-
   String _ymd(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   Future<void> _send() async {
-    final day = _date;
-    if (day == null) return;
-    final stops = _homeOn(day);
     setState(() => _busy = true);
     final r = await act(
       context,
       () => api.post(
         '/logistics/pickup-requests',
         body: {
-          'pickup_date': _ymd(day),
-          'batch_references': [for (final s in stops) s.ref],
+          'pickup_date': _ymd(widget.day),
+          'batch_references': widget.refs,
           'trucks': _trucks,
           'volunteers': _volunteers,
           'pushcarts': _pushcarts,
@@ -1597,9 +1413,8 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
-    final home = _date == null ? <_Stop>[] : _homeOn(_date!);
-    final away = widget.stops.length - home.length;
     final nothing = _trucks == 0 && _volunteers == 0 && _pushcarts == 0;
+    final stops = widget.stops;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SafeArea(
@@ -1611,28 +1426,12 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
               Text('Request DRRMO logistics support', style: t.titleLarge),
               Gaps.v4,
               Text(
-                'For a Door to Door pickup run. DRRMO sees the stops, the '
-                'landmarks and what to load, not the donors\' numbers.',
+                'For the Door to Door run on ${planDateLabel(widget.day)}. '
+                'DRRMO sees the stops, the landmarks and what to load, not '
+                'the donors\' numbers.',
                 style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
               ),
-              Gaps.v16,
-              Text('Pickup day', style: t.titleSmall),
-              Gaps.v8,
-              Wrap(
-                spacing: Space.xs,
-                runSpacing: Space.xs,
-                children: [
-                  for (final d in _dates)
-                    ChoiceChip(
-                      label: Text('${_label(d)} · ${_homeOn(d).length}'),
-                      selected: _date == d,
-                      onSelected: _homeOn(d).isEmpty
-                          ? null
-                          : (_) => setState(() => _date = d),
-                    ),
-                ],
-              ),
-              Gaps.v8,
+              Gaps.v12,
               PickupHoursNote(widget.rules),
               Gaps.v12,
               Container(
@@ -1645,33 +1444,18 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      _date == null
-                          ? 'No donor is home on the next pickup days.'
-                          : '${home.length} stop${home.length == 1 ? '' : 's'} '
-                                'on ${_label(_date!)}, in this order:',
+                      '${stops.length} stop${stops.length == 1 ? '' : 's'}, '
+                      'in this order:',
                       style: t.titleSmall,
                     ),
                     Gaps.v4,
-                    for (var i = 0; i < home.length && i < 8; i++)
+                    for (var i = 0; i < stops.length && i < 8; i++)
                       Text(
-                        '${i + 1}. ${home[i].landmark.isEmpty ? home[i].address : home[i].area}',
+                        '${i + 1}. ${stops[i].area} · ${stops[i].countLine}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                    if (home.length > 8) Text('and ${home.length - 8} more'),
-                    if (away > 0 || widget.skipped > 0) ...[
-                      Gaps.v4,
-                      Text(
-                        [
-                          if (away > 0) '$away not home that day (left out)',
-                          if (widget.skipped > 0)
-                            '${widget.skipped} already in another request',
-                        ].join(' · '),
-                        style: t.bodySmall?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
+                    if (stops.length > 8) Text('and ${stops.length - 8} more'),
                   ],
                 ),
               ),
@@ -1720,13 +1504,12 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
                 ),
               Gaps.v12,
               AppButton(
-                home.isEmpty
-                    ? 'Send request'
-                    : 'Send request for ${home.length} stop${home.length == 1 ? '' : 's'}',
+                'Send request for ${stops.length} '
+                'stop${stops.length == 1 ? '' : 's'}',
                 icon: Icons.send,
                 expand: true,
                 loading: _busy,
-                onPressed: home.isEmpty || nothing || _busy ? null : _send,
+                onPressed: nothing || _busy ? null : _send,
               ),
             ],
           ),

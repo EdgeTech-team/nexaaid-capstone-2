@@ -3,7 +3,7 @@ from models.report import DisasterReport
 from models.guest_donor_model import GuestDonor
 from models.user_rbac_model import User
 from sqlalchemy import (
-    Column, Integer, String, Numeric, DateTime, ForeignKey, CheckConstraint, Text, Index,
+    Column, Integer, String, Numeric, Date, DateTime, ForeignKey, CheckConstraint, Text, Index,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -62,6 +62,10 @@ class PhysicalDonation(Base):
     # numbers "1,3,5" (1 = Monday). Pickups happen within the CSWS pickup
     # hours (schemas/physical_donation_schema.pickup_rules).
     pickup_days = Column(String(20), nullable=True)
+    # Door to Door: the date CSWS came but nobody was home ("Not home" on
+    # the pickup map, Oct 12 pickup logic v2). The planner moves the stop to
+    # the donor's next allowed day after this date. NULL = never missed.
+    pickup_not_home_date = Column(Date, nullable=True)
     # Door to Door, older entries: one preferred date and time (UC-D2 alt 7c)
     preferred_pickup_at = Column(DateTime(timezone=True), nullable=True)
     qr_reference = Column(String(100), nullable=False, unique=True)

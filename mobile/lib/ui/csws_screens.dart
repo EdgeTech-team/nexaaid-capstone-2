@@ -250,7 +250,8 @@ class ReceiveScreen extends StatefulWidget {
   State<ReceiveScreen> createState() => _ReceiveScreenState();
 }
 
-class _ReceiveScreenState extends State<ReceiveScreen> {
+class _ReceiveScreenState extends State<ReceiveScreen>
+    with HomeTargetListener<ReceiveScreen> {
   final searchC = TextEditingController();
   String search = '';
   String view = 'pending';
@@ -272,6 +273,21 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   void dispose() {
     searchC.dispose();
     super.dispose();
+  }
+
+  @override
+  String get homeTab => 'Receive';
+
+  /// "Mark picked up" on the Pickups tab opens this tab with the scanner
+  /// (HomeTarget('Receive', view: 'scan')): scan the donor's QR, check the
+  /// goods and enter the actual quantity, like any other receipt.
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    if (target.view == 'scan') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scan();
+      });
+    }
   }
 
   Future<void> _restoreFilters() async {

@@ -13,17 +13,22 @@ import 'sms_report_format.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
-// Scope 2.4 / UC-CD1 alt 11b: SMS-Based Alternative Reporting.
-// The CSWS Disaster Unit, with no internet in the field, fills this form and
-// sends the report as a text in the structured format (sms_report_format.dart).
-// The Administrator then pastes it into "Encode SMS report" (UC-A3 alt 8a).
+// SMS-Based Alternative Reporting (Scope 2.4; Oct 12 team decision,
+// claude/sms-reporting-decision.md).
+// The Barangay Receiving Representative, with no internet, fills this form
+// and sends the report as a text in the structured format
+// (sms_report_format.dart) to a CSWS Disaster Unit member. The Disaster Unit
+// pastes it into "Encode SMS" and submits it as its report; the
+// Administrator validates it as usual. The rep does not create a report in
+// the system (Scope 1.3): NexaAid only builds the text.
 //
-// Works offline: the dropdown lists and the Administrators' SMS numbers are
+// Works offline: the dropdown lists and the Disaster Unit's SMS numbers are
 // saved on the phone every time this screen opens with internet.
 // ---------------------------------------------------------------------------
 
 const _cacheLookups = 'sms_cache_lookups';
-const _cacheReceivers = 'sms_cache_receivers';
+// v2: the receivers are now the Disaster Unit (v1 held Administrators).
+const _cacheReceivers = 'sms_cache_receivers_unit';
 const _cacheSavedAt = 'sms_cache_saved_at';
 
 class SmsSendScreen extends StatefulWidget {
@@ -84,7 +89,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     try {
       final fresh = await api.lookups().timeout(const Duration(seconds: 8));
       final r = await api
-          .get('/contacts/sms-receivers')
+          .get('/contacts/disaster-unit')
           .timeout(const Duration(seconds: 8));
       lookups = Map<String, dynamic>.from(fresh);
       if (r.ok && r.json is List) receivers = (r.json as List).cast<Map>();
@@ -333,8 +338,9 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             'Prepare an SMS Report',
             subtitle:
                 'For when there is no internet. Fill this in to make a text in '
-                'the NexaAid format, then send it from your phone. The '
-                'Administrator encodes it, then it is validated as usual.',
+                'the NexaAid format and send it from your phone to the CSWS '
+                'Disaster Unit. They encode it as a report, then the '
+                'Administrator validates it.',
           ),
           const Padding(
             padding: EdgeInsets.only(bottom: 12),
@@ -380,13 +386,19 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
                   ),
               ],
             ),
+          if (receivers.isEmpty)
+            Text(
+              'No Disaster Unit numbers saved yet. Open this screen once with '
+              'internet, or type the number you were given.',
+              style: t.bodySmall,
+            ),
           const SizedBox(height: 8),
           TextFormField(
             controller: to,
             keyboardType: TextInputType.phone,
             inputFormatters: phoneFormatters,
             decoration: const InputDecoration(
-              labelText: 'Administrator SMS number',
+              labelText: 'CSWS Disaster Unit SMS number',
               hintText: '09XXXXXXXXX',
             ),
             validator: (v) => RegExp(r'^09\d{9}$').hasMatch((v ?? '').trim())
