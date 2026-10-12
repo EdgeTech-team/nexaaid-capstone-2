@@ -5,6 +5,7 @@ import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
 import 'input_formatters.dart';
 import 'report_filters.dart';
+import 'report_summary_card.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
@@ -34,7 +35,9 @@ String? Function(String?) _wholeNumber(int max) => (v) {
   return null;
 };
 
-/// Card for one disaster report (with fulfillment if available).
+/// Card for one disaster report (with fulfillment if available). Resolves
+/// the names and the role rule, then draws the shared [ReportSummaryCard]
+/// (the landing page uses the same card).
 class ReportCard extends StatelessWidget {
   final Map<String, dynamic> r;
   final Names names;
@@ -52,125 +55,33 @@ class ReportCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final type = names.of('disaster_types', r['disaster_type_id']);
-    final brgy = names.of('barangays', r['barangay_id']);
     final hasFulfillment = r['total_items_needed'] != null;
     // Appendix H 3.2: every role except DRRMO views priority guidance.
     final showPriority = api.role != Roles.drrmo;
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: highlighted
-          ? RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(Radii.lg),
-              side: BorderSide(
-                color: Theme.of(context).colorScheme.primary,
-                width: 2,
-              ),
-            )
+    final guidance = r['priority_guidance'] ?? r['ai_recommendation'];
+    return ReportSummaryCard(
+      reportId: (r['report_id'] as num?)?.toInt(),
+      disaster: names.of('disaster_types', r['disaster_type_id']),
+      barangay: names.of('barangays', r['barangay_id']),
+      status: r['status'] as String?,
+      priority: r['priority_level'] as String?,
+      source: r['source']?.toString(),
+      affectedFamilies: (r['affected_families'] as num?)?.toInt(),
+      assistanceNeeded: r['assistance_needed']?.toString(),
+      quantity: r['estimated_quantity'] as num?,
+      description: r['description']?.toString(),
+      guidance: guidance?.toString(),
+      rejectionReason: r['rejection_reason']?.toString(),
+      delivered: hasFulfillment
+          ? r['total_items_delivered'] as num? ?? 0
           : null,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    '#${r['report_id']}  $type in $brgy',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                StatusChip(r['status'] as String?),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                if (showPriority && r['priority_level'] != null)
-                  PriorityChip(r['priority_level'] as String?),
-                Chip(
-                  avatar: const Icon(Icons.input, size: 16),
-                  label: Text('via ${r['source']}'),
-                  visualDensity: VisualDensity.compact,
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              [
-                if (r['affected_families'] != null)
-                  '${r['affected_families']} families',
-                if (r['assistance_needed'] != null)
-                  'Needs: ${r['assistance_needed']}',
-                if (r['estimated_quantity'] != null)
-                  'Qty: ${r['estimated_quantity']}',
-              ].join('  ·  '),
-            ),
-            if (r['description'] != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  '${r['description']}',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-            if (showPriority &&
-                (r['priority_guidance'] ?? r['ai_recommendation']) != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.auto_awesome,
-                      size: 16,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        'AI guidance: ${r['priority_guidance'] ?? r['ai_recommendation']}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            if (r['rejection_reason'] != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(
-                  'Rejected: ${r['rejection_reason']}',
-                  style: const TextStyle(color: AppColors.danger),
-                ),
-              ),
-            if (hasFulfillment) ...[
-              const SizedBox(height: 10),
-              Progress(
-                delivered: r['total_items_delivered'] as num? ?? 0,
-                needed: r['total_items_needed'] as num? ?? 0,
-                percent: num.tryParse('${r['fulfillment_percentage']}'),
-              ),
-            ],
-            if (actions.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  for (final a in actions)
-                    Padding(padding: const EdgeInsets.only(left: 8), child: a),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
+      needed: hasFulfillment ? r['total_items_needed'] as num? ?? 0 : null,
+      percent: hasFulfillment
+          ? num.tryParse('${r['fulfillment_percentage']}')
+          : null,
+      showPriority: showPriority,
+      highlighted: highlighted,
+      actions: actions,
     );
   }
 }

@@ -191,31 +191,16 @@ class StatTile extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final card = StatCard(
-      label: label,
-      value: value,
-      icon: icon,
-      color: color,
-      note: note ?? (onTap != null ? 'Tap to view' : null),
-    );
-    if (onTap == null) return card;
-    // The ripple sits on top of the card so it is visible when tapped.
-    return Stack(
-      children: [
-        card,
-        Positioned.fill(
-          child: Material(
-            type: MaterialType.transparency,
-            child: InkWell(
-              onTap: onTap,
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => StatCard(
+    label: label,
+    value: value,
+    icon: icon,
+    color: color,
+    note: note ?? (onTap != null ? 'Tap to view' : null),
+    // StatCard is the button itself (with its ripple), so the tile fills
+    // the width it is given instead of shrinking to its text.
+    onTap: onTap,
+  );
 }
 
 /// Old name for StatCardGrid.
