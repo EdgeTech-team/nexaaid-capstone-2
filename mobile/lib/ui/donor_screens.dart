@@ -211,13 +211,13 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   Text.rich(
                     TextSpan(
                       text: 'Showing ',
-                      style: const TextStyle(color: Brand.muted),
+                      style: TextStyle(color: cs.onSurfaceVariant),
                       children: [
                         TextSpan(
                           text: '${reports.length}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w700,
-                            color: Brand.ink,
+                            color: cs.onSurface,
                           ),
                         ),
                         const TextSpan(text: ' reports'),
