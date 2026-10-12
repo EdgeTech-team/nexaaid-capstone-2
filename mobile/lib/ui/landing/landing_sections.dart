@@ -168,16 +168,17 @@ class LandingHeader extends StatelessWidget {
                 // One tap switches light and dark (sun in light mode,
                 // moon in dark), same button as Profile. Not inside the
                 // login pop-up.
-                const SunMoonToggle(),
-                Gaps.h8,
-                FilledButton(
-                  onPressed: onLogIn,
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size(0, 44),
-                    shape: const StadiumBorder(),
-                  ),
-                  child: const Text('Log in'),
-                ),
+                     FilledButton(
+                     onPressed: onLogIn,
+                     style: FilledButton.styleFrom(
+                       minimumSize: const Size(0, 44),
+                       shape: const StadiumBorder(),
+                     ),
+                     child: const Text('Log in'),
+                   ),
+                   Gaps.h8,
+                   // Rightmost (Ivan's note).
+                   const SunMoonToggle(),
               ],
             ),
           ),
