@@ -6,7 +6,9 @@ import 'theme_toggle.dart';
 import 'widgets.dart';
 import 'change_password_screen.dart';
 
-/// Profile tab for every role: who you are, appearance, log out.
+/// Profile tab for every role (Ivan: settings-list style). From the top:
+/// "Settings" with the sun/moon toggle, your account card (tap it for
+/// Manage account), Security, About, and Log out.
 ///
 /// The developer tools (server address, API console, design system
 /// gallery) are hidden for normal use. Tap "About NexaAid" 5 times to show
@@ -38,7 +40,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!api.loggedIn) return _page(context, header: const _GuestHeader());
+    if (!api.loggedIn) return _page(context, account: const _GuestCard());
     return Loader(
       load: [() => api.get('/auth/me'), api.lookupsResult],
       builder: (context, data) {
@@ -46,151 +48,218 @@ class _ProfileScreenState extends State<ProfileScreen> {
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         return _page(
           context,
-          header: _AccountHeader(me: me, names: names),
+          account: _AccountCard(
+            me: me,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ManageAccountScreen(me: me, names: names),
+              ),
+            ),
+          ),
         );
       },
     );
   }
 
-  Widget _page(BuildContext context, {required Widget header}) {
+  Widget _page(BuildContext context, {required Widget account}) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     return ValueListenableBuilder<bool>(
       valueListenable: ProfileScreen.devToolsShown,
       builder: (context, devTools, _) => ListView(
         padding: Space.page,
         children: [
-          // Ivan: light / dark mode in the top-right corner.
-          const Align(alignment: Alignment.centerRight, child: SunMoonToggle()),
-          header,
-          if (api.loggedIn) ...[
-            const SectionHeader('Security'),
-            const _SecurityCard(),
-          ],
-          const SectionHeader('About'),
-          AppCard(
-            padding: EdgeInsets.zero,
-            child: ListTile(
-              key: const ValueKey('about-nexaaid'),
-              leading: const Icon(Icons.info_outline),
-              title: const Text('About NexaAid'),
-              subtitle: const Text(
-                'Disaster relief coordination for Mandaue City · Version 1.0.0',
-              ),
-              onTap: _tapAbout,
-            ),
-          ),
-          if (devTools) ...[
-            const SectionHeader('Developer tools'),
-            const _DevTools(),
-
-            
-          ],
-          Gaps.v24,
-          AppButton(
-            api.loggedIn ? 'Log out' : 'Back to start',
-            icon: Icons.logout,
-            variant: AppButtonVariant.secondary,
-            expand: true,
-            onPressed: api.logout,
-          ),
-          Gaps.v24,
-        ],
-      ),
-    );
-  }
-}
-
-class _AccountHeader extends StatelessWidget {
-  final Map<String, dynamic> me;
-  final Names names;
-  const _AccountHeader({required this.me, required this.names});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final name = '${me['first_name'] ?? ''} ${me['last_name'] ?? ''}'.trim();
-    final initials = name
-        .split(RegExp(r'\s+'))
-        .where((w) => w.isNotEmpty)
-        .take(2)
-        .map((w) => w[0].toUpperCase())
-        .join();
-    final barangayId = me['assigned_barangay_id'];
-
-    Widget row(IconData icon, String label, String value) => Padding(
-      padding: const EdgeInsets.only(top: Space.sm),
-      child: Row(
-        children: [
-          Icon(icon, size: 20, color: cs.onSurfaceVariant),
-          Gaps.h12,
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                ),
-                Text(value, style: t.bodyMedium),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: cs.primaryContainer,
-                child: Text(
-                  initials.isEmpty ? '?' : initials,
-                  style: t.titleMedium?.copyWith(color: cs.onPrimaryContainer),
-                ),
-              ),
-              Gaps.h16,
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      name.isEmpty ? '${me['email']}' : name,
-                      style: t.titleLarge,
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        'Settings',
+                        style: t.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
                     Text(
-                      '${me['role_name'] ?? ''}',
+                      'Manage your account',
                       style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                     ),
                   ],
                 ),
               ),
+              // Ivan: light / dark mode in the top-right corner.
+              const SunMoonToggle(),
             ],
           ),
-          const Divider(height: Space.lg),
-          row(Icons.mail_outline, 'Email', '${me['email']}'),
-          if (barangayId != null)
-            row(
-              Icons.location_city_outlined,
-              'Assigned barangay',
-              names.of(
-                'barangays',
-                barangayId,
-                fallback: 'Barangay #$barangayId',
+          Gaps.v24,
+          account,
+          if (api.loggedIn) ...[Gaps.v16, const _SecurityCard()],
+          Gaps.v16,
+          SettingsGroup(
+            children: [
+              SettingsRow(
+                key: const ValueKey('about-nexaaid'),
+                icon: Icons.info_outline,
+                title: 'About NexaAid',
+                subtitle:
+                    'Disaster relief coordination for Mandaue City · '
+                    'Version 1.0.0',
+                onTap: _tapAbout,
+                chevron: false,
               ),
+            ],
+          ),
+          if (devTools) ...[
+            const SectionHeader('Developer tools'),
+            const _DevTools(),
+          ],
+          // Guests go back with "Back to home page" at the top right.
+          if (api.loggedIn) ...[
+            Gaps.v16,
+            SettingsGroup(
+              children: [
+                SettingsRow(
+                  icon: Icons.logout,
+                  title: 'Log out',
+                  color: cs.error,
+                  onTap: api.logout,
+                ),
+              ],
             ),
+          ],
+          Gaps.v24,
         ],
       ),
     );
   }
 }
 
-class _GuestHeader extends StatelessWidget {
-  const _GuestHeader();
+/// A rounded card of settings rows with thin lines between them.
+class SettingsGroup extends StatelessWidget {
+  final List<Widget> children;
+  const SettingsGroup({super.key, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const Divider(height: 1, indent: 56),
+            children[i],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One settings line: icon, title, optional subtitle, and a chevron when
+/// it opens something.
+class SettingsRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? subtitle;
+  final VoidCallback? onTap;
+  final Color? color; // e.g. red for Log out
+  final bool chevron;
+
+  const SettingsRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.subtitle,
+    this.onTap,
+    this.color,
+    this.chevron = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return ListTile(
+      minTileHeight: 56,
+      leading: Icon(icon, color: color ?? cs.onSurfaceVariant),
+      title: Text(title, style: TextStyle(color: color)),
+      subtitle: subtitle == null ? null : Text(subtitle!),
+      trailing: onTap != null && chevron
+          ? Icon(Icons.chevron_right, color: color ?? cs.onSurfaceVariant)
+          : null,
+      onTap: onTap,
+    );
+  }
+}
+
+String _initials(String name) => name
+    .split(RegExp(r'\s+'))
+    .where((w) => w.isNotEmpty)
+    .take(2)
+    .map((w) => w[0].toUpperCase())
+    .join();
+
+String _fullName(Map<String, dynamic> me) =>
+    '${me['first_name'] ?? ''} ${me['last_name'] ?? ''}'.trim();
+
+/// Your name and email; tap it to open Manage account.
+class _AccountCard extends StatelessWidget {
+  final Map<String, dynamic> me;
+  final VoidCallback onTap;
+  const _AccountCard({required this.me, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final name = _fullName(me);
+    return Semantics(
+      button: true,
+      label: 'Manage account',
+      child: AppCard(
+        onTap: onTap,
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 26,
+              backgroundColor: cs.primaryContainer,
+              child: Text(
+                _initials(name).isEmpty ? '?' : _initials(name),
+                style: t.titleMedium?.copyWith(color: cs.onPrimaryContainer),
+              ),
+            ),
+            Gaps.h16,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name.isEmpty ? '${me['email']}' : name,
+                    style: t.titleMedium,
+                  ),
+                  Text(
+                    '${me['email'] ?? ''}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GuestCard extends StatelessWidget {
+  const _GuestCard();
 
   @override
   Widget build(BuildContext context) {
@@ -200,7 +269,7 @@ class _GuestHeader extends StatelessWidget {
       child: Row(
         children: [
           CircleAvatar(
-            radius: 28,
+            radius: 26,
             backgroundColor: cs.surfaceContainerHighest,
             child: Icon(Icons.person_outline, color: cs.onSurfaceVariant),
           ),
@@ -209,7 +278,7 @@ class _GuestHeader extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Guest donor', style: t.titleLarge),
+                Text('Guest donor', style: t.titleMedium),
                 Text(
                   'Create an account to track your donations.',
                   style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
@@ -217,6 +286,111 @@ class _GuestHeader extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Manage account (view only for now): your photo initials, name and
+/// role, then your details. There is no endpoint to change them yet.
+class ManageAccountScreen extends StatelessWidget {
+  final Map<String, dynamic> me;
+  final Names names;
+  const ManageAccountScreen({super.key, required this.me, required this.names});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final name = _fullName(me);
+    final barangayId = me['assigned_barangay_id'];
+    String? text(Object? v) {
+      final s = '${v ?? ''}'.trim();
+      return s.isEmpty ? null : s;
+    }
+
+    final rows = <(IconData, String, String)>[
+      if (text(me['username']) case final u?)
+        (Icons.alternate_email, 'Username', u),
+      (Icons.badge_outlined, 'Role', '${me['role_name'] ?? '-'}'),
+      if (barangayId != null)
+        (
+          Icons.location_city_outlined,
+          'Assigned barangay',
+          names.of('barangays', barangayId, fallback: 'Barangay #$barangayId'),
+        ),
+    ];
+    final private = <(IconData, String, String)>[
+      (Icons.person_outline, 'Name', name.isEmpty ? '-' : name),
+      (Icons.mail_outline, 'Email', '${me['email'] ?? '-'}'),
+      if (text(me['contact_number']) case final n?)
+        (Icons.phone_outlined, 'Phone number', n),
+    ];
+
+    Widget group(List<(IconData, String, String)> items) => AppCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        children: [
+          for (var i = 0; i < items.length; i++) ...[
+            if (i > 0) const Divider(height: 1, indent: 56),
+            ListTile(
+              minTileHeight: 64,
+              leading: Icon(items[i].$1, color: cs.onSurfaceVariant),
+              title: Text(
+                items[i].$2,
+                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              subtitle: Text(items[i].$3, style: t.bodyLarge),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Manage account')),
+      body: ListView(
+        padding: Space.page,
+        children: [
+          Center(
+            child: CircleAvatar(
+              radius: 44,
+              backgroundColor: cs.primaryContainer,
+              child: Text(
+                _initials(name).isEmpty ? '?' : _initials(name),
+                style: t.headlineMedium?.copyWith(color: cs.onPrimaryContainer),
+              ),
+            ),
+          ),
+          Gaps.v12,
+          Text(
+            name.isEmpty ? '${me['email']}' : name,
+            textAlign: TextAlign.center,
+            style: t.titleLarge,
+          ),
+          Gaps.v24,
+          group(rows),
+          SectionHeader(
+            'Private information',
+            action: Tooltip(
+              message: 'Only you and the NexaAid administrator can see this.',
+              triggerMode: TooltipTriggerMode.tap,
+              child: Icon(
+                Icons.info_outline,
+                size: 20,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+          ),
+          group(private),
+          Gaps.v16,
+          Text(
+            'Need to change something? Contact the NexaAid administrator.',
+            textAlign: TextAlign.center,
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v24,
         ],
       ),
     );
@@ -283,17 +457,18 @@ class _SecurityCard extends StatelessWidget {
         listenable: api,
         builder: (context, _) => ListTile(
           key: const ValueKey('change-password'),
+          minTileHeight: 56,
           leading: Icon(
             api.mustChangePassword
                 ? Icons.warning_amber_rounded
-                : Icons.lock_reset,
-            color: api.mustChangePassword ? cs.error : null,
+                : Icons.lock_outline,
+            color: api.mustChangePassword ? cs.error : cs.onSurfaceVariant,
           ),
-          title: const Text('Change password'),
+          title: const Text('Security'),
           subtitle: Text(
             api.mustChangePassword
                 ? 'Required: you are still using a temporary password'
-                : 'Change the password you log in with',
+                : 'Change your password',
           ),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.of(context).push(

@@ -68,7 +68,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
       load: [api.lookupsResult],
       builder: (context, data) {
         final names = Names(Map<String, dynamic>.from(data[0] as Map));
-                final done = widget.done;
+        final done = widget.done;
         final all = names.rows('validated_reports').where((r) {
           if (done == null) return true;
           final full = (r['fulfillment_percentage'] as num? ?? 0) >= 100;
@@ -93,14 +93,16 @@ class _ReportsFeedState extends State<ReportsFeed> {
           fulfillment: progress,
           sort: sort,
         );
+        final cs = Theme.of(context).colorScheme;
+        final t = Theme.of(context).textTheme;
         return ListView(
           padding: EdgeInsets.zero,
           children: [
             Container(
               width: double.infinity,
-              color: Brand.pinkSoft,
+              color: cs.primaryContainer,
               padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
-                            child: Column(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
@@ -109,10 +111,9 @@ class _ReportsFeedState extends State<ReportsFeed> {
                         : done
                         ? 'Completed Reports'
                         : 'Active Reports',
-                    style: const TextStyle(
-                      fontSize: 24,
+                    style: t.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w800,
-                      color: Brand.ink,
+                      color: cs.onPrimaryContainer,
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -125,7 +126,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                               'Thank you to everyone who helped.'
                         : 'Reports that still need help. Pick one and '
                               'pledge goods.',
-                    style: const TextStyle(color: Brand.muted),
+                    style: TextStyle(color: cs.onPrimaryContainer),
                   ),
                 ],
               ),
@@ -135,24 +136,25 @@ class _ReportsFeedState extends State<ReportsFeed> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  StatGrid([
-                                        StatTile(
-                      done == null
+                  StatCardGrid([
+                    StatCard(
+                      label: done == null
                           ? 'Validated reports'
                           : done
                           ? 'Completed reports'
                           : 'Active reports',
-                      '${all.length}',
-                      done == true
+                      value: '${all.length}',
+                      icon: done == true
                           ? Icons.task_alt_outlined
                           : Icons.report_outlined,
                     ),
                     if (done != true)
-                      StatTile(
-                        'High / critical priority',
-                        '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
-                        Icons.trending_up,
-                        color: const Color(0xFFE65100),
+                      StatCard(
+                        label: 'High / critical priority',
+                        value:
+                            '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
+                        icon: Icons.trending_up,
+                        color: PriorityColors.base('High'),
                       ),
                   ]),
                   const SizedBox(height: 14),
@@ -209,13 +211,13 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   Text.rich(
                     TextSpan(
                       text: 'Showing ',
-                      style: const TextStyle(color: Brand.muted),
+                      style: TextStyle(color: cs.onSurfaceVariant),
                       children: [
                         TextSpan(
                           text: '${reports.length}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontWeight: FontWeight.w700,
-                            color: Brand.ink,
+                            color: cs.onSurface,
                           ),
                         ),
                         const TextSpan(text: ' reports'),
@@ -224,7 +226,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   ),
                   const SizedBox(height: 10),
                   if (reports.isEmpty)
-                     EmptyState(
+                    EmptyState(
                       done == true && all.isEmpty
                           ? 'No completed reports yet.'
                           : 'No validated reports match.',
@@ -240,6 +242,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
   }
 
   Widget _card(BuildContext context, Map<String, dynamic> r, Names names) {
+    final cs = Theme.of(context).colorScheme;
     final pct = (r['fulfillment_percentage'] as num? ?? 0).toDouble();
     final state = pct >= 100
         ? 'Fulfilled'
@@ -252,7 +255,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
         children: [
           Text(
             '$label:',
-            style: const TextStyle(fontSize: 12, color: Brand.muted),
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
           ),
           Text('${value ?? '-'}', style: const TextStyle(fontSize: 14)),
         ],
@@ -277,7 +280,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Badge2.priority(r['priority_level'] as String?),
+                PriorityChip(r['priority_level'] as String?),
               ],
             ),
             const SizedBox(height: 12),
@@ -307,14 +310,18 @@ class _ReportsFeedState extends State<ReportsFeed> {
             Text.rich(
               TextSpan(
                 text: 'Assistance Needed: ',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
+                  color: cs.primary,
                 ),
                 children: [
                   TextSpan(
                     text: '${r['assistance_needed'] ?? '-'}',
-                    style: const TextStyle(fontWeight: FontWeight.normal),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface,
+                    ),
                   ),
                 ],
               ),
@@ -358,16 +365,16 @@ class _ReportsFeedState extends State<ReportsFeed> {
             // A fulfilled report has what it needs: no Donate button.
             if (widget.done != true && state != 'Fulfilled') ...[
               const SizedBox(height: 10),
-              FilledButton(
+              AppButton(
+                'Donate',
+                icon: Icons.volunteer_activism_outlined,
+                variant: AppButtonVariant.donate,
+                expand: true,
                 onPressed: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => DonateScreen(report: r, names: names),
                   ),
                 ),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(46),
-                ),
-                child: const Text('Donate'),
               ),
             ],
           ],
