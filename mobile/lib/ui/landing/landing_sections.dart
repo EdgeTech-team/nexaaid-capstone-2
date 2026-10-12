@@ -19,8 +19,10 @@ const double kLandingMax = 1200;
 bool landingWide(BuildContext context) =>
     MediaQuery.sizeOf(context).width >= Breakpoints.expanded;
 
-String _fmt(int n) =>
-    n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+String _fmt(int n) => n.toString().replaceAllMapped(
+  RegExp(r'\B(?=(\d{3})+(?!\d))'),
+  (_) => ',',
+);
 
 /// Centers a section at [kLandingMax] with side padding.
 class LandingWidth extends StatelessWidget {
@@ -156,10 +158,7 @@ class LandingHeader extends StatelessWidget {
                     onPressed: onHowItWorks,
                     child: const Text('How it works'),
                   ),
-                  TextButton(
-                    onPressed: onReports,
-                    child: const Text('Reports'),
-                  ),
+                  TextButton(onPressed: onReports, child: const Text('Reports')),
                   TextButton(
                     onPressed: onQuestions,
                     child: const Text('Questions'),
@@ -169,6 +168,8 @@ class LandingHeader extends StatelessWidget {
                 // One tap switches light and dark (sun in light mode,
                 // moon in dark), same button as Profile. Not inside the
                 // login pop-up.
+                const SunMoonToggle(),
+                Gaps.h8,
                 FilledButton(
                   onPressed: onLogIn,
                   style: FilledButton.styleFrom(
@@ -177,9 +178,6 @@ class LandingHeader extends StatelessWidget {
                   ),
                   child: const Text('Log in'),
                 ),
-                Gaps.h8,
-                // Rightmost (Ivan's note).
-                const SunMoonToggle(),
               ],
             ),
           ),
@@ -601,7 +599,9 @@ class LandingHowItWorks extends StatelessWidget {
                     Gaps.v4,
                     Text(
                       _steps[i].$2,
-                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                      style: t.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -687,10 +687,7 @@ class _Collage extends StatelessWidget {
                 height: 170,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(
-                    color: cs.surfaceContainerLowest,
-                    width: 6,
-                  ),
+                  border: Border.all(color: cs.surfaceContainerLowest, width: 6),
                 ),
                 child: const ClipOval(
                   child: DisasterArt(DisasterKind.flood, height: 170),
@@ -708,10 +705,7 @@ class _Collage extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: AppColors.vest,
-                  border: Border.all(
-                    color: cs.surfaceContainerLowest,
-                    width: 6,
-                  ),
+                  border: Border.all(color: cs.surfaceContainerLowest, width: 6),
                 ),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -767,7 +761,9 @@ class LandingReportGrid extends StatelessWidget {
         return Wrap(
           spacing: gap,
           runSpacing: gap,
-          children: [for (final c in children) SizedBox(width: w, child: c)],
+          children: [
+            for (final c in children) SizedBox(width: w, child: c),
+          ],
         );
       },
     );
@@ -1068,7 +1064,9 @@ class _FaqItem extends StatelessWidget {
       decoration: BoxDecoration(
         color: open ? AppColors.harbor : cs.surface,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: open ? AppColors.harbor : cs.outlineVariant),
+        border: Border.all(
+          color: open ? AppColors.harbor : cs.outlineVariant,
+        ),
       ),
       child: Material(
         type: MaterialType.transparency,
