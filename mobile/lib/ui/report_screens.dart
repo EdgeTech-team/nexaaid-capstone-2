@@ -177,12 +177,13 @@ class ReportCard extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 // UC-CD1 Submit post-disaster report (CSWS Disaster Unit), and
-// UC-A3 alt 8a Encode SMS report (Administrator, smsEncode: true).
-// Scope 2.4: the Disaster Unit SENDS structured SMS reports (see
-// sms_send_screen.dart); the Administrator reviews and ENCODES them here.
+// Encode SMS report (CSWS Disaster Unit, smsEncode: true).
+// Oct 12 decision (claude/sms-reporting-decision.md): the Barangay Receiving
+// Representative SENDS a structured SMS when offline (sms_send_screen.dart);
+// the Disaster Unit reviews and ENCODES it here; the Administrator validates.
 // ---------------------------------------------------------------------------
 class NewReportScreen extends StatefulWidget {
-  /// true = Administrator encoding a received SMS report (UC-A3 8a).
+  /// true = Disaster Unit encoding an SMS report a barangay rep sent.
   final bool smsEncode;
 
   /// Oct 11 (Daniel): the reporter corrects their own report before the
@@ -445,7 +446,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             )
           : api.post('/reports/', body: {...body, 'source': 'Mobile'}),
       success: sms
-          ? 'SMS report encoded and saved as Pending. Validate it under Validate.'
+          ? 'SMS report encoded and sent to the Administrator for validation.'
           : 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
@@ -596,11 +597,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                                 'Correct it and save to send it back for validation.'
                           : 'You can change it until the Administrator validates it.')
                     : sms
-                    ? 'Paste the text the CSWS Disaster Unit sent, tap Fill, '
-                          'then check every field before saving. '
-                          'It is saved as Pending; validate it under Validate.'
+                    ? 'Paste the text the barangay representative sent, tap '
+                          'Fill, then check every field before saving. It is '
+                          'saved as Pending until the Administrator validates it.'
                     : 'Saved as Pending until the Administrator validates it. '
-                          'No internet? Use the SMS report tab.',
+                          'Got a report by SMS? Use the Encode SMS tab.',
               ),
               if (sms) ...[
                 const SectionTitle('SMS as received'),
@@ -1203,26 +1204,6 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
           padding: const EdgeInsets.all(20),
           children: [
             PageHeader('Report Validation', subtitle: roleLine()),
-            // UC-A3 alt 8a: the Administrator encodes SMS reports.
-            Align(
-              alignment: Alignment.centerRight,
-              child: OutlinedButton.icon(
-                onPressed: () async {
-                  await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => Scaffold(
-                        appBar: AppBar(title: const Text('Encode SMS report')),
-                        body: const NewReportScreen(smsEncode: true),
-                      ),
-                    ),
-                  );
-                  if (mounted) setState(() => _loads++); // reload the list
-                },
-                icon: const Icon(Icons.sms_outlined),
-                label: const Text('Encode SMS report'),
-              ),
-            ),
-            const SizedBox(height: 8),
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(value: 'Pending', label: Text('Pending')),

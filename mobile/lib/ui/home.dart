@@ -41,11 +41,7 @@ List<_Tab> _tabsFor(String? role) {
     case Roles.admin:
       return const [
         _Tab('Overview', Icons.dashboard_outlined, AdminDashboard()), // 9.1
-        _Tab(
-          'Validate',
-          Icons.fact_check_outlined,
-          AdminReportsScreen(),
-        ), // 2.3, 2.4, 3.1, 3.3; "Encode SMS report" button = 2.2 (UC-A3 8a)
+        _Tab('Validate', Icons.fact_check_outlined, AdminReportsScreen()), // 2.3, 2.4, 3.1, 3.3 (SMS reports arrive here from the Disaster Unit)
         _Tab(
           'Monitoring',
           Icons.monitor_heart_outlined,
@@ -67,10 +63,10 @@ List<_Tab> _tabsFor(String? role) {
         _Tab('Overview', Icons.dashboard_outlined, DashboardScreen()), // 9.3
         _Tab('New report', Icons.edit_note, NewReportScreen()), // 2.1
         _Tab(
-          'SMS template',
-          Icons.sms_outlined,
-          SmsSendScreen(),
-        ), // 2.2 send by SMS when offline (Scope 2.4, UC-CD1 11b)
+          'Encode SMS',
+          Icons.mark_chat_read_outlined,
+          NewReportScreen(smsEncode: true),
+        ), // 2.2: encode the barangay rep's SMS report (Oct 12 decision)
         reportsHub, // 2.4, 2.5, 3.3
       ];
     case Roles.cswsMain:
@@ -124,6 +120,11 @@ List<_Tab> _tabsFor(String? role) {
           DeliveriesScreen(barangay: true),
         ), // 8.2-8.5
         _Tab('Overview', Icons.dashboard_outlined, BarangayDashboard()), // 9.7
+        _Tab(
+          'SMS report',
+          Icons.sms_outlined,
+          SmsSendScreen(),
+        ), // 2.2: offline SMS to the Disaster Unit (Oct 12 decision)
         reports, // 2.4
         _Tab(
           'Records',

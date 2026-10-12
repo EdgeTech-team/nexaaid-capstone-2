@@ -572,9 +572,12 @@ def delete_report(
 def ingest_sms_report(
     payload: SmsReportIngest,
     db: Session = Depends(get_db),
-    # UC-A3 alt 8a / Scope 2.4: the CSWS Disaster Unit SENDS the SMS; the
-    # Administrator reviews and manually ENCODES it here.
-    current_user=Depends(require_role("admin")),
+    # Oct 12 team decision (claude/sms-reporting-decision.md): the Barangay
+    # Receiving Representative, offline, SENDS the structured SMS to the CSWS
+    # Disaster Unit; the Disaster Unit reviews and ENCODES it here as its own
+    # report (source "SMS"); the Administrator validates it as usual
+    # (Scope 2.2). The rep never creates a report in the system (Scope 1.3).
+    current_user=Depends(require_role("csws_disaster_unit")),
 ):
     report_fields = payload.model_dump(exclude={"contact_number", "raw_message"})
     report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")

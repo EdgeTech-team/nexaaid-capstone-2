@@ -119,8 +119,8 @@ def test_reporter_cannot_validate_report(reporter_client, seed):
 
 
 def test_sms_ingest_creates_report_and_metadata(unit_client, admin_client, seed):
-    # Scope 2.4 / UC-A3 alt 8a: the Disaster Unit SENDS the SMS; the
-    # Administrator reviews and manually ENCODES it (POST /reports/sms).
+    # Oct 12 decision: the barangay rep SENDS the SMS; the Disaster Unit
+    # reviews and ENCODES it (POST /reports/sms); the Administrator validates.
     payload = {
         "contact_number": "09171234567",
         "raw_message": "FLOOD BRGY TEST 5FAM FOOD WATER",
@@ -130,9 +130,9 @@ def test_sms_ingest_creates_report_and_metadata(unit_client, admin_client, seed)
         "assistance_needed": "Food, water",
     }
 
-    assert unit_client.post("/reports/sms", json=payload).status_code == 403
+    assert admin_client.post("/reports/sms", json=payload).status_code == 403
 
-    resp = admin_client.post("/reports/sms", json=payload)
+    resp = unit_client.post("/reports/sms", json=payload)
 
     assert resp.status_code == 201
     body = resp.json()
