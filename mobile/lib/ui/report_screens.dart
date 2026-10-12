@@ -84,7 +84,7 @@ class ReportCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                StatusChip(r['status'] as String?),
+                Badge2.status(r['status'] as String?),
               ],
             ),
             const SizedBox(height: 6),
@@ -93,11 +93,11 @@ class ReportCard extends StatelessWidget {
               runSpacing: 6,
               children: [
                 if (showPriority && r['priority_level'] != null)
-                  PriorityChip(r['priority_level'] as String?),
-                Chip(
-                  avatar: const Icon(Icons.input, size: 16),
-                  label: Text('via ${r['source']}'),
-                  visualDensity: VisualDensity.compact,
+                  Badge2.priority(r['priority_level'] as String?),
+                Badge2(
+                  'via ${r['source']}',
+                  Colors.blueGrey,
+                  icon: Icons.input,
                 ),
               ],
             ),
@@ -127,10 +127,10 @@ class ReportCard extends StatelessWidget {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(
+                    const Icon(
                       Icons.auto_awesome,
                       size: 16,
-                      color: Theme.of(context).colorScheme.primary,
+                      color: Colors.deepPurple,
                     ),
                     const SizedBox(width: 4),
                     Expanded(
@@ -147,7 +147,7 @@ class ReportCard extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 6),
                 child: Text(
                   'Rejected: ${r['rejection_reason']}',
-                  style: const TextStyle(color: AppColors.danger),
+                  style: const TextStyle(color: Color(0xFFC62828)),
                 ),
               ),
             if (hasFulfillment) ...[
@@ -1341,9 +1341,7 @@ class DashboardScreen extends StatelessWidget {
                                 value: total == 0 ? 0 : r['count'] / total,
                                 minHeight: 10,
                                 color: tone(r[key] as String?),
-                                backgroundColor: Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
+                                backgroundColor: Colors.black12,
                               ),
                             ),
                           ),
@@ -1370,39 +1368,37 @@ class DashboardScreen extends StatelessWidget {
               '${api.role ?? 'System'} Dashboard',
               subtitle: roleLine(),
             ),
-            StatCardGrid([
-              StatCard(
-                label: 'Disaster reports',
-                value: '${s['total_reports']}',
-                icon: Icons.report_outlined,
+            StatGrid([
+              StatTile(
+                'Disaster reports',
+                '${s['total_reports']}',
+                Icons.report_outlined,
               ),
-              StatCard(
-                label: 'Physical donations',
-                value: '${s['total_donations']}',
-                icon: Icons.volunteer_activism_outlined,
+              StatTile(
+                'Physical donations',
+                '${s['total_donations']}',
+                Icons.volunteer_activism_outlined,
               ),
-              StatCard(
-                label: 'Deliveries',
-                value: '${s['total_deliveries']}',
-                icon: Icons.local_shipping_outlined,
+              StatTile(
+                'Deliveries',
+                '${s['total_deliveries']}',
+                Icons.local_shipping_outlined,
               ),
-              StatCard(
-                label: 'Logistics requests',
-                value: '${s['total_logistics_requests']}',
-                icon: Icons.fire_truck_outlined,
+              StatTile(
+                'Logistics requests',
+                '${s['total_logistics_requests']}',
+                Icons.fire_truck_outlined,
               ),
-              StatCard(
-                label: 'Average fulfillment',
-                value:
-                    '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
-                icon: Icons.pie_chart_outline,
-                color: AppColors.success,
+              StatTile(
+                'Average fulfillment',
+                '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
+                Icons.pie_chart_outline,
+                color: const Color(0xFF2E7D32),
               ),
-              StatCard(
-                label: 'Est. value of donations',
-                value:
-                    'PHP ${(b['total_estimated_value'] as num).toStringAsFixed(0)}',
-                icon: Icons.payments_outlined,
+              StatTile(
+                'Est. value of donations',
+                'PHP ${(b['total_estimated_value'] as num).toStringAsFixed(0)}',
+                Icons.payments_outlined,
               ),
             ]),
             const SizedBox(height: 12),
