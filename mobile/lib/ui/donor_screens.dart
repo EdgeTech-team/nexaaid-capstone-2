@@ -242,6 +242,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
   }
 
   Widget _card(BuildContext context, Map<String, dynamic> r, Names names) {
+    final cs = Theme.of(context).colorScheme;
     final pct = (r['fulfillment_percentage'] as num? ?? 0).toDouble();
     final state = pct >= 100
         ? 'Fulfilled'
@@ -254,7 +255,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
         children: [
           Text(
             '$label:',
-            style: const TextStyle(fontSize: 12, color: Brand.muted),
+            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
           ),
           Text('${value ?? '-'}', style: const TextStyle(fontSize: 14)),
         ],
@@ -279,7 +280,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Badge2.priority(r['priority_level'] as String?),
+                PriorityChip(r['priority_level'] as String?),
               ],
             ),
             const SizedBox(height: 12),
