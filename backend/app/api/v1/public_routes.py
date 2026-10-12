@@ -48,9 +48,6 @@ def public_reports(db: Session = Depends(get_db)):
             "barangay": barangays.get(r.barangay_id, "Barangay"),
             "sitio": sitios.get(r.sitio_id),
             "priority_level": r.priority_level,
-            # How the report came in (Web / Mobile / SMS), for the "via"
-            # chip on the landing report cards. Never who reported it.
-            "source": r.source,
             "priority_guidance": explain_priority(r),
             "assistance_needed": r.assistance_needed,
             "affected_families": r.affected_families,
