@@ -6,16 +6,18 @@ import '../donor_screens.dart' show DonateScreen;
 import '../login_screen.dart';
 import '../blur_popup.dart';
 import '../register_screen.dart' show showRegisterPopup;
-import '../theme_toggle.dart';
 import '../widgets.dart' show api, formDialog, DialogField, Names;
-import 'landing_extras.dart';
-import 'about_section.dart';
-import 'mission_section.dart';
+import 'landing_extras.dart' show CredentialsCard;
+import 'landing_sections.dart';
 import 'public_data.dart';
 
 /// First screen for anyone not signed in (adviser item 8): what NexaAid
 /// is, live numbers, how it works, and the validated reports that need
 /// help, with guest donation, log in and sign up.
+///
+/// Ivan's redesign (the "NexaAid landing page redesign" canvas): header,
+/// headline with a photo, stats strip, how it works, report cards,
+/// questions and a closing band. Sections are in landing_sections.dart.
 class LandingScreen extends StatefulWidget {
   const LandingScreen({super.key});
 
@@ -25,7 +27,9 @@ class LandingScreen extends StatefulWidget {
 
 class _LandingScreenState extends State<LandingScreen> {
   late Future<PublicSnapshot> _future = loadPublicData(api);
-  String? _priority; // null = all
+  final _howKey = GlobalKey();
+  final _reportsKey = GlobalKey();
+  final _faqKey = GlobalKey();
 
   Future<void> _reload() async {
     setState(() {
@@ -164,46 +168,69 @@ class _LandingScreenState extends State<LandingScreen> {
     );
   }
 
+  /// Header links: scroll to the section.
+  void _jump(GlobalKey key) {
+    final c = key.currentContext;
+    if (c == null) return;
+    Scrollable.ensureVisible(
+      c,
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 450),
+      curve: Motion.curve,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: SystemUiOverlayStyle.light,
+      value: dark ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark,
       child: Scaffold(
         body: FutureBuilder<PublicSnapshot>(
           future: _future,
           builder: (context, snap) {
             final data = snap.data;
-            final loading = data == null && !snap.hasError;
-            final urgent = data != null && data.reports.isNotEmpty
-                ? data.reports.first
-                : null;
             return RefreshIndicator(
               onRefresh: _reload,
               edgeOffset: MediaQuery.paddingOf(context).top,
               child: CustomScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 slivers: [
+                  // One sliver, so every section is built (and findable).
                   SliverToBoxAdapter(
-                    child: _Hero(
-                      onDonateAsGuest: api.continueAsGuest,
-                      onLogIn: _logIn,
-                      onCreateAccount: _createAccount,
-                      onServer: _serverAddress,
-                      urgent: loading
-                          ? const _UrgentSkeleton()
-                          : urgent == null
-                          ? null
-                          : _UrgentCard(
-                              report: urgent,
-                              onDonate: () => _donate(urgent),
-                            ),
-                    ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: _Centered(
-                      child: snap.hasError && data == null
-                          ? _error(snap.error)
-                          : _body(context, data),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        LandingHeader(
+                          onLogIn: _logIn,
+                          onHowItWorks: () => _jump(_howKey),
+                          onReports: () => _jump(_reportsKey),
+                          onQuestions: () => _jump(_faqKey),
+                        ),
+                        LandingHero(
+                          onLogIn: _logIn,
+                          onCreateAccount: _createAccount,
+                          onDonateAsGuest: api.continueAsGuest,
+                        ),
+                        if (snap.hasError && data == null)
+                          _Centered(child: _error(snap.error))
+                        else
+                          LandingStatsBand(stats: data?.stats),
+                        LandingHowItWorks(key: _howKey, stats: data?.stats),
+                        KeyedSubtree(
+                          key: _reportsKey,
+                          child: _reports(
+                            context,
+                            data,
+                            loading: data == null && !snap.hasError,
+                          ),
+                        ),
+                        LandingFaq(key: _faqKey),
+                        LandingClosingBand(onStart: api.continueAsGuest),
+                        const _Centered(child: CredentialsCard()),
+                        Gaps.v32,
+                      ],
                     ),
                   ),
                 ],
@@ -233,153 +260,80 @@ class _LandingScreenState extends State<LandingScreen> {
     );
   }
 
-  Widget _body(BuildContext context, PublicSnapshot? data) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final s = data?.stats;
+  /// "Reports that need help": the 6 most urgent validated reports.
+  Widget _reports(
+    BuildContext context,
+    PublicSnapshot? data, {
+    required bool loading,
+  }) {
+    final wide = landingWide(context);
     final all = data?.reports ?? const <Map<String, dynamic>>[];
-    final shown = all
-        .where(
-          (r) =>
-              _priority == null ||
-              (r['priority_level'] as String?)?.toLowerCase() ==
-                  _priority!.toLowerCase(),
-        )
-        .take(6)
-        .toList();
-
-    String fmt(int n) => n.toString().replaceAllMapped(
-      RegExp(r'\B(?=(\d{3})+(?!\d))'),
-      (_) => ',',
-    );
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionHeader(
-          'Right now in Mandaue',
-          subtitle: 'From validated disaster reports. Pull down to refresh.',
-        ),
-        s == null
-            ? const StatCardGrid([
-                SkeletonCard(height: 132),
-                SkeletonCard(height: 132),
-                SkeletonCard(height: 132),
-                SkeletonCard(height: 132),
-              ])
-            : StatCardGrid([
-                StatCard(
-                  label: 'Reports needing help',
-                  value: fmt(s.activeReports),
-                  icon: Icons.campaign_outlined,
+    final shown = all.take(6).toList();
+    return LandingWidth(
+      padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LandingEyebrow('Reports that need help'),
+                    Gaps.v8,
+                    LandingTitle('Barangays waiting for ', 'relief'),
+                  ],
                 ),
-                StatCard(
-                  label: 'Critical or high priority',
-                  value: fmt(s.urgentReports),
-                  icon: Icons.priority_high,
-                  color: PriorityColors.base('Critical'),
-                ),
-                StatCard(
-                  label: 'Families affected',
-                  value: fmt(s.familiesAffected),
-                  icon: Icons.groups_outlined,
-                  color: PriorityColors.base('High'),
-                ),
-                StatCard(
-                  label: 'Barangays with reports',
-                  value: fmt(s.barangays),
-                  icon: Icons.location_on_outlined,
-                  color: StatusColors.base('Received'),
-                ),
-                if (s.donationsReceived != null)
-                  StatCard(
-                    label: 'Donations received',
-                    value: fmt(s.donationsReceived!),
-                    icon: Icons.inventory_2_outlined,
-                    color: StatusColors.base('Confirmed'),
-                  ),
-                if (s.deliveriesCompleted != null)
-                  StatCard(
-                    label: 'Deliveries completed',
-                    value: fmt(s.deliveriesCompleted!),
-                    icon: Icons.local_shipping_outlined,
-                    color: StatusColors.base('Delivered'),
-                  ),
-              ]),
-        const SectionHeader('How it works'),
-        const HowItWorksSteps(),
-        const _PriorityGuide(),
-        SectionHeader(
-          'Reports that need help',
-          subtitle: 'Most urgent first.',
-          action: all.length > shown.length
-              ? TextButton(
+              ),
+              if (all.isNotEmpty)
+                TextButton(
                   onPressed: api.continueAsGuest,
                   child: Text('See all ${all.length}'),
-                )
-              : null,
-        ),
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final p in <String?>[null, ...PriorityColors.levels])
-                Padding(
-                  padding: const EdgeInsets.only(right: Space.xs),
-                  child: ChoiceChip(
-                    label: Text(p ?? 'All'),
-                    selected: _priority == p,
-                    onSelected: (_) => setState(() => _priority = p),
-                  ),
                 ),
             ],
           ),
-        ),
-        Gaps.v12,
-        if (data == null) ...[
-          const SkeletonCard(height: 200),
-          Gaps.v12,
-          const SkeletonCard(height: 200),
-        ] else if (shown.isEmpty)
-          AppCard(
-            child: EmptyView(
-              compact: true,
-              icon: Icons.verified_outlined,
-              title: all.isEmpty
-                  ? 'No reports need help right now'
-                  : 'No ${_priority?.toLowerCase()} priority reports',
-              message: all.isEmpty
-                  ? 'When the City validates a disaster report, it shows up '
-                        'here so you can donate.'
-                  : 'Choose another priority to see more reports.',
+          Gaps.v8,
+          Text(
+            'Most urgent first.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-          )
-        else
-          for (final r in shown) ...[
-            _ReportCard(
-              report: r,
-              onDonate: () => _donate(r),
-              onOpen: () => _openReport(r),
+          ),
+          Gaps.v24,
+          if (loading)
+            const LandingReportGrid(
+              children: [
+                SkeletonCard(height: 380),
+                SkeletonCard(height: 380),
+                SkeletonCard(height: 380),
+              ],
+            )
+          else if (shown.isEmpty)
+            const AppCard(
+              child: EmptyView(
+                compact: true,
+                icon: Icons.verified_outlined,
+                title: 'No reports need help right now',
+                message:
+                    'When the City validates a disaster report, it shows up '
+                    'here so you can donate.',
+              ),
+            )
+          else
+            LandingReportGrid(
+              children: [
+                for (final r in shown)
+                  LandingReportCard(
+                    report: r,
+                    onDonate: () => _donate(r),
+                    onOpen: () => _openReport(r),
+                  ),
+              ],
             ),
-            Gaps.v12,
-          ],
-        if (data != null) ImpactSection(stats: data.stats, asOf: data.loadedAt),
-        const RecentDeliveriesSection(),
-        const MissionSection(),
-        WaysToHelpSection(
-          onDonate: api.continueAsGuest,
-          onRegister: (org) => showRegisterPopup(context, org: org),
-        ),
-        const AboutSection(),
-        const CredentialsCard(),
-        Gaps.v24,
-        Text(
-          'Built for the relief offices of Mandaue City: CSWS, CMO and DRRMO.',
-          textAlign: TextAlign.center,
-          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-        ),
-        Gaps.v32,
-      ],
+        ],
+      ),
     );
   }
 }
@@ -399,295 +353,6 @@ class _Centered extends StatelessWidget {
       ),
     ),
   );
-}
-
-class _Hero extends StatelessWidget {
-  final VoidCallback onDonateAsGuest;
-  final VoidCallback onLogIn;
-  final VoidCallback onCreateAccount;
-  final VoidCallback onServer;
-  final Widget? urgent;
-
-  const _Hero({
-    required this.onDonateAsGuest,
-    required this.onLogIn,
-    required this.onCreateAccount,
-    required this.onServer,
-    required this.urgent,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    const onHero = Colors.white;
-    return Container(
-      decoration: const BoxDecoration(
-        color: AppColors.harborDeep,
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(Radii.xl)),
-      ),
-      child: SafeArea(
-        bottom: false,
-        child: _Centered(
-          child: StaggeredColumn(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Gaps.v8,
-              Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: AppColors.vest,
-                      borderRadius: BorderRadius.circular(Radii.sm + 2),
-                    ),
-                    child: const Icon(
-                      Icons.volunteer_activism,
-                      size: 20,
-                      color: AppColors.vestInk,
-                    ),
-                  ),
-                  Gaps.h12,
-                  Text(
-                    'NexaAid',
-                    style: t.titleLarge?.copyWith(
-                      color: onHero,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const Spacer(),
-                  // Light / dark mode picker, rightmost (Ivan's note). Not
-                  // in the login pop-up; signed in, it is in Profile.
-                  const ThemeToggleButton(color: onHero),
-                ],
-              ),
-              Gaps.v24,
-              Semantics(
-                header: true,
-                child: Text(
-                  'Get relief to the barangays that need it most.',
-                  textAlign: TextAlign.center,
-                  style: t.displaySmall?.copyWith(color: onHero),
-                ),
-              ),
-              Gaps.v12,
-              Text(
-                'See validated disaster reports in Mandaue City, pledge goods, '
-                'and follow them until the barangay confirms they arrived.',
-                textAlign: TextAlign.center,
-                style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
-              ),
-              Gaps.v24,
-              // UI concern (new notes): Log in and Create account come first,
-              // stand out and have friendlier names (side by side when there
-              // is room). Guest donation is a smaller pill below them that
-              // still stands out from the dark hero.
-              Align(
-                alignment: Alignment.center,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 600),
-                  child: LayoutBuilder(
-                    builder: (context, box) {
-                      final logIn = FilledButton.icon(
-                        onPressed: onLogIn,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.vest,
-                          foregroundColor: AppColors.vestInk,
-                          minimumSize: const Size.fromHeight(52),
-                        ),
-                        icon: const Icon(Icons.login),
-                        label: const Text('Log in to your account'),
-                      );
-                      final join = OutlinedButton.icon(
-                        onPressed: onCreateAccount,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: onHero,
-                          side: const BorderSide(color: onHero, width: 1.5),
-                          minimumSize: const Size.fromHeight(52),
-                        ),
-                        icon: const Icon(Icons.person_add_alt_1_outlined),
-                        label: const Text('Register as donor or organization'),
-                      );
-                      final sideBySide = box.maxWidth >= 480;
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (sideBySide)
-                            Row(
-                              children: [
-                                Expanded(child: logIn),
-                                Gaps.h12,
-                                Expanded(child: join),
-                              ],
-                            )
-                          else ...[
-                            logIn,
-                            Gaps.v12,
-                            join,
-                          ],
-                          Gaps.v16,
-                          Center(
-                            child: TextButton.icon(
-                              onPressed: onDonateAsGuest,
-                              style: TextButton.styleFrom(
-                                foregroundColor: onHero,
-                                backgroundColor: Colors.white.withValues(
-                                  alpha: 0.16,
-                                ),
-                                side: BorderSide(
-                                  color: Colors.white.withValues(alpha: 0.55),
-                                ),
-                                shape: const StadiumBorder(),
-                                minimumSize: const Size(0, 40),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 20,
-                                ),
-                                textStyle: t.labelLarge,
-                              ),
-                              icon: const Icon(
-                                Icons.volunteer_activism_outlined,
-                                size: 18,
-                              ),
-                              label: const Text('Donate as guest'),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-              ),
-              if (urgent != null) ...[Gaps.v24, urgent!],
-              Gaps.v24,
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The hero's live card: the single most urgent validated report.
-class _UrgentCard extends StatelessWidget {
-  final Map<String, dynamic> report;
-  final VoidCallback onDonate;
-  const _UrgentCard({required this.report, required this.onDonate});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    final r = report;
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const _PulseDot(),
-              Gaps.h8,
-              Expanded(
-                child: Text(
-                  'Most urgent right now',
-                  style: t.labelLarge?.copyWith(color: cs.onSurfaceVariant),
-                ),
-              ),
-              PriorityChip(r['priority_level'] as String?),
-            ],
-          ),
-          Gaps.v12,
-          Text(
-            '${r['disaster'] ?? 'Disaster'} in Barangay ${r['barangay'] ?? '-'}',
-            style: t.titleLarge,
-          ),
-          if ((r['assistance_needed'] ?? '').toString().isNotEmpty) ...[
-            Gaps.v4,
-            Text(
-              'Needs: ${r['assistance_needed']}',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-            ),
-          ],
-          Gaps.v12,
-          FulfillmentBar(
-            delivered: r['total_items_delivered'] as num? ?? 0,
-            needed: r['total_items_needed'] as num? ?? 0,
-            percent: r['fulfillment_percentage'] as num?,
-          ),
-          Gaps.v16,
-          AppButton(
-            'Donate to this report',
-            icon: Icons.volunteer_activism_outlined,
-            variant: AppButtonVariant.primary,
-            expand: true,
-            onPressed: onDonate,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _UrgentSkeleton extends StatelessWidget {
-  const _UrgentSkeleton();
-
-  @override
-  Widget build(BuildContext context) => const SkeletonCard(height: 220);
-}
-
-/// Small red dot that pulses to show the card is live data.
-class _PulseDot extends StatefulWidget {
-  const _PulseDot();
-
-  @override
-  State<_PulseDot> createState() => _PulseDotState();
-}
-
-class _PulseDotState extends State<_PulseDot>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1400),
-  )..repeat();
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final color = PriorityColors.base('Critical');
-    final dot = Container(
-      width: 10,
-      height: 10,
-      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-    );
-    if (MediaQuery.disableAnimationsOf(context)) return dot;
-    return SizedBox(
-      width: 20,
-      height: 20,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          AnimatedBuilder(
-            animation: _c,
-            builder: (_, _) => Container(
-              width: 10 + 10 * _c.value,
-              height: 10 + 10 * _c.value,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: color.withValues(alpha: 0.35 * (1 - _c.value)),
-              ),
-            ),
-          ),
-          dot,
-        ],
-      ),
-    );
-  }
 }
 
 /// The three "How it works" steps. Also on the donor Dashboard (Ivan).
@@ -782,106 +447,6 @@ class HowItWorksSteps extends StatelessWidget {
   }
 }
 
-class _ReportCard extends StatelessWidget {
-  final Map<String, dynamic> report;
-  final VoidCallback onDonate;
-  final VoidCallback onOpen;
-  const _ReportCard({
-    required this.report,
-    required this.onDonate,
-    required this.onOpen,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    final r = report;
-    Widget meta(IconData icon, String text) => Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 16, color: cs.onSurfaceVariant),
-        Gaps.h4,
-        Flexible(
-          child: Text(
-            text,
-            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-          ),
-        ),
-      ],
-    );
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  '${r['disaster'] ?? 'Disaster'} in Barangay ${r['barangay'] ?? '-'}',
-                  style: t.titleMedium,
-                ),
-              ),
-              Gaps.h8,
-              PriorityChip(r['priority_level'] as String?),
-            ],
-          ),
-          Gaps.v8,
-          Wrap(
-            spacing: Space.md,
-            runSpacing: Space.xxs,
-            children: [
-              if (r['sitio'] != null)
-                meta(Icons.place_outlined, 'Sitio ${r['sitio']}'),
-              if (r['affected_families'] != null)
-                meta(
-                  Icons.groups_outlined,
-                  '${r['affected_families']} families',
-                ),
-            ],
-          ),
-          if (_splitNeeds(r['assistance_needed']).isNotEmpty) ...[
-            Gaps.v8,
-            _NeedChips(r['assistance_needed']),
-          ],
-          if ((r['priority_guidance'] ?? '').toString().isNotEmpty) ...[
-            Gaps.v8,
-            Text(
-              r['priority_guidance'].toString(),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-            ),
-          ],
-          Gaps.v12,
-          FulfillmentBar(
-            delivered: r['total_items_delivered'] as num? ?? 0,
-            needed: r['total_items_needed'] as num? ?? 0,
-            percent: r['fulfillment_percentage'] as num?,
-          ),
-          Gaps.v12,
-          Row(
-            children: [
-              Expanded(
-                child: AppButton(
-                  'Donate',
-                  icon: Icons.volunteer_activism_outlined,
-                  variant: AppButtonVariant.donate,
-                  expand: true,
-                  onPressed: onDonate,
-                ),
-              ),
-              Gaps.h8,
-              OutlinedButton(onPressed: onOpen, child: const Text('Details')),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// Same split as Report.needs in report_model.dart:
 /// "Water, ready-to-eat food" -> ['Water', 'ready-to-eat food']
 List<String> _splitNeeds(Object? raw) => (raw ?? '')
@@ -910,60 +475,6 @@ class _NeedChips extends StatelessWidget {
   }
 }
 
-/// "How priority works": mirrors core/priority_engine.py. If the weights or
-/// thresholds change there, update this too.
-class _PriorityGuide extends StatelessWidget {
-  const _PriorityGuide();
-
-  static const _levels = [
-    ('Critical', 'Score 80 to 100', 'Needs help immediately.'),
-    ('High', 'Score 60 to 79', 'Needs help soon.'),
-    ('Medium', 'Score 35 to 59', 'Needs help, but is less urgent.'),
-    ('Low', 'Score below 35', 'Lower urgency. Cover other reports first.'),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const SectionHeader(
-          'How priority works',
-          subtitle: 'AI-assisted guidance for where help is needed first.',
-        ),
-        AppCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Each validated report is scored from four things: families '
-                'affected (30%), how much is needed (20%), the severity of '
-                'the disaster (25%), and how much is still undelivered (25%).',
-                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-              ),
-              Gaps.v12,
-              for (final l in _levels) ...[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    SizedBox(width: 92, child: PriorityChip(l.$1)),
-                    Gaps.h12,
-                    Expanded(
-                      child: Text('${l.$2}. ${l.$3}', style: t.bodyMedium),
-                    ),
-                  ],
-                ),
-                Gaps.v8,
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
 // ---------------------------------------------------------------------------
 // Which kind of donor? (Ivan's note: "lacking format pop out for choosing
 // which donor"). Pops true for an organization, false for an individual.
