@@ -99,6 +99,8 @@ class _DonorDashboardState extends State<DonorDashboard> {
         final supported = (m['supported_reports'] as List).cast<Map>();
         final isOrg = profile['organization'] != null;
         final urgent = mostUrgentReport(names.rows('validated_reports'));
+        int count(String status) =>
+            entries.where((e) => e['status'] == status).length;
 
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
@@ -161,6 +163,47 @@ class _DonorDashboardState extends State<DonorDashboard> {
                       icon: Icons.campaign_outlined,
                     ),
                   ]),
+
+                  // ---- Back (Oct 12): status counts, as in the first
+                  // dashboard. Expired or cancelled only when there is one.
+                  const SectionHeader('Where your donations are'),
+                  StatCardGrid([
+                    StatCard(
+                      label: 'Waiting for drop-off or pickup',
+                      value:
+                          '${entries.where((e) => ((e['pending_items'] as num?) ?? 0) > 0).length}',
+                      icon: Icons.schedule,
+                      color: StatusColors.base('Pending'),
+                    ),
+                    StatCard(
+                      label: 'Received by CSWS',
+                      value: '${count('Received')}',
+                      icon: Icons.inventory_2_outlined,
+                      color: StatusColors.base('Received'),
+                    ),
+                    StatCard(
+                      label: 'Confirmed by the City',
+                      value: '${count('Confirmed')}',
+                      icon: Icons.verified_outlined,
+                      color: StatusColors.base('Confirmed'),
+                    ),
+                    if (count('Expired') + count('Cancelled') > 0)
+                      StatCard(
+                        label: 'Expired or cancelled',
+                        value: '${count('Expired') + count('Cancelled')}',
+                        icon: Icons.timer_off_outlined,
+                        color: StatusColors.base('Expired'),
+                      ),
+                  ]),
+
+                  // ---- Back (Oct 12): the barangays the goods went to ----
+                  if (supported.isNotEmpty) ...[
+                    const SectionHeader(
+                      'Where your goods went',
+                      subtitle: 'Barangays of the reports you donated to.',
+                    ),
+                    GoodsWentCard(supported: supported),
+                  ],
 
                   // ---- Donations (one card per entry, 4.4 / 4.5) --------
                   const SectionHeader(
@@ -226,6 +269,63 @@ class _DonorDashboardState extends State<DonorDashboard> {
           ],
         );
       },
+    );
+  }
+}
+
+/// "Where your goods went": one pin per barangay the donor's reports are
+/// in, with how far along it is (the least fulfilled report there).
+/// Green = fully supplied, red = Critical, teal = the rest.
+class GoodsWentCard extends StatelessWidget {
+  final List<Map> supported;
+  const GoodsWentCard({super.key, required this.supported});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final byBarangay = <String, Map>{};
+    for (final r in supported) {
+      final k = _barangayOf(r);
+      final old = byBarangay[k];
+      if (old == null || _percent(r) < _percent(old)) byBarangay[k] = r;
+    }
+    Color colorOf(Map r) {
+      if (_percent(r) >= 100) return StatusColors.base('Fulfilled');
+      if (r['priority_level'] == 'Critical') {
+        return PriorityColors.base('Critical');
+      }
+      return cs.primary;
+    }
+
+    return AppCard(
+      child: Wrap(
+        spacing: Space.sm,
+        runSpacing: Space.sm,
+        children: [
+          for (final e in byBarangay.entries)
+            Container(
+              padding: const EdgeInsets.fromLTRB(8, 6, 12, 6),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(Radii.pill),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.location_on, size: 20, color: colorOf(e.value)),
+                  Gaps.h4,
+                  Text(e.key, style: t.labelLarge),
+                  Gaps.h8,
+                  Text(
+                    '${_percent(e.value).round()}%',
+                    style: t.labelLarge?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

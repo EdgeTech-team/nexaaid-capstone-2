@@ -228,7 +228,8 @@ void main() {
       expect(find.text('See all reports'), findsOneWidget);
       // Your giving: the three cards.
       expect(find.text('Your giving'), findsOneWidget);
-      expect(find.byType(StatCard), findsNWidgets(3));
+      // 3 giving cards + 3 status counts (no expired or cancelled one).
+      expect(find.byType(StatCard), findsNWidgets(6));
       for (final label in [
         'Donations made',
         'Items given',
@@ -236,6 +237,32 @@ void main() {
       ]) {
         expect(find.text(label), findsOneWidget, reason: label);
       }
+      // Back: the status counts and where the goods went.
+      expect(find.text('Where your donations are'), findsOneWidget);
+      for (final label in [
+        'Waiting for drop-off or pickup',
+        'Received by CSWS',
+        'Confirmed by the City',
+      ]) {
+        // "Received by CSWS" is also a timeline step: look in the cards.
+        expect(
+          find.descendant(
+            of: find.byType(StatCard),
+            matching: find.text(label),
+          ),
+          findsOneWidget,
+          reason: label,
+        );
+      }
+      expect(find.text('Expired or cancelled'), findsNothing);
+      expect(find.text('Where your goods went'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(GoodsWentCard),
+          matching: find.text('Banilad'),
+        ),
+        findsOneWidget,
+      );
       // The donor's donations and the reports they supported.
       expect(find.text('Your donations'), findsOneWidget);
       expect(find.byType(DonationEntriesView), findsOneWidget);
