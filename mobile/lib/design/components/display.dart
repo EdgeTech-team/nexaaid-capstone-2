@@ -408,11 +408,20 @@ class StatusTimeline extends StatelessWidget {
     Widget line(bool on) => Expanded(
       child: Container(height: 2, color: on ? cs.primary : cs.outlineVariant),
     );
+    // Labels with line breaks: each step gets room for its longest word.
+    final split = [for (var i = 0; i < n; i++) _label(i)]
+        .any((l) => l.contains('\n'));
+    int flex(int i) => !split
+        ? 1
+        : _label(i)
+              .split(RegExp(r'[\n ]'))
+              .fold(4, (m, w) => w.length > m ? w.length : m);
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var i = 0; i < n; i++)
           Expanded(
+            flex: flex(i),
             child: Column(
               children: [
                 SizedBox(
@@ -426,16 +435,35 @@ class StatusTimeline extends StatelessWidget {
                   ),
                 ),
                 Gaps.v4,
-                Text(
-                  _label(i),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: t.labelSmall?.copyWith(
-                    color: i <= at ? cs.onSurface : cs.onSurfaceVariant,
-                    fontWeight: i == at ? FontWeight.w800 : FontWeight.w500,
+                // A label with its own line break ("Acknowledged\nby CMO")
+                // keeps each line whole: a word too wide for a narrow phone
+                // shrinks a little instead of being cut in the middle.
+                if (_label(i).contains('\n'))
+                  for (final part in _label(i).split('\n'))
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        part,
+                        maxLines: 1,
+                        style: t.labelSmall?.copyWith(
+                          color: i <= at ? cs.onSurface : cs.onSurfaceVariant,
+                          fontWeight: i == at
+                              ? FontWeight.w800
+                              : FontWeight.w500,
+                        ),
+                      ),
+                    )
+                else
+                  Text(
+                    _label(i),
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: t.labelSmall?.copyWith(
+                      color: i <= at ? cs.onSurface : cs.onSurfaceVariant,
+                      fontWeight: i == at ? FontWeight.w800 : FontWeight.w500,
+                    ),
                   ),
-                ),
               ],
             ),
           ),

@@ -15,8 +15,11 @@ import 'widgets.dart';
 /// view, never a second copy of it. A pop-up (report summary, donation
 /// sheet) or a detail page that is normally opened from that tab can follow
 /// on top. See home_nav.dart.
-typedef EntityOpener =
-    void Function(BuildContext context, int entityId, String? event);
+typedef EntityOpener = void Function(
+  BuildContext context,
+  int entityId,
+  String? event,
+);
 
 void _go(
   BuildContext c,
@@ -131,9 +134,9 @@ Future<void> _openDonation(BuildContext c, int donationId) async {
       _go(c, 'Acknowledge', view: 'pending');
     case Roles.donor:
     case Roles.org:
-      // The Reports tab (the donor's own giving, Ivan's screens), then that
-      // donation's page, as when it is tapped in that list.
-      _go(c, 'Reports', then: (ctx) => openMyDonation(ctx, donationId));
+      // The My giving tab (every donation entry), then that donation's
+      // page, as when it is tapped in that list.
+      _go(c, 'My giving', then: (ctx) => openMyDonation(ctx, donationId));
     default:
       break; // other roles have no donation page: stay on the inbox
   }
