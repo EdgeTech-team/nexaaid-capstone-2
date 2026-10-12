@@ -84,7 +84,7 @@ class ReportCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                Badge2.status(r['status'] as String?),
+                StatusChip(r['status'] as String?),
               ],
             ),
             const SizedBox(height: 6),
@@ -93,11 +93,11 @@ class ReportCard extends StatelessWidget {
               runSpacing: 6,
               children: [
                 if (showPriority && r['priority_level'] != null)
-                  Badge2.priority(r['priority_level'] as String?),
-                Badge2(
-                  'via ${r['source']}',
-                  Colors.blueGrey,
-                  icon: Icons.input,
+                  PriorityChip(r['priority_level'] as String?),
+                Chip(
+                  avatar: const Icon(Icons.input, size: 16),
+                  label: Text('via ${r['source']}'),
+                  visualDensity: VisualDensity.compact,
                 ),
               ],
             ),
