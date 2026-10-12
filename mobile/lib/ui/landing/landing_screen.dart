@@ -6,7 +6,6 @@ import '../donor_screens.dart' show DonateScreen;
 import '../login_screen.dart';
 import '../blur_popup.dart';
 import '../register_screen.dart' show showRegisterPopup;
-import '../report_summary_card.dart';
 import '../widgets.dart' show api, formDialog, DialogField, Names;
 import 'landing_extras.dart' show CredentialsCard;
 import 'landing_sections.dart';
@@ -16,8 +15,8 @@ import 'public_data.dart';
 /// is, live numbers, how it works, and the validated reports that need
 /// help, with guest donation, log in and sign up.
 ///
-/// Redesign (Oct 12, approved mockups): pinned header with the section
-/// links, headline with a photo, our impact, how it works, the report cards,
+/// Ivan's redesign (the "NexaAid landing page redesign" canvas): header,
+/// headline with a photo, stats strip, how it works, report cards,
 /// questions and a closing band. Sections are in landing_sections.dart.
 class LandingScreen extends StatefulWidget {
   const LandingScreen({super.key});
@@ -28,42 +27,9 @@ class LandingScreen extends StatefulWidget {
 
 class _LandingScreenState extends State<LandingScreen> {
   late Future<PublicSnapshot> _future = loadPublicData(api);
-  final _scroll = ScrollController();
-  final _viewportKey = GlobalKey();
-  final _sections = {
-    for (final s in LandingSection.values) s: GlobalKey(debugLabel: s.name),
-  };
-
-  /// The section in view, highlighted in the header links.
-  LandingSection? _current;
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  double get _headerExtent =>
-      LandingHeader.heightFor(context) + MediaQuery.paddingOf(context).top;
-
-  /// Top of [key]'s section, measured from the top of the scroll view.
-  double? _topOf(GlobalKey key) {
-    final box = key.currentContext?.findRenderObject() as RenderBox?;
-    final viewport = _viewportKey.currentContext?.findRenderObject();
-    if (box == null || viewport == null || !box.attached) return null;
-    return box.localToGlobal(Offset.zero, ancestor: viewport).dy;
-  }
-
-  /// Highlights the link of the section under the pinned header.
-  bool _track(ScrollNotification _) {
-    LandingSection? now;
-    for (final s in LandingSection.values) {
-      final top = _topOf(_sections[s]!);
-      if (top != null && top <= _headerExtent + 120) now = s;
-    }
-    if (now != _current) setState(() => _current = now);
-    return false;
-  }
+  final _howKey = GlobalKey();
+  final _reportsKey = GlobalKey();
+  final _faqKey = GlobalKey();
 
   Future<void> _reload() async {
     setState(() {
@@ -126,68 +92,93 @@ class _LandingScreenState extends State<LandingScreen> {
     );
   }
 
-  /// Public pop-out of one validated report: a dialog on Chrome and
-  /// tablets, a bottom sheet on phones. Reporter details are never shown.
+  /// Public detail view of one validated report: needs, fulfillment progress
+  /// and priority guidance, no login. Reporter details are never shown.
   void _openReport(Map<String, dynamic> r) {
-    void donate(BuildContext ctx) {
-      Navigator.of(ctx).pop();
-      _donate(r);
-    }
-
-    if (landingWide(context)) {
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => Dialog(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(Space.lg),
-              child: LandingReportDetails(
-                report: r,
-                onDonate: () => donate(ctx),
-              ),
-            ),
-          ),
-        ),
-      );
-      return;
-    }
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(ctx).height * 0.9,
-          ),
+      builder: (ctx) {
+        final t = Theme.of(ctx).textTheme;
+        final cs = Theme.of(ctx).colorScheme;
+        final guidance = (r['priority_guidance'] ?? '').toString();
+        return SafeArea(
           child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
-            child: LandingReportDetails(report: r, onDonate: () => donate(ctx)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${r['disaster'] ?? 'Disaster'} in Barangay ${r['barangay'] ?? '-'}',
+                        style: t.titleLarge,
+                      ),
+                    ),
+                    Gaps.h8,
+                    PriorityChip(r['priority_level'] as String?),
+                  ],
+                ),
+                Gaps.v8,
+                Text(
+                  [
+                    if (r['sitio'] != null) 'Sitio ${r['sitio']}',
+                    if (r['affected_families'] != null)
+                      '${r['affected_families']} families affected',
+                  ].join(' · '),
+                  style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                ),
+                Gaps.v16,
+                Text('Reported needs', style: t.titleSmall),
+                Gaps.v8,
+                _NeedChips(r['assistance_needed']),
+                Gaps.v16,
+                Text('Fulfillment progress', style: t.titleSmall),
+                Gaps.v8,
+                FulfillmentBar(
+                  delivered: r['total_items_delivered'] as num? ?? 0,
+                  needed: r['total_items_needed'] as num? ?? 0,
+                  percent: r['fulfillment_percentage'] as num?,
+                ),
+                if (guidance.isNotEmpty) ...[
+                  Gaps.v16,
+                  Text('Priority guidance', style: t.titleSmall),
+                  Gaps.v8,
+                  Text(guidance, style: t.bodyMedium),
+                ],
+                Gaps.v24,
+                AppButton(
+                  'Donate to this report',
+                  icon: Icons.volunteer_activism_outlined,
+                  variant: AppButtonVariant.donate,
+                  expand: true,
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                    _donate(r);
+                  },
+                ),
+              ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  /// Header links: scroll so the section starts just under the pinned
-  /// header.
-  void _jump(LandingSection s) {
-    final top = _topOf(_sections[s]!);
-    if (top == null || !_scroll.hasClients) return;
-    final pos = _scroll.position;
-    final target = (pos.pixels + top - _headerExtent)
-        .clamp(pos.minScrollExtent, pos.maxScrollExtent)
-        .toDouble();
-    if (MediaQuery.disableAnimationsOf(context)) {
-      _scroll.jumpTo(target);
-    } else {
-      _scroll.animateTo(
-        target,
-        duration: const Duration(milliseconds: 450),
-        curve: Motion.curve,
-      );
-    }
+  /// Header links: scroll to the section.
+  void _jump(GlobalKey key) {
+    final c = key.currentContext;
+    if (c == null) return;
+    Scrollable.ensureVisible(
+      c,
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 450),
+      curve: Motion.curve,
+    );
   }
 
   @override
@@ -202,66 +193,47 @@ class _LandingScreenState extends State<LandingScreen> {
             final data = snap.data;
             return RefreshIndicator(
               onRefresh: _reload,
-              edgeOffset: _headerExtent,
-              child: NotificationListener<ScrollNotification>(
-                onNotification: _track,
-                child: CustomScrollView(
-                  key: _viewportKey,
-                  controller: _scroll,
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  slivers: [
-                    // Pinned while scrolling, with the section links.
-                    SliverPersistentHeader(
-                      pinned: true,
-                      delegate: _PinnedHeader(
-                        extent: _headerExtent,
-                        child: LandingHeader(onJump: _jump, current: _current),
-                      ),
+              edgeOffset: MediaQuery.paddingOf(context).top,
+              child: CustomScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                slivers: [
+                  // One sliver, so every section is built (and findable).
+                  SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        LandingHeader(
+                          onLogIn: _logIn,
+                          onHowItWorks: () => _jump(_howKey),
+                          onReports: () => _jump(_reportsKey),
+                          onQuestions: () => _jump(_faqKey),
+                        ),
+                        LandingHero(
+                          onLogIn: _logIn,
+                          onCreateAccount: _createAccount,
+                          onDonateAsGuest: api.continueAsGuest,
+                        ),
+                        if (snap.hasError && data == null)
+                          _Centered(child: _error(snap.error))
+                        else
+                          LandingStatsBand(stats: data?.stats),
+                        LandingHowItWorks(key: _howKey, stats: data?.stats),
+                        KeyedSubtree(
+                          key: _reportsKey,
+                          child: _reports(
+                            context,
+                            data,
+                            loading: data == null && !snap.hasError,
+                          ),
+                        ),
+                        LandingFaq(key: _faqKey),
+                        LandingClosingBand(onStart: api.continueAsGuest),
+                        const _Centered(child: CredentialsCard()),
+                        Gaps.v32,
+                      ],
                     ),
-                    // One sliver, so every section is built (and findable).
-                    SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          LandingHero(
-                            onLogIn: _logIn,
-                            onCreateAccount: _createAccount,
-                            onDonateAsGuest: api.continueAsGuest,
-                          ),
-                          KeyedSubtree(
-                            key: _sections[LandingSection.impact],
-                            child: snap.hasError && data == null
-                                ? _Centered(child: _error(snap.error))
-                                : LandingImpactSection(
-                                    stats: data?.stats,
-                                    asOf: data?.loadedAt,
-                                  ),
-                          ),
-                          LandingHowItWorks(
-                            key: _sections[LandingSection.how],
-                            onSeeReports: () => _jump(LandingSection.reports),
-                            onDonateAsGuest: api.continueAsGuest,
-                          ),
-                          KeyedSubtree(
-                            key: _sections[LandingSection.reports],
-                            child: _reports(
-                              context,
-                              data,
-                              loading: data == null && !snap.hasError,
-                            ),
-                          ),
-                          LandingFaq(key: _sections[LandingSection.questions]),
-                          LandingClosingBand(
-                            onStart: api.continueAsGuest,
-                            onRegister: _createAccount,
-                          ),
-                          const _Centered(child: CredentialsCard()),
-                          Gaps.v32,
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             );
           },
@@ -288,147 +260,82 @@ class _LandingScreenState extends State<LandingScreen> {
     );
   }
 
-  /// "Reports that need help": the 6 most urgent validated reports, on the
-  /// same card as the signed-in report lists.
+  /// "Reports that need help": the 6 most urgent validated reports.
   Widget _reports(
     BuildContext context,
     PublicSnapshot? data, {
     required bool loading,
   }) {
-    final cs = Theme.of(context).colorScheme;
     final wide = landingWide(context);
     final all = data?.reports ?? const <Map<String, dynamic>>[];
     final shown = all.take(6).toList();
-    final seeAll = TextButton(
-      onPressed: api.continueAsGuest,
-      style: TextButton.styleFrom(minimumSize: const Size(0, 44)),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
+    return LandingWidth(
+      padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('See all reports'),
-          Gaps.h4,
-          Icon(Icons.arrow_forward, size: 16),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LandingEyebrow('Reports that need help'),
+                    Gaps.v8,
+                    LandingTitle('Barangays waiting for ', 'relief'),
+                  ],
+                ),
+              ),
+              if (all.isNotEmpty)
+                TextButton(
+                  onPressed: api.continueAsGuest,
+                  child: Text('See all ${all.length}'),
+                ),
+            ],
+          ),
+          Gaps.v8,
+          Text(
+            'Most urgent first.',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+          Gaps.v24,
+          if (loading)
+            const LandingReportGrid(
+              children: [
+                SkeletonCard(height: 380),
+                SkeletonCard(height: 380),
+                SkeletonCard(height: 380),
+              ],
+            )
+          else if (shown.isEmpty)
+            const AppCard(
+              child: EmptyView(
+                compact: true,
+                icon: Icons.verified_outlined,
+                title: 'No reports need help right now',
+                message:
+                    'When the City validates a disaster report, it shows up '
+                    'here so you can donate.',
+              ),
+            )
+          else
+            LandingReportGrid(
+              children: [
+                for (final r in shown)
+                  LandingReportCard(
+                    report: r,
+                    onDonate: () => _donate(r),
+                    onOpen: () => _openReport(r),
+                  ),
+              ],
+            ),
         ],
       ),
     );
-    return Material(
-      color: cs.surfaceContainerLowest,
-      child: LandingWidth(
-        padding: EdgeInsets.symmetric(vertical: wide ? 80 : Space.xl + 4),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      LandingEyebrow('Reports that need help'),
-                      Gaps.v8,
-                      LandingTitle('Barangays waiting for relief'),
-                      Gaps.v8,
-                      Text(
-                        'Checked by the City. Most urgent first. Tap a report '
-                        'to see everything.',
-                      ),
-                    ],
-                  ),
-                ),
-                if (wide && all.isNotEmpty) seeAll,
-              ],
-            ),
-            if (!wide && all.isNotEmpty)
-              Align(alignment: Alignment.centerRight, child: seeAll),
-            Gaps.v24,
-            if (loading)
-              const LandingReportGrid(
-                children: [
-                  SkeletonCard(height: 300),
-                  SkeletonCard(height: 300),
-                  SkeletonCard(height: 300),
-                ],
-              )
-            else if (shown.isEmpty)
-              const AppCard(
-                child: EmptyView(
-                  compact: true,
-                  icon: Icons.verified_outlined,
-                  title: 'No reports need help right now',
-                  message:
-                      'When the City validates a disaster report, it shows up '
-                      'here so you can donate.',
-                ),
-              )
-            else
-              LandingReportGrid(
-                children: [for (final r in shown) _reportCard(r)],
-              ),
-          ],
-        ),
-      ),
-    );
   }
-
-  Widget _reportCard(Map<String, dynamic> r) {
-    final guidance = '${r['priority_guidance'] ?? ''}'.trim();
-    final description = '${r['description'] ?? ''}'.trim();
-    final needs = '${r['assistance_needed'] ?? ''}'.trim();
-    return ReportSummaryCard(
-      reportId: (r['report_id'] ?? r['id']) as int?,
-      disaster: '${r['disaster'] ?? 'Disaster'}',
-      barangay: '${r['barangay'] ?? '-'}',
-      status: 'Validated',
-      priority: r['priority_level'] as String?,
-      source: r['source']?.toString(),
-      affectedFamilies: (r['affected_families'] as num?)?.toInt(),
-      assistanceNeeded: needs.isEmpty ? null : needs,
-      quantity: r['total_items_needed'] as num?,
-      description: description.isEmpty ? null : description,
-      guidance: guidance.isEmpty ? null : guidance,
-      delivered: r['total_items_delivered'] as num? ?? 0,
-      needed: r['total_items_needed'] as num? ?? 0,
-      percent: num.tryParse('${r['fulfillment_percentage'] ?? ''}'),
-      margin: EdgeInsets.zero,
-      fillActions: true,
-      onTap: () => _openReport(r),
-      actions: [
-        OutlinedButton(
-          onPressed: () => _openReport(r),
-          style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
-          child: const Text('Details'),
-        ),
-        AppButton(
-          'Donate',
-          icon: Icons.volunteer_activism_outlined,
-          variant: AppButtonVariant.donate,
-          expand: true,
-          onPressed: () => _donate(r),
-        ),
-      ],
-    );
-  }
-}
-
-/// Keeps the header at the top while the page scrolls.
-class _PinnedHeader extends SliverPersistentHeaderDelegate {
-  final double extent;
-  final Widget child;
-  const _PinnedHeader({required this.extent, required this.child});
-
-  @override
-  double get minExtent => extent;
-
-  @override
-  double get maxExtent => extent;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlaps) =>
-      SizedBox.expand(child: child);
-
-  @override
-  bool shouldRebuild(covariant _PinnedHeader old) => true;
 }
 
 /// Keeps reading content at a comfortable width on tablets and Chrome.
@@ -540,6 +447,34 @@ class HowItWorksSteps extends StatelessWidget {
   }
 }
 
+/// Same split as Report.needs in report_model.dart:
+/// "Water, ready-to-eat food" -> ['Water', 'ready-to-eat food']
+List<String> _splitNeeds(Object? raw) => (raw ?? '')
+    .toString()
+    .split(',')
+    .map((s) => s.trim())
+    .where((s) => s.isNotEmpty)
+    .toList();
+
+class _NeedChips extends StatelessWidget {
+  final Object? raw;
+  const _NeedChips(this.raw);
+
+  @override
+  Widget build(BuildContext context) {
+    final needs = _splitNeeds(raw);
+    if (needs.isEmpty) return const SizedBox.shrink();
+    return Wrap(
+      spacing: Space.xs,
+      runSpacing: Space.xs,
+      children: [
+        for (final n in needs)
+          Chip(label: Text(n), visualDensity: VisualDensity.compact),
+      ],
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Which kind of donor? (Ivan's note: "lacking format pop out for choosing
 // which donor"). Pops true for an organization, false for an individual.
@@ -552,12 +487,7 @@ class _DonorTypeChooser extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(
-        Space.lg,
-        Space.xs,
-        Space.lg,
-        Space.lg,
-      ),
+      padding: const EdgeInsets.fromLTRB(Space.lg, Space.xs, Space.lg, Space.lg),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

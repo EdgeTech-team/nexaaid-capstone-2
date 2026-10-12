@@ -13,7 +13,7 @@ void main() {
       MaterialApp(theme: AppTheme.light(), home: const LoginScreen()),
     );
     await tester.enterText(
-      find.widgetWithText(TextField, 'Email or username'),
+      find.widgetWithText(TextField, 'Email'),
       'me@example.com',
     );
     await tester.tap(find.text('Forgot password?'));
