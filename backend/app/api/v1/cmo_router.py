@@ -214,6 +214,25 @@ def acknowledged_entries(
     return _entry_rows(db, donations)
 
 
+@router.get("/entries/by-donation/{donation_id}")
+def entry_of_donation(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(CMO)),
+):
+    """problema_napud 4.1: the whole entry a CMO notification points at
+    ("Donation ... was received by CSWS"), shown in a pop-out with
+    Acknowledge and Close. Only items CSWS already received are listed."""
+    d = db.get(PhysicalDonation, donation_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="Donation not found")
+    rows = _entry(db, d.batch_reference) if d.batch_reference else [d]
+    received = [r for r in rows if r.status in ("Received", "Confirmed")]
+    if not received:
+        raise HTTPException(status_code=404, detail="CSWS has not received this donation yet.")
+    return _entry_rows(db, received)[0]
+
+
 @router.post("/entries/{reference}/decide")
 def decide_entry(
     reference: str,

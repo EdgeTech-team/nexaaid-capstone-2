@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
+import 'input_formatters.dart';
 import 'location_picker.dart';
 import 'pickup_days.dart';
 import 'qr_save.dart';
@@ -59,7 +60,7 @@ class _Line {
       'item_id': int.parse(itemId!),
     'packaging': packaging == 'Other' ? otherPackaging.text.trim() : packaging,
     'quantity': int.parse(qty.text.trim()),
-    'estimated_value': double.tryParse(value.text.trim()),
+    'estimated_value': ThousandsFormatter.parse(value.text),
   };
 
   void dispose() {
@@ -131,8 +132,12 @@ class _DonateScreenState extends State<DonateScreen> {
         l.packaging = 'Other';
         l.otherPackaging.text = pack;
       }
-      final value = i['estimated_value'];
-      if (value != null) l.value.text = '$value';
+      final value =
+          (i['estimated_value'] as num?) ??
+          num.tryParse('${i['estimated_value'] ?? ''}');
+      if (value != null) {
+        l.value.text = ThousandsFormatter.format('${value.round()}');
+      }
       lines.add(l);
     }
     if (lines.isEmpty) lines.add(_Line());
@@ -481,9 +486,12 @@ class _DonateScreenState extends State<DonateScreen> {
             TextFormField(
               controller: l.value,
               keyboardType: TextInputType.number,
+              // problema_napud 4.1: numbers only, with commas.
+              inputFormatters: const [ThousandsFormatter()],
               decoration: const InputDecoration(
                 labelText: 'Estimated value (optional)',
                 prefixText: '₱ ',
+                hintText: '0',
               ),
             ),
           ],

@@ -126,44 +126,28 @@ class _LandingScreenState extends State<LandingScreen> {
     );
   }
 
-  /// Public pop-out of one validated report: a dialog on Chrome and
-  /// tablets, a bottom sheet on phones. Reporter details are never shown.
+  /// Public pop-out of one validated report, with its X at the top right
+  /// (problema_napud 2.1: every pop-out is a centered pop-out, on phones
+  /// too). Reporter details are never shown.
   void _openReport(Map<String, dynamic> r) {
-    void donate(BuildContext ctx) {
-      Navigator.of(ctx).pop();
-      _donate(r);
-    }
-
-    if (landingWide(context)) {
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => Dialog(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(Space.lg),
-              child: LandingReportDetails(
-                report: r,
-                onDonate: () => donate(ctx),
-              ),
-            ),
-          ),
-        ),
-      );
-      return;
-    }
-    showModalBottomSheet<void>(
+    showDialog<void>(
       context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
+      builder: (ctx) => Dialog(
+        insetPadding: const EdgeInsets.all(Space.md),
         child: ConstrainedBox(
           constraints: BoxConstraints(
+            maxWidth: 560,
             maxHeight: MediaQuery.sizeOf(ctx).height * 0.9,
           ),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
-            child: LandingReportDetails(report: r, onDonate: () => donate(ctx)),
+            padding: EdgeInsets.all(landingWide(context) ? Space.lg : Space.md),
+            child: LandingReportDetails(
+              report: r,
+              onDonate: () {
+                Navigator.of(ctx).pop();
+                _donate(r);
+              },
+            ),
           ),
         ),
       ),
@@ -381,10 +365,8 @@ class _LandingScreenState extends State<LandingScreen> {
       barangay: '${r['barangay'] ?? '-'}',
       status: 'Validated',
       priority: r['priority_level'] as String?,
-      source: r['source']?.toString(),
       affectedFamilies: (r['affected_families'] as num?)?.toInt(),
       assistanceNeeded: needs.isEmpty ? null : needs,
-      quantity: r['total_items_needed'] as num?,
       description: description.isEmpty ? null : description,
       guidance: guidance.isEmpty ? null : guidance,
       delivered: r['total_items_delivered'] as num? ?? 0,

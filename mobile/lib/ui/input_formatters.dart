@@ -81,3 +81,65 @@ final nameFormatters = <TextInputFormatter>[
 
 /// Organization name: capitalize the first letter of every word.
 final orgNameFormatters = <TextInputFormatter>[CapitalizeOrgWordsFormatter()];
+
+/// Peso amounts (problema_napud 4.1): digits only, shown with commas while
+/// typing ("12500" -> "12,500"). At most 8 digits: physical_donations
+/// .estimated_value is NUMERIC(10, 2). Read the number back with
+/// [ThousandsFormatter.parse].
+class ThousandsFormatter extends TextInputFormatter {
+  const ThousandsFormatter({this.maxDigits = 8});
+  final int maxDigits;
+
+  static final _nonDigit = RegExp(r'[^0-9]');
+
+  /// "12500" -> "12,500"
+  static String format(String digits) {
+    final d = digits
+        .replaceAll(_nonDigit, '')
+        .replaceFirst(RegExp(r'^0+(?=\d)'), '');
+    final out = StringBuffer();
+    for (var i = 0; i < d.length; i++) {
+      if (i > 0 && (d.length - i) % 3 == 0) out.write(',');
+      out.write(d[i]);
+    }
+    return out.toString();
+  }
+
+  /// "12,500" -> 12500, "" -> null
+  static int? parse(String text) =>
+      int.tryParse(text.replaceAll(_nonDigit, ''));
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(_nonDigit, '');
+    if (digits.length > maxDigits) return oldValue;
+    final text = format(digits);
+    // Keep the cursor after the same number of digits as before.
+    final before = newValue.selection.baseOffset < 0
+        ? digits.length
+        : newValue.text
+              .substring(
+                0,
+                newValue.selection.baseOffset.clamp(0, newValue.text.length),
+              )
+              .replaceAll(_nonDigit, '')
+              .length;
+    var pos = 0;
+    for (var seen = 0; pos < text.length && seen < before; pos++) {
+      if (text[pos] != ',') seen++;
+    }
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: pos),
+    );
+  }
+}
+
+/// "12500.00" / 12500 -> "PHP 12,500" (problema_napud 4.1), or null.
+String? pesos(Object? value) {
+  final n = value is num ? value : num.tryParse('${value ?? ''}');
+  return n == null ? null : 'PHP ${ThousandsFormatter.format('${n.round()}')}';
+}

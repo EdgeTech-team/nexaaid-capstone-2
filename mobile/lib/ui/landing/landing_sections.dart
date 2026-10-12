@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../design/design.dart';
+import '../report_summary_card.dart' show NeedChips;
 import '../theme_toggle.dart';
 import '../widgets.dart' show api;
 import 'landing_extras.dart' show kImpactImage;
@@ -1703,7 +1704,6 @@ class LandingReportDetails extends StatelessWidget {
         .round();
     final guidance = '${r['priority_guidance'] ?? ''}'.trim();
     final description = '${r['description'] ?? ''}'.trim();
-    final source = r['source'];
     final families = r['affected_families'];
 
     Widget label(String text) => Padding(
@@ -1723,8 +1723,7 @@ class LandingReportDetails extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Report #${r['report_id'] ?? r['id']}'
-                    '${source == null ? '' : ' · via $source'}',
+                    'Report #${r['report_id'] ?? r['id']}',
                     style: t.labelLarge?.copyWith(color: cs.onSurfaceVariant),
                   ),
                   Gaps.v4,
@@ -1767,9 +1766,9 @@ class LandingReportDetails extends StatelessWidget {
             Expanded(child: _StatBox('$pct%', 'delivered')),
           ],
         ),
-        if (_NeedChips.split(r['assistance_needed']).isNotEmpty) ...[
+        if (NeedChips.split(r['assistance_needed']).isNotEmpty) ...[
           label('Reported needs'),
-          _NeedChips(r['assistance_needed']),
+          NeedChips(NeedChips.split(r['assistance_needed'])),
         ],
         label('Fulfillment progress'),
         FulfillmentBar(
@@ -1848,33 +1847,6 @@ class _StatBox extends StatelessWidget {
           Text(label, style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant)),
         ],
       ),
-    );
-  }
-}
-
-class _NeedChips extends StatelessWidget {
-  final Object? raw;
-  const _NeedChips(this.raw);
-
-  /// "Water, ready-to-eat food" -> ['Water', 'ready-to-eat food']
-  static List<String> split(Object? raw) => (raw ?? '')
-      .toString()
-      .split(',')
-      .map((s) => s.trim())
-      .where((s) => s.isNotEmpty)
-      .toList();
-
-  @override
-  Widget build(BuildContext context) {
-    final needs = split(raw);
-    if (needs.isEmpty) return const SizedBox.shrink();
-    return Wrap(
-      spacing: Space.xs,
-      runSpacing: Space.xs,
-      children: [
-        for (final n in needs)
-          Chip(label: Text(n), visualDensity: VisualDensity.compact),
-      ],
     );
   }
 }

@@ -30,3 +30,17 @@ def test_admin_reviews_individual_donor_registrations(api):
     ok(client.patch(f"/admin/users/{staff['user_id']}/review", json={"reviewed": True}, headers=t["admin"]), 409)
     ok(client.patch(f"/admin/users/{donor_id}/review", json={"reviewed": "yes"}, headers=t["admin"]), 422)
     ok(client.patch(f"/admin/users/{donor_id}/review", json={"reviewed": True}, headers=t["csws"]), 403)
+
+
+def test_organization_rows_carry_their_account_for_view_account(api):
+    """problema_napud 1.1: organization registrations have "View account"
+    too, so each row names the organization's own account."""
+    from tests.reg_helpers import org_payload
+    client, t = api
+    org = ok(client.post("/auth/register/organization",
+                         json=org_payload(client, "ops@relief.ph")), 201)
+    rows = ok(client.get("/admin/organizations", headers=t["admin"]))
+    row = next(r for r in rows if r["organization_id"] == org["organization_id"])
+    assert row["user_id"]
+    account = ok(client.get(f"/admin/users/{row['user_id']}", headers=t["admin"]))
+    assert account["email"] == "ops@relief.ph"

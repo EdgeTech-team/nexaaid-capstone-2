@@ -581,3 +581,69 @@ class DonationStatusChip extends StatelessWidget {
   Widget build(BuildContext context) =>
       StatusChip(status, label: donationStatusText(status));
 }
+
+/// The app's detail pop-out: centered, scrollable, with an X at the top
+/// right (problema_napud 2.1: every pop-out shows the full details at once
+/// and closes with the X). Used for reports and donation entries.
+Future<T?> showDetailPopout<T>(
+  BuildContext context, {
+  required String title,
+  required Widget child,
+  List<Widget> actions = const [],
+  EdgeInsetsGeometry padding = const EdgeInsets.fromLTRB(20, 4, 20, 12),
+}) {
+  return showDialog<T>(
+    context: context,
+    builder: (ctx) {
+      final size = MediaQuery.sizeOf(ctx);
+      return Dialog(
+        insetPadding: const EdgeInsets.all(Space.md),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 640,
+            maxHeight: size.height * 0.9,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 8, 0),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: Theme.of(ctx).textTheme.titleMedium,
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+              ),
+              Flexible(
+                child: SingleChildScrollView(padding: padding, child: child),
+              ),
+              if (actions.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < actions.length; i++) ...[
+                        if (i > 0) Gaps.h8,
+                        Expanded(child: actions[i]),
+                      ],
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}

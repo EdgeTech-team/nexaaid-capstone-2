@@ -24,6 +24,7 @@ into app/alembic/env.py, so it's imported directly below.
 """
 
 from sqlalchemy import (
+    Table,
     Column,
     Integer,
     String,
@@ -65,6 +66,26 @@ from models.sitio_model import Sitio  # noqa: F401
 # ---------------------------------------------------------------------------
 # REAL MODELS — owned by this module (3.4)
 # ---------------------------------------------------------------------------
+
+# problema_napud 2.2: a report can name several sitios of its barangay
+# (e.g. only 2 sitios were hit). disaster_reports.sitio_id keeps the first
+# one, so older code and views keep working. Migration b4e7c2d9f1a6.
+report_sitios = Table(
+    "report_sitios",
+    Base.metadata,
+    Column(
+        "report_id",
+        Integer,
+        ForeignKey("disaster_reports.report_id", ondelete="CASCADE", name="fk_report_sitios_report_id"),
+        primary_key=True,
+    ),
+    Column(
+        "sitio_id",
+        Integer,
+        ForeignKey("sitios.sitio_id", ondelete="CASCADE", name="fk_report_sitios_sitio_id"),
+        primary_key=True,
+    ),
+)
 
 class DisasterReport(Base):
     __tablename__ = "disaster_reports"
@@ -130,6 +151,10 @@ class DisasterReport(Base):
     disaster_type = relationship("DisasterType")
     barangay = relationship("Barangay")
     sitio = relationship("Sitio")
+    # Every sitio the report names (empty = the whole barangay).
+    sitios = relationship(
+        "Sitio", secondary=report_sitios, order_by="Sitio.sitio_id", lazy="selectin"
+    )
     validator = relationship("User", foreign_keys=[validated_by])
     sms_metadata = relationship(
         "SmsReportMetadata",
@@ -160,6 +185,20 @@ class DisasterReport(Base):
     @property
     def barangay_name(self):
         return self.barangay.barangay_name if self.barangay else None
+
+    # problema_napud 2.2: every sitio the report names. Reports saved before
+    # report_sitios existed fall back to their one disaster_reports.sitio_id.
+    @property
+    def sitio_ids(self) -> list:
+        ids = [s.sitio_id for s in self.sitios]
+        return ids or ([self.sitio_id] if self.sitio_id else [])
+
+    @property
+    def sitio_names(self) -> list:
+        names = [s.sitio_name for s in self.sitios]
+        if not names and self.sitio is not None:
+            names = [self.sitio.sitio_name]
+        return names
 
     @property
     def priority_guidance(self):
