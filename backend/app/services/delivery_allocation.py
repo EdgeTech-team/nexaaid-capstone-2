@@ -7,15 +7,17 @@ it, the same way every time:
     first received, first sent; donations the CMO already acknowledged
     go before those still waiting for the CMO.
 
-Example: Liza gave 50 kg, then Ana gave 30 kg, both acknowledged. CSWS
-sends 65 kg -> all 50 of Liza's and 15 of Ana's. preview() shows that while
-the delivery is being prepared and offers "Send 80 to finish Ana's
-donation", so most deliveries take whole donations.
+Oct 13 (team): a delivery prepared in the app takes EVERY acknowledged
+donation of its report that has not gone out yet (ready_lines /
+ready_donations). Donations are for that report, so they all go; a full
+truck is handled with a DRRMO logistics request, not by sending less.
+Donations still waiting for the CMO stay for the next delivery.
 
 A donor's donation then moves to In transit / Delivered / Barangay
-confirmed only when ALL its goods reached that step (the least advanced
-part decides); until then it stays at the step before, with a note such as
-"Rice: 15 of 30 kg sent". There is no "partly delivered" status.
+confirmed with its delivery. Only deliveries made the old way (typed
+quantities, through the API or before this change) can take part of a
+donation; then the least advanced part decides and a note says
+"Rice: 15 of 30 kg sent".
 
 Cancelled deliveries are ignored everywhere, so their goods count as not
 sent again. A trip that is undone deletes its deliveries, and with them
@@ -89,6 +91,82 @@ def plan(db: Session, report_id: int, item_id: int, quantity: int) -> list:
     return out
 
 
+def ready_lines(db: Session, report_id: int) -> list:
+    """Oct 13 (team): a delivery takes EVERY donation of its report that the
+    CMO acknowledged and that has not gone out yet. Returns the lines
+    [{item_id, quantity}] for POST /deliveries/ and trips. Donations still
+    waiting for the CMO stay in stock for the next delivery."""
+    rows = (
+        db.query(PhysicalDonation.item_id)
+        .filter(PhysicalDonation.report_id == report_id, PhysicalDonation.status == "Confirmed")
+        .distinct().all()
+    )
+    out = []
+    for (item_id,) in rows:
+        qty = sum(left for d, _, left in pool(db, report_id, item_id) if d.status == "Confirmed")
+        if qty > 0:
+            out.append(_Line(item_id, qty))
+    return out
+
+
+class _Line:
+    """Same shape as a DeliveryItemCreate (item_id, quantity)."""
+    def __init__(self, item_id: int, quantity: int):
+        self.item_id, self.quantity = item_id, quantity
+
+    def model_dump(self) -> dict:
+        return {"item_id": self.item_id, "quantity": self.quantity}
+
+
+def ready_donations(db: Session, report_id: int) -> dict:
+    """For the Prepare delivery screen: every donation entry that goes on
+    the next delivery of this report (acknowledged, not sent yet), with its
+    items, and how many entries still wait for the CMO."""
+    from models.item_model import Item
+    from services.donation_entries import _donor_names  # avoid an import cycle
+
+    rows = (
+        db.query(PhysicalDonation)
+        .filter(PhysicalDonation.report_id == report_id,
+                PhysicalDonation.status.in_(("Received", "Confirmed")))
+        .order_by(PhysicalDonation.donation_id).all()
+    )
+    received = {g.donation_id: g.actual_quantity for g in db.query(ReceivedGoods)
+                .filter(ReceivedGoods.donation_id.in_([d.donation_id for d in rows]))}
+    sent = _allocated(db, [d.donation_id for d in rows])
+    items = {i.item_id: i for i in db.query(Item).all()}
+    users, guests = _donor_names(db, rows)
+    entries: dict = {}
+    waiting: set = set()
+    for d in rows:
+        left = (received.get(d.donation_id) or 0) - sent.get(d.donation_id, 0)
+        if left <= 0:
+            continue
+        if d.status != "Confirmed":
+            waiting.add(d.batch_reference)
+            continue
+        e = entries.setdefault(d.batch_reference, {
+            "batch_reference": d.batch_reference,
+            "donor": (users.get(d.user_id, "Donor") if d.user_id
+                      else f"{guests.get(d.guest_donor_id, 'Guest')} (guest)"),
+            "items": [],
+        })
+        it = items.get(d.item_id)
+        e["items"].append({"item_id": d.item_id, "item_name": it.item_name if it else "Item",
+                           "unit": it.unit_of_measure if it else "", "quantity": left})
+    totals: dict = {}
+    for e in entries.values():
+        for i in e["items"]:
+            t = totals.setdefault(i["item_id"], {**i, "quantity": 0})
+            t["quantity"] += i["quantity"]
+    return {
+        "report_id": report_id,
+        "entries": list(entries.values()),
+        "totals": list(totals.values()),
+        "waiting_for_cmo": len(waiting - set(entries)),
+    }
+
+
 def allocate_delivery(db: Session, delivery: Delivery) -> None:
     """Record whose goods each line of a new delivery takes. Call once its
     items are flushed. Lines for the same item are planned one after the
@@ -102,46 +180,6 @@ def allocate_delivery(db: Session, delivery: Delivery) -> None:
                 delivery_item_id=line.delivery_item_id, donation_id=d.donation_id, quantity=take,
             ))
         db.flush()
-
-
-def preview(db: Session, report_id: int, lines: Iterable) -> list:
-    """For the "Prepare delivery" screen: per item, whose donations the
-    entered quantity takes, and the quantity that would finish a donation
-    that is only partly taken."""
-    from services.donation_entries import _donor_names  # avoid an import cycle
-
-    wanted: dict = defaultdict(int)
-    for line in lines:
-        wanted[line.item_id] += line.quantity
-    out = []
-    for item_id, qty in wanted.items():
-        steps = plan(db, report_id, item_id, qty)
-        users, guests = _donor_names(db, [d for d, _, _ in steps])
-        donations = []
-        for d, take, left in steps:
-            name = (users.get(d.user_id, "Donor") if d.user_id
-                    else f"{guests.get(d.guest_donor_id, 'Guest')} (guest)")
-            donations.append({
-                "donation_id": d.donation_id,
-                "batch_reference": d.batch_reference,
-                "donor": name,
-                "acknowledged": d.status == "Confirmed",
-                "take": take,
-                "available": left,
-                "whole": take == left,
-            })
-        last = donations[-1] if donations else None
-        out.append({
-            "item_id": item_id,
-            "quantity": qty,
-            "assigned": sum(x["take"] for x in donations),
-            "donations": donations,
-            # e.g. 65 splits Ana's 30 -> 80 finishes it.
-            "finish_quantity": (qty + last["available"] - last["take"])
-            if last and not last["whole"] else None,
-            "finish_donor": last["donor"] if last and not last["whole"] else None,
-        })
-    return out
 
 
 def add_delivery_progress(db: Session, entries: list) -> None:

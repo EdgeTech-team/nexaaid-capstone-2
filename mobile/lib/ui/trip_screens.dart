@@ -614,6 +614,9 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   /// report_id -> item_id -> quantity box
   final Map<int, Map<int, TextEditingController>> qty = {};
 
+  /// Oct 13: acknowledged donations ready per report (ReadyDonations).
+  final Map<int, int> _ready = {};
+
   final _sendForm = GlobalKey<FormState>();
   final vehicle = TextEditingController();
   final notes = TextEditingController();
@@ -650,11 +653,6 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
     setState(() {
       if (on && !chosen.contains(reportId)) {
         chosen.add(reportId);
-        // Oct 13: start with everything in stock for this report.
-        for (final i in _items(reportId)) {
-          final c = _ctrlFor(reportId)(i['item_id'] as int);
-          if (c.text.trim().isEmpty) c.text = '${i['quantity']}';
-        }
         if (!stopOrder.contains(_brgy(reportId))) {
           stopOrder.add(_brgy(reportId));
         }
@@ -678,7 +676,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   bool get _stepOk => switch (step) {
     0 => chosen.isNotEmpty,
-    1 => chosen.every((r) => _total(r) > 0),
+    // Oct 13: every report needs at least one acknowledged donation.
+    1 => chosen.isNotEmpty && chosen.every((r) => (_ready[r] ?? 0) > 0),
     _ => date != null,
   };
 
@@ -712,7 +711,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
       'reports': [
         for (final stop in _stops)
           for (final r in stop.value)
-            {'report_id': r, 'items': linesFrom(_items(r), _ctrlFor(r))},
+            // No items: the whole report (every acknowledged donation).
+            {'report_id': r},
       ],
     };
     final res = await act(
@@ -846,8 +846,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
           Text(
-            'Enter how much to load for each report. Every report needs at '
-            'least one item.',
+            'Every donation the CMO acknowledged goes, report by report. If '
+            'it does not fit the truck, request transport from DRRMO.',
             style: t.bodyMedium,
           ),
           for (final stop in _stops)
@@ -872,22 +872,16 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                           ),
                         ],
                       ),
-                      StockQuantities(
-                        key: ValueKey('trip-items-$rid'),
-                        items: _items(rid),
-                        controllerFor: _ctrlFor(rid),
-                        onChanged: () => setState(() {}),
-                      ),
-                      AllocationPreview(
+                      ReadyDonations(
+                        key: ValueKey('trip-ready-$rid'),
                         reportId: rid,
-                        lines: linesFrom(_items(rid), _ctrlFor(rid)),
-                        items: _items(rid),
-                        onSetQuantity: (id, n) =>
-                            setState(() => _ctrlFor(rid)(id).text = '$n'),
+                        onLoaded: (n) {
+                          if (mounted) setState(() => _ready[rid] = n);
+                        },
                       ),
-                      if (tried && _total(rid) == 0)
+                      if (tried && (_ready[rid] ?? 0) == 0)
                         Text(
-                          'Enter at least one quantity, or tap Remove.',
+                          'Nothing to send yet for this report. Tap Remove.',
                           style: TextStyle(color: cs.error),
                         ),
                     ],
@@ -995,7 +989,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = ['Choose reports', 'What to send', 'When and which truck'];
+    const titles = ['Choose reports', 'What goes', 'When and which truck'];
     return Scaffold(
       appBar: AppBar(
         title: Text('Plan a trip · Step ${step + 1} of 3'),

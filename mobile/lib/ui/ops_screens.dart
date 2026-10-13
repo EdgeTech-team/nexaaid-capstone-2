@@ -808,27 +808,15 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   Map? report; // row from /trips/candidates (with its items)
   String? brgyId; // destination; defaults to the report's barangay
   bool changeBrgy = false;
-  final Map<int, TextEditingController> qty = {};
+
+  /// Oct 13: donations that go (GET /deliveries/ready); null = loading.
+  int? ready;
   String? date; // ISO, UTC
   bool tried = false;
   bool busy = false;
 
   Future<List<ApiResult>> _fetch() =>
       Future.wait([api.get('/trips/candidates'), api.lookupsResult()]);
-
-  @override
-  void dispose() {
-    for (final c in qty.values) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  TextEditingController _ctrl(int itemId) =>
-      qty.putIfAbsent(itemId, () => TextEditingController());
-
-  List<Map> get _items =>
-      report == null ? const [] : (report!['items'] as List).cast<Map>();
 
   Future<void> _chooseReport(Map candidates) async {
     final r = await pickReportWithStock(context, candidates);
@@ -837,14 +825,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
       report = r;
       brgyId = '${r['barangay_id']}';
       changeBrgy = false;
-      for (final c in qty.values) {
-        c.clear();
-      }
-      // Oct 13: the goods can only go to this report's barangay, so start
-      // with everything in stock; lower a box only if the truck is full.
-      for (final i in (r['items'] as List).cast<Map>()) {
-        _ctrl(i['item_id'] as int).text = '${i['quantity']}';
-      }
+      ready = null;
     });
   }
 
@@ -852,8 +833,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
     setState(() => tried = true);
     if (report == null) return;
     if (!_form.currentState!.validate()) return;
-    final lines = linesFrom(_items, _ctrl);
-    if (lines.isEmpty || date == null) return;
+    if ((ready ?? 0) == 0 || date == null) return;
     setState(() => busy = true);
     final r = await act(
       context,
@@ -863,7 +843,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           'report_id': report!['report_id'],
           'destination_barangay_id': int.parse(brgyId!),
           'delivery_date': date,
-          'items': lines,
+          // No items: the whole report (every acknowledged donation).
         },
       ),
       success: 'Delivery prepared',
@@ -903,7 +883,6 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           final names = Names(
             Map<String, dynamic>.from(snap.data![1].json as Map),
           );
-          final lines = linesFrom(_items, _ctrl);
           final noReports = (candidates['barangays'] as List).isEmpty;
           return Form(
             key: _form,
@@ -977,24 +956,12 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                   Gaps.v24,
                   Text('2. What to send', style: t.titleMedium),
                   Gaps.v8,
-                  StockQuantities(
-                    key: ValueKey('items-${report!['report_id']}'),
-                    items: _items,
-                    controllerFor: _ctrl,
-                    onChanged: () => setState(() {}),
-                  ),
-                  if (tried && lines.isEmpty)
-                    Text(
-                      'Enter a quantity for at least one item.',
-                      style: TextStyle(color: cs.error),
-                    ),
-                  Gaps.v8,
-                  AllocationPreview(
+                  ReadyDonations(
+                    key: ValueKey('ready-${report!['report_id']}'),
                     reportId: report!['report_id'] as int,
-                    lines: lines,
-                    items: _items,
-                    onSetQuantity: (id, n) =>
-                        setState(() => _ctrl(id).text = '$n'),
+                    onLoaded: (n) {
+                      if (mounted) setState(() => ready = n);
+                    },
                   ),
                   // 3. When
                   Gaps.v24,
@@ -1015,18 +982,18 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                     },
                   ),
                   Gaps.v24,
-                  if (lines.isNotEmpty)
+                  if ((ready ?? 0) > 0)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Sending ${lines.length} '
-                        '${lines.length == 1 ? 'item' : 'items'}'
+                        'Sending $ready '
+                        '${ready == 1 ? 'donation' : 'donations'}'
                         '${date == null ? '' : ' on ${niceWhen(date)}'}.',
                         style: t.bodyMedium,
                       ),
                     ),
                   FilledButton.icon(
-                    onPressed: busy ? null : _submit,
+                    onPressed: busy || (ready ?? 0) == 0 ? null : _submit,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size.fromHeight(52),
                     ),
