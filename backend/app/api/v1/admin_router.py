@@ -322,6 +322,10 @@ def list_organizations(
                 .order_by(AuditLog.log_id)):
         reasons[log.entity_id] = (log.new_value or {}).get("reason")
         decided[log.entity_id] = log.timestamp
+    # The organization's own account, for "View account" in Registrations.
+    accounts = {}
+    for u in db.query(User).filter(User.organization_id.isnot(None)).order_by(User.user_id):
+        accounts.setdefault(u.organization_id, u.user_id)
     rows = []
     for o in query.order_by(Organization.created_at.desc()).all():
         rows.append({
@@ -345,6 +349,7 @@ def list_organizations(
             "reviewed_at": o.reviewed_at,
             "reviewed_by_user_id": o.reviewed_by_user_id,
             "created_at": o.created_at,
+            "user_id": accounts.get(o.organization_id),
         })
     return rows
 

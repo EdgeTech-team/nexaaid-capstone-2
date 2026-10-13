@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart' show ApiResult, Roles;
 import 'records_screens.dart' show DonationRecordsScreen, SupportRecordsScreen;
 import 'delivery_widgets.dart';
+import 'input_formatters.dart' show pesos;
 import 'trip_screens.dart';
 import 'widgets.dart';
 import 'entry_report_views.dart' show EntrySummaryList;
@@ -67,17 +68,13 @@ Future<void> showDeliveryHistory(BuildContext context, int deliveryId) async {
   final r = await api.get('/deliveries/$deliveryId/history');
   if (!context.mounted || !r.ok) return;
   final h = (r.json['history'] as List).cast<Map>();
-  showModalBottomSheet(
-    context: context,
-    showDragHandle: true,
-    builder: (_) => ListView(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+  // A pop-out with the X (problema_napud 2.1).
+  showDetailPopout<void>(
+    context,
+    title: 'Delivery #$deliveryId history',
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          'Delivery #$deliveryId history',
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 8),
         for (final e in h)
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -1039,6 +1036,153 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
 // donation entry (one QR, all its items), not per item. The donor's status
 // becomes "Acknowledged by CMO" by itself.
 // ---------------------------------------------------------------------------
+/// problema_napud 4.1: a CMO notification ("Donation ... was received by
+/// CSWS") opens the whole entry in a pop-out with only Acknowledge and
+/// Close. Acknowledging refreshes the Acknowledge tab underneath.
+Future<void> showCmoEntryPopout(BuildContext context, int donationId) async {
+  final r = await api.get('/cmo/entries/by-donation/$donationId');
+  if (!context.mounted) return;
+  if (!r.ok || r.json is! Map) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          r.status == 404
+              ? 'This donation is not waiting for the CMO.'
+              : 'Could not open this donation. Check your connection.',
+        ),
+      ),
+    );
+    return;
+  }
+  final e = Map<String, dynamic>.from(r.json as Map);
+  final done = e['acknowledged'] == true;
+  await showDetailPopout<void>(
+    context,
+    title: 'Donation entry',
+    child: CmoEntryDetails(e),
+    actions: [
+      Builder(
+        builder: (ctx) => AppButton(
+          'Close',
+          variant: AppButtonVariant.secondary,
+          expand: true,
+          onPressed: () => Navigator.of(ctx).pop(),
+        ),
+      ),
+      if (!done)
+        Builder(
+          builder: (ctx) => AppButton(
+            'Acknowledge',
+            icon: Icons.verified,
+            expand: true,
+            onPressed: () async {
+              final res = await act(
+                ctx,
+                () => api.post(
+                  '/cmo/entries/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
+                  body: {'status': 'Acknowledged', 'notes': null},
+                ),
+                success: '${e['batch_reference']} acknowledged',
+              );
+              if (!res.ok || !ctx.mounted) return;
+              Navigator.of(ctx).pop();
+              HomeNav.go(
+                context,
+                const HomeTarget('Acknowledge', view: 'pending'),
+              );
+            },
+          ),
+        ),
+    ],
+  );
+}
+
+/// Everything about one donation entry the CMO acknowledges: reference,
+/// status, report, handover, each item and the estimated value.
+class CmoEntryDetails extends StatelessWidget {
+  final Map e;
+  const CmoEntryDetails(this.e, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final done = e['acknowledged'] == true;
+    final items = ((e['items'] as List?) ?? const []).cast<Map>();
+    final value = (e['estimated_value'] as num?) ?? 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.qr_code_2, color: cs.primary),
+            Gaps.h8,
+            Expanded(
+              child: Text(
+                '${e['batch_reference']}',
+                style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
+              ),
+            ),
+            if (done)
+              const StatusChip('Confirmed', label: 'Acknowledged')
+            else
+              StatusChip(
+                e['cmo_decision'] as String? ?? 'Received',
+                label: e['cmo_decision'] == null
+                    ? 'Waiting'
+                    : '${e['cmo_decision']}',
+              ),
+          ],
+        ),
+        Gaps.v8,
+        Text('For ${e['report_label'] ?? 'report #${e['report_id']}'}'),
+        Text(
+          'Handover: ${e['handover_method'] ?? '-'} · Received by CSWS',
+          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+        const SectionTitle('Items'),
+        for (final i in items)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.inventory_2_outlined,
+                  size: 16,
+                  color: cs.onSurfaceVariant,
+                ),
+                Gaps.h8,
+                Expanded(
+                  child: Text(
+                    '${i['quantity']} ${i['unit']} ${i['item_name']} '
+                    '(${i['packaging']})',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Gaps.v8,
+        Text(
+          '${e['total_items']} item(s) · ${e['total_quantity']} in all'
+          '${value > 0 ? ' · Estimated value ${pesos(value)}' : ''}',
+          style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        if (e['hold_reason'] != null && !done) ...[
+          Gaps.v8,
+          Text(
+            'On hold: ${e['hold_reason']}',
+            style: t.bodyMedium?.copyWith(color: AppColors.danger),
+          ),
+        ],
+        if (done) ...[
+          Gaps.v8,
+          Text('Already acknowledged.', style: t.bodySmall),
+        ],
+      ],
+    );
+  }
+}
+
 class CmoScreen extends StatefulWidget {
   const CmoScreen({super.key});
 
@@ -1062,6 +1206,7 @@ class _CmoScreenState extends State<CmoScreen>
   void applyHomeTarget(HomeTarget target) {
     view = target.view ?? 'pending';
     decision = null;
+    _loads++; // e.g. an entry was just acknowledged from a notification
   }
 
   /// 5.1: a tile was tapped. Filter the list and scroll down to it.
@@ -1182,10 +1327,7 @@ class _CmoScreenState extends State<CmoScreen>
                 ),
               ),
             if (value > 0)
-              Text(
-                'Estimated value PHP ${value.toStringAsFixed(0)}',
-                style: t.bodySmall,
-              ),
+              Text('Estimated value ${pesos(value)}', style: t.bodySmall),
             if (e['hold_reason'] != null && !done) ...[
               Gaps.v8,
               Text(

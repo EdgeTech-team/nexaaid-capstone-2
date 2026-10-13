@@ -152,9 +152,12 @@ void main() {
       expect(find.text('Delivery completed'), findsOneWidget);
       expect(find.text('Barangay reached'), findsOneWidget);
       expect(find.text('Arrived'), findsOneWidget);
-      // The landing card is the signed-in report card, with its source.
+      // The landing card is the signed-in report card. problema_napud 2.1:
+      // no "via Mobile / via SMS", and each need highlighted on its own.
       expect(find.text('#27  Flood in Banilad'), findsOneWidget);
-      expect(find.text('via Mobile'), findsOneWidget);
+      expect(find.textContaining('via '), findsNothing);
+      expect(find.text('Clothing'), findsOneWidget);
+      expect(find.text('Rice'), findsOneWidget);
     }, () => _server);
   });
 
@@ -171,13 +174,16 @@ void main() {
         await tester.tap(details);
         await tester.pumpAndSettle();
         expect(find.text('Donate to this report'), findsOneWidget);
-        expect(find.text('Report #27 · via Mobile'), findsOneWidget);
+        expect(find.text('Report #27'), findsOneWidget);
+        expect(find.textContaining('via '), findsNothing);
         expect(find.text('Reported needs'), findsOneWidget);
         expect(find.text('About this report'), findsOneWidget);
-        expect(
-          find.byType(size.width >= 840 ? Dialog : BottomSheet),
-          findsOneWidget,
-        );
+        // problema_napud 2.1: a centered pop-out on phones too, with its X.
+        expect(find.byType(Dialog), findsOneWidget);
+        expect(find.byType(BottomSheet), findsNothing);
+        await tester.tap(find.byTooltip('Close'));
+        await tester.pumpAndSettle();
+        expect(find.byType(Dialog), findsNothing);
       }, () => _server);
     });
   }
@@ -218,11 +224,9 @@ void main() {
       ),
     );
     expect(find.text('#5  Flood in Tipolo'), findsOneWidget);
-    expect(find.text('via SMS'), findsOneWidget);
-    expect(
-      find.text('10 families  ·  Needs: Rice  ·  Qty: 50'),
-      findsOneWidget,
-    );
+    expect(find.text('via SMS'), findsNothing);
+    expect(find.text('10 families affected'), findsOneWidget);
+    expect(find.text('Rice'), findsOneWidget); // the need, highlighted
     expect(find.text('Near the river'), findsOneWidget);
     expect(find.text('AI guidance: Help soon.'), findsOneWidget);
     expect(find.text('Rejected: Wrong sitio'), findsOneWidget);

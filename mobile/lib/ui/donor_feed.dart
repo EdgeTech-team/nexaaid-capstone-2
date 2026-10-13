@@ -93,8 +93,7 @@ class _DonorFeedState extends State<DonorFeed> {
       for (final r
           in (widget.validated
                   .where(
-                    (r) =>
-                        ((r['fulfillment_percentage'] as num?) ?? 0) < 100,
+                    (r) => ((r['fulfillment_percentage'] as num?) ?? 0) < 100,
                   )
                   .toList()
                 ..sort(
@@ -152,7 +151,12 @@ class _PostHeader extends StatelessWidget {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Space.md, Space.sm, Space.md, Space.xs),
+      padding: const EdgeInsets.fromLTRB(
+        Space.md,
+        Space.sm,
+        Space.md,
+        Space.xs,
+      ),
       child: Row(
         children: [
           avatar,
@@ -193,10 +197,8 @@ class _Avatar extends StatelessWidget {
       child: text != null
           ? Text(
               text!,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: Colors.white, fontWeight: FontWeight.w700),
             )
           : Icon(icon, size: 20, color: s.fg),
     );
@@ -230,10 +232,11 @@ class ReportPost extends StatelessWidget {
     final r = report;
     final families = r['affected_families'];
     final sitio = r['sitio'];
+    final several = ((r['sitios'] as List?)?.length ?? 0) > 1;
     final needs = '${r['assistance_needed'] ?? ''}'.trim();
     final who = [
       if (families != null) '$families families',
-      if (sitio != null) 'in Sitio $sitio',
+      if (sitio != null) 'in ${several ? 'Sitios' : 'Sitio'} $sitio',
     ].join(' ');
     return _postCard([
       _PostHeader(
@@ -258,10 +261,8 @@ class ReportPost extends StatelessWidget {
               ),
               if (who.isNotEmpty || needs.isNotEmpty)
                 TextSpan(
-                  text: '${[
-                    if (who.isNotEmpty) who,
-                    if (needs.isNotEmpty) 'need $needs',
-                  ].join(' ')}.',
+                  text:
+                      '${[if (who.isNotEmpty) who, if (needs.isNotEmpty) 'need $needs'].join(' ')}.',
                 ),
             ],
           ),

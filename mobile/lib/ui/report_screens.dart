@@ -6,6 +6,7 @@ import 'donation_info.dart' show NewReportDonationInfo;
 import 'input_formatters.dart';
 import 'report_filters.dart';
 import 'report_summary_card.dart';
+import 'sitio_picker.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
@@ -65,10 +66,8 @@ class ReportCard extends StatelessWidget {
       barangay: names.of('barangays', r['barangay_id']),
       status: r['status'] as String?,
       priority: r['priority_level'] as String?,
-      source: r['source']?.toString(),
       affectedFamilies: (r['affected_families'] as num?)?.toInt(),
       assistanceNeeded: r['assistance_needed']?.toString(),
-      quantity: r['estimated_quantity'] as num?,
       description: r['description']?.toString(),
       guidance: guidance?.toString(),
       rejectionReason: r['rejection_reason']?.toString(),
@@ -118,7 +117,15 @@ const _other = 'other';
 
 class _NewReportScreenState extends State<NewReportScreen> {
   final _form = GlobalKey<FormState>();
-  String? typeId, brgyId, sitioId;
+  String? typeId, brgyId;
+
+  /// problema_napud 2.2: one row per sitio hit, '' = not chosen yet. A
+  /// single empty row means the whole barangay.
+  List<String> sitioRows = [''];
+  List<int> get _sitioIds => [
+    for (final v in sitioRows.toSet())
+      if (v.isNotEmpty) int.parse(v),
+  ];
   final desc = TextEditingController();
   final families = TextEditingController();
   final smsSender = TextEditingController();
@@ -136,7 +143,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
   void _fillFromReport(Map<String, dynamic> r, Names names) {
     typeId = '${r['disaster_type_id']}';
     brgyId = '${r['barangay_id']}';
-    sitioId = r['sitio_id'] == null ? null : '${r['sitio_id']}';
+    final ids =
+        (r['sitio_ids'] as List?) ?? [if (r['sitio_id'] != null) r['sitio_id']];
+    sitioRows = ids.isEmpty ? [''] : [for (final i in ids) '$i'];
     desc.text = '${r['description'] ?? ''}';
     families.text = '${r['affected_families'] ?? ''}';
     final parsed = <_Need>[];
@@ -232,26 +241,32 @@ class _NewReportScreenState extends State<NewReportScreen> {
     if (parsed.barangay != null && brgy == null) {
       notes.add('Barangay "${parsed.barangay}" not found. Choose it below.');
     }
-    String? sitio;
-    if (brgy != null && parsed.sitio != null) {
-      final want = _norm(parsed.sitio!);
-      for (final st in names.rows('sitios')) {
-        if ('${st['barangay_id']}' == brgy && _norm('${st['name']}') == want) {
-          sitio = '${st['id']}';
-          break;
+    final sitios = <String>[];
+    if (brgy != null) {
+      for (final name in parsed.sitios) {
+        final want = _norm(name);
+        final match = names
+            .rows('sitios')
+            .where(
+              (st) =>
+                  '${st['barangay_id']}' == brgy &&
+                  _norm('${st['name']}') == want,
+            )
+            .firstOrNull;
+        if (match == null) {
+          notes.add(
+            'Sitio "$name" not found in this barangay. Choose it below.',
+          );
+        } else {
+          sitios.add('${match['id']}');
         }
-      }
-      if (sitio == null) {
-        notes.add(
-          'Sitio "${parsed.sitio}" not found in this barangay. Choose it below.',
-        );
       }
     }
     final newNeeds = [for (final n in parsed.needs) _needFrom(n, names)];
     setState(() {
       typeId = type;
       brgyId = brgy;
-      sitioId = sitio;
+      sitioRows = sitios.isEmpty ? [''] : sitios;
       if (parsed.families != null) families.text = '${parsed.families}';
       if (parsed.details != null) desc.text = parsed.details!;
       if (newNeeds.isNotEmpty) {
@@ -325,7 +340,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
     final body = {
       'disaster_type_id': int.parse(typeId!),
       'barangay_id': int.parse(brgyId!),
-      'sitio_id': (sitioId ?? '').isEmpty ? null : int.parse(sitioId!),
+      'sitio_id': _sitioIds.firstOrNull,
+      'sitio_ids': _sitioIds,
       'description': desc.text.trim(),
       'affected_families': int.parse(families.text.trim()),
       'assistance_needed': summary,
@@ -372,7 +388,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
         needs
           ..clear()
           ..add(_Need());
-        typeId = brgyId = sitioId = null;
+        typeId = brgyId = null;
+        sitioRows = [''];
         _fillNotes = const [];
         _fills++;
       }
@@ -598,33 +615,21 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 names: names,
                 onChanged: (v) => setState(() {
                   brgyId = v;
-                  sitioId = null;
+                  sitioRows = [''];
                 }),
               ),
               // Concerns2: the sitio field only appears after a barangay is
-              // chosen, and defaults to the whole barangay.
+              // chosen, lists only that barangay's sitios, and defaults to
+              // the whole barangay. problema_napud 2.2: "Add another sitio".
               if (brgyId != null) ...[
                 const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  key: ValueKey('sitio-$brgyId-$_fills'),
-                  initialValue: sitioId ?? '',
-                  isExpanded: true,
-                  items: [
-                    const DropdownMenuItem(
-                      value: '',
-                      child: Text('Whole barangay'),
-                    ),
-                    for (final s in sitios)
-                      DropdownMenuItem(
-                        value: '${s['id']}',
-                        child: Text('${s['name']}'),
-                      ),
-                  ],
-                  onChanged: (v) => sitioId = v,
-                  decoration: const InputDecoration(
-                    labelText: 'Sitio',
-                    helperText: 'Choose a sitio, or keep Whole barangay',
-                  ),
+                SitioPicker(
+                  key: ValueKey('sitios-$brgyId-$_fills'),
+                  options: {
+                    for (final st in sitios) '${st['id']}': '${st['name']}',
+                  },
+                  rows: sitioRows,
+                  onChanged: (rows) => setState(() => sitioRows = rows),
                 ),
               ],
               const SectionTitle('Donation info'),
@@ -1292,8 +1297,7 @@ class DashboardScreen extends StatelessWidget {
               ),
               StatCard(
                 label: 'Est. value of donations',
-                value:
-                    'PHP ${(b['total_estimated_value'] as num).toStringAsFixed(0)}',
+                value: pesos(b['total_estimated_value']) ?? 'PHP 0',
                 icon: Icons.payments_outlined,
               ),
             ]),

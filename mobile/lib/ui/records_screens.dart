@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show Roles;
+import 'batch_sheet.dart' show openDonationByQr;
+import 'csws_screens.dart' show ScannerPage;
 import 'donation_entries_view.dart';
 import 'expiry_widgets.dart';
+import 'home_nav.dart';
 import 'ops_screens.dart' show DeliveriesScreen;
 import 'widgets.dart';
 
@@ -27,11 +30,23 @@ bool get _canManageRecords =>
 
 class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
   bool perReport = false;
+  int _loads = 0;
+
+  /// problema_napud 5.1: the Administrator can scan a donor's QR here,
+  /// e.g. right after a donation notification.
+  Future<void> _scan() async {
+    final code = await Navigator.of(context)
+        .push<String>(MaterialPageRoute(builder: (_) => const ScannerPage()));
+    if (code == null || !mounted) return;
+    await openDonationByQr(context, code);
+    if (mounted) setState(() => _loads++);
+  }
 
   @override
   Widget build(BuildContext context) {
     final barangay = api.role == Roles.barangay;
     return Loader(
+      key: ValueKey(_loads),
       // include_closed: Expired / Cancelled donations get their own chips.
       // A Barangay Rep only gets its own barangay's (backend enforced).
       load: [
@@ -50,6 +65,16 @@ class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
                           'one is in the process.'
                     : 'Every donation entry and where it is in the process.',
               ),
+            // CSWS Main Office scans on its Receive tab.
+            if (api.role == Roles.admin) ...[
+              AppButton(
+                'Scan QR code',
+                icon: Icons.qr_code_scanner,
+                expand: true,
+                onPressed: _scan,
+              ),
+              Gaps.v12,
+            ],
             SegmentedButton<bool>(
               showSelectedIcon: false,
               segments: const [
@@ -422,8 +447,19 @@ class AdminRecordsScreen extends StatefulWidget {
   State<AdminRecordsScreen> createState() => _AdminRecordsScreenState();
 }
 
-class _AdminRecordsScreenState extends State<AdminRecordsScreen> {
+class _AdminRecordsScreenState extends State<AdminRecordsScreen>
+    with HomeTargetListener<AdminRecordsScreen> {
   String view = 'donations';
+
+  // A donation notification opens Records on Donations, with its Scan QR
+  // button, and the donation's pop-out on top.
+  @override
+  String get homeTab => 'Records';
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    view = target.view ?? 'donations';
+  }
 
   @override
   Widget build(BuildContext context) {

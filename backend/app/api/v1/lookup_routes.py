@@ -22,7 +22,6 @@ def get_lookups(db: Session = Depends(get_db)):
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     sitios = db.query(Sitio).order_by(Sitio.barangay_id, Sitio.sitio_id).all()
-    sitio_names = {s.sitio_id: s.sitio_name for s in sitios}
 
     reports = (db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
                .order_by(DisasterReport.report_id.desc()).limit(200).all())
@@ -80,7 +79,8 @@ def get_lookups(db: Session = Depends(get_db)):
                 "disaster": types.get(r.disaster_type_id, "Disaster"),
                 "barangay": barangays.get(r.barangay_id, "Barangay"),
                 "barangay_id": r.barangay_id,
-                "sitio": sitio_names.get(r.sitio_id),
+                "sitio": ", ".join(r.sitio_names) or None,
+                "sitios": r.sitio_names,
                 "priority_level": r.priority_level,
                 "assistance_needed": r.assistance_needed,
                 "affected_families": r.affected_families,

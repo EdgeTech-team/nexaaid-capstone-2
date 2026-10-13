@@ -457,7 +457,7 @@ void main() {
       expect(find.textContaining('Showing '), findsOneWidget);
       expect(find.text('Barangay:'), findsWidgets);
       expect(find.text('Sitio:'), findsWidgets);
-      expect(find.textContaining('Assistance Needed: '), findsWidgets);
+      expect(find.text('Assistance Needed:'), findsWidgets); // + one chip per need
 
       // The chips scroll sideways: bring "Fulfilled" into view first.
       final fulfilled = find.textContaining('Fulfilled (');

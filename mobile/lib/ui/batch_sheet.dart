@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'expiry_widgets.dart';
+import 'input_formatters.dart' show pesos;
 import 'location_picker.dart' show formatPickupIso;
 import 'pickup_actions.dart';
 import 'widgets.dart';
@@ -27,11 +28,32 @@ Future<void> openDonationByQr(BuildContext context, String reference) async {
     );
     return;
   }
-  await showModalBottomSheet(
+  // A pop-out with the whole entry, closed with the X (problema_napud 2.1).
+  await showDialog<void>(
     context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (_) => BatchSheet(Map<String, dynamic>.from(r.json as Map)),
+    builder: (ctx) => Dialog(
+      insetPadding: const EdgeInsets.all(Space.md),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 640),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.of(ctx).pop(),
+                icon: const Icon(Icons.close),
+              ),
+            ),
+            Flexible(
+              child: BatchSheet(Map<String, dynamic>.from(r.json as Map)),
+            ),
+          ],
+        ),
+      ),
+    ),
   );
 }
 
@@ -293,13 +315,16 @@ class _BatchSheetState extends State<BatchSheet> {
               const SizedBox(height: 8),
               for (final line in items) _itemCard(line),
               if (pending > 0) ...[
-                TextField(
-                  controller: _notes,
-                  decoration: const InputDecoration(
-                    labelText: 'Notes (optional)',
+                // problema_napud 4.2: no notes for a guest donation.
+                if (b['donor_type'] != 'Guest') ...[
+                  TextField(
+                    controller: _notes,
+                    decoration: const InputDecoration(
+                      labelText: 'Notes (optional)',
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
+                  const SizedBox(height: 16),
+                ],
                 FilledButton.icon(
                   onPressed: _busy ? null : _receive,
                   style: FilledButton.styleFrom(
@@ -352,7 +377,7 @@ class _BatchSheetState extends State<BatchSheet> {
             Text(
               'Declared: ${line['quantity']} ${line['unit']} · '
               '${line['packaging']}'
-              '${line['estimated_value'] != null ? ' · PHP ${line['estimated_value']}' : ''}',
+              '${line['estimated_value'] != null ? ' · ${pesos(line['estimated_value'])}' : ''}',
             ),
             Text(
               '${line['qr_reference']}',

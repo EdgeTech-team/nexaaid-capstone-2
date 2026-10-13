@@ -12,7 +12,7 @@ import core.database as database
 from core.storage import get_storage
 from models.audit_log_model import AuditLog
 from models.organization_model import Organization
-from models.upload_model import Upload
+from models.upload_model import Upload, UploadBlob
 from models.user_rbac_model import User
 from tests.reg_helpers import (
     STRONG_PASSWORD, donor_payload, org_payload, pdf, png, ref, upload,
@@ -304,8 +304,20 @@ def test_organization_document_status_flags(api):
         db.add_all([old, link])
         db.commit()
         old_id, link_id = old.organization_id, link.organization_id
-        # The uploaded file disappears from storage -> unreadable.
+        # Gone from this machine's disk only: the shared copy brings it back
+        # (problema_napud 2.1, several machines on one database).
         up = db.query(Upload).filter(Upload.file_id == d["file_id"]).one()
+        get_storage().delete(up.storage_key)
+    finally:
+        db.close()
+    assert ok(client.get(f"/admin/organizations/{oid}/document", headers=t["admin"]))["status"] == "ok"
+
+    db = _db()
+    try:
+        # Gone from storage and from the database -> unreadable.
+        up = db.query(Upload).filter(Upload.file_id == d["file_id"]).one()
+        db.query(UploadBlob).filter(UploadBlob.upload_id == up.upload_id).delete()
+        db.commit()
         get_storage().delete(up.storage_key)
     finally:
         db.close()

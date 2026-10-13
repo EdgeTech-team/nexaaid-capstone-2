@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from core.database import get_db
-from models.report import DisasterReport, DisasterType, Barangay, Sitio
+from models.report import DisasterReport, DisasterType, Barangay
 from models.delivery import Delivery, DeliveryItem, Receipt
 from models.physical_donation_model import PhysicalDonation
 from core.priority_engine import explain_priority
@@ -24,7 +24,6 @@ DELIVERED_STATUS = "Delivered"         # from the 3.10 status flow
 def public_reports(db: Session = Depends(get_db)):
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
-    sitios = {s.sitio_id: s.sitio_name for s in db.query(Sitio).all()}
 
     rows = (
         db.query(DisasterReport)
@@ -46,10 +45,12 @@ def public_reports(db: Session = Depends(get_db)):
             "report_id": r.report_id,
             "disaster": types.get(r.disaster_type_id, "Disaster"),
             "barangay": barangays.get(r.barangay_id, "Barangay"),
-            "sitio": sitios.get(r.sitio_id),
+            "sitio": ", ".join(r.sitio_names) or None,
+            "sitios": r.sitio_names,
             "priority_level": r.priority_level,
-            # How the report came in (Web / Mobile / SMS), for the "via"
-            # chip on the landing report cards. Never who reported it.
+            # How the report came in (Web / Mobile / SMS). Never who
+            # reported it. The app no longer shows it (problema_napud 2.1:
+            # no "via Mobile / via SMS"); kept so older clients still work.
             "source": r.source,
             "priority_guidance": explain_priority(r),
             "assistance_needed": r.assistance_needed,

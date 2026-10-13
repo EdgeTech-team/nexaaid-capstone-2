@@ -52,6 +52,7 @@ from core.database import get_db
 from core.auth import get_current_user, require_role, has_role, barangay_scope
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
+from models.sitio_model import Sitio
 from core.notifications import notify, notify_event_many, user_ids_with_role
 from schemas.report import (
     DisasterReportCreate,
@@ -179,6 +180,27 @@ def _monitoring_rows(query, skip: int, limit: int):
 
 
 # ---------------------------------------------------------------------------
+# problema_napud 2.2: one or more sitios, all in the report's barangay.
+# ---------------------------------------------------------------------------
+def _apply_sitios(db: Session, report: DisasterReport, sitio_id, sitio_ids) -> None:
+    ids = list(dict.fromkeys(
+        sitio_ids if sitio_ids is not None else ([sitio_id] if sitio_id else [])
+    ))
+    found = {s.sitio_id: s for s in db.query(Sitio).filter(Sitio.sitio_id.in_(ids)).all()} if ids else {}
+    wrong = [i for i in ids if i not in found or found[i].barangay_id != report.barangay_id]
+    if wrong:
+        raise HTTPException(
+            status_code=422,
+            detail="Choose sitios of the report's own barangay "
+                   f"(not in this barangay: {', '.join(str(i) for i in wrong)})",
+        )
+    # Same order as DisasterReport.sitios, so sitio_id is always the first.
+    ids.sort()
+    report.sitios = [found[i] for i in ids]
+    report.sitio_id = ids[0] if ids else None
+
+
+# ---------------------------------------------------------------------------
 # Create — any authenticated reporter (citizen / barangay official / staff)
 # ---------------------------------------------------------------------------
 @router.post("/", response_model=DisasterReportResponse, status_code=status.HTTP_201_CREATED)
@@ -187,7 +209,10 @@ def create_report(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    report = DisasterReport(**payload.model_dump(), user_id=current_user.user_id)
+    report = DisasterReport(
+        **payload.model_dump(exclude={"sitio_ids"}), user_id=current_user.user_id
+    )
+    _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()   # get report.report_id before commit (commit happens in get_db)
     db.refresh(report)
@@ -344,8 +369,9 @@ def edit_my_report(
     report = _own_open_report(db, report_id, current_user, "edit")
     before = {k: getattr(report, k) for k in payload.model_dump()}
     before["status"] = report.status
-    for field, value in payload.model_dump().items():
+    for field, value in payload.model_dump(exclude={"sitio_ids"}).items():
         setattr(report, field, value)
+    _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     resubmitted = report.status == "Rejected"
     if resubmitted:
         report.status = "Pending"
@@ -579,8 +605,9 @@ def ingest_sms_report(
     # (Scope 2.2). The rep never creates a report in the system (Scope 1.3).
     current_user=Depends(require_role("csws_disaster_unit")),
 ):
-    report_fields = payload.model_dump(exclude={"contact_number", "raw_message"})
+    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids"})
     report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")
+    _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()  # need report.report_id for the metadata FK
 
