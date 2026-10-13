@@ -1,6 +1,6 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
+
+import '../api.dart' show ApiResult;
 
 import 'widgets.dart';
 
@@ -401,168 +401,148 @@ class _StockQuantitiesState extends State<StockQuantities> {
   }
 }
 
-/// Oct 13 concerns: whose donations a delivery takes, shown while it is
-/// being prepared (POST /deliveries/preview-allocation). First received,
-/// first sent, CMO-acknowledged donations first. When the quantity splits a
-/// donation, one tap sends enough to finish it, so most deliveries take
-/// whole donations and donors' timelines move in one step.
-class AllocationPreview extends StatefulWidget {
+/// Oct 13 (team): a delivery carries EVERY donation of its report that the
+/// CMO acknowledged and that has not gone out yet, so there are no
+/// quantities to type. This shows what goes (GET /deliveries/ready/{id}):
+/// the totals, each donor's donation, and how many still wait for the CMO.
+/// If it does not fit one vehicle, Main Office requests transport (DRRMO).
+class ReadyDonations extends StatefulWidget {
   final int reportId;
 
-  /// [{item_id, quantity}] as entered (see linesFrom).
-  final List<Map<String, int>> lines;
+  /// Called with the number of donations that go (0 = nothing to send).
+  final ValueChanged<int>? onLoaded;
 
-  /// [{item_id, item_name, unit, quantity}]: names and stock per item.
-  final List<Map> items;
-
-  /// "Send 80 to finish Ana's donation": sets that item's quantity.
-  final void Function(int itemId, int quantity) onSetQuantity;
-
-  const AllocationPreview({
-    super.key,
-    required this.reportId,
-    required this.lines,
-    required this.items,
-    required this.onSetQuantity,
-  });
+  const ReadyDonations({super.key, required this.reportId, this.onLoaded});
 
   @override
-  State<AllocationPreview> createState() => _AllocationPreviewState();
+  State<ReadyDonations> createState() => _ReadyDonationsState();
 }
 
-class _AllocationPreviewState extends State<AllocationPreview> {
-  List<Map>? _rows;
-  String _asked = '';
-  Timer? _wait;
+class _ReadyDonationsState extends State<ReadyDonations> {
+  late Future<ApiResult> _load = _fetch();
 
-  String get _key =>
-      '${widget.reportId}:'
-      '${widget.lines.map((l) => '${l['item_id']}=${l['quantity']}').join(',')}';
-
-  @override
-  void initState() {
-    super.initState();
-    _schedule();
+  Future<ApiResult> _fetch() async {
+    final r = await api.get('/deliveries/ready/${widget.reportId}');
+    final n = r.ok && r.json is Map
+        ? ((r.json as Map)['entries'] as List).length
+        : 0;
+    widget.onLoaded?.call(n);
+    return r;
   }
 
   @override
-  void didUpdateWidget(covariant AllocationPreview old) {
+  void didUpdateWidget(covariant ReadyDonations old) {
     super.didUpdateWidget(old);
-    if (_key != _asked) _schedule();
+    if (old.reportId != widget.reportId) _load = _fetch();
   }
 
-  @override
-  void dispose() {
-    _wait?.cancel();
-    super.dispose();
-  }
-
-  void _schedule() {
-    _wait?.cancel();
-    final key = _key;
-    _asked = key;
-    if (widget.lines.isEmpty) {
-      setState(() => _rows = const []);
-      return;
-    }
-    // Wait until typing stops, then ask once.
-    _wait = Timer(const Duration(milliseconds: 350), () async {
-      final r = await api.post(
-        '/deliveries/preview-allocation',
-        body: {'report_id': widget.reportId, 'items': widget.lines},
-      );
-      if (!mounted || key != _asked) return;
-      setState(() {
-        _rows = r.ok && r.json is Map
-            ? ((r.json as Map)['items'] as List).cast<Map>()
-            : null;
-      });
-    });
-  }
-
-  Map? _item(int id) =>
-      widget.items.where((i) => i['item_id'] == id).firstOrNull;
+  String _amount(Map i) =>
+      '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
 
   @override
   Widget build(BuildContext context) {
-    final rows = _rows;
-    if (rows == null || rows.isEmpty) return const SizedBox.shrink();
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    return AppCard(
-      key: const ValueKey('allocation-preview'),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text("Whose donations go on this delivery", style: t.titleSmall),
-          Gaps.v4,
-          Text(
-            'First received, first sent. Donations the CMO already '
-            'acknowledged go first.',
-            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-          ),
-          for (final r in rows) ...[
-            Gaps.v12,
-            Text(
-              '${_item(r['item_id'] as int)?['item_name'] ?? 'Item'}',
-              style: t.labelLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            for (final d in (r['donations'] as List).cast<Map>())
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Row(
-                  children: [
-                    Icon(
-                      d['whole'] == true
-                          ? Icons.check_circle_outline
-                          : Icons.incomplete_circle,
-                      size: 16,
-                      color: d['whole'] == true ? cs.primary : cs.tertiary,
-                    ),
-                    Gaps.h8,
-                    Expanded(
-                      child: Text(
-                        '${d['donor']} · ${d['batch_reference']}: '
-                        '${d['whole'] == true ? 'all ${d['take']}' : '${d['take']} of ${d['available']}'}'
-                        ' ${_item(r['item_id'] as int)?['unit'] ?? ''}'
-                        '${d['whole'] == true ? '' : ' (the rest waits for the next delivery)'}'
-                        '${d['acknowledged'] == true ? '' : ' · not yet acknowledged by the CMO'}',
-                        style: t.bodySmall,
-                      ),
-                    ),
-                  ],
-                ),
+    return FutureBuilder<ApiResult>(
+      future: _load,
+      builder: (context, snap) {
+        if (!snap.hasData) {
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final r = snap.data!;
+        if (!r.ok || r.json is! Map) {
+          return Text(r.errorText, style: TextStyle(color: cs.error));
+        }
+        final m = r.json as Map;
+        final entries = (m['entries'] as List).cast<Map>();
+        final totals = (m['totals'] as List).cast<Map>();
+        final waiting = (m['waiting_for_cmo'] as num? ?? 0).toInt();
+        final waitNote = waiting == 0
+            ? null
+            : '$waiting ${waiting == 1 ? 'donation still waits' : 'donations still wait'} '
+                  'for the CMO to acknowledge it. '
+                  '${waiting == 1 ? 'It goes' : 'They go'} on the next delivery.';
+        if (entries.isEmpty) {
+          return EmptyView(
+            key: const ValueKey('ready-none'),
+            compact: true,
+            icon: Icons.hourglass_top,
+            title: 'Nothing to send yet',
+            message:
+                waitNote ??
+                'No donation for this report is acknowledged by the CMO yet.',
+          );
+        }
+        return AppCard(
+          key: const ValueKey('ready-donations'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Everything below goes on this delivery',
+                style: t.titleSmall,
               ),
-            if ((r['assigned'] as num? ?? 0) < (r['quantity'] as num? ?? 0))
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  '${(r['quantity'] as num) - (r['assigned'] as num)} not '
-                  'linked to a donation (stock edited by hand).',
+              Gaps.v4,
+              Text(
+                'Every donation for this report that the CMO acknowledged. '
+                'If it does not fit one vehicle, request transport from DRRMO.',
+                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v12,
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final i in totals)
+                    Chip(
+                      avatar: const Icon(Icons.inventory_2_outlined, size: 16),
+                      label: Text(_amount(i)),
+                    ),
+                ],
+              ),
+              Gaps.v12,
+              Text(
+                '${entries.length} ${entries.length == 1 ? 'donation' : 'donations'}',
+                style: t.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              for (final e in entries)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.check_circle_outline,
+                        size: 16,
+                        color: cs.primary,
+                      ),
+                      Gaps.h8,
+                      Expanded(
+                        child: Text(
+                          '${e['donor']} · ${e['batch_reference']}: '
+                          '${(e['items'] as List).cast<Map>().map(_amount).join(', ')}',
+                          style: t.bodySmall,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              if (waitNote != null) ...[
+                Gaps.v12,
+                Text(
+                  waitNote,
                   style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
-              ),
-            if (r['finish_quantity'] != null &&
-                (r['finish_quantity'] as num) <=
-                    ((_item(r['item_id'] as int)?['quantity'] as num?) ?? 0))
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  key: ValueKey('finish-${r['item_id']}'),
-                  onPressed: () => widget.onSetQuantity(
-                    r['item_id'] as int,
-                    (r['finish_quantity'] as num).toInt(),
-                  ),
-                  icon: const Icon(Icons.done_all),
-                  label: Text(
-                    "Send ${r['finish_quantity']} to finish "
-                    "${r['finish_donor']}'s donation",
-                  ),
-                ),
-              ),
-          ],
-        ],
-      ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }
