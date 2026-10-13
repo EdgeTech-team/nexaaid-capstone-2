@@ -31,9 +31,12 @@ from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
+from services.delivery_allocation import allocate_delivery, preview as allocation_preview
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
+from pydantic import BaseModel, Field
 from schemas.delivery import (
     DeliveryCreate,
+    DeliveryItemCreate,
     DeliveryResponse,
     ReceiptConfirm,
     ReceiptConfirmResponse,
@@ -93,10 +96,30 @@ def create_delivery(
     )
 
   db.flush()
+  # Whose donations these goods are: first received, first sent.
+  allocate_delivery(db, delivery)
   log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
              new={"status": "Preparing", "items": [i.model_dump() for i in payload.items]})
   db.refresh(delivery)
   return delivery
+
+class AllocationPreview(BaseModel):
+  report_id: int
+  items: List[DeliveryItemCreate] = Field(min_length=1)
+
+
+@router.post("/preview-allocation")
+def preview_allocation(
+    payload: AllocationPreview,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office", "admin")),
+):
+  """Oct 13 concerns: while preparing a delivery, whose donations the
+  entered quantities take (first received, first sent; acknowledged
+  first), and the quantity that would finish a donation that is only
+  partly taken. Changes nothing."""
+  return {"items": allocation_preview(db, payload.report_id, payload.items)}
+
 
 # List — staff, with filters
 

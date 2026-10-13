@@ -840,6 +840,11 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
       for (final c in qty.values) {
         c.clear();
       }
+      // Oct 13: the goods can only go to this report's barangay, so start
+      // with everything in stock; lower a box only if the truck is full.
+      for (final i in (r['items'] as List).cast<Map>()) {
+        _ctrl(i['item_id'] as int).text = '${i['quantity']}';
+      }
     });
   }
 
@@ -983,6 +988,14 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                       'Enter a quantity for at least one item.',
                       style: TextStyle(color: cs.error),
                     ),
+                  Gaps.v8,
+                  AllocationPreview(
+                    reportId: report!['report_id'] as int,
+                    lines: lines,
+                    items: _items,
+                    onSetQuantity: (id, n) =>
+                        setState(() => _ctrl(id).text = '$n'),
+                  ),
                   // 3. When
                   Gaps.v24,
                   Text('3. When will it leave?', style: t.titleMedium),

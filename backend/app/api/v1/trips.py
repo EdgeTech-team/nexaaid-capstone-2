@@ -38,6 +38,7 @@ from models.report import DisasterReport
 from schemas.delivery import ReceiptConfirm
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
+from services.delivery_allocation import allocate_delivery
 from services.delivery_views import delivery_views, report_labels
 
 router = APIRouter(prefix="/trips", tags=["Delivery trips"])
@@ -285,6 +286,8 @@ def create_trip(
         db.flush()
         for line in stop.items:
             db.add(DeliveryItem(delivery_id=delivery.delivery_id, item_id=line.item_id, quantity=line.quantity))
+        db.flush()
+        allocate_delivery(db, delivery)   # whose donations: first received, first sent
         # Same history entry a single delivery gets, plus the trip number.
         log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
                    new={"status": "Preparing", "trip_id": trip.trip_id,
