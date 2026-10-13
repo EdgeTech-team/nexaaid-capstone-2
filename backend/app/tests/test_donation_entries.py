@@ -131,7 +131,7 @@ def test_receive_entry_is_all_or_nothing(api):
     # same item twice, zero quantity, empty list
     assert post([{"donation_id": ids[0], "actual_quantity": 1}] * 2).status_code == 400
     assert post([{"donation_id": ids[0], "actual_quantity": 0}]).status_code == 422
-    assert post([]).status_code == 422
+    assert post([]).status_code == 400  # Oct 13: nothing received and nothing marked not brought
     assert _inv(client, t, rid) == before
     entry = [x for x in ok(client.get("/donations/entries", headers=t["csws"]))["reports"][0]["entries"]
              if x["batch_reference"] == ref][0]

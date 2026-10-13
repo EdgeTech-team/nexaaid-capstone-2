@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'widgets.dart';
@@ -395,6 +397,171 @@ class _StockQuantitiesState extends State<StockQuantities> {
           ),
         if (shown.isEmpty) Text('No item matches "$q".', style: t.bodySmall),
       ],
+    );
+  }
+}
+
+/// Oct 13 concerns: whose donations a delivery takes, shown while it is
+/// being prepared (POST /deliveries/preview-allocation). First received,
+/// first sent, CMO-acknowledged donations first. When the quantity splits a
+/// donation, one tap sends enough to finish it, so most deliveries take
+/// whole donations and donors' timelines move in one step.
+class AllocationPreview extends StatefulWidget {
+  final int reportId;
+
+  /// [{item_id, quantity}] as entered (see linesFrom).
+  final List<Map<String, int>> lines;
+
+  /// [{item_id, item_name, unit, quantity}]: names and stock per item.
+  final List<Map> items;
+
+  /// "Send 80 to finish Ana's donation": sets that item's quantity.
+  final void Function(int itemId, int quantity) onSetQuantity;
+
+  const AllocationPreview({
+    super.key,
+    required this.reportId,
+    required this.lines,
+    required this.items,
+    required this.onSetQuantity,
+  });
+
+  @override
+  State<AllocationPreview> createState() => _AllocationPreviewState();
+}
+
+class _AllocationPreviewState extends State<AllocationPreview> {
+  List<Map>? _rows;
+  String _asked = '';
+  Timer? _wait;
+
+  String get _key =>
+      '${widget.reportId}:'
+      '${widget.lines.map((l) => '${l['item_id']}=${l['quantity']}').join(',')}';
+
+  @override
+  void initState() {
+    super.initState();
+    _schedule();
+  }
+
+  @override
+  void didUpdateWidget(covariant AllocationPreview old) {
+    super.didUpdateWidget(old);
+    if (_key != _asked) _schedule();
+  }
+
+  @override
+  void dispose() {
+    _wait?.cancel();
+    super.dispose();
+  }
+
+  void _schedule() {
+    _wait?.cancel();
+    final key = _key;
+    _asked = key;
+    if (widget.lines.isEmpty) {
+      setState(() => _rows = const []);
+      return;
+    }
+    // Wait until typing stops, then ask once.
+    _wait = Timer(const Duration(milliseconds: 350), () async {
+      final r = await api.post(
+        '/deliveries/preview-allocation',
+        body: {'report_id': widget.reportId, 'items': widget.lines},
+      );
+      if (!mounted || key != _asked) return;
+      setState(() {
+        _rows = r.ok && r.json is Map
+            ? ((r.json as Map)['items'] as List).cast<Map>()
+            : null;
+      });
+    });
+  }
+
+  Map? _item(int id) =>
+      widget.items.where((i) => i['item_id'] == id).firstOrNull;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = _rows;
+    if (rows == null || rows.isEmpty) return const SizedBox.shrink();
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return AppCard(
+      key: const ValueKey('allocation-preview'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Whose donations go on this delivery", style: t.titleSmall),
+          Gaps.v4,
+          Text(
+            'First received, first sent. Donations the CMO already '
+            'acknowledged go first.',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          for (final r in rows) ...[
+            Gaps.v12,
+            Text(
+              '${_item(r['item_id'] as int)?['item_name'] ?? 'Item'}',
+              style: t.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            for (final d in (r['donations'] as List).cast<Map>())
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      d['whole'] == true
+                          ? Icons.check_circle_outline
+                          : Icons.incomplete_circle,
+                      size: 16,
+                      color: d['whole'] == true ? cs.primary : cs.tertiary,
+                    ),
+                    Gaps.h8,
+                    Expanded(
+                      child: Text(
+                        '${d['donor']} · ${d['batch_reference']}: '
+                        '${d['whole'] == true ? 'all ${d['take']}' : '${d['take']} of ${d['available']} (the rest waits for the next delivery)'}'
+                        ' ${_item(r['item_id'] as int)?['unit'] ?? ''}'
+                        '${d['acknowledged'] == true ? '' : ' · not yet acknowledged by the CMO'}',
+                        style: t.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if ((r['assigned'] as num? ?? 0) < (r['quantity'] as num? ?? 0))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${(r['quantity'] as num) - (r['assigned'] as num)} not '
+                  'linked to a donation (stock edited by hand).',
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+            if (r['finish_quantity'] != null &&
+                (r['finish_quantity'] as num) <=
+                    ((_item(r['item_id'] as int)?['quantity'] as num?) ?? 0))
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: ValueKey('finish-${r['item_id']}'),
+                  onPressed: () => widget.onSetQuantity(
+                    r['item_id'] as int,
+                    (r['finish_quantity'] as num).toInt(),
+                  ),
+                  icon: const Icon(Icons.done_all),
+                  label: Text(
+                    "Send ${r['finish_quantity']} to finish "
+                    "${r['finish_donor']}'s donation",
+                  ),
+                ),
+              ),
+          ],
+        ],
+      ),
     );
   }
 }

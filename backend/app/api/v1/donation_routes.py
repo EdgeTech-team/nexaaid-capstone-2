@@ -30,6 +30,7 @@ from models.notification import Notification
 from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
 from models.delivery import Delivery
+from services.delivery_allocation import add_delivery_progress
 from schemas.physical_donation_schema import (
     DonationBatchCreate,
     DonationEntryEdit,
@@ -836,6 +837,9 @@ def my_donations(
 
     entries = build_entries(db, donations, include_cmo=True)
     group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
+    # Oct 13: In transit / Delivered / Barangay confirmed on the donor's own
+    # timeline, from whose goods went on each delivery.
+    add_delivery_progress(db, entries)
     by_ref = {}
     for d in donations:
         by_ref[d.batch_reference] = d  # rows are newest first, so this keeps the entry's first row

@@ -650,6 +650,11 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
     setState(() {
       if (on && !chosen.contains(reportId)) {
         chosen.add(reportId);
+        // Oct 13: start with everything in stock for this report.
+        for (final i in _items(reportId)) {
+          final c = _ctrlFor(reportId)(i['item_id'] as int);
+          if (c.text.trim().isEmpty) c.text = '${i['quantity']}';
+        }
         if (!stopOrder.contains(_brgy(reportId))) {
           stopOrder.add(_brgy(reportId));
         }
@@ -872,6 +877,13 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                         items: _items(rid),
                         controllerFor: _ctrlFor(rid),
                         onChanged: () => setState(() {}),
+                      ),
+                      AllocationPreview(
+                        reportId: rid,
+                        lines: linesFrom(_items(rid), _ctrlFor(rid)),
+                        items: _items(rid),
+                        onSetQuantity: (id, n) =>
+                            setState(() => _ctrlFor(rid)(id).text = '$n'),
                       ),
                       if (tried && _total(rid) == 0)
                         Text(

@@ -61,7 +61,7 @@ Future<void> openDonationByQr(BuildContext context, String reference) async {
 /// every item with its declared quantity and, while pending, an "actual
 /// quantity received" field prefilled with the declared quantity.
 /// One Receive action receives the whole entry (UC-CM1 alt 4a: less than
-/// declared; alt 4b: 0 = not accepted, the item stays pending).
+/// declared; alt 4b: "Not brought" closes an item that did not arrive).
 class BatchSheet extends StatefulWidget {
   final Map<String, dynamic> batch;
   const BatchSheet(this.batch, {super.key});
@@ -76,6 +76,11 @@ class _BatchSheetState extends State<BatchSheet> {
   final Map<int, TextEditingController> _actual = {};
   final _notes = TextEditingController();
   bool _busy = false;
+
+  /// Oct 13 concerns: pending items the donor did not bring. They are
+  /// closed on receive ("Not brought to CSWS") instead of staying pending,
+  /// so the donation reads Received, never Partly Received.
+  final Set<int> _notBrought = {};
 
   List<Map<String, dynamic>> get _items => (b['items'] as List? ?? const [])
       .map((e) => Map<String, dynamic>.from(e as Map))
@@ -104,20 +109,12 @@ class _BatchSheetState extends State<BatchSheet> {
     if (!_form.currentState!.validate()) return;
     final lines = [
       for (final e in _actual.entries)
-        if ((int.tryParse(e.value.text.trim()) ?? 0) > 0)
+        if (!_notBrought.contains(e.key))
           {
             'donation_id': e.key,
             'actual_quantity': int.parse(e.value.text.trim()),
           },
     ];
-    if (lines.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter an actual quantity for at least one item'),
-        ),
-      );
-      return;
-    }
     setState(() => _busy = true);
     final r = await act(
       context,
@@ -126,12 +123,15 @@ class _BatchSheetState extends State<BatchSheet> {
         '${Uri.encodeComponent('${b['batch_reference']}')}/receive',
         body: {
           'items': lines,
+          'not_brought': _notBrought.toList(),
           'notes': _notes.text.trim().isEmpty ? null : _notes.text.trim(),
         },
       ),
-      success:
-          '${lines.length} item(s) of ${b['batch_reference']} received '
-          'and added to inventory',
+      success: lines.isEmpty
+          ? 'Marked as not brought'
+          : '${lines.length} item(s) of ${b['batch_reference']} received '
+                'and added to inventory'
+                '${_notBrought.isEmpty ? '' : '; ${_notBrought.length} not brought'}',
     );
     if (!mounted) return;
     setState(() => _busy = false);
@@ -308,7 +308,7 @@ class _BatchSheetState extends State<BatchSheet> {
                   padding: EdgeInsets.only(top: 2),
                   child: Text(
                     'Check the goods and enter what was actually received. '
-                    'Enter 0 for an item that is not accepted; it stays pending.',
+                    'Tap "Not brought" for an item the donor did not bring.',
                     style: TextStyle(fontSize: 12, color: Brand.muted),
                   ),
                 ),
@@ -331,7 +331,11 @@ class _BatchSheetState extends State<BatchSheet> {
                     minimumSize: const Size.fromHeight(48),
                   ),
                   icon: const Icon(Icons.move_to_inbox),
-                  label: const Text('Receive into inventory'),
+                  label: Text(
+                    _notBrought.length == pending
+                        ? 'Save: nothing was brought'
+                        : 'Receive into inventory',
+                  ),
                 ),
                 Align(
                   alignment: Alignment.centerRight,
@@ -390,24 +394,44 @@ class _BatchSheetState extends State<BatchSheet> {
                   'Received: ${line['actual_quantity_received']} ${line['unit']}',
                 ),
               ),
-            if (ctrl != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: TextFormField(
-                  controller: ctrl,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: 'Actual quantity received',
-                    suffixText: '${line['unit'] ?? ''}',
-                    isDense: true,
+            if (ctrl != null) ...[
+              if (!_notBrought.contains(line['donation_id']))
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: TextFormField(
+                    controller: ctrl,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'Actual quantity received',
+                      suffixText: '${line['unit'] ?? ''}',
+                      isDense: true,
+                    ),
+                    validator: (v) {
+                      final n = int.tryParse(v?.trim() ?? '');
+                      if (n == null || n <= 0) {
+                        return 'Enter what arrived, or tap "Not brought"';
+                      }
+                      return null;
+                    },
                   ),
-                  validator: (v) {
-                    final n = int.tryParse(v?.trim() ?? '');
-                    if (n == null || n < 0) return 'Enter 0 or more';
-                    return null;
-                  },
+                ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilterChip(
+                  key: ValueKey('not-brought-${line['donation_id']}'),
+                  label: const Text('Not brought'),
+                  avatar: const Icon(
+                    Icons.remove_shopping_cart_outlined,
+                    size: 18,
+                  ),
+                  selected: _notBrought.contains(line['donation_id']),
+                  onSelected: (on) => setState(() {
+                    final id = line['donation_id'] as int;
+                    on ? _notBrought.add(id) : _notBrought.remove(id);
+                  }),
                 ),
               ),
+            ],
           ],
         ),
       ),
