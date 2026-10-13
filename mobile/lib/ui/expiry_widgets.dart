@@ -28,8 +28,18 @@ String _short(dynamic iso) {
   final d = DateTime.tryParse('${iso ?? ''}');
   if (d == null) return '';
   const m = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   final l = d.toLocal();
   return '${m[l.month - 1]} ${l.day}';
@@ -66,7 +76,8 @@ class ExpiryNote extends StatelessWidget {
                 : 'Contact CSWS if this was a mistake.');
       return _Box(
         tone: tone,
-        title: '${expired ? 'Expired' : 'Cancelled'}${when.isEmpty ? '' : ' on $when'}',
+        title:
+            '${expired ? 'Expired' : 'Cancelled'}${when.isEmpty ? '' : ' on $when'}',
         lines: [if (reason.isNotEmpty) reason, next],
         style: t,
       );
@@ -76,9 +87,16 @@ class ExpiryNote extends StatelessWidget {
     if (label == null || !hasWaitingItems(e)) {
       final closed = (e['closed_items'] as num? ?? 0).toInt();
       if (closed == 0) return const SizedBox.shrink();
+      // Oct 13: items marked "Not brought" at receiving say so plainly.
+      final notBrought = ((e['items'] as List?) ?? const [])
+          .where((i) => isNotBrought(i as Map))
+          .length;
       return Text(
-        '$closed ${closed == 1 ? 'item was' : 'items were'} not handed over '
-        '(expired or cancelled).',
+        notBrought == closed
+            ? '$closed ${closed == 1 ? 'item was' : 'items were'} not brought '
+                  'to CSWS.'
+            : '$closed ${closed == 1 ? 'item was' : 'items were'} not handed '
+                  'over (expired, cancelled or not brought).',
         style: t.bodySmall,
       );
     }
@@ -93,7 +111,8 @@ class ExpiryNote extends StatelessWidget {
     } else if (urgent) {
       title = 'Only $days ${days == 1 ? 'day' : 'days'} left (by $label)';
     } else {
-      title = '${dropOff ? 'Hand over by' : 'Pickup window ends'} $label'
+      title =
+          '${dropOff ? 'Hand over by' : 'Pickup window ends'} $label'
           '${days == null ? '' : ' · $days days left'}';
     }
     return _Box(
@@ -201,10 +220,13 @@ Future<bool> cancelDonation(
     builder: (ctx) => StatefulBuilder(
       builder: (ctx, setLocal) {
         final reasonText = picked == '__other' ? other.text.trim() : picked;
-        final canConfirm = (reasonText ?? '').isNotEmpty &&
+        final canConfirm =
+            (reasonText ?? '').isNotEmpty &&
             (!askPhone || phone.text.trim().length >= 10);
         return AlertDialog(
-          title: Text(staff ? 'Cancel for the donor?' : 'Cancel this donation?'),
+          title: Text(
+            staff ? 'Cancel for the donor?' : 'Cancel this donation?',
+          ),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -218,10 +240,7 @@ Future<bool> cancelDonation(
                             'already received are not affected.',
                 ),
                 Gaps.v12,
-                Text(
-                  'Why?',
-                  style: Theme.of(ctx).textTheme.titleSmall,
-                ),
+                Text('Why?', style: Theme.of(ctx).textTheme.titleSmall),
                 RadioGroup<String>(
                   groupValue: picked,
                   onChanged: (v) => setLocal(() => picked = v),
@@ -276,9 +295,7 @@ Future<bool> cancelDonation(
               child: const Text('Keep donation'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.danger,
-              ),
+              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
               onPressed: canConfirm ? () => Navigator.pop(ctx, true) : null,
               child: const Text('Yes, cancel it'),
             ),
@@ -295,10 +312,7 @@ Future<bool> cancelDonation(
     context,
     () => api.post(
       '/donations/entries/${Uri.encodeComponent('${entry['batch_reference']}')}/cancel',
-      body: {
-        'reason': reason,
-        if (askPhone) 'contact_number': phoneText,
-      },
+      body: {'reason': reason, if (askPhone) 'contact_number': phoneText},
     ),
     success: 'Donation cancelled',
   );
@@ -336,3 +350,8 @@ Future<bool> reinstateDonation(BuildContext context, Map entry) async {
   );
   return r.ok;
 }
+
+/// Oct 13: an item Main Office marked "Not brought" when receiving.
+bool isNotBrought(Map item) =>
+    item['status'] == 'Cancelled' &&
+    item['close_reason'] == 'Not brought to CSWS';

@@ -78,7 +78,7 @@ void main() {
       expect(asked.single['report_id'], 5);
       expect(find.text("Whose donations go on this delivery"), findsOneWidget);
       expect(find.textContaining('Liza · DON-A: all 50'), findsOneWidget);
-      expect(find.textContaining('Ana · DON-B: 15 of 30'), findsOneWidget);
+      expect(find.textContaining('Ana · DON-B: 15 of 30 kg (the rest'), findsOneWidget);
       await tester.tap(find.text("Send 80 to finish Ana's donation"));
       expect(setTo, 80);
     }, () => server);

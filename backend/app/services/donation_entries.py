@@ -125,6 +125,8 @@ def build_entries(
                     "estimated_value": float(l.estimated_value) if l.estimated_value is not None else None,
                     "status": l.status,
                     "actual_quantity_received": received.get(l.donation_id),
+                    # e.g. "Not brought to CSWS" (Oct 13) for a closed item.
+                    "close_reason": l.close_reason,
                 }
                 for l in lines
             ],

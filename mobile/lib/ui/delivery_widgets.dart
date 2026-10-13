@@ -523,8 +523,9 @@ class _AllocationPreviewState extends State<AllocationPreview> {
                     Expanded(
                       child: Text(
                         '${d['donor']} · ${d['batch_reference']}: '
-                        '${d['whole'] == true ? 'all ${d['take']}' : '${d['take']} of ${d['available']} (the rest waits for the next delivery)'}'
+                        '${d['whole'] == true ? 'all ${d['take']}' : '${d['take']} of ${d['available']}'}'
                         ' ${_item(r['item_id'] as int)?['unit'] ?? ''}'
+                        '${d['whole'] == true ? '' : ' (the rest waits for the next delivery)'}'
                         '${d['acknowledged'] == true ? '' : ' · not yet acknowledged by the CMO'}',
                         style: t.bodySmall,
                       ),
