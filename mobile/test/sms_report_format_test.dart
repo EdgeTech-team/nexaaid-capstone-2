@@ -1,6 +1,7 @@
 // Scope 2.4 / UC-CD1 alt 11b / UC-A3 alt 8a: the structured SMS format.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/ui/sms_report_format.dart';
+import 'package:mobile/ui/sms_send_screen.dart' show smsUri;
 
 void main() {
   test(
@@ -80,4 +81,34 @@ void main() {
     );
     expect(SmsReport.parse(r.toMessage())!.barangay, 'Banilad');
   });
+
+  test('problema_napud 2.2: several sitios go through the SMS', () {
+    const sent = SmsReport(
+      disasterType: 'Flood',
+      barangay: 'Banilad',
+      sitio: 'Riverside, Proper',
+      families: 10,
+      needs: [SmsNeed('Rice', 5, 'sacks')],
+    );
+    expect(sent.toMessage(), contains('SITIO: Riverside, Proper'));
+    final got = SmsReport.parse(sent.toMessage())!;
+    expect(got.sitios, ['Riverside', 'Proper']);
+    expect(
+      SmsReport.parse('TYPE: Flood\nSITIO: whole barangay')!.sitios,
+      isEmpty,
+    );
+  });
+
+  test(
+    'problema_napud 2.2: the SMS app opens with every number and the text',
+    () {
+      final uri = smsUri([
+        '09171111111',
+        '09172222222',
+      ], 'NEXAAID REPORT\nTYPE: Flood');
+      expect(uri.scheme, 'sms');
+      expect(uri.path, '09171111111,09172222222');
+      expect(uri.queryParameters['body'], 'NEXAAID REPORT\nTYPE: Flood');
+    },
+  );
 }

@@ -26,6 +26,7 @@ final _server = MockClient((req) async {
         'contact_email': 'hh@example.com',
         'created_at': '2026-10-02T08:00:00',
         'reviewed_at': null,
+        'user_id': 9,
       },
     ],
     '/admin/organizations/3/document' => {'status': 'missing'},
@@ -71,8 +72,18 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Opens on Not Reviewed: the new donor and the new organization.
-      expect(find.text('Not Reviewed (2)'), findsOneWidget);
+      // problema_napud 1.1: All, Reviewed, Not Reviewed (All first).
+      expect(find.text('All (3)'), findsOneWidget);
+      expect(find.text('Juan Cruz'), findsOneWidget);
+      final segs = [
+        for (final l in ['All (3)', 'Reviewed (1)', 'Not Reviewed (2)'])
+          tester.getCenter(find.text(l)).dx,
+      ];
+      expect(segs[0] < segs[1] && segs[1] < segs[2], isTrue);
+      await tester.tap(find.text('Not Reviewed (2)'));
+      await tester.pumpAndSettle();
+      // The new donor and the new organization; both have View account.
+      expect(find.text('View account'), findsNWidgets(2));
       expect(find.text('Maria Santos'), findsOneWidget);
       expect(find.text('Helping Hands'), findsOneWidget);
       expect(find.text('Juan Cruz'), findsNothing);
@@ -93,6 +104,29 @@ void main() {
       await tester.tap(find.text('Reviewed (1)'));
       await tester.pumpAndSettle();
       expect(find.text('Juan Cruz'), findsOneWidget);
+      expect(find.text('Mark Not Reviewed'), findsOneWidget);
+    }, () => _server);
+  });
+
+  testWidgets('a notification opens on that account, outlined', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: const Scaffold(
+            body: RegistrationsScreen(focusType: 'donor', focusId: 8),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      // Juan Cruz was reviewed: the Reviewed section, donors only.
+      expect(find.text('Juan Cruz'), findsOneWidget);
+      expect(find.text('Maria Santos'), findsNothing);
+      expect(find.text('Helping Hands'), findsNothing);
       expect(find.text('Mark Not Reviewed'), findsOneWidget);
     }, () => _server);
   });

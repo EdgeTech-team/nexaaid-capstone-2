@@ -3,11 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
-import '../report_detail_screen.dart';
-import '../report_model.dart';
 import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
 import 'home_nav.dart';
+import 'ops_screens.dart' show showCmoEntryPopout;
+import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 
 /// Where each notification opens (Oct 11 notes, Jenises): always the page
@@ -95,14 +95,23 @@ final Map<String, EntityOpener> notificationDestinations = {
         break;
     }
   },
-  // New organization / new donor: Accounts > Registrations, where both are
-  // listed together with sorting and Reviewed / Not Reviewed.
+  // New organization / new donor: Accounts > Registrations, opened on that
+  // account (its type and Reviewed / Not Reviewed section, outlined).
   'organization': (c, id, event) {
-    if (api.role == Roles.admin) _go(c, 'Accounts', view: 'registrations');
+    if (api.role == Roles.admin) {
+      _go(c, 'Accounts', view: 'registrations:org', id: id);
+    }
   },
   'user': (c, id, event) {
     if (api.role == Roles.admin) {
-      _go(c, 'Accounts', view: 'registrations');
+      _go(
+        c,
+        'Accounts',
+        view: event == 'donor_registered'
+            ? 'registrations:donor'
+            : 'registrations',
+        id: id,
+      );
     } else {
       _go(c, 'Profile'); // account created / password changed: your profile
     }
@@ -131,7 +140,13 @@ Future<void> _openDonation(BuildContext c, int donationId) async {
         then: (ctx) => openDonationByQr(ctx, ref),
       );
     case Roles.cmo:
-      _go(c, 'Acknowledge', view: 'pending');
+      // problema_napud 4.1: the entry itself, in a pop-out over Acknowledge.
+      _go(
+        c,
+        'Acknowledge',
+        view: 'pending',
+        then: (ctx) => showCmoEntryPopout(ctx, donationId),
+      );
     case Roles.donor:
     case Roles.org:
       // The My giving tab (every donation entry), then that donation's
@@ -186,12 +201,13 @@ Future<void> showReportSheet(BuildContext c, int id) async {
   if (!c.mounted) return;
 
   messenger.hideCurrentSnackBar();
-  await showModalBottomSheet<void>(
-    context: c,
-    isScrollControlled: true,
-    useSafeArea: true,
-    showDragHandle: true,
-    builder: (_) => ReportSheet(report: report, names: names),
+  // problema_napud 2.1: a pop-out with everything already in it, closed
+  // with the X at the top (no "See full details" page).
+  await showDetailPopout(
+    c,
+    title: 'Report #${report['report_id']}',
+    padding: EdgeInsets.zero, // ReportSheet has its own
+    child: ReportSheet(report: report, names: names),
   );
 }
 
@@ -234,25 +250,24 @@ class ReportSheet extends StatelessWidget {
   String get _barangay =>
       '${report['barangay_name'] ?? names?.of('barangays', report['barangay_id']) ?? 'Unknown barangay'}';
 
+  /// problema_napud 2.2: every sitio the report names.
   String get _sitio {
-    final id = report['sitio_id'];
-    if (id == null) return 'Whole barangay';
-    final name = names?.of('sitios', id, fallback: '') ?? '';
-    return name.isEmpty ? 'One sitio of the barangay' : 'Sitio $name';
-  }
-
-  void _openFullDetails(BuildContext context) {
-    try {
-      final full = Report.fromJson(report);
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ReportDetailScreen(report: full)),
-      );
-    } catch (e) {
-      debugPrint('Open full report failed: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Full details are not available.')),
-      );
-    }
+    final saved = [
+      for (final n in (report['sitio_names'] as List?) ?? const []) '$n',
+    ];
+    final ids =
+        (report['sitio_ids'] as List?) ??
+        [if (report['sitio_id'] != null) report['sitio_id']];
+    if (saved.isEmpty && ids.isEmpty) return 'Whole barangay';
+    final shown = saved.isNotEmpty
+        ? saved
+        : [
+            for (final id in ids)
+              if ((names?.of('sitios', id, fallback: '') ?? '').isNotEmpty)
+                names!.of('sitios', id),
+          ];
+    if (shown.isEmpty) return 'Part of the barangay';
+    return '${shown.length == 1 ? 'Sitio' : 'Sitios'} ${shown.join(', ')}';
   }
 
   @override
@@ -270,7 +285,7 @@ class ReportSheet extends StatelessWidget {
     final guidance = report['priority_guidance'] ?? report['ai_recommendation'];
     final reason = report['rejection_reason'];
 
-    return SingleChildScrollView(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -314,26 +329,7 @@ class ReportSheet extends StatelessWidget {
             ),
 
           if (needs.isNotEmpty)
-            _Section(
-              label: 'What they need',
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final n in needs)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Icon(Icons.check_circle_outline, size: 22),
-                          const SizedBox(width: 8),
-                          Expanded(child: Text(n, style: t.titleMedium)),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
+            _Section(label: 'What they need', child: NeedChips(needs)),
 
           if (description.isNotEmpty)
             _Section(
@@ -389,23 +385,6 @@ class ReportSheet extends StatelessWidget {
                 style: t.bodyLarge?.copyWith(color: const Color(0xFFC62828)),
               ),
             ),
-
-          const SizedBox(height: 24),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(),
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-            ),
-            child: const Text('Close'),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: () => _openFullDetails(context),
-            style: OutlinedButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-            ),
-            child: const Text('See full details'),
-          ),
         ],
       ),
     );
@@ -441,8 +420,27 @@ class _Section extends StatelessWidget {
   }
 }
 
-/// Bell icon with an unread badge. Refreshes every 30 s, after any action
-/// in the app (api notifies listeners), and when the inbox is closed.
+/// How often the bell asks for new notifications (problema_napud 2.1: the
+/// Administrator should see a new report almost as soon as it is sent).
+const notificationPollInterval = Duration(seconds: 8);
+
+/// Opens what a notification is about (marks it read first).
+Future<void> openNotification(BuildContext context, Map n) async {
+  if (n['is_read'] != true) {
+    await api.post('/notifications/${n['notification_id']}/read');
+  }
+  final type = n['entity_type'] as String?;
+  final id = (n['entity_id'] as num?)?.toInt();
+  final opener = type == null ? null : notificationDestinations[type];
+  if (opener != null && id != null && context.mounted) {
+    opener(context, id, n['type'] as String?);
+  }
+}
+
+/// Bell icon with an unread badge. Checks every few seconds, after any
+/// action in the app (api notifies listeners), and when the inbox is
+/// closed. A notification that just arrived pops up as a short message
+/// with "View", so nobody has to keep opening the inbox.
 class NotificationBell extends StatefulWidget {
   const NotificationBell({super.key});
 
@@ -452,10 +450,12 @@ class NotificationBell extends StatefulWidget {
 
 class _NotificationBellState extends State<NotificationBell> {
   int unread = 0;
+  int? _newest; // id of the newest unread notification seen so far
   Timer? _timer;
 
   Future<void> _refresh() async {
     var n = 0;
+    Map? top;
     if (api.loggedIn) {
       final r = await api.get(
         '/notifications/',
@@ -463,9 +463,37 @@ class _NotificationBellState extends State<NotificationBell> {
       );
       if (r.ok && r.json is Map) {
         n = ((r.json as Map)['unread_count'] as num?)?.toInt() ?? 0;
+        final items = (r.json as Map)['items'];
+        if (items is List && items.isNotEmpty && items.first is Map) {
+          top = items.first as Map;
+        }
       }
     }
-    if (mounted) setState(() => unread = n);
+    if (!mounted) return;
+    final topId = (top?['notification_id'] as num?)?.toInt();
+    final isNew = topId != null && _newest != null && topId > _newest!;
+    if (topId != null && (_newest == null || topId > _newest!)) {
+      _newest = topId;
+    } else if (topId == null && _newest == null) {
+      _newest = 0; // nothing unread yet: anything later is new
+    }
+    setState(() => unread = n);
+    if (isNew) {
+      final note = top!;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text('${note['title'] ?? 'New notification'}'),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'View',
+            onPressed: () async {
+              await openNotification(context, note);
+              _refresh();
+            },
+          ),
+        ),
+      );
+    }
   }
 
   @override
@@ -473,7 +501,7 @@ class _NotificationBellState extends State<NotificationBell> {
     super.initState();
     _refresh();
     api.addListener(_refresh);
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _refresh());
+    _timer = Timer.periodic(notificationPollInterval, (_) => _refresh());
   }
 
   @override
@@ -513,23 +541,43 @@ class NotificationsScreen extends StatefulWidget {
 class _NotificationsScreenState extends State<NotificationsScreen> {
   // Changing this key makes Loader fetch again (after mark-read / mark-all).
   int _reload = 0;
+  Timer? _timer;
+  String? _seen; // unread count + newest id last shown
 
   void _refreshList() {
     if (mounted) setState(() => _reload++);
   }
 
+  /// While the inbox is open, new notifications appear by themselves.
+  Future<void> _check() async {
+    final r = await api.get('/notifications/', query: {'limit': '1'});
+    if (!mounted || !r.ok || r.json is! Map) return;
+    final m = r.json as Map;
+    final items = m['items'];
+    final top = items is List && items.isNotEmpty ? items.first : null;
+    final now =
+        '${m['unread_count']}|${top is Map ? top['notification_id'] : ''}';
+    if (_seen != null && now != _seen) _refreshList();
+    _seen = now;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+    _timer = Timer.periodic(notificationPollInterval, (_) => _check());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _open(BuildContext tileContext, Map<String, dynamic> n) async {
-    if (n['is_read'] != true) {
-      await api.post('/notifications/${n['notification_id']}/read');
-    }
-    final type = n['entity_type'] as String?;
-    final id = (n['entity_id'] as num?)?.toInt();
-    final opener = type == null ? null : notificationDestinations[type];
     // Open from this screen's context: refreshing the list rebuilds the
     // tiles, so the tapped tile's context would be gone and nothing opened.
-    if (opener != null && id != null && mounted) {
-      opener(context, id, n['type'] as String?);
-    }
+    await openNotification(context, n);
     _refreshList();
   }
 

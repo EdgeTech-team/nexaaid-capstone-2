@@ -19,9 +19,9 @@ from sqlalchemy.orm import Session
 from core.auth import get_current_user_optional, has_role
 from core.database import get_db
 from core.storage import get_storage
-from core.uploads import ( EXTENSION, LABEL, MAX_BYTES, PDF, PURPOSES, clean_image, file_url, hash_token, read_limited, sniff, )
+from core.uploads import ( EXTENSION, LABEL, MAX_BYTES, PDF, PURPOSES, clean_image, file_url, hash_token, local_path, read_limited, sniff, )
 
-from models.upload_model import Upload
+from models.upload_model import Upload, UploadBlob
 from models.user_rbac_model import User
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -71,7 +71,7 @@ def upload_file(
     storage = get_storage()
     storage.save(storage_key, data)
     try:
-        db.add(Upload(
+        up = Upload(
             file_id=file_id,
             purpose=purpose,
             visibility=rule.visibility,
@@ -81,7 +81,11 @@ def upload_file(
             storage_key=storage_key,
             owner_user_id=user.user_id if user is not None else None,
             claim_token_hash=hash_token(claim_token) if claim_token else None,
-        ))
+        )
+        db.add(up)
+        db.flush()
+        # The shared copy, so every machine on this database can serve it.
+        db.add(UploadBlob(upload_id=up.upload_id, data=data))
         db.flush()  # commit happens in get_db
     except Exception:
         storage.delete(storage_key)  # don't leave an orphan file behind
@@ -123,8 +127,8 @@ def get_file(
         if not allowed:
             raise missing
  
-    path = get_storage().path(up.storage_key)
-    if not path.exists():
+    path = local_path(db, up)
+    if path is None:
         raise missing
  
     disposition = "attachment" if up.content_type == PDF else "inline"

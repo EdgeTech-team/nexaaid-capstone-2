@@ -13,6 +13,7 @@ import io
 import secrets
 from dataclasses import dataclass
 from datetime import datetime,timedelta, timezone
+from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
 from fastapi import HTTPException, status
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from core.config import settings
 from core.storage import get_storage
-from models.upload_model import Upload
+from models.upload_model import Upload, UploadBlob
 
 MAX_BYTES = settings.MAX_UPLOAD_MB * 1024 * 1024
 UNCLAIMED_TTL = timedelta(hours=24) #ownerless registration uploads are purged after this
@@ -113,6 +114,27 @@ def clean_image(data: bytes, content_type: str) -> bytes:
             status.HTTP_400_BAD_REQUEST, 
             "The image could not be read. Please take or choose the photo again.",
         )
+
+
+def local_path(db: Session, up: Upload) -> Optional[Path]:
+    """The file on this machine's disk, or None when it is gone everywhere.
+
+    problema_napud 2.1: the team shares one database from several machines.
+    A file uploaded on another machine is copied here from upload_blobs;
+    a file uploaded before upload_blobs existed is copied INTO it the
+    first time the machine that has it serves it, so the others see it too.
+    """
+    path = get_storage().path(up.storage_key)
+    blob = db.get(UploadBlob, up.upload_id)
+    if path.exists():
+        if blob is None:
+            db.add(UploadBlob(upload_id=up.upload_id, data=path.read_bytes()))
+            db.flush()
+        return path
+    if blob is None:
+        return None
+    get_storage().save(up.storage_key, blob.data)
+    return path
 
 
 def _as_utc(dt: datetime) -> datetime:

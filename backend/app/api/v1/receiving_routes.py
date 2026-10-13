@@ -180,7 +180,9 @@ def receive_donation(
     receipt = _receive_line(db, current_user, donation, payload.actual_quantity, payload.notes)
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
                 "donation_awaiting_confirmation", "Donation awaiting acknowledgement",
-                f"Donation #{donation.donation_id} was received by CSWS and needs the CMO's acknowledgement.")
+                f"Donation #{donation.donation_id} was received by CSWS and needs the CMO's acknowledgement.",
+                # problema_napud 4.1: tapping it opens this entry.
+                entity_type="donation", entity_id=donation.donation_id)
     if donation.user_id:
         notify(db, donation.user_id, "donation_received",
                title=f"Donation entry {donation.batch_reference or donation.qr_reference} received",
@@ -232,7 +234,9 @@ def receive_entry(
     first = next(iter(rows.values()))
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
                 "donation_awaiting_confirmation", "Donation awaiting acknowledgement",
-                f"Donation {ref} ({len(ids)} item(s)) was received by CSWS and needs the CMO's acknowledgement.")
+                f"Donation {ref} ({len(ids)} item(s)) was received by CSWS and needs the CMO's acknowledgement.",
+                # problema_napud 4.1: tapping it opens this entry.
+                entity_type="donation", entity_id=ids[0])
     if first.user_id:
         notify(db, first.user_id, "donation_received",
                title=f"Donation entry {ref} received",

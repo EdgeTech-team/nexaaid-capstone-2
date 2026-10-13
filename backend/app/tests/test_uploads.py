@@ -133,3 +133,43 @@ def test_claim_upload_for_registration(files):
         db.close()
 
     assert client.get(up["url"], headers=t["donor"]).status_code == 200
+
+def test_file_uploaded_on_another_machine_is_still_served(files, tmp_path):
+    """problema_napud 2.1 ("QR image unavailable"): the team shares one
+    database from several machines. A file saved on machine A's disk must
+    still open on machine B, whose disk does not have it."""
+    client, t = files
+    up = ok(post(client, "id_front", png(), headers=t["donor"]), 201)
+    on_a = client.get(up["url"], headers=t["donor"]).content
+
+    other_machine = set_storage(LocalStorage(tmp_path / "machine-b"))
+    try:
+        r = client.get(up["url"], headers=t["donor"])
+        assert r.status_code == 200 and r.content == on_a
+        # Still private there: the donor's ID is not shown to other donors.
+        assert client.get(up["url"]).status_code == 404
+    finally:
+        set_storage(other_machine)
+
+
+def test_file_from_before_shared_copies_is_shared_once_served(files, tmp_path):
+    """Files uploaded before upload_blobs existed only live on the uploader's
+    disk. Serving one there once copies it to the database for the others."""
+    from models.upload_model import Upload, UploadBlob
+
+    client, t = files
+    up = ok(post(client, "id_front", png(), headers=t["donor"]), 201)
+    db = database.SessionLocal()
+    try:
+        row = db.query(Upload).filter(Upload.file_id == up["file_id"]).one()
+        db.query(UploadBlob).filter(UploadBlob.upload_id == row.upload_id).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    assert client.get(up["url"], headers=t["donor"]).status_code == 200  # machine A
+    other_machine = set_storage(LocalStorage(tmp_path / "machine-b"))
+    try:
+        assert client.get(up["url"], headers=t["donor"]).status_code == 200  # machine B
+    finally:
+        set_storage(other_machine)

@@ -69,6 +69,18 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Maria Santos'), findsOneWidget);
+      // problema_napud 1.2: one section, the status is a filter beside
+      // the role.
+      expect(find.text('All accounts'), findsOneWidget);
+      expect(find.text('All roles'), findsOneWidget);
+      expect(find.byKey(const ValueKey('accounts-status')), findsOneWidget);
+      expect(
+        tester.getCenter(find.text('All roles')).dy,
+        closeTo(
+          tester.getCenter(find.byKey(const ValueKey('accounts-status'))).dy,
+          8,
+        ),
+      );
       expect(find.byType(PopupMenuButton<String>), findsNothing);
       expect(find.byTooltip('Actions'), findsNothing);
       expect(find.text('Edit'), findsNothing);
