@@ -495,7 +495,20 @@ class DonationEntryCard extends StatelessWidget {
                 ),
               ),
               Gaps.h8,
-              DonationStatusChip('${e['status']}'),
+              // Oct 13: once its goods are on a delivery, the chip follows
+              // the timeline (In Transit / Delivered / Barangay confirmed).
+              switch (e['lifecycle_status']) {
+                'In Transit' => const StatusChip(
+                  'In Transit',
+                  label: 'In transit',
+                ),
+                'Delivered' => const StatusChip('Delivered'),
+                'Acknowledged' => const StatusChip(
+                  'Confirmed',
+                  label: 'Barangay confirmed',
+                ),
+                _ => DonationStatusChip('${e['status']}'),
+              },
             ],
           ),
           Gaps.v8,
@@ -558,9 +571,12 @@ class DonationEntryCard extends StatelessWidget {
                   ),
                   if (mixed || i['hold_reason'] != null) ...[
                     Gaps.h8,
-                    DonationStatusChip(
-                      i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
-                    ),
+                    if (isNotBrought(i))
+                      const StatusChip('Cancelled', label: 'Not brought')
+                    else
+                      DonationStatusChip(
+                        i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
+                      ),
                   ],
                 ],
               ),
