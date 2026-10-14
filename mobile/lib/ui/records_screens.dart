@@ -1,0 +1,493 @@
+import 'package:flutter/material.dart';
+
+import '../api.dart' show Roles;
+import 'batch_sheet.dart' show openDonationByQr;
+import 'csws_screens.dart' show ScannerPage;
+import 'donation_entries_view.dart';
+import 'expiry_widgets.dart';
+import 'home_nav.dart';
+import 'ops_screens.dart' show DeliveriesScreen;
+import 'widgets.dart';
+
+// ---------------------------------------------------------------------------
+// Appendix H 4.4 View donation records / 4.5 Monitor donation status
+// (Administrator, CSWS Main Office, CMO, Barangay Receiving Representative).
+// One record per donation entry (one QR), with its items, filters and
+// sorting; "Per report" groups them by report, and tapping a report opens
+// its records with a status summary on top.
+// ---------------------------------------------------------------------------
+class DonationRecordsScreen extends StatefulWidget {
+  final bool header;
+  const DonationRecordsScreen({super.key, this.header = true});
+
+  @override
+  State<DonationRecordsScreen> createState() => _DonationRecordsScreenState();
+}
+
+/// CSWS / Admin can reopen or cancel; the CMO and barangay only view.
+bool get _canManageRecords =>
+    api.role == Roles.cswsMain || api.role == Roles.admin;
+
+class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
+  bool perReport = false;
+  int _loads = 0;
+
+  /// problema_napud 5.1: the Administrator can scan a donor's QR here,
+  /// e.g. right after a donation notification.
+  Future<void> _scan() async {
+    final code = await Navigator.of(context)
+        .push<String>(MaterialPageRoute(builder: (_) => const ScannerPage()));
+    if (code == null || !mounted) return;
+    await openDonationByQr(context, code);
+    if (mounted) setState(() => _loads++);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final barangay = api.role == Roles.barangay;
+    return Loader(
+      key: ValueKey(_loads),
+      // include_closed: Expired / Cancelled donations get their own chips.
+      // A Barangay Rep only gets its own barangay's (backend enforced).
+      load: [
+        () => api.get('/donations/records', query: {'include_closed': 'true'}),
+      ],
+      builder: (context, data) {
+        final entries = (data[0] as List).cast<Map>();
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (widget.header)
+              PageHeader(
+                'Donation Records',
+                subtitle: barangay
+                    ? "Donations for your barangay's reports and where each "
+                          'one is in the process.'
+                    : 'Every donation entry and where it is in the process.',
+              ),
+            // CSWS Main Office scans on its Receive tab.
+            if (api.role == Roles.admin) ...[
+              AppButton(
+                'Scan QR code',
+                icon: Icons.qr_code_scanner,
+                expand: true,
+                onPressed: _scan,
+              ),
+              Gaps.v12,
+            ],
+            SegmentedButton<bool>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(
+                  value: false,
+                  icon: Icon(Icons.qr_code_2),
+                  label: Text('Entries'),
+                ),
+                ButtonSegment(
+                  value: true,
+                  icon: Icon(Icons.article_outlined),
+                  label: Text('Per report'),
+                ),
+              ],
+              selected: {perReport},
+              onSelectionChanged: (v) => setState(() => perReport = v.first),
+            ),
+            Gaps.v16,
+            if (perReport)
+              ReportRecordsList(entries)
+            else
+              DonationEntriesView(
+                entries: entries,
+                footer: _canManageRecords ? (e) => _EntryActions(e) : null,
+                emptyTitle: 'No donations to show.',
+                emptyMessage: barangay
+                    ? "Donations for your barangay's reports appear here."
+                    : 'Donation entries appear here once donors submit them.',
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// One card per report with its entry count and status mix. Tap a report
+/// to open its records.
+class ReportRecordsList extends StatelessWidget {
+  final List<Map> entries;
+  const ReportRecordsList(this.entries, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final byReport = <int, List<Map>>{};
+    for (final e in entries) {
+      byReport.putIfAbsent(e['report_id'] as int, () => []).add(e);
+    }
+    // Newest report first, as on the backend (group_by_report).
+    final ids = byReport.keys.toList()..sort((a, b) => b.compareTo(a));
+    if (ids.isEmpty) {
+      return const EmptyView(
+        icon: Icons.article_outlined,
+        title: 'No donations to show.',
+        message: 'Reports appear here once they have donations.',
+        compact: true,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final id in ids)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Space.sm),
+            child: AppCard(
+              key: ValueKey('report-records-$id'),
+              onTap: () => openReportRecords(
+                context,
+                reportId: id,
+                title: entryReportLabel(byReport[id]!.first),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          entryReportLabel(byReport[id]!.first),
+                          style: t.titleMedium,
+                        ),
+                        Gaps.v4,
+                        Text(
+                          _statusLine(byReport[id]!),
+                          style: t.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// "3 entries · 2 Pending · 1 Received".
+  static String _statusLine(List<Map> entries) {
+    final parts = [
+      '${entries.length} ${entries.length == 1 ? 'entry' : 'entries'}',
+      for (final s in entryStatuses)
+        if (entries.any((e) => e['status'] == s))
+          '${entries.where((e) => e['status'] == s).length} '
+              '${donationStatusText(s)}',
+    ];
+    return parts.join(' · ');
+  }
+}
+
+/// Reminder 4.4 "Records per report": every donation entry of one report
+/// with its status, a status summary on top, and the same status chips,
+/// search, handover filter and sort as the other records screens.
+void openReportRecords(
+  BuildContext context, {
+  required int reportId,
+  required String title,
+}) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => ReportRecordsScreen(reportId: reportId, title: title),
+    ),
+  );
+}
+
+class ReportRecordsScreen extends StatelessWidget {
+  final int reportId;
+  final String title;
+  const ReportRecordsScreen({
+    super.key,
+    required this.reportId,
+    required this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: Loader(
+        load: [
+          () => api.get(
+            '/donations/records',
+            query: {'report_id': '$reportId', 'include_closed': 'true'},
+          ),
+        ],
+        builder: (context, data) {
+          final entries = (data[0] as List).cast<Map>();
+          return ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              EntryStatusSummary(entries),
+              Gaps.v16,
+              DonationEntriesView(
+                entries: entries,
+                reportFilter: false,
+                footer: _canManageRecords ? (e) => _EntryActions(e) : null,
+                emptyTitle: 'No donations for this report yet.',
+                emptyMessage:
+                    'Donation entries appear here once donors submit them.',
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Reopen (Expired / Cancelled) or cancel for the donor (still waiting).
+class _EntryActions extends StatelessWidget {
+  final Map entry;
+  const _EntryActions(this.entry);
+
+  @override
+  Widget build(BuildContext context) {
+    final closed =
+        isClosedEntry(entry) ||
+        (entry['items'] as List).any(
+          (i) =>
+              (i as Map)['status'] == 'Expired' || i['status'] == 'Cancelled',
+        );
+    final waiting = hasWaitingItems(entry);
+    if (!closed && !waiting) return const SizedBox.shrink();
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: Space.xs,
+      children: [
+        if (waiting)
+          TextButton.icon(
+            onPressed: () => cancelDonation(context, entry, staff: true),
+            icon: const Icon(Icons.block),
+            label: const Text('Cancel for donor'),
+          ),
+        if (closed)
+          FilledButton.icon(
+            onPressed: () => reinstateDonation(context, entry),
+            icon: const Icon(Icons.restart_alt),
+            label: const Text('Reopen'),
+          ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Appendix H 6.3 View donation summaries per report (CMO, Administrator)
+// ---------------------------------------------------------------------------
+class ReportSummariesScreen extends StatelessWidget {
+  const ReportSummariesScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Loader(
+      load: [() => api.get('/cmo/dashboard')],
+      builder: (context, data) {
+        final rows = ((data[0] as Map)['per_report'] as List).cast<Map>();
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (rows.isEmpty)
+              const EmptyState('No received donations under any report yet.'),
+            for (final r in rows)
+              Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${r['report_label']}',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${r['confirmed_count']} acknowledged '
+                        '(${r['confirmed_quantity']} units, '
+                        'PHP ${r['confirmed_value']}) · '
+                        '${r['pending_count']} waiting for CMO',
+                      ),
+                      const SizedBox(height: 8),
+                      LinearProgressIndicator(
+                        value:
+                            ((num.tryParse('${r['fulfillment_percentage']}') ??
+                                        0) /
+                                    100)
+                                .clamp(0, 1)
+                                .toDouble(),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Fulfillment ${r['fulfillment_percentage']}%',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Appendix H 7.5 Monitor completed support records
+// (Administrator, CSWS Main Office, DRRMO)
+// ---------------------------------------------------------------------------
+class SupportRecordsScreen extends StatefulWidget {
+  const SupportRecordsScreen({super.key});
+
+  @override
+  State<SupportRecordsScreen> createState() => _SupportRecordsScreenState();
+}
+
+class _SupportRecordsScreenState extends State<SupportRecordsScreen> {
+  String stage = 'Completed';
+
+  @override
+  Widget build(BuildContext context) {
+    return Loader(
+      load: [() => api.get('/logistics/requests')],
+      builder: (context, data) {
+        final all = (data[0] as List).cast<Map>();
+        final rows = stage.isEmpty
+            ? all
+            : all.where((r) => r['stage'] == stage).toList();
+        return ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  for (final s in const [
+                    'Completed',
+                    '',
+                    'Pending',
+                    'Accepted',
+                    'In Transit',
+                    'Declined',
+                  ])
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: ChoiceChip(
+                        label: Text(s.isEmpty ? 'All' : s),
+                        selected: stage == s,
+                        onSelected: (_) => setState(() => stage = s),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (rows.isEmpty) const EmptyState('No logistics requests here.'),
+            for (final r in rows)
+              Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    child: Icon(
+                      r['request_type'] == 'Pickup'
+                          ? Icons.door_front_door_outlined
+                          : Icons.fire_truck_outlined,
+                    ),
+                  ),
+                  // A Disaster Unit pickup run has no delivery.
+                  title: Text(
+                    r['request_type'] == 'Pickup'
+                        ? 'Request #${r['request_id']} · pickup run, '
+                              '${r['destination'] ?? '-'}'
+                        : 'Request #${r['request_id']} · delivery '
+                              '#${r['delivery_id']} to ${r['destination'] ?? '-'}',
+                  ),
+                  subtitle: Text(
+                    [
+                      if (r['report_label'] != null) '${r['report_label']}',
+                      if ((r['goods'] as List?)?.isNotEmpty ?? false)
+                        (r['goods'] as List).join(', '),
+                      if (r['scheduled_date'] != null)
+                        'Scheduled ${niceDate(r['scheduled_date'])}',
+                      if (r['notes'] != null) '${r['notes']}',
+                    ].join('\n'),
+                  ),
+                  isThreeLine: true,
+                  trailing: Badge2.status('${r['stage']}'),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Administrator "Records" menu: the monitoring parts of Modules 4-8 that
+// Appendix H gives the Administrator (view only).
+// ---------------------------------------------------------------------------
+class AdminRecordsScreen extends StatefulWidget {
+  const AdminRecordsScreen({super.key});
+
+  @override
+  State<AdminRecordsScreen> createState() => _AdminRecordsScreenState();
+}
+
+class _AdminRecordsScreenState extends State<AdminRecordsScreen>
+    with HomeTargetListener<AdminRecordsScreen> {
+  String view = 'donations';
+
+  // A donation notification opens Records on Donations, with its Scan QR
+  // button, and the donation's pop-out on top.
+  @override
+  String get homeTab => 'Records';
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    view = target.view ?? 'donations';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: SegmentedButton<String>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: 'donations', label: Text('Donations')),
+              ButtonSegment(value: 'reports', label: Text('Per report')),
+              ButtonSegment(value: 'deliveries', label: Text('Deliveries')),
+              ButtonSegment(value: 'support', label: Text('Logistics')),
+            ],
+            selected: {view},
+            onSelectionChanged: (v) => setState(() => view = v.first),
+          ),
+        ),
+        Expanded(
+          child: switch (view) {
+            'reports' => const ReportSummariesScreen(),
+            'deliveries' => const DeliveriesScreen(readOnly: true),
+            'support' => const SupportRecordsScreen(),
+            _ => const DonationRecordsScreen(header: false),
+          },
+        ),
+      ],
+    );
+  }
+}

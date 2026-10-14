@@ -8,3 +8,8 @@ alembic
 bcrypt==4.0.1
 python-jose[cryptography]
 passlib[bcrypt]
+qrcode[pil]
+email-validator
+pytest
+httpx
+Pillow

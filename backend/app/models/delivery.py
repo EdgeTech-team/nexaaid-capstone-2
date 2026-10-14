@@ -20,14 +20,9 @@ from sqlalchemy import(
 
 from sqlalchemy.orm import relationship
 from core.database import Base
-
-class Item(Base):
-  
-
-    __tablename__ = "items"
-
-    item_id = Column(Integer, primary_key=True)
-    name = Column(String(150))
+from models.item_model import Item  # noqa: F401
+from models.barangay_model import Barangay  # noqa: F401
+from models.sitio_model import Sitio  # noqa: F401
 
 # module (3.10)
 
@@ -52,14 +47,27 @@ class Delivery(Base):
         Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
     )
 
-    status = Column(String(50),nullable=False)# 'Preparing', >'In Transit' > 'Delivered' > 'Confirmed'
+    status = Column(String(50),nullable=False)# 'Preparing', >'In Transit' > 'Delivered' > 'Confirmed' (or 'Cancelled')
 
     delivery_date = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
 
+    # Several reports on one truck (api/v1/trips.py). NULL = a delivery made
+    # on its own, exactly as before. stop_order: 1 = first barangay visited.
+    trip_id = Column(
+        Integer, ForeignKey("delivery_trips.trip_id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    stop_order = Column(Integer, nullable=True)
+
+    # Unexpected problems (api/v1/delivery_problems.py): a delivery that
+    # cannot go ahead is Cancelled, its goods go back to stock, and the
+    # reason is kept here (migration 9c4e2b7a1f35).
+    cancelled_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    cancel_reason = Column(Text, nullable=True)
+
     __table_args__ = (
         CheckConstraint(
-             "status IN ('Preparing','In Transit','Delivered', 'Confirmed')", 
+             "status IN ('Preparing','In Transit','Delivered', 'Confirmed', 'Cancelled')", 
              name="deliveries_status_check",
         ),
     )
@@ -73,6 +81,34 @@ class Delivery(Base):
     receipt = relationship(
         "Receipt", back_populates="delivery", uselist=False, cascade="all, delete-orphan"
     )
+    trip = relationship("DeliveryTrip", back_populates="deliveries")
+
+
+class DeliveryTrip(Base):
+    """One truck run that carries deliveries for several reports, e.g. three
+    Banilad reports and two nearby barangays in one go.
+
+    Each delivery inside keeps ONE report and ONE barangay, so stock per
+    report, the barangay's own receipt confirmation (UC-B1 alt 3a) and
+    fulfillment per report work exactly as for a single delivery. The trip
+    only groups them: prepare together, leave together, one stop per
+    barangay. Its status is worked out from its deliveries (api/v1/trips.py),
+    so it can never disagree with them. No route optimisation (Limitation 6).
+    """
+
+    __tablename__ = "delivery_trips"
+
+    trip_id = Column(Integer, primary_key=True)
+    trip_date = Column(TIMESTAMP(timezone=True), nullable=False)   # planned departure
+    vehicle_details = Column(Text, nullable=True)                  # e.g. "City truck, plate ABC 1234"
+    notes = Column(Text, nullable=True)
+    handled_by_user_id = Column(
+        Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
+
+    deliveries = relationship("Delivery", back_populates="trip", order_by="Delivery.stop_order")
+    handled_by = relationship("User", foreign_keys=[handled_by_user_id])
 
 class DeliveryItem(Base): 
         __tablename__ = "delivery_items"

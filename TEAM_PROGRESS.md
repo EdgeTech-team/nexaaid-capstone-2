@@ -8,7 +8,7 @@
 - Neon Postgres connected (pooled + direct URLs configured)
 - Real schema discovered mid-build — DB already had full production tables,
   models rewritten to match (User: user_id/password_hash, normalized Role
-  via role_id, not an enum)
+  via role_id, not an enum) 
 - Alembic baselined safely (schema-drop near-miss caught before running)
 - core/auth.py: JWT login, password hashing, require_role() dependency
 - /health, /health/secure, throwaway /token all tested working end-to-end
@@ -17,6 +17,226 @@
 
 **For the team:** see note below on real column names + role table before
 building anything that touches `users`.
+
+---
+
+## Castillo — Donation expiry, delivery filters, delivery trips (Oct 9)
+
+**Status:** Built and tested on a branch, waiting for team review before merge
+**Last updated:** Oct 9, 2026
+
+Three additions to the spec, agreed by the team on Oct 9. None of them are
+in the manuscript, so present them as improvements found during testing.
+
+**1. Donations that never arrive now end (Expired / Cancelled).**
+A pending donation used to stay Pending forever (manuscript 3.2 never closes
+it). Now: Drop Off expires 14 days after it was submitted; Door to Door 7 days
+after the preferred pickup time. Donors get a reminder 3 days before. Donors
+can cancel while it is still waiting (guests prove it with their phone
+number); CSWS can cancel for them, and can **Reopen** an expired one when
+the donor arrives late (UC-CM1 alt 2a). Nothing is deleted: the row keeps
+`closed_at`, `close_reason`, `closed_by_user_id` (NULL = the system).
+Received goods and inventory are never touched.
+- Rules: `services/donation_expiry.py`. Endpoints: `api/v1/donation_lifecycle_routes.py`
+  (`GET /donations/expiry-rules`, `POST /donations/entries/{ref}/cancel`,
+  `/reinstate`, `POST /donations/expiry/run`).
+- No scheduler needed: pending lists and dashboards run the check when they
+  load. Optional daily cron: `POST /donations/expiry/run` with header
+  `X-Cron-Token: <DONATION_CRON_TOKEN>`.
+- `.env` (optional): `DONATION_DROPOFF_DAYS=14`, `DONATION_PICKUP_GRACE_DAYS=7`,
+  `DONATION_REMINDER_DAYS=3`, `DONATION_CRON_TOKEN=...`
+
+**2. Deliveries screen: sorting, filtering, stock messages.**
+`GET /deliveries/` gains `sort` (newest, oldest, date_soonest, date_latest,
+status), `date_from`/`date_to`, `q` (barangay, item or delivery no.),
+`trip_id`, and several statuses at once. Each delivery now carries readable
+names (`destination_barangay_name`, `report_label`, `item_name`).
+`GET /deliveries/counts` feeds the filter chips. Stock errors name the item:
+"No more stock of Rice for this report." / "Only 50 kg of Rice left...".
+
+**3. Trips: several reports on one truck.** (3 Banilad reports + 2 nearby
+barangays in one go.) A trip groups ordinary deliveries; each still has one
+report and one barangay, so stock per report, the barangay's own receipt
+(UC-B1 alt 3a) and fulfillment per report work exactly as before.
+Prepare (stock taken all-or-nothing) → Start → Arrived at each stop →
+barangay confirms (one tap for all of theirs) → Completed automatically.
+Undo is allowed only while still preparing (stock goes back).
+No route optimisation (Limitation 6). Endpoints: `api/v1/trips.py`.
+DRRMO transport requests are still per delivery; per-trip requests are a
+later step (would make `logistics_requests.delivery_id` nullable).
+
+**Schema (2 migrations, both additive, upgrade/downgrade tested on Postgres):**
+- `5e1b8c3d9f20` physical_donations: statuses `Expired`, `Cancelled`; columns
+  `expires_at`, `reminder_sent_at`, `closed_at`, `close_reason`,
+  `closed_by_user_id`. Existing Pending rows get a deadline at least 7 days
+  after the migration runs, so nothing expires on deploy day.
+- `7a2c4e6b8d10` new table `delivery_trips`; deliveries get nullable
+  `trip_id` and `stop_order`.
+
+**Who should check what:**
+- **Hoyohoy** (donations 3.5): `donation_routes.py` now sets `expires_at` on
+  create and shows the deadline; entry/batch status knows Expired/Cancelled.
+  `/donations/records` hides closed entries unless `status=` or
+  `include_closed=true`. Run `test_donation_*`.
+- **Mariquit** (deliveries 3.10): `create_delivery` stock check moved to
+  `services/delivery_stock.py` (same 409, clearer message);
+  `advance_delivery` logic moved into `move_to_next_status()` (trips reuse it);
+  `_receive_line` explains how to reopen an expired donation. Run
+  `test_deliveries.py`, `test_delivery_lines.py`, `test_delivery_trips.py`.
+- **Fernandez** (dashboard 3.13): `/dashboard/csws-main` adds
+  `due_soon_donations`, `expired_donations`, `cancelled_donations` (existing
+  fields unchanged). New statuses `Expired` and `Completed` have colors in
+  `design/status.dart`.
+
+**Test before merging:** `pytest` (new: `test_donation_expiry.py`,
+`test_delivery_trips.py`), `TEST_POSTGRES_URL=... pytest
+tests/test_models_match_migrations.py`, then `flutter analyze` (could not be
+run in my environment). Migrations go to Neon only after review.
+
+---
+
+## Daniel — Door to Door pickup days, Disaster Unit pickup map, DRRMO support (Oct 10 notes)
+
+**Status:** Built and tested on branch `daniel/pickup-days-map-logistics` (from `copy-develop`), waiting for team review
+**Last updated:** Oct 10, 2026
+
+**1. Donors choose pickup days, not one date and time.** Door to Door now
+opens a pop-out with day buttons (M / T / W / Th / F, Sa and Su crossed out
+while CSWS does not pick up then) and the note "Pickup hours are 9:00 AM to
+5:00 PM". Stored in `physical_donations.pickup_days` ("1,3,5", 1 = Monday).
+Old entries keep `preferred_pickup_at`. Pickup hours default to 9 AM - 5 PM
+(`PICKUP_START_HOUR=9`). Expiry for a days-only pickup: 14 days after it was
+submitted (`DONATION_PICKUP_WINDOW_DAYS`).
+
+**2. Pickup map for the CSWS Disaster Unit** (new "Pickup map" tab; Main
+Office opens it from the Pickups tab, view only). A numbered pin per waiting
+Door to Door donation at the landmark the donor picked; tap a pin to see its
+landmark and address. Above the map: day buttons (with how many donors are
+home that day), landmark chips, and order: Nearest (one way, nearest stop
+next, starting at the CSWS office when `DROPOFF_LAT`/`DROPOFF_LNG` are set)
+or A to Z. Straight-line distance only, not road routing (Limitation 6).
+
+**3. Disaster Unit asks DRRMO for logistics support for a pickup run**, like
+Main Office does for deliveries: a day, the stops in order, trucks /
+volunteers / pushcarts. `POST /logistics/pickup-requests`. DRRMO sees it in
+the same list. The server checks that every donor is home that day.
+
+**4. Appendix H 7.1 and 7.2.** No driver count any more (a truck comes with
+its driver); trucks, volunteers and the new pushcarts can each be None. DRRMO
+cards highlight what is needed and when it was requested.
+
+**5. Daniel's QR items.** Donors can save their QR as an image (a small QR
+pass with the reference). The Receive scanner can read a QR from a photo.
+Scanning still opens the receive pop-up directly. The donor is told in
+order, once per donation entry: submitted, received by CSWS, acknowledged by
+the CMO.
+
+**6. Oct 11 follow-ups.** Main Office "Pickups" tab is the pickup map
+(the Overdue/Today list is gone). Pickups stay inside Cebu province
+(`PICKUP_AREA_BBOX`); pickups farther than `PICKUP_MAX_KM` (20) from the
+office are red, out of the route, and Main Office can decline them. Donors
+can edit or delete a donation while nothing of it was received
+(`PUT` / `DELETE /donations/entries/{ref}`, same QR); a declined one can be
+fixed (e.g. switched to Drop Off) and is waiting again. No staff
+notifications for donor edits/deletes; deleted entries leave every list,
+their notifications and any DRRMO pickup run. Tapping a donation
+notification opens that donation (and notification taps work again: they
+were lost when the list refreshed).
+
+**Schema (1 migration, additive, upgrade/downgrade tested on Postgres):**
+`d8f3a1c6b2e4` physical_donations.pickup_days; logistics_requests gets
+`request_type` ('Delivery' / 'Pickup'), `pickup_date`, `pickup_batches`, and
+`delivery_id` becomes nullable (a check keeps Delivery requests tied to a
+delivery).
+
+**Who should check what:**
+- **Hoyohoy** (donations): `schemas/physical_donation_schema.py` (pickup
+  days rules), `donation_routes.py` (pickup days in every view, Disaster Unit
+  may read `/donations/pickups`).
+- **Mariquit** (logistics/deliveries): `logistics_router.py`,
+  `drrmo_router.request_rows` (pickup runs), `delivery_problems.py` (the
+  Disaster Unit cancels only its own pickup runs).
+- **Fernandez** (UI): `ui/pickup_days.dart`, `ui/pickup_map.dart`,
+  `ui/logistics_cards.dart`, `ui/qr_save.dart`.
+
+**Tests:** `pytest` (new: `test_pickup_days_and_runs.py`,
+`test_donation_notice_order.py`), `flutter test test/pickup_days_test.dart`.
+
+---
+
+## Daniel — NEW_CONCERNS (Oct 11), on `copy-develop`
+
+**Status:** Built and tested on `copy-develop`
+**Last updated:** Oct 11, 2026
+
+**Mark: one migration to apply on Neon:** `a7c3e5f19b42` (run
+`alembic upgrade head` from `backend/app`). Without it, withdrawing a report
+fails with `CheckViolation ... chk_disaster_reports_status`: Neon has that
+check (it was never in our migrations) and it did not allow "Cancelled".
+The migration keeps every status the old check allowed and adds
+"Cancelled". It also adds `users.reviewed_at` / `reviewed_by_user_id` for
+reviewing individual donor registrations. Upgrade and downgrade tested on
+Postgres with the same check as Neon.
+
+**Daniel**
+- The Disaster Unit has no pickup map any more. Pickup runs (asking DRRMO
+  for trucks/volunteers for a pickup day) now come from the Main Office
+  "Pickups" tab, because that is where the map is. `POST
+  /logistics/pickup-requests` and `/donations/pickups` are Main Office only.
+- The Disaster Unit edits or withdraws its own report while the
+  Administrator has not validated it (Reports > Status > "Only my reports").
+  `GET /reports/mine`, `PUT /reports/{id}/mine` (a Rejected report goes back
+  to Pending and the Administrators are told again), `POST
+  /reports/{id}/withdraw` (status "Cancelled": kept for the record, can no
+  longer be validated or rejected).
+
+**Jenises**
+- Accounts > **Registrations** is the one place where the Administrator
+  reviews new registrations, individual donors and organizations alike:
+  Not Reviewed / Reviewed / All, Everyone / Individual donors /
+  Organizations, search, sort, and Mark Reviewed on each card
+  (`PATCH /admin/users/{id}/review` for donors). The separate
+  "Organizations" section is gone. The dashboard tile counts both
+  ("Registrations to review").
+- Tapping a notification moves to the page that already exists (the tab in
+  the bottom menu, on the right view) instead of opening a second copy:
+  `ui/home_nav.dart`. New report -> Admin Validate (Pending, the report
+  outlined first); new organization / donor -> Accounts > Registrations;
+  donations -> Receive / Acknowledge / donor Dashboard; deliveries ->
+  Deliveries / Incoming aid; logistics -> DRRMO Logistics. Admin and Main
+  Office dashboard tiles do the same.
+
+**Ivan** (donor dashboard left to Ivan)
+- Fulfillment status chips and sort on every staff report list: Validated
+  Reports for CMO, DRRMO and Barangay Rep (no priority chips there), and
+  the Administrator's Validate > Validated. No Done sections in staff lists.
+
+**Dave**
+- New internal account form uses the app's own cards, fields and buttons.
+  The separate "Employee ID" number is gone; the employee ID card stays
+  (required on create). A temporary password is still emailed.
+- The CMO "Acknowledges" one donation entry (one QR) with one tap, not per
+  item: `GET /cmo/entries/pending`, `/cmo/entries/acknowledged`, `POST
+  /cmo/entries/{ref}/decide`, `/cmo/entries/{ref}/revert`. The donor's
+  status changes to "Acknowledged" by itself (stored as Confirmed, shown as
+  "Acknowledged" everywhere). Dave2 items were already done.
+
+**Reminder items (4.4)**
+- Barangay Rep has donation records (new "Records" tab): only its own
+  barangay's reports, enforced in `GET /donations/records`, without donor
+  names or CMO notes.
+- Records per report: Records > "Per report" lists each report with its
+  status mix; tapping one opens its entries with a status summary on top and
+  the same status chips, search, handover filter and sort.
+
+**Tests:** `pytest` 161 passed, including the Postgres models-vs-migrations
+check (new: `test_report_edit_withdraw.py`, `test_cmo_entries.py`, barangay
+records in `test_donation_records.py`). `flutter test`: fixed the account
+form, report filter, accounts, entries and role menu tests. Still failing,
+and failing on `copy-develop` without these changes too: 3 in
+`donation_info_test`, 1 in `registration_test`, and 2 login tests
+(`forgot_password_test`, `widget_test` "Log in on the landing page") since
+the username login commits.
 
 ---
 
@@ -60,17 +280,32 @@ dashboard/report work also modified — diff this file carefully before merging.
 - Extended validate_report (3.4) to auto-create a report_fulfillments row,
   since 3.10/3.11 both depend on it existing.
 
+- **3.7 Needs Monitoring**: added priority_level filter to GET /reports/,
+  plus new GET /reports/monitoring endpoint joining disaster_reports with
+  report_fulfillments (joinedload, avoids N+1) — returns fulfillment
+  status/percentage/items alongside each report for staff/admin/barangay
+  official roles.
+- **3.11 AI-Assisted Priority Level Assignment**: rule-based scoring
+  (core/priority_engine.py) triggered on report validation — factors in
+  affected_families, estimated_quantity, disaster type severity, and
+  current fulfillment status. Handles the manuscript's alt flows:
+  insufficient data → "Needs Review", missing fulfillment record →
+  scored as max unmet need, out-of-range score → "Review Required"
+  safety fallback. Scoring weights/thresholds are a team-agreed rule,
+  not manuscript-specified (manuscript intentionally leaves the formula
+  open — see UC spec p.93-94).
 ### Still open / needs team input
 
-- Real RBAC role names are placeholders in code (e.g. "admin", "csws_main_office",
-  "barangay_receiving_rep") — need actual values from roles table once decided.
-- No way yet to check a Barangay Rep's own barangay_id when confirming receipt
-  (user_rbac_model has no such column) — the check is written but not enforced.
-- Missing: photo/evidence upload field on disaster_reports (FR 2.1 gap).
-- 3.11 (AI-Assisted Priority Level Assignment) and 3.12 (SMS-Based Alternative
-  Reporting) — not started; 3.12 partially covered by existing SMS ingestion.
-- 3.7 (Needs Monitoring) — not started; mostly extends existing GET /reports/.
-
+- DisasterType stub currently only has 1 real row ("Flood") in the actual
+  Neon DB — Typhoon/Fire/Earthquake severities in priority_engine.py's
+  DISASTER_SEVERITY map are unreachable until whoever owns reference
+  tables actually seeds those rows.
+- Found a real mismatch: models/report.py's DisasterType stub maps the
+  column as `name`, but the actual Postgres column is `type_name` — hasn't
+  broken anything yet since nothing reads it, but will the moment code
+  (like priority_engine.py) starts using report.disaster_type.name.
+  Flagging for whoever owns reference/lookup tables.
+  
 ## Fernandez — Dashboard (3.13)
 
 **Status:** In progress — core endpoints built, pending final verification
@@ -104,3 +339,57 @@ dashboard/report work also modified — diff this file carefully before merging.
 - Run `uvicorn main:app --reload` and test all 5 endpoints against the
   test admin account
 - Confirm empty-table case doesn't error (should return zeros)
+
+---
+
+## Fernandez — UI/UX lead: Sprint 0 design system + app shell, Item 8 landing page
+
+**Status:** Ready for review (branch `feat/0-design-system`)
+**Last updated:** Oct 1, 2026
+
+- **Design system** in `mobile/lib/design/`: light and dark themes, Lexend +
+  Source Sans 3 type, 8-pt spacing, radius scale, one fixed color per status
+  and priority, and components (`AppButton`, `AppTextField` with password eye
+  toggle, `AppCard`, `StatCard`, `StatusChip`, `PriorityChip`,
+  `FulfillmentBar`, `StatusTimeline`, skeletons, `EmptyView`, `ErrorView`).
+  Rules: `docs/design/DESIGN_SYSTEM.md`.
+- **Everyone's screens restyled for free:** `ui/widgets.dart` now draws the
+  old `Badge2`, `StatTile`, `Progress`, `EmptyState`, `PageHeader` and
+  `Loader` with the new components, and re-exports the design system.
+  No screen code changed.
+- **App shell:** new app bar, bottom bar on phones and side rail on
+  tablets/Chrome, Appearance setting (System / Light / Dark) in Profile,
+  `_shellActions` slot in `ui/home.dart` for the notification bell.
+- **Component gallery:** Profile > Developer tools > Design system gallery,
+  with dark-mode and 100/130/200% text switches.
+- **Landing page (Item 8)** in `ui/landing/`: shown when signed out. Hero
+  with the most urgent report, live stats, how it works, report feed with
+  priority filter, Donate as guest / Log in / Create account.
+- **Team tooling:** `docs/setup/EMULATOR.md`, `.github/pull_request_template.md`
+  (UI review gate checklist).
+- Tests: `test/design_system_test.dart`; `test/widget_test.dart` updated for
+  the landing page.
+
+**For Mariquit (Item 8 data):** the landing page already calls
+`GET /public/reports` and `GET /public/stats` and falls back to
+`/lookups` while they return 404. Shapes it expects:
+- `/public/reports`: list of validated reports with the same keys as
+  `/lookups` `validated_reports` (`id` or `report_id`, `disaster`,
+  `barangay`, `sitio`, `priority_level`, `assistance_needed`,
+  `affected_families`, `description`, `total_items_needed`,
+  `total_items_delivered`, `fulfillment_percentage`). No reporter info.
+- `/public/stats`: `{active_reports, families_affected, urgent_reports,
+  barangays, donations_received, deliveries_completed}`. Any missing key
+  is computed from the reports instead.
+
+**For Mariquit (privacy):** `/lookups` is public and its
+`pending_donations` / `received_donations` include QR references. Worth
+moving those lists behind auth when you build `/public/*`.
+
+**For everyone:** when you restyle your screens, replace `Brand.ink` /
+`Brand.muted` with `colorScheme.onSurface` / `onSurfaceVariant` so they
+work in dark mode.
+
+**Next:** Item 10 donor/org dashboards (stat cards, `StatusTimeline` per
+donation, supported-report progress, optional self-declared financial log),
+then Module 8 delivery screens.

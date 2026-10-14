@@ -40,3 +40,8 @@ mobile/.packages
 # OS
 .DS_Store
 Thumbs.db
+
+backend/app/var/
+.neon/
+.neon
+.env.*
