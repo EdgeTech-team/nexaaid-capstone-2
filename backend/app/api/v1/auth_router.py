@@ -1,19 +1,75 @@
 # routers/auth_router.py
-from fastapi import APIRouter, Depends, HTTPException, status
+import hashlib
+import hmac
+import secrets
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from core.database import get_db                     # [NOT SPECIFIED — confirm against Mark's real dependency name]
-from core.auth import hash_password                    # [NOT SPECIFIED — confirm against Mark's real function name]
+
+from core.audit import log_action
+from core.auth import hash_password
+from core.config import settings
+from core.database import get_db
+from core.email import send_email
+from core.uploads import claim_registration_files, file_url
 from models.user_rbac_model import User
 from models.role_model import Role
 from models.organization_model import Organization
-from schemas.user_schema import DonorRegisterRequest, UserResponse
+from models.password_reset_model import PasswordResetToken
+from schemas.user_schema import (
+    DonorRegisterRequest, ForgotPasswordRequest, ResetPasswordRequest, UserResponse,
+)
 from schemas.organization_schema import OrganizationRegisterRequest, OrganizationResponse
+from core.notifications import notify_event, notify_event_many, user_ids_with_role
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+RESET_CODE_MINUTES = 15
+MAX_RESET_ATTEMPTS = 5
+
+# The two register endpoints commit before they answer, because the app signs
+# the new account in right after registering and get_db() would only commit
+# after the response and the email task. Everything is still saved in one
+# commit at the end, so when an uploaded file can't be claimed (expired,
+# wrong token, wrong purpose), the account is not created either: the error
+# is raised first and get_db rolls everything back.
+
+
+def _email_taken(db: Session, email: str) -> bool:
+    return db.query(User).filter(func.lower(User.email) == email.lower()).first() is not None
+
+
+def _username_taken(db: Session, username: str) -> bool:
+    # Usernames are saved in lowercase (core/usernames.py), and the schema
+    # already lowercased this one.
+    return db.query(User).filter(User.username == username.lower()).first() is not None
+
+
+def _flush_or_409(db: Session, detail: str) -> None:
+    # Two people registering the same email at the same moment: the second
+    # one hits the UNIQUE constraint here instead of a 500.
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+
+
 @router.post("/register/donor", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-def register_donor(payload: DonorRegisterRequest, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == payload.email).first():
+def register_donor(
+    payload: DonorRegisterRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """UC-D1 Register Individual Donor (adviser item 2). The account is
+    validated automatically (Capstone 2 adviser comment 1.3) and the app
+    signs it in right after registering. The Administrator is notified and
+    may review the ID afterwards."""
+    if _email_taken(db, payload.email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
     donor_role = db.query(Role).filter(Role.role_name == "Individual Donor").first()
@@ -26,48 +82,229 @@ def register_donor(payload: DonorRegisterRequest, db: Session = Depends(get_db))
         email=payload.email,
         password_hash=hash_password(payload.password),
         contact_number=payload.contact_number,
+        id_type=payload.id_type,
+        address=payload.address,
         role_id=donor_role.role_id,
         organization_id=None,
+        terms_accepted_at=datetime.now(timezone.utc),
     )
     db.add(new_user)
+    _flush_or_409(db, "Email already registered")
+
+    # UC-D1 step 3: attach the ID photos uploaded before the account existed.
+    files = claim_registration_files(db, new_user, {
+        "id_front": payload.id_front,
+        "id_back": payload.id_back,
+    })
+    # The back is found later through the uploads table (owner + purpose).
+    new_user.id_document_url = file_url(files["id_front"].file_id)
+
+    log_action(db, new_user, "REGISTER DONOR", "users", new_user.user_id, new={
+        "email": new_user.email,
+        "id_type": new_user.id_type,
+        "consent_ra10173": True,
+    }, request=request)
+
+    # Adviser comment 1.1: the Administrator is told about every new donor.
+    notify_event_many(db, user_ids_with_role(db, ["Administrator"]),
+                      "donor_registered", "user", new_user.user_id,
+                      name=f"{new_user.first_name} {new_user.last_name}")
+
+    # Registration confirmation email (never includes the password).
+    background_tasks.add_task(
+        send_email, new_user.email, "Welcome to NexaAid",
+        f"Hello {new_user.first_name},\n\n"
+        "Your NexaAid donor account was created. You can now sign in "
+        "with this email address.\n\nNexaAid",
+    )
+    # Commit before answering: the app signs in right after registering, and
+    # get_db() would only commit after the response and the email task.
     db.commit()
     db.refresh(new_user)
     return new_user
 
 
 @router.post("/register/organization", response_model=OrganizationResponse, status_code=status.HTTP_201_CREATED)
-def register_organization(payload: OrganizationRegisterRequest, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == payload.contact_email).first():
+def register_organization(
+    payload: OrganizationRegisterRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """UC-A2: the organization registers, is validated automatically
+    (Capstone 2 adviser comment 1.3) and does not wait for the
+    Administrator: the app signs it in right after registering and it goes
+    straight to its dashboard. The supporting document is optional (comment
+    1.1). The registration form no longer asks for a registration number;
+    the field is still accepted here and stored as NULL when missing. The
+    Administrator reviews the registration afterwards."""
+    if _email_taken(db, payload.contact_email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    if db.query(Organization).filter(Organization.registration_no == payload.registration_no).first():
+    # The organization's login name. Optional for the API, required by the app.
+    if payload.username and _username_taken(db, payload.username):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username already taken")
+    # Only check for duplicates when a number was given. The app no longer
+    # sends one, so normally this is skipped (the value is stored as NULL).
+    if payload.registration_no and db.query(Organization).filter(
+        Organization.registration_no == payload.registration_no
+    ).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Registration number already used")
 
-    org_role = db.query(Role).filter(Role.role_name == "Relief Organization").first()  # [NOT SPECIFIED — confirm exact seeded string]
+    org_role = db.query(Role).filter(Role.role_name == "Relief Organization").first()
     if org_role is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Role configuration missing")
 
     new_org = Organization(
         org_name=payload.org_name,
-        organization_type=payload.organization_type,
+        organization_type=payload.organization_type_label,
         address=payload.address,
         contact_person=payload.contact_person,
         registration_no=payload.registration_no,
         contact_email=payload.contact_email,
-        legitimacy_document_url=payload.legitimacy_document_url,  # now a real column — this actually persists
+        # Organizations activate automatically; administrator review is separate.
+        status="Approved",
+        approved_at=datetime.now(timezone.utc),
     )
     db.add(new_org)
-    db.flush()
+    _flush_or_409(db, "Email or registration number already exists")
 
     new_user = User(
-        first_name=payload.contact_person,
-        last_name="",  # [NOT SPECIFIED — Capstone 1 doesn't split org contact into first/last name]
+        first_name=payload.contact_first_name,
+        last_name=payload.contact_last_name,
         email=payload.contact_email,
         password_hash=hash_password(payload.password),
         contact_number=payload.contact_number,
+        username=payload.username,
         role_id=org_role.role_id,
         organization_id=new_org.organization_id,
+        terms_accepted_at=datetime.now(timezone.utc),
     )
     db.add(new_user)
+    # Two people taking the same email or username at the same moment end up
+    # here, so the message names both.
+    _flush_or_409(db, "Email or username already registered")
+
+    # Adviser comment 1.1: the supporting document is optional. Some
+    # organization types (e.g. churches) have no documents.
+    if payload.legitimacy_document is not None:
+        files = claim_registration_files(db, new_user, {
+            "legitimacy_document": payload.legitimacy_document,
+        })
+        new_org.legitimacy_document_url = file_url(files["legitimacy_document"].file_id)
+
+    log_action(db, new_user, "REGISTER ORGANIZATION", "organizations", new_org.organization_id, new={
+        "org_name": new_org.org_name,
+        "email": new_user.email,
+        "consent_ra10173": True,
+    }, request=request)
+
+    notify_event_many(db, user_ids_with_role(db, ["Administrator"]),
+                      "org_registered", "organization", new_org.organization_id,
+                      name=new_org.org_name)
+
+    # Registration confirmation email (never includes the password).
+    # authenticate_user() lets the organization sign in right away because
+    # its status is already Approved.
+    # The organization can sign in with its username or this email address.
+    login_hint = (
+        f"your username ({new_user.username}) or this email address"
+        if new_user.username else "this email address"
+    )
+    background_tasks.add_task(
+        send_email, new_user.email, "Welcome to NexaAid",
+        f"Hello {new_user.first_name},\n\n"
+        f"Your organization, {new_org.org_name}, was registered and is active. "
+        f"You can now sign in with {login_hint}.\n\nNexaAid",
+    )
+    # Commit before answering (see register_donor): the app signs in at once.
     db.commit()
     db.refresh(new_org)
     return new_org
+
+
+# ---------------------------------------------------------------------------
+# Forgot password (adviser comment: login page). A 6-digit code is emailed,
+# expires after RESET_CODE_MINUTES, works once, and allows MAX_RESET_ATTEMPTS
+# wrong guesses. Codes are stored hashed.
+# ---------------------------------------------------------------------------
+
+def _code_hash(code: str) -> str:
+    return hmac.new(settings.SECRET_KEY.encode(), code.encode(), hashlib.sha256).hexdigest()
+
+
+@router.post("/forgot-password")
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(func.lower(User.email) == payload.email.lower()).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not registered")
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated. Please contact an administrator.",
+        )
+    if True:
+        now = datetime.now(timezone.utc)
+        # Only the newest code works.
+        db.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.user_id,
+            PasswordResetToken.used_at.is_(None),
+        ).update({"used_at": now})
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        db.add(PasswordResetToken(
+            user_id=user.user_id,
+            code_hash=_code_hash(code),
+            expires_at=now + timedelta(minutes=RESET_CODE_MINUTES),
+        ))
+        background_tasks.add_task(
+            send_email, user.email, "Your NexaAid password reset code",
+            f"Hello {user.first_name},\n\n"
+            f"Your password reset code is {code}. It expires in {RESET_CODE_MINUTES} minutes.\n\n"
+            "If you did not ask for this, you can ignore this email.\n\nNexaAid",
+        )
+    return {"detail": "A reset code was sent to your email."}
+
+
+@router.post("/reset-password")
+def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    bad = HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
+    user = db.query(User).filter(func.lower(User.email) == payload.email.lower()).first()
+    if user is None or not user.is_active:
+        raise bad
+
+    token = (
+        db.query(PasswordResetToken)
+        .filter(PasswordResetToken.user_id == user.user_id, PasswordResetToken.used_at.is_(None))
+        .order_by(PasswordResetToken.created_at.desc())
+        .first()
+    )
+    if token is None or token.attempts >= MAX_RESET_ATTEMPTS:
+        raise bad
+
+    now = datetime.now(timezone.utc)
+    expires = token.expires_at
+    if expires.tzinfo is None:  # SQLite (tests) returns naive datetimes
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < now:
+        raise bad
+
+    if not hmac.compare_digest(token.code_hash, _code_hash(payload.code)):
+        token.attempts += 1
+        db.commit()  # get_db rolls back when an error is raised, so save the wrong guess first
+        raise bad
+
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
+    token.used_at = now
+    log_action(db, user, "RESET PASSWORD", "users", user.user_id,
+               new={"method": "email code"}, request=request)
+    notify_event(db, user.user_id, "account_password_changed", "user", user.user_id)
+    db.flush()
+    return {"detail": "Password updated. You can now log in."}

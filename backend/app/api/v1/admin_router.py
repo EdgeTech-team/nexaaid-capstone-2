@@ -1,42 +1,481 @@
-# routers/admin_router.py
-from fastapi import APIRouter, Depends, HTTPException, status
+# api/v1/admin_router.py
+from datetime import datetime, timezone
+from typing import Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
+from core import email as mail_service
 from core.database import get_db
-from core.auth import hash_password, require_role      # [NOT SPECIFIED — confirm exact signature]
+from core.auth import hash_password, require_role
+from core.temp_password import generate_temp_password
+from core.uploads import transfer_upload
 from models.user_rbac_model import User
 from models.role_model import Role
-from schemas.user_schema import InternalAccountCreateRequest, UserResponse, INTERNAL_ROLES
+from models.organization_model import Organization
+from models.barangay_model import Barangay
+from models.audit_log_model import AuditLog
+from core.audit import log_action
+from schemas.user_schema import (
+    AccountUpdateRequest, BARANGAY_REP, INTERNAL_ROLES, InternalAccountCreateRequest, UserResponse,
+)
+from core.notifications import notify_event
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+def _queue_email(background_tasks: BackgroundTasks, to: Optional[str], subject: str, body: str) -> None:
+    """Send after the response, so a slow Gmail connection never delays the
+    request. Only plain strings are passed (never the db session), and
+    send_email() never raises or logs the body."""
+    if to:
+        background_tasks.add_task(mail_service.send_email, to, subject, body)
+
+
+def _email_in_use(db: Session, email: str, except_user_id: Optional[int] = None) -> bool:
+    q = db.query(User).filter(func.lower(User.email) == email.lower())
+    if except_user_id is not None:
+        q = q.filter(User.user_id != except_user_id)
+    return q.first() is not None
+
+
+def _employee_id_in_use(db: Session, employee_id: str, except_user_id: Optional[int] = None) -> bool:
+    q = db.query(User).filter(User.employee_id == employee_id)
+    if except_user_id is not None:
+        q = q.filter(User.user_id != except_user_id)
+    return q.first() is not None
+
+
+def _check_barangay(db: Session, barangay_id: int) -> None:
+    if db.get(Barangay, barangay_id) is None:
+        raise HTTPException(status_code=422, detail="Barangay not found")
+
 
 @router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_internal_account(
     payload: InternalAccountCreateRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("Administrator")),
 ):
-    if payload.role_name not in INTERNAL_ROLES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"role_name must be one of: {', '.join(sorted(INTERNAL_ROLES))}")
-
-    if payload.role_name == "Barangay Receiving Representative" and payload.assigned_barangay_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
-            detail="assigned_barangay_id is required for this role")
-
-    if db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+    """UC-A1 step 4 (staff accounts only). Role and barangay rules are in the
+    schema. The Administrator does not choose a password: the server makes a
+    temporary one, stores only its hash, and emails it to the staff member,
+    who must change it at first login (must_change_password)."""
+    # Fail before anything is saved: without working email nobody would ever
+    # learn the temporary password, and the account would be unusable.
+    if not mail_service.email_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email is not set up on the server, so the temporary password "
+                   "cannot be sent. Set SMTP_USER and SMTP_PASSWORD.",
+        )
+    if payload.assigned_barangay_id is not None:
+        _check_barangay(db, payload.assigned_barangay_id)
+    if _email_in_use(db, payload.email):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already in use")
+    if payload.employee_id and _employee_id_in_use(db, payload.employee_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Employee ID already in use")
 
     role = db.query(Role).filter(Role.role_name == payload.role_name).first()
     if role is None:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Role configuration missing")
 
+    temp_password = generate_temp_password()
+
     new_user = User(
         first_name=payload.first_name, last_name=payload.last_name,
-        email=payload.email, password_hash=hash_password(payload.password),
+        email=payload.email, password_hash=hash_password(temp_password),
         contact_number=payload.contact_number, role_id=role.role_id,
-        assigned_barangay_id=payload.assigned_barangay_id,   # works now — the model actually declares this column
+        assigned_barangay_id=payload.assigned_barangay_id,
+        must_change_password=True,
+        employee_id=payload.employee_id,
     )
     db.add(new_user)
-    db.commit()
+    db.flush()
+    # The card was uploaded by this Administrator; the staff member owns it now.
+    card = transfer_upload(db, payload.employee_id_card.file_id, current_user, new_user,
+                           "employee_id_card")
+    # The audit log never contains the password, only that the account was made.
+    log_action(db, current_user, "CREATE ACCOUNT", "users", new_user.user_id,
+               new={"email": new_user.email, "role": payload.role_name,
+                    "employee_id": new_user.employee_id,
+                    "assigned_barangay_id": new_user.assigned_barangay_id,
+                    "employee_id_card": card.file_id},
+               request=request)
+    notify_event(db, new_user.user_id, "account_created", "user", new_user.user_id)
+
+    # The new staff member gets their login details by email.
+    _queue_email(
+        background_tasks, new_user.email,
+        "Your NexaAid account is ready",
+        f"Hello {payload.first_name},\n\n"
+        f"An administrator created your NexaAid account ({payload.role_name}).\n\n"
+        f"Login email: {payload.email}\n"
+        f"Temporary password: {temp_password}\n\n"
+        "Sign in with this temporary password, then change it right away. "
+        "Do not share it with anyone.\n\n"
+        "NexaAid",
+    )
+    db.flush()
     db.refresh(new_user)
     return new_user
+
+
+ADMIN = "Administrator"
+
+
+def _user_row(u: User, orgs: dict, barangays: dict) -> dict:
+    org = orgs.get(u.organization_id)
+    return {
+        "user_id": u.user_id,
+        "name": f"{u.first_name} {u.last_name}".strip(),
+        "email": u.email,
+        "contact_number": u.contact_number,
+        "role": u.role.role_name if u.role else None,
+        "organization": org.org_name if org else None,
+        "organization_status": org.status if org else None,
+        "assigned_barangay_id": u.assigned_barangay_id,
+        "assigned_barangay": barangays.get(u.assigned_barangay_id),
+        "employee_id": u.employee_id,
+        "is_active": u.is_active,
+        # Why and when an Administrator deactivated the account (None while
+        # active, and for accounts deactivated before this was recorded).
+        "deactivation_reason": u.deactivation_reason,
+        "deactivated_at": u.deactivated_at,
+        # Individual donors: the Administrator reviewed the registration.
+        "reviewed_at": u.reviewed_at,
+        "reviewed_by_user_id": u.reviewed_by_user_id,
+        "created_at": u.created_at,
+    }
+
+
+# UC-A1 Manage Internal Accounts: list accounts, view role, update status/details
+@router.get("/users")
+def list_users(
+    role: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None, description="search name or email"),
+    active: Optional[bool] = Query(default=None, description="true = Active, false = Deactivated (I2)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    query = db.query(User).join(Role, Role.role_id == User.role_id)
+    if role:
+        query = query.filter(Role.role_name == role)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            User.email.ilike(like) | User.first_name.ilike(like) | User.last_name.ilike(like)
+        )
+    orgs = {o.organization_id: o for o in db.query(Organization).all()}
+    barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
+    users = query.order_by(User.user_id).all()
+    if active is not None:
+        # I2. Filtered in Python so it reads is_active the same way on Postgres
+        # and on the SQLite test database (like _active_admins below).
+        users = [u for u in users if bool(u.is_active) == active]
+    return [_user_row(u, orgs, barangays) for u in users]
+
+
+def _active_admins(db: Session) -> int:
+    # Counted in Python: there are only a few admins, and it reads is_active
+    # the same way on Postgres and on the SQLite test database.
+    admins = db.query(User).join(Role, Role.role_id == User.role_id).filter(Role.role_name == ADMIN)
+    return sum(1 for u in admins if u.is_active)
+
+
+@router.patch("/users/{user_id}")
+def update_user(
+    user_id: int,
+    payload: AccountUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """UC-A1 step 5: update account details or status, with the same rules
+    as account creation. Alt 3a: unknown account -> 404. Alt 5a: invalid
+    changes -> 422 (409 when the email / employee ID belongs to someone else).
+
+    Deactivating an active account needs deactivation_reason (422 without
+    it). The reason and the time are kept on the account and cleared when it
+    is activated again."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Account not found")  # UC-A1 3a
+    changes = payload.model_dump(exclude_unset=True)
+    card = changes.pop("employee_id_card", None)
+    reason = changes.pop("deactivation_reason", None)   # already stripped; blank -> None
+    for key in ("first_name", "last_name", "email", "contact_number", "role_name", "is_active"):
+        if key in changes and changes[key] is None:
+            raise HTTPException(status_code=422, detail=f"{key.replace('_', ' ').capitalize()} cannot be empty")
+
+    current_role = user.role.role_name if user.role else None
+    is_self = user.user_id == current_user.user_id
+    is_admin = current_role == ADMIN
+    is_internal = current_role in INTERNAL_ROLES
+    staff = is_internal or is_admin
+
+    # --- self-protection and "never zero active Administrators" -----------
+    if changes.get("is_active") is False:
+        if is_self:
+            raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+        if is_admin and user.is_active and _active_admins(db) <= 1:
+            raise HTTPException(status_code=400, detail="At least one active Administrator must remain")
+        if user.is_active and not reason:
+            raise HTTPException(status_code=422, detail="Give a reason when you deactivate an account")
+    new_role = changes.get("role_name")
+    if new_role is not None and new_role != current_role:
+        if is_self:
+            raise HTTPException(status_code=400, detail="You cannot change your own role")
+        if is_admin:
+            raise HTTPException(status_code=422, detail="Administrator accounts keep their role")
+        if not is_internal:
+            raise HTTPException(status_code=422,
+                                detail="Only internal accounts can have their role changed")
+    if not staff and ({"employee_id", "assigned_barangay_id"} & set(changes) or card):
+        raise HTTPException(status_code=422,
+                            detail="Employee ID, barangay and ID card are only for internal accounts")
+
+    # --- final values, checked as a whole ---------------------------------
+    final_role = new_role or current_role
+    if final_role == BARANGAY_REP:
+        final_brgy = changes.get("assigned_barangay_id", user.assigned_barangay_id)
+        if final_brgy is None:
+            raise HTTPException(status_code=422,
+                                detail="Choose the assigned barangay for a Barangay Receiving Representative")
+        _check_barangay(db, final_brgy)
+    elif staff:
+        if changes.get("assigned_barangay_id") is not None:
+            raise HTTPException(status_code=422,
+                                detail="Only a Barangay Receiving Representative has an assigned barangay")
+        if user.assigned_barangay_id is not None:
+            changes["assigned_barangay_id"] = None   # role changed away from barangay rep
+    if "email" in changes and _email_in_use(db, changes["email"], user.user_id):
+        raise HTTPException(status_code=409, detail="Email already in use")
+    if changes.get("employee_id") and _employee_id_in_use(db, changes["employee_id"], user.user_id):
+        raise HTTPException(status_code=409, detail="Employee ID already in use")
+
+    # --- apply ---------------------------------------------------------------
+    old, new = {}, {}
+    if new_role is not None and new_role != current_role:
+        role = db.query(Role).filter(Role.role_name == new_role).first()
+        if role is None:
+            raise HTTPException(status_code=500, detail="Role configuration missing")
+        old["role"], new["role"] = current_role, new_role
+        user.role_id = role.role_id
+    changes.pop("role_name", None)
+    for k, v in changes.items():
+        if getattr(user, k) != v:
+            old[k], new[k] = getattr(user, k), v
+            setattr(user, k, v)
+    if "is_active" in new:
+        # Keep the reason with the account while it is deactivated; clear it
+        # when the account is activated again.
+        old["deactivation_reason"] = user.deactivation_reason
+        if new["is_active"] is False:
+            user.deactivation_reason = reason
+            user.deactivated_at = datetime.now(timezone.utc)
+        else:
+            user.deactivation_reason = None
+            user.deactivated_at = None
+        new["deactivation_reason"] = user.deactivation_reason
+    if card is not None:
+        up = transfer_upload(db, card["file_id"], current_user, user, "employee_id_card")
+        new["employee_id_card"] = up.file_id
+
+    if new:
+        action = "UPDATE ACCOUNT"
+        if "is_active" in new and set(new) <= {"is_active", "deactivation_reason"}:
+            action = "ACTIVATE ACCOUNT" if new["is_active"] else "DEACTIVATE ACCOUNT"
+        log_action(db, current_user, action, "users", user.user_id, old=old, new=new, request=request)
+    db.flush()
+    db.refresh(user)
+    orgs = {o.organization_id: o for o in db.query(Organization).all()}
+    barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
+    return _user_row(user, orgs, barangays)
+
+
+# UC-A2 Review Organization Registrations.
+# Capstone 2 adviser comment 1.3: organizations are validated automatically
+# when they register, so this list is for review only. There is no approve /
+# hold / reject endpoint any more. To stop an organization, deactivate its
+# account with PATCH /admin/users/{user_id} (is_active = false).
+@router.get("/organizations")
+def list_organizations(
+    reviewed: Optional[bool] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    query = db.query(Organization)
+    if reviewed is True:
+        query = query.filter(Organization.reviewed_at.isnot(None))
+    elif reviewed is False:
+        query = query.filter(Organization.reviewed_at.is_(None))
+    # Reason and decision time kept in audit_logs from before comment 1.3,
+    # when the Administrator still approved, held or rejected organizations.
+    reasons, decided = {}, {}
+    for log in (db.query(AuditLog)
+                .filter(AuditLog.entity_type == "organizations",
+                        AuditLog.action.in_(["HOLD ORGANIZATION", "REJECT ORGANIZATION",
+                                             "APPROVE ORGANIZATION"]))
+                .order_by(AuditLog.log_id)):
+        reasons[log.entity_id] = (log.new_value or {}).get("reason")
+        decided[log.entity_id] = log.timestamp
+    # The organization's own account, for "View account" in Registrations.
+    accounts = {}
+    for u in db.query(User).filter(User.organization_id.isnot(None)).order_by(User.user_id):
+        accounts.setdefault(u.organization_id, u.user_id)
+    rows = []
+    for o in query.order_by(Organization.created_at.desc()).all():
+        rows.append({
+            "organization_id": o.organization_id,
+            "org_name": o.org_name,
+            "organization_type": o.organization_type,
+            "address": o.address,
+            "contact_person": o.contact_person,
+            "contact_email": o.contact_email,
+            "registration_no": o.registration_no,
+            "legitimacy_document_url": o.legitimacy_document_url,
+            # Comment 1.1: the document is optional, so this only means
+            # "no document submitted". It is not an error.
+            "document_missing": not (o.legitimacy_document_url or "").strip(),
+            "status": o.status,
+            # Older rows only (organizations rejected before comment 1.3).
+            "rejection_reason": o.rejection_reason,
+            "decision_reason": o.rejection_reason or reasons.get(o.organization_id),
+            "decided_at": decided.get(o.organization_id),
+            "approved_at": o.approved_at,
+            "reviewed_at": o.reviewed_at,
+            "reviewed_by_user_id": o.reviewed_by_user_id,
+            "created_at": o.created_at,
+            "user_id": accounts.get(o.organization_id),
+        })
+    return rows
+
+
+# Oct 11 notes (Jenises): the Administrator reviews individual donor
+# registrations too, in the same Registrations list as organizations.
+# Review only: donor accounts are active as soon as they register.
+DONOR = "Individual Donor"
+
+
+@router.patch("/users/{user_id}/review")
+def review_donor(
+    user_id: int,
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """Mark an individual donor's registration Reviewed or Not Reviewed."""
+    reviewed = payload.get("reviewed")
+    if not isinstance(reviewed, bool):
+        raise HTTPException(status_code=422, detail="'reviewed' must be true or false")
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not user.role or user.role.role_name != DONOR:
+        raise HTTPException(
+            status_code=409,
+            detail="Only individual donor registrations are reviewed here. "
+                   "Organizations are reviewed in their own list.",
+        )
+    old = {"reviewed_at": user.reviewed_at.isoformat() if user.reviewed_at else None}
+    if reviewed:
+        user.reviewed_at = user.reviewed_at or datetime.now(timezone.utc)
+        user.reviewed_by_user_id = user.reviewed_by_user_id or current_user.user_id
+    else:
+        user.reviewed_at = None
+        user.reviewed_by_user_id = None
+    new = {"reviewed_at": user.reviewed_at.isoformat() if user.reviewed_at else None}
+    if old != new:
+        log_action(db, current_user, "REVIEW DONOR", "users", user.user_id,
+                   old=old, new=new, request=request)
+    db.flush()
+    return {
+        "user_id": user.user_id,
+        "reviewed_at": user.reviewed_at,
+        "reviewed_by_user_id": user.reviewed_by_user_id,
+    }
+
+
+@router.patch("/organizations/{organization_id}/review")
+def review_organization(
+    organization_id: int,
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """Mark an organization Reviewed or Not Reviewed without changing activation."""
+    reviewed = payload.get("reviewed")
+    if not isinstance(reviewed, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="'reviewed' must be true or false",
+        )
+
+    org = db.get(Organization, organization_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    old = {
+        "reviewed_at": org.reviewed_at.isoformat() if org.reviewed_at else None,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
+
+    if reviewed:
+        org.reviewed_at = datetime.now(timezone.utc)
+        org.reviewed_by_user_id = current_user.user_id
+    else:
+        org.reviewed_at = None
+        org.reviewed_by_user_id = None
+
+    new = {
+        "reviewed_at": org.reviewed_at.isoformat() if org.reviewed_at else None,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
+
+    if old != new:
+        log_action(
+            db, current_user, "REVIEW ORGANIZATION", "organizations",
+            org.organization_id, old=old, new=new, request=request,
+        )
+
+    db.flush()
+    db.refresh(org)
+    return {
+        "organization_id": org.organization_id,
+        "org_name": org.org_name,
+        "status": org.status,
+        "reviewed_at": org.reviewed_at,
+        "reviewed_by_user_id": org.reviewed_by_user_id,
+    }
+
+
+# UC-A4 Monitor System Records: read-only activity logs
+@router.get("/audit-logs")
+def list_audit_logs(
+    limit: int = Query(default=100, ge=1, le=500),
+    entity_type: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    query = db.query(AuditLog, User.email).join(User, User.user_id == AuditLog.user_id)
+    if entity_type:
+        query = query.filter(AuditLog.entity_type == entity_type)
+    return [
+        {
+            "log_id": log.log_id,
+            "user": email,
+            "action": log.action,
+            "entity_type": log.entity_type,
+            "entity_id": log.entity_id,
+            "old_value": log.old_value,
+            "new_value": log.new_value,
+            "ip_address": log.ip_address,
+            "timestamp": log.timestamp,
+        }
+        for log, email in query.order_by(AuditLog.log_id.desc()).limit(limit).all()
+    ]

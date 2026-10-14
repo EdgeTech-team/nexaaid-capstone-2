@@ -7,17 +7,12 @@ ASSUMPTIONS TO VERIFY (same caveats as api/v1/reports.py):
 -Role names ("csws_main office", "barangay_receiving_rep", "admin")
 are placeholders- swap for real RBAC role names once Known.
 - confirm_receipt's barangay-match check (alt flow 3a: "delivery
-  record can't be matched to assigned barangay") assumes
-  current_user has a `.barangay_id` attribute. The real User model
-  (user_rbac_model.py) does NOT have this column today — there's no
-  confirmed way yet to know which barangay a Barangay Receiving
-  Representative belongs to. This check is written defensively
-  (skips enforcement if the attribute doesn't exist) so it doesn't
-  crash, but it is NOT actually enforcing anything until that's
-  resolved. Flagged clearly — do not treat this as done.
+  record can't be matched to assigned barangay") uses
+  users.assigned_barangay_id via core.auth.barangay_scope(). Barangay
+  Receiving Representatives also only list/see deliveries to that barangay.
 """
 
-from datetime import datetime, timezone 
+from datetime import date, datetime, timezone 
 from decimal import Decimal
 from typing import List, Optional
 
@@ -25,9 +20,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from core.database import get_db
-from core.auth import get_current_user, require_role
+from core.notifications import notify_event_many, user_ids_with_role
+from models.report import DisasterReport
+from core.auth import get_current_user, require_role, barangay_scope
+from core.audit import log_action
+from models.inventory_model import Inventory
+from models.audit_log_model import AuditLog
+from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
+from api.v1.drrmo_router import DRRMO
+from services.delivery_stock import check_stock, take_stock
+from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from schemas.delivery import (
     DeliveryCreate,
     DeliveryResponse,
@@ -59,6 +63,13 @@ def create_delivery(
   report = db.get (DisasterReport,payload.report_id)
   if not report:
     raise HTTPException(status_code=404, detail="Report not found")
+  if report.status != "Validated":
+    raise HTTPException(status_code=409, detail="Only validated reports can receive deliveries")
+
+  # Goods are released from this report's inventory (manuscript: "Inventory
+  # is linked to specific report records"), so there must be enough stock.
+  # services/delivery_stock.py: shared with trips, plain-language messages.
+  take_stock(check_stock(db, payload.report_id, payload.items))
 
   delivery = Delivery (
     report_id=payload.report_id,
@@ -81,54 +92,82 @@ def create_delivery(
       )
     )
 
-  db._flush()
+  db.flush()
+  log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
+             new={"status": "Preparing", "items": [i.model_dump() for i in payload.items]})
   db.refresh(delivery)
   return delivery
 
 # List — staff, with filters
+
+# Appendix H, Module 8.5: DRRMO also views delivery records (read only).
+# Sorting and filtering (Oct 9): status (one, or several comma-separated),
+# barangay, report, trip, delivery date range and a search box (delivery no.,
+# report no., barangay or item name). Names come with each delivery so the
+# app can show "Banilad" instead of an id.
+_LIST_ROLES = ("csws_main_office", "admin", "barangay_receiving_rep", "drrmo logistics support")
+
 
 @router.get("/",response_model=List[DeliveryResponse])
 def list_deliveries(
   status_filter: Optional[str] = Query(default=None, alias="status"),
   barangay_id: Optional[int]  = Query(default=None),
   report_id: Optional[int] = Query(default=None),
+  trip_id: Optional[int] = Query(default=None),
+  date_from: Optional[date] = Query(default=None, description="Delivery date on or after (Philippine date)"),
+  date_to: Optional[date] = Query(default=None, description="Delivery date on or before (Philippine date)"),
+  q: Optional[str] = Query(default=None, max_length=100),
+  sort: str = Query(default="newest", pattern="^(" + "|".join(DELIVERY_SORTS) + ")$"),
   skip: int = Query(default=0, ge=0),
   limit: int =Query(default=50, ge=1, le=200),
   db: Session = Depends(get_db),
-  current_user=Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep")),
+  current_user=Depends(require_role(*_LIST_ROLES)),
 
 ):
     query = db.query(Delivery).options(joinedload(Delivery.items))
-    if status_filter:
-       query = query.filter(Delivery.status == status_filter)
-    if barangay_id: 
-       query = query.filter(Delivery.destination_barangay_id == barangay_id)
-    if report_id: 
-        query= query.filter(Delivery.report_idc== report_id)
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+       query = query.filter(Delivery.destination_barangay_id == own_barangay)
+    query = apply_delivery_filters(
+       db, query, status=status_filter, barangay_id=barangay_id, report_id=report_id,
+       trip_id=trip_id, date_from=date_from, date_to=date_to, q=q, sort=sort)
+    return delivery_views(db, query.offset(skip).limit(limit).all())
 
-    return (
-       query.order_by(Delivery.created_at.desc())
-       .offset(skip)
-       .limit(limit)
-       .unique()
-       .all()
-    )
+
+@router.get("/counts")
+def delivery_counts(
+  barangay_id: Optional[int] = Query(default=None),
+  report_id: Optional[int] = Query(default=None),
+  db: Session = Depends(get_db),
+  current_user=Depends(require_role(*_LIST_ROLES)),
+):
+    """How many deliveries are in each status, for the filter chips
+    ("In Transit (3)"). Same barangay scope as the list."""
+    query = db.query(Delivery)
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None:
+       query = query.filter(Delivery.destination_barangay_id == own_barangay)
+    if barangay_id:
+       query = query.filter(Delivery.destination_barangay_id == barangay_id)
+    if report_id:
+       query = query.filter(Delivery.report_id == report_id)
+    return status_counts(query)
 
 # Retrieve one
 
-@router.get("/ {delivery_id}", response_model=DeliveryResponse)
+@router.get("/{delivery_id}", response_model=DeliveryResponse)
 def get_delivery(
    delivery_id: int,
    db: Session= Depends(get_db),
-   current_user= Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep")),
-):
+    current_user= Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep", "DRRMO Logistics Support")),):
   delivery =(
      db.query(Delivery)
      .options(joinedload(Delivery.items))
      .filter(Delivery.delivery_id == delivery_id)
-     .first
+     .first()
   )
-  if not delivery: 
+  own_barangay = barangay_scope(current_user)
+  if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
      raise HTTPException(status_code=404, detail="Delivery not found")
   return delivery
 
@@ -147,9 +186,21 @@ def advance_delivery(
             status_code=404,
             detail="Delivery not found"
         )
+    move_to_next_status(db, delivery, current_user)
+    db.flush()
+    db.refresh(delivery)
 
+    return delivery
+
+
+def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delivery:
+    """One step forward (Preparing -> In Transit -> Delivered) with the
+    timestamped history and notifications. Used by advance_delivery and by
+    trips (api/v1/trips.py) so both behave the same. Does not commit."""
     # 'Confirmed' is the last stage and is only reached via
     # confirm_receipt below — never through this endpoint.
+    if delivery.status == "Cancelled":
+        raise HTTPException(status_code=409, detail="This delivery was cancelled.")
 
     if delivery.status == "Delivered":
         raise HTTPException(
@@ -175,11 +226,25 @@ def advance_delivery(
 
     current_index = _STATUS_SEQUENCE.index(delivery.status)
 
+    old_status = delivery.status
     delivery.status = _STATUS_SEQUENCE[current_index + 1]
-
-    db.flush()
-    db.refresh(delivery)
-
+    # Timestamped status history (UC-CM2 / delivery module step 3)
+    log_action(db, current_user, "UPDATE DELIVERY STATUS", "deliveries", delivery.delivery_id,
+               old={"status": old_status}, new={"status": delivery.status})
+   
+    report = db.get(DisasterReport, delivery.report_id)
+    recipients = set(user_ids_with_role(
+        db, ["Barangay Receiving Representative"],
+        barangay_id=delivery.destination_barangay_id))
+    # 7.5: DRRMO is notified whenever a delivery is advanced
+    recipients |= set(user_ids_with_role(
+        db, ["DRRMO Logistics Support"],
+        exclude_user_id=current_user.user_id))
+    if report and report.user_id != current_user.user_id:
+        recipients.add(report.user_id)
+    notify_event_many(db, recipients, "delivery_status_changed", "delivery",
+                      delivery.delivery_id,
+                      title=f"Delivery #{delivery.delivery_id}", status=delivery.status)
     return delivery
 
 
@@ -195,7 +260,7 @@ def confirm_receipt(
    delivery_id: int,
    payload: ReceiptConfirm,
    db: Session = Depends(get_db),
-   current_user=Depends(require_role("barngay_receiving_rep","admin")),
+   current_user=Depends(require_role("barangay_receiving_rep","admin")),
 ):
     delivery = (
       db.query(Delivery)
@@ -216,15 +281,13 @@ def confirm_receipt(
                   f"'{delivery.status}', must be delivered first",
     )
 
-    # Alt flow 3a: delivery must match the confirming rep's own barangay.
-    # not actually enforced yet — see module docstring. Written
-    # defensively so it doesn't crash while the real linkage is unknown.
-
-    user_barangay_id = getattr(current_user, "barangay_id", None)
-    if user_barangay_id is not None and user_barangay_id != delivery.destination_barangay_id:
+    # Alt flow 3a: delivery must match the confirming rep's assigned
+    # barangay (users.assigned_barangay_id).
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None and own_barangay != delivery.destination_barangay_id:
        raise HTTPException(
           status_code=403,
-          detail="This delivery is not assigned in your barangay.",
+          detail="This delivery is not for your assigned barangay.",
        )
 
     receipt = Receipt(
@@ -235,6 +298,16 @@ def confirm_receipt(
 
     db.add(receipt)
     delivery.status = "Confirmed"
+    log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
+               old={"status": "Delivered"}, new={"status": "Confirmed", "remarks": payload.remarks})
+    
+    report = db.get(DisasterReport, delivery.report_id)
+    recipients = set(user_ids_with_role(db, ["CSWS Main Office"],
+                                        exclude_user_id=current_user.user_id))
+    if report and report.user_id != current_user.user_id:
+        recipients.add(report.user_id)
+    notify_event_many(db, recipients, "delivery_receipt_confirmed", "delivery",
+                      delivery.delivery_id, title=f"Delivery #{delivery.delivery_id}")
     db.flush()
 
     fulfillment = _recalculate_fulfillment (
@@ -247,6 +320,69 @@ def confirm_receipt(
     db.refresh(fulfillment)
 
     return ReceiptConfirmResponse(receipt=receipt, delivery=delivery, fulfillment=fulfillment)
+
+# Acknowledge — Barangay Receiving Representative (UC-B1 step 5).
+# Acknowledgment is separate from receipt confirmation and only allowed
+# after it (delivery module alt flow 4a). Stored in audit_logs.
+
+@router.post("/{delivery_id}/acknowledge")
+def acknowledge_delivery(
+   delivery_id: int,
+   db: Session = Depends(get_db),
+   current_user=Depends(require_role("barangay_receiving_rep", "admin")),
+):
+    delivery = db.get(Delivery, delivery_id)
+    own_barangay = barangay_scope(current_user)
+    if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status != "Confirmed":
+        raise HTTPException(status_code=409, detail="Confirm receipt first, then acknowledge")
+    if _is_acknowledged(db, delivery_id):
+        raise HTTPException(status_code=409, detail="Already acknowledged")
+    log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery_id,
+               new={"acknowledged": True})
+    db.flush()
+    return {"delivery_id": delivery_id, "acknowledged": True}
+
+
+def _is_acknowledged(db: Session, delivery_id: int) -> bool:
+    return db.query(AuditLog).filter(
+        AuditLog.entity_type == "deliveries",
+        AuditLog.entity_id == delivery_id,
+        AuditLog.action == "ACKNOWLEDGE AID",
+    ).first() is not None
+
+
+# Status history with timestamps (who moved it, when)
+
+@router.get("/{delivery_id}/history")
+def delivery_history(
+   delivery_id: int,
+   db: Session = Depends(get_db),
+   current_user=Depends(require_role("csws_main_office", "admin", "barangay_receiving_rep", "drrmo logistics support")),
+):
+    delivery = db.get(Delivery, delivery_id)
+    own_barangay = barangay_scope(current_user)
+    if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    rows = (
+        db.query(AuditLog, User.email)
+        .join(User, User.user_id == AuditLog.user_id)
+        .filter(AuditLog.entity_type == "deliveries", AuditLog.entity_id == delivery_id)
+        .order_by(AuditLog.log_id)
+        .all()
+    )
+    return {
+        "delivery_id": delivery_id,
+        "status": delivery.status,
+        "acknowledged": any(l.action == "ACKNOWLEDGE AID" for l, _ in rows),
+        "history": [
+            {"action": l.action, "old": l.old_value, "new": l.new_value,
+             "by": email, "at": l.timestamp}
+            for l, email in rows
+        ],
+    }
+
 
 # Fulfillment recalculation — internal helper, not an endpoint
 
@@ -313,9 +449,3 @@ def _recalculate_fulfillment(
   
   db.flush()
   return fulfillment
-
-
-
-
-
-

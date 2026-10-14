@@ -11,15 +11,58 @@ Split by intent, not just by model:
 - Response: full row, safe to return to any authorized reader.
 - Sms* : the SMS ingestion path, which creates a report + its metadata
   together in one call.
+
+CHANGE LOG
+- Concerns2.txt 2.1 (Castillo): affected_families and estimated_quantity
+  now only accept whole numbers within realistic limits. Text like
+  "dwadawdas" or decimals is rejected with a 422, and 0 / negative values
+  are rejected. Limits are the constants below so they are easy to adjust.
+  Input-only: existing rows and all response schemas are unchanged.
 """
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, Literal
+from typing import List, Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SourceType = Literal["web", "mobile", "sms"]
+from models.report import canonical_source
+
+# Stored exactly as the live DB constraint expects; any casing is accepted
+# on input ("web", "WEB", ...) and normalised.
+SourceType = Literal["Web", "Mobile", "SMS"]
+
+# ---------------------------------------------------------------------------
+# Input limits (Concerns2.txt 2.1)
+# The largest Cebu City barangays have roughly 15,000-17,000 households, so
+# 20,000 families covers any single-barangay report with room to spare.
+# Confirm both numbers with CSWS / your adviser; change them here only.
+# ---------------------------------------------------------------------------
+MAX_AFFECTED_FAMILIES = 20_000
+MAX_ESTIMATED_QUANTITY = 100_000
+
+# Accepts 12 or "12" (in case the app sends the text field as a string),
+# rejects letters ("dwadawdas") and decimals (12.5).
+AffectedFamilies = Optional[int]
+EstimatedQuantity = Optional[int]
+
+
+def _families_field():
+    return Field(
+        default=None,
+        ge=1,
+        le=MAX_AFFECTED_FAMILIES,
+        description=f"Whole number from 1 to {MAX_AFFECTED_FAMILIES:,}",
+    )
+
+
+def _quantity_field():
+    return Field(
+        default=None,
+        ge=1,
+        le=MAX_ESTIMATED_QUANTITY,
+        description=f"Whole number from 1 to {MAX_ESTIMATED_QUANTITY:,}",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -30,11 +73,39 @@ class DisasterReportCreate(BaseModel):
     disaster_type_id: int
     barangay_id: int
     sitio_id: Optional[int] = None
+    # Several sitios of the barangay (problema_napud 2.2). When given, it
+    # wins over sitio_id; empty = the whole barangay.
+    sitio_ids: Optional[List[int]] = None
     description: Optional[str] = None
-    affected_families: Optional[int] = Field(default=None, ge=0)
+    affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
-    estimated_quantity: Optional[int] = Field(default=None, ge=0)
-    source: SourceType = "web"
+    estimated_quantity: EstimatedQuantity = _quantity_field()
+    source: SourceType = "Web"
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _canonical_source(cls, v):
+        return canonical_source(v)
+
+
+class DisasterReportEdit(BaseModel):
+    """The reporter (CSWS Disaster Unit) corrects their own report before the
+    Administrator validates it (Oct 11 notes). Same fields as a new report;
+    the source stays as it was."""
+    disaster_type_id: int
+    barangay_id: int
+    sitio_id: Optional[int] = None
+    # Several sitios of the barangay (problema_napud 2.2). When given, it
+    # wins over sitio_id; empty = the whole barangay.
+    sitio_ids: Optional[List[int]] = None
+    description: Optional[str] = None
+    affected_families: AffectedFamilies = _families_field()
+    assistance_needed: Optional[str] = None
+    estimated_quantity: EstimatedQuantity = _quantity_field()
+
+
+class ReportWithdraw(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=300)
 
 
 class DisasterReportUpdate(BaseModel):
@@ -50,9 +121,9 @@ class DisasterReportUpdate(BaseModel):
     ai_priority_score: Optional[Decimal] = None
     ai_recommendation: Optional[str] = None
     description: Optional[str] = None
-    affected_families: Optional[int] = Field(default=None, ge=0)
+    affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
-    estimated_quantity: Optional[int] = Field(default=None, ge=0)
+    estimated_quantity: EstimatedQuantity = _quantity_field()
 
 
 class DisasterReportResponse(BaseModel):
@@ -63,6 +134,8 @@ class DisasterReportResponse(BaseModel):
     disaster_type_id: int
     barangay_id: int
     sitio_id: Optional[int]
+    sitio_ids: List[int] = []
+    sitio_names: List[str] = []
     description: Optional[str]
     affected_families: Optional[int]
     assistance_needed: Optional[str]
@@ -77,6 +150,14 @@ class DisasterReportResponse(BaseModel):
     rejection_reason: Optional[str]
     created_at: datetime
     updated_at: datetime
+    disaster_type_name: Optional[str] = None
+    barangay_name: Optional[str] = None
+    priority_guidance: Optional[str] = None
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _canonical_source(cls, v):
+        return canonical_source(v)
 
 
 # ---------------------------------------------------------------------------
@@ -111,10 +192,11 @@ class SmsReportIngest(BaseModel):
     disaster_type_id: int
     barangay_id: int
     sitio_id: Optional[int] = None
+    sitio_ids: Optional[List[int]] = None
     description: Optional[str] = None
-    affected_families: Optional[int] = Field(default=None, ge=0)
+    affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
-    estimated_quantity: Optional[int] = Field(default=None, ge=0)
+    estimated_quantity: EstimatedQuantity = _quantity_field()
 
 
 class SmsReportMetadataResponse(BaseModel):
@@ -131,3 +213,10 @@ class SmsReportMetadataResponse(BaseModel):
 class SmsReportIngestResponse(BaseModel):
     report: DisasterReportResponse
     sms_metadata: SmsReportMetadataResponse
+
+
+class ReportMonitoringResponse(DisasterReportResponse):
+    fulfillment_status: Optional[str] = None
+    fulfillment_percentage: Optional[Decimal] = None
+    total_items_needed: Optional[int] = None
+    total_items_delivered: Optional[int] = None

@@ -24,6 +24,7 @@ into app/alembic/env.py, so it's imported directly below.
 """
 
 from sqlalchemy import (
+    Table,
     Column,
     Integer,
     String,
@@ -34,9 +35,22 @@ from sqlalchemy import (
     CheckConstraint,
     func,
 )
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 
 from core.database import Base
+
+# Exact values allowed by the live disaster_reports_source_check constraint.
+REPORT_SOURCES = ("Web", "Mobile", "SMS")
+
+
+def canonical_source(value):
+    """'web' / 'WEB' / 'Web' -> 'Web' (and so on). Unknown values pass through
+    unchanged so validation can reject them."""
+    if isinstance(value, str):
+        for s in REPORT_SOURCES:
+            if value.strip().lower() == s.lower():
+                return s
+    return value
 
 # The real User model already exists — models/user_rbac_model.py (Hoyohoy's
 # 3.3) — and is already registered with Base via app/alembic/env.py. Import
@@ -44,39 +58,34 @@ from core.database import Base
 # 'users' table would crash SQLAlchemy with a mapper conflict the moment
 # both get imported into the same process.
 from models.user_rbac_model import User  # noqa: F401  (re-exported for convenience)
-
-
-# ---------------------------------------------------------------------------
-# STUB MODELS — delete each one once the real owner merges their model
-# ---------------------------------------------------------------------------
-
-class DisasterType(Base):
-    """STUB — real owner: whoever models reference/lookup tables. Delete on merge."""
-    __tablename__ = "disaster_types"
-
-    disaster_type_id = Column(Integer, primary_key=True)
-    name = Column(String(100))
-
-
-class Barangay(Base):
-    """STUB — real owner: whoever models reference/lookup tables. Delete on merge."""
-    __tablename__ = "barangays"
-
-    barangay_id = Column(Integer, primary_key=True)
-    name = Column(String(100))
-
-
-class Sitio(Base):
-    """STUB — real owner: whoever models reference/lookup tables. Delete on merge."""
-    __tablename__ = "sitios"
-
-    sitio_id = Column(Integer, primary_key=True)
-    name = Column(String(100))
-
+from models.city_model import City  # noqa: F401  (Barangay's FK needs 'cities' loaded)
+from models.disaster_type_model import DisasterType  # noqa: F401
+from models.barangay_model import Barangay  # noqa: F401
+from models.sitio_model import Sitio  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # REAL MODELS — owned by this module (3.4)
 # ---------------------------------------------------------------------------
+
+# problema_napud 2.2: a report can name several sitios of its barangay
+# (e.g. only 2 sitios were hit). disaster_reports.sitio_id keeps the first
+# one, so older code and views keep working. Migration b4e7c2d9f1a6.
+report_sitios = Table(
+    "report_sitios",
+    Base.metadata,
+    Column(
+        "report_id",
+        Integer,
+        ForeignKey("disaster_reports.report_id", ondelete="CASCADE", name="fk_report_sitios_report_id"),
+        primary_key=True,
+    ),
+    Column(
+        "sitio_id",
+        Integer,
+        ForeignKey("sitios.sitio_id", ondelete="CASCADE", name="fk_report_sitios_sitio_id"),
+        primary_key=True,
+    ),
+)
 
 class DisasterReport(Base):
     __tablename__ = "disaster_reports"
@@ -103,7 +112,7 @@ class DisasterReport(Base):
     assistance_needed = Column(Text, nullable=True)
     estimated_quantity = Column(Integer, nullable=True)
 
-    source = Column(String(20), nullable=False)  # 'web' | 'mobile' | 'sms'
+    source = Column(String(20), nullable=False)  # 'Web' | 'Mobile' | 'SMS'
 
     ai_priority_score = Column(Numeric(5, 2), nullable=True)
     ai_recommendation = Column(Text, nullable=True)
@@ -128,7 +137,13 @@ class DisasterReport(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("source IN ('web','mobile','sms')", name="disaster_reports_source_check"),
+        CheckConstraint("source IN ('Web','Mobile','SMS')", name="disaster_reports_source_check"),
+        # Cancelled = withdrawn by the reporter before validation (kept for
+        # the record). Migration a7c3e5f19b42.
+        CheckConstraint(
+            "status IN ('Cancelled', 'Pending', 'Rejected', 'Validated')",
+            name="chk_disaster_reports_status",
+        ),
     )
 
     # Relationships
@@ -136,6 +151,10 @@ class DisasterReport(Base):
     disaster_type = relationship("DisasterType")
     barangay = relationship("Barangay")
     sitio = relationship("Sitio")
+    # Every sitio the report names (empty = the whole barangay).
+    sitios = relationship(
+        "Sitio", secondary=report_sitios, order_by="Sitio.sitio_id", lazy="selectin"
+    )
     validator = relationship("User", foreign_keys=[validated_by])
     sms_metadata = relationship(
         "SmsReportMetadata",
@@ -144,6 +163,10 @@ class DisasterReport(Base):
         cascade="all, delete-orphan",
     )
 
+    @validates("source")
+    def _canonical_source(self, key, value):
+        return canonical_source(value)
+
     fulfillment = relationship(
         "ReportFulfillment",
         back_populates="report",
@@ -151,6 +174,38 @@ class DisasterReport(Base):
         cascade="all, delete-orphan",
     )
 
+    # Display names for the mobile app (Report.fromJson reads
+    # disaster_type_name / barangay_name). Plain properties built from the
+    # relationships above: no new columns, no migration. They reach the API
+    # only if the response schema declares them (see DisasterReportResponse).
+    @property
+    def disaster_type_name(self):
+        return self.disaster_type.type_name if self.disaster_type else None
+
+    @property
+    def barangay_name(self):
+        return self.barangay.barangay_name if self.barangay else None
+
+    # problema_napud 2.2: every sitio the report names. Reports saved before
+    # report_sitios existed fall back to their one disaster_reports.sitio_id.
+    @property
+    def sitio_ids(self) -> list:
+        ids = [s.sitio_id for s in self.sitios]
+        return ids or ([self.sitio_id] if self.sitio_id else [])
+
+    @property
+    def sitio_names(self) -> list:
+        names = [s.sitio_name for s in self.sitios]
+        if not names and self.sitio is not None:
+            names = [self.sitio.sitio_name]
+        return names
+
+    @property
+    def priority_guidance(self):
+        # Imported here to avoid a circular import at module load.
+        from core.priority_engine import explain_priority
+        return explain_priority(self)
+    
 class SmsReportMetadata(Base):
     __tablename__ = "sms_report_metadata"
 
