@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -20,12 +21,15 @@ class ApiResult {
   final int status; // 0 = network error / blocked by the browser
   final dynamic json; // decoded body, or null if not JSON
   final String raw;
+
   ApiResult(this.status, this.json, this.raw);
 
   bool get ok => status >= 200 && status < 300;
 
   String get pretty {
-    if (json != null) return const JsonEncoder.withIndent('  ').convert(json);
+    if (json != null) {
+      return const JsonEncoder.withIndent('  ').convert(json);
+    }
     return raw.isEmpty ? '(empty response)' : raw;
   }
 
@@ -33,16 +37,20 @@ class ApiResult {
   String get errorText {
     if (json is Map && json['detail'] != null) {
       final d = json['detail'];
+
       if (d is String) return d;
-      // 422 from FastAPI: a list of {loc, msg, ...}. Show just the messages.
+
+      // 422 from FastAPI: a list of {loc, msg, ...}.
       if (d is List && d.every((e) => e is Map && e['msg'] is String)) {
         return d
             .map((e) => (e['msg'] as String).replaceFirst('Value error, ', ''))
             .toSet()
             .join('\n');
       }
+
       return const JsonEncoder.withIndent('  ').convert(d);
     }
+
     return raw;
   }
 }
@@ -50,9 +58,13 @@ class ApiResult {
 /// Tiny API client + session state (token, email, role).
 class Api extends ChangeNotifier {
   Api._();
+
   static final Api instance = Api._();
 
+  // Default backend: deployed NexaAid Render service.
+  // This avoids resetting to localhost when the app restarts.
   String baseUrl = _defaultBase();
+
   String? token;
   String? email;
   String? role;
@@ -68,9 +80,11 @@ class Api extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Dropdown data from GET /lookups: disaster_types, barangays, sitios,
-  /// items, reports -> list of {id, name}. Cached; cleared after any change.
+  /// Dropdown data from GET /lookups:
+  /// disaster_types, barangays, sitios, items, reports -> list of {id, name}.
+  /// Cached; cleared after any change.
   Future<Map<String, dynamic>>? _lookups;
+
   Future<Map<String, dynamic>> lookups() => _lookups ??= get('/lookups').then(
     (r) => r.ok && r.json is Map
         ? Map<String, dynamic>.from(r.json as Map)
@@ -85,12 +99,9 @@ class Api extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Use the deployed backend on Android, Chrome, and other platforms.
   static String _defaultBase() {
-    // The Android emulator reaches the host machine at 10.0.2.2
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8000';
-    }
-    return 'http://localhost:8000';
+    return 'https://nexaaid-capstone-2.onrender.com';
   }
 
   void setBase(String v) {
@@ -107,51 +118,67 @@ class Api extends ChangeNotifier {
   }) async {
     try {
       var uri = Uri.parse('$baseUrl$path');
+
       if (query != null && query.isNotEmpty) {
         uri = uri.replace(queryParameters: query);
       }
+
       final req = http.Request(method, uri);
-      if (token != null) req.headers['Authorization'] = 'Bearer $token';
+
+      if (token != null) {
+        req.headers['Authorization'] = 'Bearer $token';
+      }
+
       if (form != null) {
-        req.bodyFields = form; // sets the form content-type itself
+        req.bodyFields = form;
       } else if (body != null) {
         req.headers['Content-Type'] = 'application/json';
         req.body = jsonEncode(body);
       }
+
       final streamed = await req.send().timeout(const Duration(seconds: 20));
+
       final res = await http.Response.fromStream(streamed);
+
       dynamic decoded;
+
       try {
         decoded = jsonDecode(res.body);
       } catch (_) {
         decoded = null;
       }
+
       // A new report / item may now exist, so reload dropdowns.
       if (method != 'GET' &&
           res.statusCode < 300 &&
           !path.startsWith('/token')) {
         refreshLookups();
       }
+
       return ApiResult(res.statusCode, decoded, res.body);
     } catch (e) {
       return ApiResult(
         0,
         null,
-        'Network error: $e\n\nIs uvicorn running and is the base URL right? '
-        'In Chrome a server crash (500) also shows up here, so check the '
-        'uvicorn terminal for a traceback.',
+        'Network error: $e\n\n'
+        'Check the internet connection and API base URL. '
+        'If using the deployed backend, verify the Render service.',
       );
     }
   }
 
   Future<ApiResult> get(String path, {Map<String, String>? query}) =>
       send('GET', path, query: query);
+
   Future<ApiResult> post(String path, {Map<String, dynamic>? body}) =>
       send('POST', path, body: body ?? {});
+
   Future<ApiResult> patch(String path, {Map<String, dynamic>? body}) =>
       send('PATCH', path, body: body ?? {});
+
   Future<ApiResult> put(String path, {Map<String, dynamic>? body}) =>
       send('PUT', path, body: body ?? {});
+
   Future<ApiResult> delete(String path) => send('DELETE', path);
 
   /// POST /uploads as multipart form data (purpose + file).
@@ -163,27 +190,37 @@ class Api extends ChangeNotifier {
   }) async {
     try {
       final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/uploads'));
-      if (token != null) req.headers['Authorization'] = 'Bearer $token';
+
+      if (token != null) {
+        req.headers['Authorization'] = 'Bearer $token';
+      }
+
       req.fields['purpose'] = purpose;
+
       req.files.add(
         http.MultipartFile.fromBytes('file', bytes, filename: filename),
       );
+
       final streamed = await req.send().timeout(const Duration(seconds: 60));
+
       final res = await http.Response.fromStream(streamed);
+
       dynamic decoded;
+
       try {
         decoded = jsonDecode(res.body);
       } catch (_) {
         decoded = null;
       }
+
       return ApiResult(res.statusCode, decoded, res.body);
     } catch (e) {
       return ApiResult(0, null, 'Network error: $e');
     }
   }
 
-  /// Downloads a file the server only gives to allowed users (private
-  /// uploads: GET /uploads/{file_id} checks owner / Administrator).
+  /// Downloads a file the server only gives to allowed users.
+  /// Private uploads: GET /uploads/{file_id} checks owner / Administrator.
   /// Returns (status, bytes); status 0 means the server was not reached.
   Future<(int, Uint8List?)> download(String path) async {
     try {
@@ -193,30 +230,40 @@ class Api extends ChangeNotifier {
             headers: {if (token != null) 'Authorization': 'Bearer $token'},
           )
           .timeout(const Duration(seconds: 60));
+
       return (res.statusCode, res.statusCode == 200 ? res.bodyBytes : null);
     } catch (_) {
       return (0, null);
     }
   }
 
-  //   // ---- auth ----
+  // ---- Authentication ----
+
   Future<ApiResult> login(String emailIn, String password) async {
     final r = await send(
       'POST',
       '/token',
       form: {'username': emailIn.trim(), 'password': password},
     );
+
     if (r.ok && r.json is Map && r.json['access_token'] != null) {
       token = r.json['access_token'] as String;
       email = emailIn.trim();
       role = null;
       guest = false;
+
       final user = r.json['user'];
       mustChangePassword = user is Map && user['must_change_password'] == true;
+
       final me = await get('/health/secure');
-      if (me.ok && me.json is Map) role = me.json['role']?.toString();
+
+      if (me.ok && me.json is Map) {
+        role = me.json['role']?.toString();
+      }
+
       notifyListeners();
     }
+
     return r;
   }
 
@@ -224,7 +271,7 @@ class Api extends ChangeNotifier {
   Future<ApiResult> forgotPassword(String email) =>
       post('/auth/forgot-password', body: {'email': email.trim()});
 
-  /// POST /auth/reset-password: the emailed code plus the new password.
+  /// POST /auth/reset-password: emailed code plus the new password.
   Future<ApiResult> resetPassword(
     String email,
     String code,
@@ -249,7 +296,7 @@ class Api extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// I1: POST /auth/change-password. Clears [mustChangePassword] on success.
+  /// POST /auth/change-password. Clears mustChangePassword on success.
   Future<ApiResult> changePassword(
     String current,
     String newPassword,
@@ -263,10 +310,12 @@ class Api extends ChangeNotifier {
         'confirm_password': confirm,
       },
     );
+
     if (r.ok) {
       mustChangePassword = false;
       notifyListeners();
     }
+
     return r;
   }
 }
