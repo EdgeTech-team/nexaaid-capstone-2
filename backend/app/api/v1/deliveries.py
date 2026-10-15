@@ -31,7 +31,7 @@ from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
-from services.delivery_allocation import allocate_delivery, ready_donations, ready_lines
+from services.delivery_allocation import allocate_delivery, chosen_refs, ready_donations, ready_lines
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from schemas.delivery import (
     DeliveryCreate,
@@ -72,7 +72,9 @@ def create_delivery(
   # services/delivery_stock.py: shared with trips, plain-language messages.
   # Oct 13 (team): no items = the whole report, i.e. every donation the CMO
   # acknowledged that has not gone out yet (the app always does this).
-  lines = payload.items or ready_lines(db, payload.report_id)
+  # Oct 15: or only the entries Main Office kept ticked (each one whole).
+  refs = None if payload.items else chosen_refs(db, payload.report_id, payload.batch_references)
+  lines = payload.items or ready_lines(db, payload.report_id, refs)
   if not lines:
     raise HTTPException(
       status_code=409,
@@ -103,7 +105,7 @@ def create_delivery(
 
   db.flush()
   # Whose donations these goods are: first received, first sent.
-  allocate_delivery(db, delivery)
+  allocate_delivery(db, delivery, refs)
   log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
              new={"status": "Preparing", "items": [i.model_dump() for i in lines]})
   db.refresh(delivery)

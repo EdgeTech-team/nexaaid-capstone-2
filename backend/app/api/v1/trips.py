@@ -38,7 +38,7 @@ from models.report import DisasterReport
 from schemas.delivery import ReceiptConfirm
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
-from services.delivery_allocation import allocate_delivery, ready_lines
+from services.delivery_allocation import allocate_delivery, chosen_refs, ready_lines
 from services.delivery_views import delivery_views, report_labels
 
 router = APIRouter(prefix="/trips", tags=["Delivery trips"])
@@ -71,6 +71,8 @@ class TripStop(BaseModel):
     destination_sitio_id: Optional[int] = None
     # Empty = every acknowledged donation of the report not sent yet (Oct 13).
     items: List[TripLine] = []
+    # Oct 15: the donation entries that go, each whole (None = all acknowledged).
+    batch_references: Optional[List[str]] = None
 
 
 class TripCreate(BaseModel):
@@ -254,9 +256,10 @@ def create_trip(
         reports[stop.report_id] = report
 
     # Oct 13 (team): a stop without items takes the whole report.
-    lines_of = {}
+    lines_of, refs_of = {}, {}
     for stop in payload.reports:
-        lines_of[stop.report_id] = stop.items or ready_lines(db, stop.report_id)
+        refs_of[stop.report_id] = None if stop.items else chosen_refs(db, stop.report_id, stop.batch_references)
+        lines_of[stop.report_id] = stop.items or ready_lines(db, stop.report_id, refs_of[stop.report_id])
         if not lines_of[stop.report_id]:
             raise HTTPException(
                 status_code=409,
@@ -298,7 +301,7 @@ def create_trip(
         for line in lines_of[stop.report_id]:
             db.add(DeliveryItem(delivery_id=delivery.delivery_id, item_id=line.item_id, quantity=line.quantity))
         db.flush()
-        allocate_delivery(db, delivery)   # whose donations: first received, first sent
+        allocate_delivery(db, delivery, refs_of[stop.report_id])   # whose donations
         # Same history entry a single delivery gets, plus the trip number.
         log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
                    new={"status": "Preparing", "trip_id": trip.trip_id,
