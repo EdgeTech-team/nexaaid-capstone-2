@@ -809,8 +809,9 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   String? brgyId; // destination; defaults to the report's barangay
   bool changeBrgy = false;
 
-  /// Oct 13: donations that go (GET /deliveries/ready); null = loading.
-  int? ready;
+  /// Oct 15: the ticked donation entries (each goes whole); null = loading.
+  Set<String>? chosen;
+  int get ready => chosen?.length ?? 0;
   String? date; // ISO, UTC
   bool tried = false;
   bool busy = false;
@@ -825,7 +826,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
       report = r;
       brgyId = '${r['barangay_id']}';
       changeBrgy = false;
-      ready = null;
+      chosen = null;
     });
   }
 
@@ -833,7 +834,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
     setState(() => tried = true);
     if (report == null) return;
     if (!_form.currentState!.validate()) return;
-    if ((ready ?? 0) == 0 || date == null) return;
+    if (ready == 0 || date == null) return;
     setState(() => busy = true);
     final r = await act(
       context,
@@ -843,7 +844,8 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           'report_id': report!['report_id'],
           'destination_barangay_id': int.parse(brgyId!),
           'delivery_date': date,
-          // No items: the whole report (every acknowledged donation).
+          // Oct 15: the ticked donation entries, each one whole.
+          'batch_references': chosen!.toList(),
         },
       ),
       success: 'Delivery prepared',
@@ -959,8 +961,8 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                   ReadyDonations(
                     key: ValueKey('ready-${report!['report_id']}'),
                     reportId: report!['report_id'] as int,
-                    onLoaded: (n) {
-                      if (mounted) setState(() => ready = n);
+                    onChanged: (refs) {
+                      if (mounted) setState(() => chosen = refs);
                     },
                   ),
                   // 3. When
@@ -982,7 +984,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                     },
                   ),
                   Gaps.v24,
-                  if ((ready ?? 0) > 0)
+                  if (ready > 0)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
@@ -993,7 +995,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                       ),
                     ),
                   FilledButton.icon(
-                    onPressed: busy || (ready ?? 0) == 0 ? null : _submit,
+                    onPressed: busy || ready == 0 ? null : _submit,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size.fromHeight(52),
                     ),

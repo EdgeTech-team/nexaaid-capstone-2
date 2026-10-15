@@ -40,6 +40,9 @@ class DeliveryCreate(BaseModel):
     # Empty = every acknowledged donation of the report that has not gone
     # out yet (Oct 13; what the app sends). Typed lines are still accepted.
     items: List[DeliveryItemCreate] = []
+    # Oct 15: the donation entries (batch references) that go, each whole.
+    # Left out = every acknowledged entry of the report.
+    batch_references: Optional[List[str]] = None
 
 class DeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

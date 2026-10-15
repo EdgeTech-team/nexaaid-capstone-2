@@ -138,3 +138,33 @@ def test_not_brought_closes_the_item_instead_of_partly_received(api):
     # Already closed: it cannot be marked again.
     assert client.post(f"/donations/entries/{ref}/receive", headers=t["csws"], json={
         "not_brought": [two]}).status_code == 409
+
+
+def test_main_office_picks_whole_entries_and_the_rest_waits(api):
+    """Oct 15 (team): too much for one truck? Donor A's and B's entries go,
+    donor C's waits for the next delivery. An entry always goes whole."""
+    client, t = api
+    rid = _report(client, t)
+    a, b, cc = _give(client, t, rid, 50), _give(client, t, rid, 30), _give(client, t, rid, 20)
+    r = client.post("/deliveries/", headers=t["csws"], json={
+        "report_id": rid, "destination_barangay_id": 1, "delivery_date": "2026-10-20T08:00:00",
+        "batch_references": [a["batch_reference"], b["batch_reference"]]})
+    assert r.status_code == 201, r.text
+    assert [(i["item_id"], i["quantity"]) for i in r.json()["items"]] == [(1, 80)]
+    ok(client.post(f"/deliveries/{r.json()['delivery_id']}/advance", headers=t["csws"]))
+    assert _entry(client, t, a["batch_reference"])["lifecycle_status"] == "In Transit"
+    assert _entry(client, t, b["batch_reference"])["lifecycle_status"] == "In Transit"
+    assert _entry(client, t, cc["batch_reference"])["lifecycle_status"] == "Confirmed"   # waits
+    ready = ok(client.get(f"/deliveries/ready/{rid}", headers=t["csws"]))
+    assert [e["batch_reference"] for e in ready["entries"]] == [cc["batch_reference"]]
+
+    # An entry already sent (or not this report's) cannot be picked.
+    r = client.post("/deliveries/", headers=t["csws"], json={
+        "report_id": rid, "destination_barangay_id": 1, "delivery_date": "2026-10-20T08:00:00",
+        "batch_references": [a["batch_reference"]]})
+    assert r.status_code == 409 and a["batch_reference"] in r.json()["detail"]
+    # Next trip takes C, whole.
+    r = client.post("/trips/", headers=t["csws"], json={"trip_date": "2026-10-21T08:00:00",
+        "reports": [{"report_id": rid, "batch_references": [cc["batch_reference"]]}]})
+    assert r.status_code == 201, r.text
+    assert r.json()["total_quantity"] == 20

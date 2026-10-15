@@ -24,7 +24,9 @@ sent again. A trip that is undone deletes its deliveries, and with them
 their allocations.
 """
 from collections import defaultdict
-from typing import Iterable
+from typing import Iterable, Optional
+
+from fastapi import HTTPException
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -55,10 +57,11 @@ def _allocated(db: Session, donation_ids: Iterable[int]) -> dict:
     return {d: int(q or 0) for d, q in rows}
 
 
-def pool(db: Session, report_id: int, item_id: int) -> list:
+def pool(db: Session, report_id: int, item_id: int, refs: Optional[set] = None) -> list:
     """[(donation, received_at, quantity not sent yet)] in the order goods
-    are taken: acknowledged first, then oldest received first."""
-    rows = (
+    are taken: acknowledged first, then oldest received first. refs: only
+    these donation entries (batch references), when Main Office chose them."""
+    q = (
         db.query(PhysicalDonation, ReceivedGoods)
         .join(ReceivedGoods, ReceivedGoods.donation_id == PhysicalDonation.donation_id)
         .filter(
@@ -66,8 +69,10 @@ def pool(db: Session, report_id: int, item_id: int) -> list:
             PhysicalDonation.item_id == item_id,
             PhysicalDonation.status.in_(("Received", "Confirmed")),
         )
-        .all()
     )
+    if refs is not None:
+        q = q.filter(PhysicalDonation.batch_reference.in_(list(refs)))
+    rows = q.all()
     sent = _allocated(db, [d.donation_id for d, _ in rows])
     out = []
     for d, g in rows:
@@ -78,11 +83,11 @@ def pool(db: Session, report_id: int, item_id: int) -> list:
     return out
 
 
-def plan(db: Session, report_id: int, item_id: int, quantity: int) -> list:
+def plan(db: Session, report_id: int, item_id: int, quantity: int, refs: Optional[set] = None) -> list:
     """[(donation, take, left before)] for `quantity` of one item."""
     out = []
     need = quantity
-    for d, _, left in pool(db, report_id, item_id):
+    for d, _, left in pool(db, report_id, item_id, refs):
         if need <= 0:
             break
         take = min(left, need)
@@ -91,19 +96,42 @@ def plan(db: Session, report_id: int, item_id: int, quantity: int) -> list:
     return out
 
 
-def ready_lines(db: Session, report_id: int) -> list:
-    """Oct 13 (team): a delivery takes EVERY donation of its report that the
-    CMO acknowledged and that has not gone out yet. Returns the lines
-    [{item_id, quantity}] for POST /deliveries/ and trips. Donations still
-    waiting for the CMO stay in stock for the next delivery."""
-    rows = (
-        db.query(PhysicalDonation.item_id)
-        .filter(PhysicalDonation.report_id == report_id, PhysicalDonation.status == "Confirmed")
-        .distinct().all()
-    )
+def ready_refs(db: Session, report_id: int) -> set:
+    """Batch references of the acknowledged entries not sent yet."""
+    return {e["batch_reference"] for e in ready_donations(db, report_id)["entries"]}
+
+
+def chosen_refs(db: Session, report_id: int, refs: Optional[Iterable[str]]) -> set:
+    """Oct 15 (team): the donation entries this delivery takes, always WHOLE.
+    None = every acknowledged entry of the report. Otherwise the ones Main
+    Office kept ticked; the others wait for the next delivery. Refuses an
+    entry that is not acknowledged, not this report's, or already sent."""
+    ready = ready_refs(db, report_id)
+    if refs is None:
+        return ready
+    want = {(r or "").strip().upper() for r in refs if (r or "").strip()}
+    wrong = sorted(want - ready)
+    if wrong:
+        raise HTTPException(
+            status_code=409,
+            detail="These donations cannot go on this delivery (not acknowledged by the CMO, "
+                   f"already sent, or for another report): {', '.join(wrong)}",
+        )
+    return want
+
+
+def ready_lines(db: Session, report_id: int, refs: Optional[set] = None) -> list:
+    """The lines [{item_id, quantity}] that carry the chosen entries whole
+    (all acknowledged entries when refs is None)."""
+    refs = ready_refs(db, report_id) if refs is None else refs
+    if not refs:
+        return []
+    item_ids = {i for (i,) in db.query(PhysicalDonation.item_id).filter(
+        PhysicalDonation.report_id == report_id,
+        PhysicalDonation.batch_reference.in_(list(refs))).distinct()}
     out = []
-    for (item_id,) in rows:
-        qty = sum(left for d, _, left in pool(db, report_id, item_id) if d.status == "Confirmed")
+    for item_id in sorted(item_ids):
+        qty = sum(left for d, _, left in pool(db, report_id, item_id, refs) if d.status == "Confirmed")
         if qty > 0:
             out.append(_Line(item_id, qty))
     return out
@@ -167,7 +195,7 @@ def ready_donations(db: Session, report_id: int) -> dict:
     }
 
 
-def allocate_delivery(db: Session, delivery: Delivery) -> None:
+def allocate_delivery(db: Session, delivery: Delivery, refs: Optional[set] = None) -> None:
     """Record whose goods each line of a new delivery takes. Call once its
     items are flushed. Lines for the same item are planned one after the
     other, so they never take the same goods twice. If the pool has less
@@ -175,7 +203,7 @@ def allocate_delivery(db: Session, delivery: Delivery) -> None:
     lines = (db.query(DeliveryItem).filter(DeliveryItem.delivery_id == delivery.delivery_id)
              .order_by(DeliveryItem.delivery_item_id).all())
     for line in lines:
-        for d, take, _ in plan(db, delivery.report_id, line.item_id, line.quantity):
+        for d, take, _ in plan(db, delivery.report_id, line.item_id, line.quantity, refs):
             db.add(DeliveryAllocation(
                 delivery_item_id=line.delivery_item_id, donation_id=d.donation_id, quantity=take,
             ))

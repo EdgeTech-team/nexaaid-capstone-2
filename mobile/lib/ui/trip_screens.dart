@@ -614,8 +614,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   /// report_id -> item_id -> quantity box
   final Map<int, Map<int, TextEditingController>> qty = {};
 
-  /// Oct 13: acknowledged donations ready per report (ReadyDonations).
-  final Map<int, int> _ready = {};
+  /// Oct 15: ticked donation entries per report (each goes whole).
+  final Map<int, Set<String>> _ready = {};
 
   final _sendForm = GlobalKey<FormState>();
   final vehicle = TextEditingController();
@@ -677,7 +677,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   bool get _stepOk => switch (step) {
     0 => chosen.isNotEmpty,
     // Oct 13: every report needs at least one acknowledged donation.
-    1 => chosen.isNotEmpty && chosen.every((r) => (_ready[r] ?? 0) > 0),
+    1 => chosen.isNotEmpty && chosen.every((r) => (_ready[r] ?? {}).isNotEmpty),
     _ => date != null,
   };
 
@@ -711,8 +711,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
       'reports': [
         for (final stop in _stops)
           for (final r in stop.value)
-            // No items: the whole report (every acknowledged donation).
-            {'report_id': r},
+            // Oct 15: the ticked donation entries, each one whole.
+            {'report_id': r, 'batch_references': (_ready[r] ?? {}).toList()},
       ],
     };
     final res = await act(
@@ -846,8 +846,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
           Text(
-            'Every donation the CMO acknowledged goes, report by report. If '
-            'it does not fit the truck, request transport from DRRMO.',
+            'Every donation the CMO acknowledged is ticked. If they do not all '
+            'fit the truck, untick whole donations; they wait for the next trip.',
             style: t.bodyMedium,
           ),
           for (final stop in _stops)
@@ -875,13 +875,13 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                       ReadyDonations(
                         key: ValueKey('trip-ready-$rid'),
                         reportId: rid,
-                        onLoaded: (n) {
-                          if (mounted) setState(() => _ready[rid] = n);
+                        onChanged: (refs) {
+                          if (mounted) setState(() => _ready[rid] = refs);
                         },
                       ),
-                      if (tried && (_ready[rid] ?? 0) == 0)
+                      if (tried && (_ready[rid] ?? {}).isEmpty)
                         Text(
-                          'Nothing to send yet for this report. Tap Remove.',
+                          'Nothing ticked for this report. Tick a donation, or tap Remove.',
                           style: TextStyle(color: cs.error),
                         ),
                     ],

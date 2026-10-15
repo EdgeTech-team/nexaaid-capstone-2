@@ -16,69 +16,80 @@ import 'receive_entry_test.dart' show entry, host;
 void main() {
   setUpAll(() => AppTheme.useGoogleFonts = false);
 
-  testWidgets('What goes: every acknowledged donation, no quantities', (
-    tester,
-  ) async {
-    final server = MockClient((req) async {
-      expect(req.url.path, '/deliveries/ready/5');
-      return http.Response(
-        jsonEncode({
-          'report_id': 5,
-          'entries': [
-            {
-              'batch_reference': 'DON-A',
-              'donor': 'Liza',
-              'items': [
-                {
-                  'item_id': 1,
-                  'item_name': 'Rice',
-                  'unit': 'kg',
-                  'quantity': 50,
-                },
-              ],
-            },
-            {
-              'batch_reference': 'DON-B',
-              'donor': 'Ana',
-              'items': [
-                {
-                  'item_id': 1,
-                  'item_name': 'Rice',
-                  'unit': 'kg',
-                  'quantity': 30,
-                },
-              ],
-            },
-          ],
-          'totals': [
-            {'item_id': 1, 'item_name': 'Rice', 'unit': 'kg', 'quantity': 80},
-          ],
-          'waiting_for_cmo': 1,
-        }),
-        200,
-      );
-    });
-    int? ready;
-    await http.runWithClient(() async {
-      await tester.pumpWidget(
-        host(ReadyDonations(reportId: 5, onLoaded: (n) => ready = n)),
-      );
-      await tester.pumpAndSettle();
-      expect(ready, 2);
-      expect(
-        find.text('Everything below goes on this delivery'),
-        findsOneWidget,
-      );
-      expect(find.text('80 kg Rice'), findsOneWidget);
-      expect(find.text('Liza · DON-A: 50 kg Rice'), findsOneWidget);
-      expect(find.text('Ana · DON-B: 30 kg Rice'), findsOneWidget);
-      expect(
-        find.textContaining('1 donation still waits for the CMO'),
-        findsOneWidget,
-      );
-      expect(find.byType(TextField), findsNothing); // nothing to type
-    }, () => server);
-  });
+  testWidgets(
+    'What goes: every donation ticked, untick a whole one to leave it',
+    (tester) async {
+      final server = MockClient((req) async {
+        expect(req.url.path, '/deliveries/ready/5');
+        return http.Response(
+          jsonEncode({
+            'report_id': 5,
+            'entries': [
+              {
+                'batch_reference': 'DON-A',
+                'donor': 'Liza',
+                'items': [
+                  {
+                    'item_id': 1,
+                    'item_name': 'Rice',
+                    'unit': 'kg',
+                    'quantity': 50,
+                  },
+                ],
+              },
+              {
+                'batch_reference': 'DON-B',
+                'donor': 'Ana',
+                'items': [
+                  {
+                    'item_id': 1,
+                    'item_name': 'Rice',
+                    'unit': 'kg',
+                    'quantity': 30,
+                  },
+                ],
+              },
+            ],
+            'totals': [
+              {'item_id': 1, 'item_name': 'Rice', 'unit': 'kg', 'quantity': 80},
+            ],
+            'waiting_for_cmo': 1,
+          }),
+          200,
+        );
+      });
+      Set<String>? chosen;
+      await http.runWithClient(() async {
+        await tester.pumpWidget(
+          host(ReadyDonations(reportId: 5, onChanged: (r) => chosen = r)),
+        );
+        await tester.pumpAndSettle();
+        expect(chosen, {'DON-A', 'DON-B'}); // all ticked to start
+        expect(find.text('Donations on this delivery'), findsOneWidget);
+        expect(find.text('80 kg Rice'), findsOneWidget);
+        expect(find.text('2 of 2 donations going'), findsOneWidget);
+        expect(
+          find.textContaining('1 donation still waits for the CMO'),
+          findsOneWidget,
+        );
+        expect(
+          find.byType(TextField),
+          findsNothing,
+        ); // never a quantity to type
+
+        // Too much for the truck: Ana's whole donation waits.
+        await tester.tap(find.byKey(const ValueKey('ready-DON-B')));
+        await tester.pumpAndSettle();
+        expect(chosen, {'DON-A'});
+        expect(find.text('50 kg Rice'), findsWidgets);
+        expect(find.text('80 kg Rice'), findsNothing);
+        expect(
+          find.text('1 of 2 donations going · 1 waiting for the next delivery'),
+          findsOneWidget,
+        );
+      }, () => server);
+    },
+  );
 
   testWidgets('What goes: nothing acknowledged yet', (tester) async {
     final server = MockClient(
@@ -92,13 +103,13 @@ void main() {
         200,
       ),
     );
-    int? ready;
+    Set<String>? chosen;
     await http.runWithClient(() async {
       await tester.pumpWidget(
-        host(ReadyDonations(reportId: 5, onLoaded: (n) => ready = n)),
+        host(ReadyDonations(reportId: 5, onChanged: (r) => chosen = r)),
       );
       await tester.pumpAndSettle();
-      expect(ready, 0);
+      expect(chosen, isEmpty);
       expect(find.text('Nothing to send yet'), findsOneWidget);
       expect(
         find.textContaining('2 donations still wait for the CMO'),
