@@ -55,6 +55,10 @@ async def show_server_errors(request: Request, call_next):
             content={"detail": f"Server error: {type(exc).__name__}: {str(exc).splitlines()[0][:300]}"},
         )
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "NexaAid API"}
+
 
 # DEV ONLY: lets the Flutter test app (Chrome / emulator) call the API.
 # Tighten allow_origins before deployment.
