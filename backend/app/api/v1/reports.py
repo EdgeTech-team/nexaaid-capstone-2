@@ -33,9 +33,12 @@ CHANGE LOG
   Row-building moved into _to_monitoring() so the detail, /monitoring and
   /validated endpoints all build the same shape.
 - SMS reporting, manuscript-aligned (claude/sms-reporting-decision.md):
-  * POST /reports/sms is now Administrator-only (UC-A3 alt 8a, UC-CD1 alt
+  * POST /reports/sms is Administrator-only (UC-A3 alt 8a, UC-CD1 alt
     11b, Scope 2.4: the Disaster Unit SENDS the SMS, the Administrator
-    reviews and ENCODES it). Was CSWS Disaster Unit.
+    reviews and ENCODES it). Oct 12 it moved to the Disaster Unit (the
+    Barangay Rep sent the SMS); Oct 15 (team) it is back to the manuscript.
+  * The report is filed under the Disaster Unit member whose number sent
+    the SMS, so they get the "validated" notice and can follow it.
   * Scope 2.4: when an SMS report is validated, every registered user is
     notified, not only the usual recipients.
 """
@@ -588,8 +591,32 @@ def delete_report(
 
 
 # ---------------------------------------------------------------------------
-# SMS ingestion — staff encodes an incoming SMS into report + metadata
+# SMS ingestion — the Administrator encodes an incoming SMS into report + metadata
 # ---------------------------------------------------------------------------
+def _phone_key(number: Optional[str]) -> str:
+    """'+63 917-123-4567' and '09171234567' -> '9171234567'."""
+    digits = "".join(ch for ch in (number or "") if ch.isdigit())
+    return digits[-10:]
+
+
+def _disaster_unit_member(db: Session, number: Optional[str]):
+    """The active Disaster Unit member whose profile number sent the SMS,
+    or None (the report is then filed under the encoding Administrator)."""
+    from models.role_model import Role
+    from models.user_rbac_model import User
+
+    key = _phone_key(number)
+    if len(key) < 10:
+        return None
+    rows = (
+        db.query(User)
+        .join(Role, Role.role_id == User.role_id)
+        .filter(Role.role_name == "CSWS Disaster Unit", User.is_active.is_(True))
+        .order_by(User.user_id)
+        .all()
+    )
+    return next((u for u in rows if _phone_key(u.contact_number) == key), None)
+
 @router.post(
     "/sms",
     response_model=SmsReportIngestResponse,
@@ -598,15 +625,19 @@ def delete_report(
 def ingest_sms_report(
     payload: SmsReportIngest,
     db: Session = Depends(get_db),
-    # Oct 12 team decision (claude/sms-reporting-decision.md): the Barangay
-    # Receiving Representative, offline, SENDS the structured SMS to the CSWS
-    # Disaster Unit; the Disaster Unit reviews and ENCODES it here as its own
-    # report (source "SMS"); the Administrator validates it as usual
-    # (Scope 2.2). The rep never creates a report in the system (Scope 1.3).
-    current_user=Depends(require_role("csws_disaster_unit")),
+    # Scope 2.4, UC-A3 alt 8a, UC-CD1 alt 11b (Oct 15 team, back to the
+    # manuscript): the CSWS Disaster Unit, offline, SENDS the structured SMS
+    # to the Administrators; an Administrator reviews and ENCODES it here
+    # (source "SMS"). It then waits in the validation queue as Pending.
+    current_user=Depends(require_role("admin")),
 ):
     report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids"})
-    report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")
+    sender = _disaster_unit_member(db, payload.contact_number)
+    report = DisasterReport(
+        **report_fields,
+        user_id=sender.user_id if sender else current_user.user_id,
+        source="SMS",
+    )
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()  # need report.report_id for the metadata FK
@@ -622,6 +653,7 @@ def ingest_sms_report(
     db.refresh(report)
     db.refresh(sms_meta)
 
+    # The other Administrators and both CSWS offices hear of the new report.
     _notify_new_report(db, report, current_user.user_id)
 
     return SmsReportIngestResponse(report=report, sms_metadata=sms_meta)

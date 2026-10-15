@@ -87,13 +87,14 @@ class ReportCard extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 // UC-CD1 Submit post-disaster report (CSWS Disaster Unit), and
-// Encode SMS report (CSWS Disaster Unit, smsEncode: true).
-// Oct 12 decision (claude/sms-reporting-decision.md): the Barangay Receiving
-// Representative SENDS a structured SMS when offline (sms_send_screen.dart);
-// the Disaster Unit reviews and ENCODES it here; the Administrator validates.
+// Encode SMS report (Administrator, smsEncode: true).
+// Scope 2.4, UC-A3 alt 8a, UC-CD1 alt 11b (Oct 15 team, back to the
+// manuscript; claude/sms-reporting-decision.md): the Disaster Unit SENDS a
+// structured SMS when offline (sms_send_screen.dart); the Administrator
+// reviews and ENCODES it here, then validates it on the Validate tab.
 // ---------------------------------------------------------------------------
 class NewReportScreen extends StatefulWidget {
-  /// true = Disaster Unit encoding an SMS report a barangay rep sent.
+  /// true = Administrator encoding an SMS report the Disaster Unit sent.
   final bool smsEncode;
 
   /// Oct 11 (Daniel): the reporter corrects their own report before the
@@ -373,7 +374,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             )
           : api.post('/reports/', body: {...body, 'source': 'Mobile'}),
       success: sms
-          ? 'SMS report encoded and sent to the Administrator for validation.'
+          ? 'SMS report encoded. It is now pending on the Validate tab.'
           : 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
@@ -525,11 +526,12 @@ class _NewReportScreenState extends State<NewReportScreen> {
                                 'Correct it and save to send it back for validation.'
                           : 'You can change it until the Administrator validates it.')
                     : sms
-                    ? 'Paste the text the barangay representative sent, tap '
-                          'Fill, then check every field before saving. It is '
-                          'saved as Pending until the Administrator validates it.'
+                    ? 'Paste the text the Disaster Unit sent, tap Fill, then '
+                          'check every field before saving. It is saved as '
+                          'Pending; validate it on the Validate tab.'
                     : 'Saved as Pending until the Administrator validates it. '
-                          'Got a report by SMS? Use the Encode SMS tab.',
+                          'No internet? Use the SMS report tab to text it to '
+                          'the Administrator.',
               ),
               if (sms) ...[
                 const SectionTitle('SMS as received'),
