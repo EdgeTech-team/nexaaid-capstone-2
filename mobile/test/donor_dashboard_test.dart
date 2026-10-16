@@ -98,13 +98,26 @@ var _mine = <String, dynamic>{
   'profile': {'name': 'Ana Reyes', 'organization': null},
   'summary': {'total_entries': 1, 'total_quantity': 12, 'supported_reports': 1},
   'entries': [
-    _entry('BATCH-ANA-1', 'Received', [
-      ['Rice', 10, 'kg'],
-      ['Canned sardines', 2, 'pcs'],
-    ]),
+    {
+      ..._entry('BATCH-ANA-1', 'Received', [
+        ['Rice', 10, 'kg'],
+        ['Canned sardines', 2, 'pcs'],
+      ]),
+      // Oct 13: part of it is on a truck; the step moves when all of it is.
+      'lifecycle_status': 'Received',
+      'delivery_note':
+          'Rice: 4 of 10 kg sent. The rest goes on a later delivery.',
+    },
     _entry('BATCH-ANA-2', 'Pending', [
       ['Bottled water', 6, 'jugs'],
     ]),
+    {
+      ..._entry('BATCH-ANA-3', 'Confirmed', [
+        ['Rice', 5, 'kg'],
+      ]),
+      'lifecycle_status': 'In Transit',
+      'delivery_note': null,
+    },
   ],
   'deliveries': [
     {
@@ -336,38 +349,40 @@ void main() {
     expect(timeAgo(null, now: now), '');
   });
 
-  testWidgets('My giving tab: 4 cards, every donation entry, delivery status', (
-    tester,
-  ) async {
-    Api.instance.token = 'test-token';
-    await http.runWithClient(() async {
-      await _pump(tester, const MyGivingScreen());
-      for (final label in [
-        'Donations made',
-        'Waiting for drop-off or pickup',
-        'In delivery',
-        'Reports supported',
-      ]) {
-        expect(find.text(label), findsOneWidget, reason: label);
-      }
-      expect(find.byType(StatCard), findsNWidgets(4));
-      // Donation status: every entry with the status chips, search and
-      // sort, each with its full journey; QR only when waiting.
-      expect(find.text('Donation status'), findsOneWidget);
-      expect(find.byType(DonationEntriesView), findsOneWidget);
-      expect(find.byKey(const ValueKey('entries-sort')), findsOneWidget);
-      expect(find.textContaining('BATCH-ANA-1'), findsWidgets);
-      expect(find.textContaining('BATCH-ANA-2'), findsWidgets);
-      expect(find.text('by CSWS'), findsWidgets);
-      expect(find.text('confirmed'), findsWidgets); // full journey, 6 steps
-      expect(find.text('by CMO'), findsWidgets);
-      expect(find.text('Show QR'), findsOneWidget); // only BATCH-ANA-2
-      // Delivery status.
-      expect(find.text('Delivery status'), findsOneWidget);
-      expect(find.text('Rice and 1 more to Barangay Banilad'), findsOneWidget);
-      expect(find.text('In transit'), findsWidgets);
-    }, () => _server);
-  });
+  testWidgets(
+    'My giving tab: 4 cards, every donation entry with its delivery step',
+    (tester) async {
+      Api.instance.token = 'test-token';
+      await http.runWithClient(() async {
+        await _pump(tester, const MyGivingScreen());
+        for (final label in [
+          'Donations made',
+          'Waiting for drop-off or pickup',
+          'In delivery',
+          'Reports supported',
+        ]) {
+          expect(find.text(label), findsOneWidget, reason: label);
+        }
+        expect(find.byType(StatCard), findsNWidgets(4));
+        // Donation status: every entry with the status chips, search and
+        // sort, each with its full journey; QR only when waiting.
+        expect(find.text('Donation status'), findsOneWidget);
+        expect(find.byType(DonationEntriesView), findsOneWidget);
+        expect(find.byKey(const ValueKey('entries-sort')), findsOneWidget);
+        expect(find.textContaining('BATCH-ANA-1'), findsWidgets);
+        expect(find.textContaining('BATCH-ANA-2'), findsWidgets);
+        expect(find.text('by CSWS'), findsWidgets);
+        expect(find.text('confirmed'), findsWidgets); // full journey, 6 steps
+        expect(find.text('by CMO'), findsWidgets);
+        expect(find.text('Show QR'), findsOneWidget); // only BATCH-ANA-2
+        // Oct 13: no separate Delivery status list; the donation's own
+        // timeline shows it, with a note while only part of it left.
+        expect(find.text('Delivery status'), findsNothing);
+        expect(find.textContaining('Rice: 4 of 10 kg sent'), findsOneWidget);
+        expect(find.text('In transit'), findsWidgets);
+      }, () => _server);
+    },
+  );
 
   testWidgets('My giving tab cards open their lists', (tester) async {
     Api.instance.token = 'test-token';
@@ -375,7 +390,10 @@ void main() {
       await _pump(tester, const MyGivingScreen());
       await tester.tap(find.text('In delivery'));
       await tester.pumpAndSettle();
-      expect(find.byType(MyDeliveriesScreen), findsOneWidget);
+      expect(find.byType(MyDonationsScreen), findsOneWidget);
+      expect(find.textContaining('BATCH-ANA-3'), findsWidgets); // in transit
+      expect(find.textContaining('BATCH-ANA-1'), findsWidgets); // part sent
+      expect(find.textContaining('BATCH-ANA-2'), findsNothing); // not received
       await tester.pageBack();
       await tester.pumpAndSettle();
 
@@ -457,7 +475,10 @@ void main() {
       expect(find.textContaining('Showing '), findsOneWidget);
       expect(find.text('Barangay:'), findsWidgets);
       expect(find.text('Sitio:'), findsWidgets);
-      expect(find.text('Assistance Needed:'), findsWidgets); // + one chip per need
+      expect(
+        find.text('Assistance Needed:'),
+        findsWidgets,
+      ); // + one chip per need
 
       // The chips scroll sideways: bring "Fulfilled" into view first.
       final fulfilled = find.textContaining('Fulfilled (');

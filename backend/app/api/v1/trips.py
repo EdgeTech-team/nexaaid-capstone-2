@@ -38,6 +38,7 @@ from models.report import DisasterReport
 from schemas.delivery import ReceiptConfirm
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
+from services.delivery_allocation import allocate_delivery, chosen_refs, ready_lines
 from services.delivery_views import delivery_views, report_labels
 
 router = APIRouter(prefix="/trips", tags=["Delivery trips"])
@@ -68,7 +69,10 @@ class TripStop(BaseModel):
     # Usually the report's own barangay, so the app may leave it out.
     destination_barangay_id: Optional[int] = None
     destination_sitio_id: Optional[int] = None
-    items: List[TripLine] = Field(min_length=1)
+    # Empty = every acknowledged donation of the report not sent yet (Oct 13).
+    items: List[TripLine] = []
+    # Oct 15: the donation entries that go, each whole (None = all acknowledged).
+    batch_references: Optional[List[str]] = None
 
 
 class TripCreate(BaseModel):
@@ -251,8 +255,19 @@ def create_trip(
             raise HTTPException(status_code=404, detail=f"Barangay #{stop.destination_barangay_id} not found")
         reports[stop.report_id] = report
 
+    # Oct 13 (team): a stop without items takes the whole report.
+    lines_of, refs_of = {}, {}
+    for stop in payload.reports:
+        refs_of[stop.report_id] = None if stop.items else chosen_refs(db, stop.report_id, stop.batch_references)
+        lines_of[stop.report_id] = stop.items or ready_lines(db, stop.report_id, refs_of[stop.report_id])
+        if not lines_of[stop.report_id]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Nothing to send yet for report {labels.get(stop.report_id, stop.report_id)}: "
+                       "no donation has been acknowledged by the CMO.",
+            )
     checked = [
-        check_stock(db, stop.report_id, stop.items, report_name=f"report {labels.get(stop.report_id, stop.report_id)}")
+        check_stock(db, stop.report_id, lines_of[stop.report_id], report_name=f"report {labels.get(stop.report_id, stop.report_id)}")
         for stop in payload.reports
     ]
     for c in checked:
@@ -283,12 +298,14 @@ def create_trip(
         )
         db.add(delivery)
         db.flush()
-        for line in stop.items:
+        for line in lines_of[stop.report_id]:
             db.add(DeliveryItem(delivery_id=delivery.delivery_id, item_id=line.item_id, quantity=line.quantity))
+        db.flush()
+        allocate_delivery(db, delivery, refs_of[stop.report_id])   # whose donations
         # Same history entry a single delivery gets, plus the trip number.
         log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
                    new={"status": "Preparing", "trip_id": trip.trip_id,
-                        "items": [l.model_dump() for l in stop.items]})
+                        "items": [l.model_dump() for l in lines_of[stop.report_id]]})
     log_action(db, current_user, "PREPARE TRIP", "delivery_trips", trip.trip_id,
                new={"reports": [s.report_id for s in payload.reports], "stops": len(stop_of)})
     db.commit()
