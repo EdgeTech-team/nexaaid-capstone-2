@@ -808,27 +808,16 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   Map? report; // row from /trips/candidates (with its items)
   String? brgyId; // destination; defaults to the report's barangay
   bool changeBrgy = false;
-  final Map<int, TextEditingController> qty = {};
+
+  /// Oct 15: the ticked donation entries (each goes whole); null = loading.
+  Set<String>? chosen;
+  int get ready => chosen?.length ?? 0;
   String? date; // ISO, UTC
   bool tried = false;
   bool busy = false;
 
   Future<List<ApiResult>> _fetch() =>
       Future.wait([api.get('/trips/candidates'), api.lookupsResult()]);
-
-  @override
-  void dispose() {
-    for (final c in qty.values) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  TextEditingController _ctrl(int itemId) =>
-      qty.putIfAbsent(itemId, () => TextEditingController());
-
-  List<Map> get _items =>
-      report == null ? const [] : (report!['items'] as List).cast<Map>();
 
   Future<void> _chooseReport(Map candidates) async {
     final r = await pickReportWithStock(context, candidates);
@@ -837,9 +826,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
       report = r;
       brgyId = '${r['barangay_id']}';
       changeBrgy = false;
-      for (final c in qty.values) {
-        c.clear();
-      }
+      chosen = null;
     });
   }
 
@@ -847,8 +834,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
     setState(() => tried = true);
     if (report == null) return;
     if (!_form.currentState!.validate()) return;
-    final lines = linesFrom(_items, _ctrl);
-    if (lines.isEmpty || date == null) return;
+    if (ready == 0 || date == null) return;
     setState(() => busy = true);
     final r = await act(
       context,
@@ -858,7 +844,8 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           'report_id': report!['report_id'],
           'destination_barangay_id': int.parse(brgyId!),
           'delivery_date': date,
-          'items': lines,
+          // Oct 15: the ticked donation entries, each one whole.
+          'batch_references': chosen!.toList(),
         },
       ),
       success: 'Delivery prepared',
@@ -898,7 +885,6 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           final names = Names(
             Map<String, dynamic>.from(snap.data![1].json as Map),
           );
-          final lines = linesFrom(_items, _ctrl);
           final noReports = (candidates['barangays'] as List).isEmpty;
           return Form(
             key: _form,
@@ -972,17 +958,13 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                   Gaps.v24,
                   Text('2. What to send', style: t.titleMedium),
                   Gaps.v8,
-                  StockQuantities(
-                    key: ValueKey('items-${report!['report_id']}'),
-                    items: _items,
-                    controllerFor: _ctrl,
-                    onChanged: () => setState(() {}),
+                  ReadyDonations(
+                    key: ValueKey('ready-${report!['report_id']}'),
+                    reportId: report!['report_id'] as int,
+                    onChanged: (refs) {
+                      if (mounted) setState(() => chosen = refs);
+                    },
                   ),
-                  if (tried && lines.isEmpty)
-                    Text(
-                      'Enter a quantity for at least one item.',
-                      style: TextStyle(color: cs.error),
-                    ),
                   // 3. When
                   Gaps.v24,
                   Text('3. When will it leave?', style: t.titleMedium),
@@ -1002,18 +984,18 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                     },
                   ),
                   Gaps.v24,
-                  if (lines.isNotEmpty)
+                  if (ready > 0)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Sending ${lines.length} '
-                        '${lines.length == 1 ? 'item' : 'items'}'
+                        'Sending $ready '
+                        '${ready == 1 ? 'donation' : 'donations'}'
                         '${date == null ? '' : ' on ${niceWhen(date)}'}.',
                         style: t.bodyMedium,
                       ),
                     ),
                   FilledButton.icon(
-                    onPressed: busy ? null : _submit,
+                    onPressed: busy || ready == 0 ? null : _submit,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size.fromHeight(52),
                     ),

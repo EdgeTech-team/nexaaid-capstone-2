@@ -614,6 +614,9 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   /// report_id -> item_id -> quantity box
   final Map<int, Map<int, TextEditingController>> qty = {};
 
+  /// Oct 15: ticked donation entries per report (each goes whole).
+  final Map<int, Set<String>> _ready = {};
+
   final _sendForm = GlobalKey<FormState>();
   final vehicle = TextEditingController();
   final notes = TextEditingController();
@@ -673,7 +676,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   bool get _stepOk => switch (step) {
     0 => chosen.isNotEmpty,
-    1 => chosen.every((r) => _total(r) > 0),
+    // Oct 13: every report needs at least one acknowledged donation.
+    1 => chosen.isNotEmpty && chosen.every((r) => (_ready[r] ?? {}).isNotEmpty),
     _ => date != null,
   };
 
@@ -707,7 +711,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
       'reports': [
         for (final stop in _stops)
           for (final r in stop.value)
-            {'report_id': r, 'items': linesFrom(_items(r), _ctrlFor(r))},
+            // Oct 15: the ticked donation entries, each one whole.
+            {'report_id': r, 'batch_references': (_ready[r] ?? {}).toList()},
       ],
     };
     final res = await act(
@@ -841,8 +846,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
           Text(
-            'Enter how much to load for each report. Every report needs at '
-            'least one item.',
+            'Every donation the CMO acknowledged is ticked. If they do not all '
+            'fit the truck, untick whole donations; they wait for the next trip.',
             style: t.bodyMedium,
           ),
           for (final stop in _stops)
@@ -867,15 +872,16 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                           ),
                         ],
                       ),
-                      StockQuantities(
-                        key: ValueKey('trip-items-$rid'),
-                        items: _items(rid),
-                        controllerFor: _ctrlFor(rid),
-                        onChanged: () => setState(() {}),
+                      ReadyDonations(
+                        key: ValueKey('trip-ready-$rid'),
+                        reportId: rid,
+                        onChanged: (refs) {
+                          if (mounted) setState(() => _ready[rid] = refs);
+                        },
                       ),
-                      if (tried && _total(rid) == 0)
+                      if (tried && (_ready[rid] ?? {}).isEmpty)
                         Text(
-                          'Enter at least one quantity, or tap Remove.',
+                          'Nothing ticked for this report. Tick a donation, or tap Remove.',
                           style: TextStyle(color: cs.error),
                         ),
                     ],
@@ -983,7 +989,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = ['Choose reports', 'What to send', 'When and which truck'];
+    const titles = ['Choose reports', 'What goes', 'When and which truck'];
     return Scaffold(
       appBar: AppBar(
         title: Text('Plan a trip · Step ${step + 1} of 3'),

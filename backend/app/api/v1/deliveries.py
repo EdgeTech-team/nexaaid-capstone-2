@@ -31,6 +31,7 @@ from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
+from services.delivery_allocation import allocate_delivery, chosen_refs, ready_donations, ready_lines
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from schemas.delivery import (
     DeliveryCreate,
@@ -69,7 +70,17 @@ def create_delivery(
   # Goods are released from this report's inventory (manuscript: "Inventory
   # is linked to specific report records"), so there must be enough stock.
   # services/delivery_stock.py: shared with trips, plain-language messages.
-  take_stock(check_stock(db, payload.report_id, payload.items))
+  # Oct 13 (team): no items = the whole report, i.e. every donation the CMO
+  # acknowledged that has not gone out yet (the app always does this).
+  # Oct 15: or only the entries Main Office kept ticked (each one whole).
+  refs = None if payload.items else chosen_refs(db, payload.report_id, payload.batch_references)
+  lines = payload.items or ready_lines(db, payload.report_id, refs)
+  if not lines:
+    raise HTTPException(
+      status_code=409,
+      detail="Nothing to send yet: no donation for this report has been acknowledged by the CMO.",
+    )
+  take_stock(check_stock(db, payload.report_id, lines))
 
   delivery = Delivery (
     report_id=payload.report_id,
@@ -82,7 +93,7 @@ def create_delivery(
   db.add(delivery)
   db.flush()
 
-  for item_payload in payload.items: 
+  for item_payload in lines: 
     db.add (
       DeliveryItem(
         delivery_id=delivery.delivery_id,
@@ -93,10 +104,26 @@ def create_delivery(
     )
 
   db.flush()
+  # Whose donations these goods are: first received, first sent.
+  allocate_delivery(db, delivery, refs)
   log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
-             new={"status": "Preparing", "items": [i.model_dump() for i in payload.items]})
+             new={"status": "Preparing", "items": [i.model_dump() for i in lines]})
   db.refresh(delivery)
   return delivery
+
+@router.get("/ready/{report_id}")
+def ready_to_send(
+    report_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office", "admin")),
+):
+  """Oct 13 (team): what the next delivery of this report carries, i.e.
+  every donation the CMO acknowledged that has not gone out yet, and how
+  many still wait for the CMO. Changes nothing."""
+  if db.get(DisasterReport, report_id) is None:
+    raise HTTPException(status_code=404, detail="Report not found")
+  return ready_donations(db, report_id)
+
 
 # List — staff, with filters
 

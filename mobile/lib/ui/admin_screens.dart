@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import 'account_detail_screen.dart';
 import 'account_form.dart' show AccountsScreen;
-import 'copyable_phone.dart';
 import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
@@ -759,90 +758,6 @@ class _OrgDocument extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Appendix H 2.2: barangay reps see the CSWS Disaster Unit's phone number so
-// they can send the emergency SMS report from their own phone. The number is
-// copy-only: the app never opens the dialer or the SMS app.
-// ---------------------------------------------------------------------------
-class DisasterUnitContactCard extends StatefulWidget {
-  const DisasterUnitContactCard({super.key});
-
-  @override
-  State<DisasterUnitContactCard> createState() =>
-      _DisasterUnitContactCardState();
-}
-
-class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
-  late final Future<ApiResult> _future = api.get('/contacts/disaster-unit');
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return FutureBuilder<ApiResult>(
-      future: _future,
-      builder: (context, snap) {
-        final res = snap.data;
-        if (res == null || !res.ok || res.json is! List) {
-          return const SizedBox.shrink();
-        }
-        final contacts = (res.json as List).cast<Map>();
-        return Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.sms_outlined, size: 18, color: cs.primary),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Emergency SMS report: CSWS Disaster Unit',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Tap the number to copy it, then send your report from your phone\'s messaging app.',
-                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
-                ),
-                const SizedBox(height: 8),
-                if (contacts.isEmpty)
-                  Text(
-                    'No Disaster Unit contact number is available yet.',
-                    style: TextStyle(color: cs.onSurfaceVariant),
-                  ),
-                for (final c in contacts)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('${c['name']}'),
-                        CopyablePhone(
-                          number: '${c['contact_number']}',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: cs.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
 // UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
 class BarangayDashboard extends StatelessWidget {
@@ -863,8 +778,6 @@ class BarangayDashboard extends StatelessWidget {
               'Barangay ${m['barangay'] ?? ''} Dashboard',
               subtitle: roleLine(),
             ),
-            // Appendix H 2.2: Disaster Unit phone number for the emergency SMS.
-            const DisasterUnitContactCard(),
             StatGrid([
               StatTile(
                 'Donations linked to our reports',

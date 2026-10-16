@@ -9,6 +9,9 @@ import 'widgets.dart';
 /// (staff) or the "entries" of GET /donations/mine (donor / organization).
 /// The filters and sort only change what is shown.
 
+// Oct 13: items that were not brought are closed at receiving ("Not
+// brought"), so new entries never become Partly Received. The chip and the
+// summary still show it only while older entries have it.
 const entryStatuses = [
   'Pending',
   'Partly Received',
@@ -24,10 +27,6 @@ const handoverMethods = ['Drop Off', 'Door to Door'];
 /// with what it means, in their own section above the list. 'On Hold' is
 /// not an entry status: it is an entry with an item the CMO put on hold.
 const attentionStatuses = <(String, String)>[
-  (
-    'Partly Received',
-    'CSWS received some items of the entry. The rest are still expected.',
-  ),
   (
     'On Hold',
     "The City Mayor's Office paused the acknowledgement. The reason is on the entry.",
@@ -195,18 +194,19 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
           child: Row(
             children: [
               for (final s in <String?>[null, ...entryStatuses])
-                Padding(
-                  padding: const EdgeInsets.only(right: Space.xs),
-                  child: ChoiceChip(
-                    label: Text(
-                      s == null
-                          ? 'All (${widget.entries.length})'
-                          : '${donationStatusText(s)} (${countOf(s)})',
+                if (s != 'Partly Received' || countOf(s!) > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(right: Space.xs),
+                    child: ChoiceChip(
+                      label: Text(
+                        s == null
+                            ? 'All (${widget.entries.length})'
+                            : '${donationStatusText(s)} (${countOf(s)})',
+                      ),
+                      selected: status == s,
+                      onSelected: (_) => setState(() => status = s),
                     ),
-                    selected: status == s,
-                    onSelected: (_) => setState(() => status = s),
                   ),
-                ),
             ],
           ),
         ),
@@ -495,7 +495,20 @@ class DonationEntryCard extends StatelessWidget {
                 ),
               ),
               Gaps.h8,
-              DonationStatusChip('${e['status']}'),
+              // Oct 13: once its goods are on a delivery, the chip follows
+              // the timeline (In Transit / Delivered / Barangay confirmed).
+              switch (e['lifecycle_status']) {
+                'In Transit' => const StatusChip(
+                  'In Transit',
+                  label: 'In transit',
+                ),
+                'Delivered' => const StatusChip('Delivered'),
+                'Acknowledged' => const StatusChip(
+                  'Confirmed',
+                  label: 'Barangay confirmed',
+                ),
+                _ => DonationStatusChip('${e['status']}'),
+              },
             ],
           ),
           Gaps.v8,
@@ -558,9 +571,12 @@ class DonationEntryCard extends StatelessWidget {
                   ),
                   if (mixed || i['hold_reason'] != null) ...[
                     Gaps.h8,
-                    DonationStatusChip(
-                      i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
-                    ),
+                    if (isNotBrought(i))
+                      const StatusChip('Cancelled', label: 'Not brought')
+                    else
+                      DonationStatusChip(
+                        i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
+                      ),
                   ],
                 ],
               ),

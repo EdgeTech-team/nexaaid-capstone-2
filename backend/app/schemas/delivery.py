@@ -37,7 +37,12 @@ class DeliveryCreate(BaseModel):
     destination_barangay_id: int
     destination_sitio_id: Optional[int] = None
     delivery_date: datetime
-    items: List[DeliveryItemCreate] = Field(min_length=1)
+    # Empty = every acknowledged donation of the report that has not gone
+    # out yet (Oct 13; what the app sends). Typed lines are still accepted.
+    items: List[DeliveryItemCreate] = []
+    # Oct 15: the donation entries (batch references) that go, each whole.
+    # Left out = every acknowledged entry of the report.
+    batch_references: Optional[List[str]] = None
 
 class DeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

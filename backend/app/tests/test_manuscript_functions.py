@@ -200,26 +200,38 @@ def test_appendix_h_module_access(api):
     for role in ("donor", "drrmo", "cmo"):
         ok(client.get("/reports/monitoring", headers=t[role]), 403)
 
-    # 2.2 SMS-based reporting (Oct 12 decision): the barangay rep texts the
-    # Disaster Unit, the Disaster Unit encodes it, the Administrator validates.
-    sms = {"contact_number": "09171234567", "raw_message": "FLOOD 5FAM",
-           "disaster_type_id": 1, "barangay_id": 1}
-    for role in ("admin", "csws", "brgy", "donor"):
-        ok(client.post("/reports/sms", json=sms, headers=t[role]), 403)
-    created = ok(client.post("/reports/sms", json=sms, headers=t["unit"]), 201)
-    assert created["report"]["source"] == "SMS"
-    assert created["report"]["status"] == "Pending"
-    ok(client.post(f"/reports/{created['report']['report_id']}/validate",
-                   headers=t["admin"], json={}))
-
-    # The rep (and the Disaster Unit) can read the Disaster Unit's numbers
-    # to send the SMS; members without a number are left out.
+    # 2.2 SMS-based reporting (Scope 2.4, UC-A3 8a, UC-CD1 11b): the
+    # Disaster Unit texts the Administrators, an Administrator encodes it
+    # (filed under the Disaster Unit member who sent it), then validates it.
     from tests.test_pickup_days_and_runs import _activate_everyone
     _activate_everyone()          # SQLite stores is_active as text
-    unit = ok(client.get("/contacts/disaster-unit", headers=t["brgy"]))
-    assert unit and all(c["contact_number"] for c in unit)
-    for role in ("donor", "cmo", "drrmo"):
-        ok(client.get("/contacts/disaster-unit", headers=t[role]), 403)
+    from core import database
+    from models.user_rbac_model import User
+    db = database.SessionLocal()
+    me = {k: db.query(User.user_id).filter(User.first_name == k).scalar() for k in ("admin", "unit")}
+    db.close()
+    sms = {"contact_number": "+63 917 000 0000", "raw_message": "FLOOD 5FAM",
+           "disaster_type_id": 1, "barangay_id": 1}
+    for role in ("unit", "csws", "brgy", "donor"):
+        ok(client.post("/reports/sms", json=sms, headers=t[role]), 403)
+    created = ok(client.post("/reports/sms", json=sms, headers=t["admin"]), 201)
+    assert created["report"]["source"] == "SMS"
+    assert created["report"]["status"] == "Pending"
+    assert created["report"]["user_id"] == me["unit"]           # the sender
+    assert created["sms_metadata"]["encoded_by_user_id"] == me["admin"]
+    ok(client.post(f"/reports/{created['report']['report_id']}/validate",
+                   headers=t["admin"], json={}))
+    # A number that is no Disaster Unit member's: kept under the encoder.
+    other = ok(client.post("/reports/sms", json={**sms, "contact_number": "09998887777"},
+                           headers=t["admin"]), 201)
+    assert other["report"]["user_id"] == me["admin"]
+
+    # The Disaster Unit (and the Administrators) read the Administrators'
+    # numbers to send the SMS; members without a number are left out.
+    admins = ok(client.get("/contacts/sms-receivers", headers=t["unit"]))
+    assert admins and all(c["contact_number"] for c in admins)
+    for role in ("brgy", "donor", "cmo", "drrmo"):
+        ok(client.get("/contacts/sms-receivers", headers=t[role]), 403)
 
     # 4.4 / 4.5 Donation records: Admin, Main Office, CMO.
     for role in ("admin", "csws", "cmo"):

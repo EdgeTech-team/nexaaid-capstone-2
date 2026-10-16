@@ -14,25 +14,24 @@ import 'sms_report_format.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
-// SMS-Based Alternative Reporting (Scope 2.4; Oct 12 team decision,
-// claude/sms-reporting-decision.md).
-// The Barangay Receiving Representative, with no internet, fills this form
-// and sends the report as a text in the structured format
-// (sms_report_format.dart). problema_napud 2.2: "Open SMS app" opens the
-// phone's messaging app with the text already written and EVERY CSWS
-// Disaster Unit number already filled in as recipients; the rep only taps
-// Send. Any Disaster Unit member who receives it pastes it into
-// "Encode SMS" and submits it as the unit's report; the Administrator
-// validates it as usual. The rep does not create a report in the system
-// (Scope 1.3): NexaAid only builds the text.
+// SMS-Based Alternative Reporting (Scope 2.4, UC-A3 alt 8a, UC-CD1 alt
+// 11b; Oct 15 team: back to the manuscript, claude/sms-reporting-decision.md).
+// The CSWS Disaster Unit, with no internet, fills this form and sends the
+// report as a text in the structured format (sms_report_format.dart).
+// "Open SMS app" opens the phone's messaging app with the text already
+// written and EVERY Administrator number already filled in as recipients;
+// the Disaster Unit only taps Send. An Administrator who receives it
+// reviews it and encodes it ("Encode SMS"), then validates it as usual.
+// NexaAid only builds the text here.
 //
-// Works offline: the dropdown lists and the Disaster Unit's SMS numbers are
+// Works offline: the dropdown lists and the Administrators' SMS numbers are
 // saved on the phone every time this screen opens with internet.
 // ---------------------------------------------------------------------------
 
 const _cacheLookups = 'sms_cache_lookups';
-// v2: the receivers are now the Disaster Unit (v1 held Administrators).
-const _cacheReceivers = 'sms_cache_receivers_unit';
+// v3: the receivers are the Administrators again (v2 held the Disaster
+// Unit, from when the Barangay Rep sent the SMS).
+const _cacheReceivers = 'sms_cache_receivers_admin';
 const _cacheSavedAt = 'sms_cache_saved_at';
 
 class SmsSendScreen extends StatefulWidget {
@@ -59,11 +58,11 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   bool loading = true;
   bool online = false;
 
-  /// Typed by hand only when no Disaster Unit number is saved yet.
+  /// Typed by hand only when no Administrator number is saved yet.
   final to = TextEditingController();
 
-  /// The Disaster Unit numbers the text goes to: all of them, unless the
-  /// rep leaves some out.
+  /// The Administrator numbers the text goes to: all of them, unless the
+  /// sender leaves some out.
   final picked = <String>{};
   bool _choseReceivers = false;
   String? type, barangay;
@@ -102,7 +101,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     try {
       final fresh = await api.lookups().timeout(const Duration(seconds: 8));
       final r = await api
-          .get('/contacts/disaster-unit')
+          .get('/contacts/sms-receivers')
           .timeout(const Duration(seconds: 8));
       lookups = Map<String, dynamic>.from(fresh);
       if (r.ok && r.json is List) receivers = (r.json as List).cast<Map>();
@@ -250,7 +249,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     if (_recipients.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Choose at least one Disaster Unit number.'),
+          content: Text('Choose at least one Administrator number.'),
         ),
       );
       return false;
@@ -274,7 +273,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
         const SnackBar(
           content: Text(
             'Could not open the messaging app. Type the text above in a '
-            'new message to the Disaster Unit numbers.',
+            'new message to the Administrator numbers.',
           ),
         ),
       );
@@ -368,9 +367,9 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             'Prepare an SMS Report',
             subtitle:
                 'For when there is no internet. Fill this in to make a text in '
-                'the NexaAid format and send it from your phone to the CSWS '
-                'Disaster Unit. They encode it as a report, then the '
-                'Administrator validates it.',
+                'the NexaAid format and send it from your phone to the '
+                'Administrator. They review and encode it as a report, then '
+                'validate it.',
           ),
           const Padding(
             padding: EdgeInsets.only(bottom: 12),
@@ -404,8 +403,8 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
           const SectionTitle('Send to'),
           if (_receiverNumbers.isNotEmpty) ...[
             Text(
-              'The text goes to every CSWS Disaster Unit number below, filled '
-              'in for you. Tap a number to leave it out.',
+              'The text goes to every Administrator number below, filled in '
+              'for you. Tap a number to leave it out.',
               style: t.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -430,7 +429,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             ),
           ] else ...[
             Text(
-              'No Disaster Unit numbers saved yet. Open this screen once with '
+              'No Administrator numbers saved yet. Open this screen once with '
               'internet, or type the number you were given.',
               style: t.bodySmall,
             ),
@@ -440,7 +439,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               keyboardType: TextInputType.phone,
               inputFormatters: phoneFormatters,
               decoration: const InputDecoration(
-                labelText: 'CSWS Disaster Unit SMS number',
+                labelText: 'Administrator SMS number',
                 hintText: '09XXXXXXXXX',
               ),
               validator: (v) => RegExp(r'^09\d{9}$').hasMatch((v ?? '').trim())

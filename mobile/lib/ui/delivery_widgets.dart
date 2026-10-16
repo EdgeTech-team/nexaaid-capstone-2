@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../api.dart' show ApiResult;
+
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -395,6 +397,174 @@ class _StockQuantitiesState extends State<StockQuantities> {
           ),
         if (shown.isEmpty) Text('No item matches "$q".', style: t.bodySmall),
       ],
+    );
+  }
+}
+
+/// What a delivery carries (GET /deliveries/ready/{id}): every donation of
+/// the report that the CMO acknowledged and that has not gone out yet, each
+/// one WHOLE. Oct 15 (team): all start ticked; if they do not fit, Main
+/// Office unticks whole donations (donor C's entry waits for the next
+/// delivery). A donation is never split, so no quantities to type.
+class ReadyDonations extends StatefulWidget {
+  final int reportId;
+
+  /// The ticked donation entries (batch references); empty = nothing to send.
+  final ValueChanged<Set<String>>? onChanged;
+
+  const ReadyDonations({super.key, required this.reportId, this.onChanged});
+
+  @override
+  State<ReadyDonations> createState() => _ReadyDonationsState();
+}
+
+class _ReadyDonationsState extends State<ReadyDonations> {
+  late Future<ApiResult> _load = _fetch();
+  final Set<String> _ticked = {};
+
+  Future<ApiResult> _fetch() async {
+    final r = await api.get('/deliveries/ready/${widget.reportId}');
+    _ticked
+      ..clear()
+      ..addAll([
+        if (r.ok && r.json is Map)
+          for (final e in ((r.json as Map)['entries'] as List).cast<Map>())
+            '${e['batch_reference']}',
+      ]);
+    widget.onChanged?.call({..._ticked});
+    return r;
+  }
+
+  @override
+  void didUpdateWidget(covariant ReadyDonations old) {
+    super.didUpdateWidget(old);
+    if (old.reportId != widget.reportId) _load = _fetch();
+  }
+
+  void _toggle(String ref, bool on) {
+    setState(() => on ? _ticked.add(ref) : _ticked.remove(ref));
+    widget.onChanged?.call({..._ticked});
+  }
+
+  String _amount(Map i) =>
+      '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return FutureBuilder<ApiResult>(
+      future: _load,
+      builder: (context, snap) {
+        if (!snap.hasData) {
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final r = snap.data!;
+        if (!r.ok || r.json is! Map) {
+          return Text(r.errorText, style: TextStyle(color: cs.error));
+        }
+        final m = r.json as Map;
+        final entries = (m['entries'] as List).cast<Map>();
+        final waiting = (m['waiting_for_cmo'] as num? ?? 0).toInt();
+        final waitNote = waiting == 0
+            ? null
+            : '$waiting ${waiting == 1 ? 'donation still waits' : 'donations still wait'} '
+                  'for the CMO to acknowledge it. '
+                  '${waiting == 1 ? 'It goes' : 'They go'} on the next delivery.';
+        if (entries.isEmpty) {
+          return EmptyView(
+            key: const ValueKey('ready-none'),
+            compact: true,
+            icon: Icons.hourglass_top,
+            title: 'Nothing to send yet',
+            message:
+                waitNote ??
+                'No donation for this report is acknowledged by the CMO yet.',
+          );
+        }
+        // Totals of the ticked donations only.
+        final totals = <int, Map>{};
+        for (final e in entries) {
+          if (!_ticked.contains('${e['batch_reference']}')) continue;
+          for (final i in (e['items'] as List).cast<Map>()) {
+            final id = i['item_id'] as int;
+            final sum = totals.putIfAbsent(id, () => {...i, 'quantity': 0});
+            sum['quantity'] = (sum['quantity'] as num) + (i['quantity'] as num);
+          }
+        }
+        final left = entries.length - _ticked.length;
+        return AppCard(
+          key: const ValueKey('ready-donations'),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Donations on this delivery', style: t.titleSmall),
+              Gaps.v4,
+              Text(
+                'Every donation the CMO acknowledged is ticked. If they do not '
+                'all fit, untick whole donations; they wait for the next '
+                'delivery. A donation is never split. Need a truck? Request '
+                'transport from DRRMO.',
+                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v12,
+              if (totals.isEmpty)
+                Text(
+                  'Nothing ticked. Tick at least one donation.',
+                  style: t.bodySmall?.copyWith(color: cs.error),
+                )
+              else
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final i in totals.values)
+                      Chip(
+                        avatar: const Icon(
+                          Icons.inventory_2_outlined,
+                          size: 16,
+                        ),
+                        label: Text(_amount(i)),
+                      ),
+                  ],
+                ),
+              Gaps.v8,
+              Text(
+                '${_ticked.length} of ${entries.length} '
+                '${entries.length == 1 ? 'donation' : 'donations'} going'
+                '${left > 0 ? ' · $left waiting for the next delivery' : ''}',
+                style: t.labelLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              for (final e in entries)
+                CheckboxListTile(
+                  key: ValueKey('ready-${e['batch_reference']}'),
+                  contentPadding: EdgeInsets.zero,
+                  dense: true,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: _ticked.contains('${e['batch_reference']}'),
+                  onChanged: (v) =>
+                      _toggle('${e['batch_reference']}', v ?? false),
+                  title: Text('${e['donor']} · ${e['batch_reference']}'),
+                  subtitle: Text(
+                    (e['items'] as List).cast<Map>().map(_amount).join(', '),
+                  ),
+                ),
+              if (waitNote != null) ...[
+                Gaps.v8,
+                Text(
+                  waitNote,
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }
