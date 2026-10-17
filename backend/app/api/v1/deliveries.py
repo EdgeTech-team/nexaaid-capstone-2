@@ -32,6 +32,7 @@ from models.delivery import Delivery, DeliveryItem, Receipt
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
 from services.delivery_allocation import allocate_delivery, chosen_refs, ready_donations, ready_lines
+from services.delivery_notices import tell_barangay_prepared, tell_donors, tell_status
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from schemas.delivery import (
     DeliveryCreate,
@@ -108,6 +109,7 @@ def create_delivery(
   allocate_delivery(db, delivery, refs)
   log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
              new={"status": "Preparing", "items": [i.model_dump() for i in lines]})
+  tell_barangay_prepared(db, [delivery])   # the barangay gets ready to receive
   db.refresh(delivery)
   return delivery
 
@@ -272,6 +274,7 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
     notify_event_many(db, recipients, "delivery_status_changed", "delivery",
                       delivery.delivery_id,
                       title=f"Delivery #{delivery.delivery_id}", status=delivery.status)
+    tell_status(db, delivery)   # donors follow their donation (Oct 17)
     return delivery
 
 
@@ -335,6 +338,7 @@ def confirm_receipt(
         recipients.add(report.user_id)
     notify_event_many(db, recipients, "delivery_receipt_confirmed", "delivery",
                       delivery.delivery_id, title=f"Delivery #{delivery.delivery_id}")
+    tell_donors(db, delivery, "donation_barangay_confirmed")
     db.flush()
 
     fulfillment = _recalculate_fulfillment (
@@ -368,6 +372,15 @@ def acknowledge_delivery(
         raise HTTPException(status_code=409, detail="Already acknowledged")
     log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery_id,
                new={"acknowledged": True})
+    # Oct 17 run-through: the final record of the delivery reaches CSWS Main
+    # Office and the Disaster Unit member who reported the need.
+    report = db.get(DisasterReport, delivery.report_id)
+    recipients = set(user_ids_with_role(db, ["CSWS Main Office"], exclude_user_id=current_user.user_id))
+    if report and report.user_id != current_user.user_id:
+        recipients.add(report.user_id)
+    barangay = delivery.destination_barangay.barangay_name if delivery.destination_barangay else "The barangay"
+    notify_event_many(db, recipients, "delivery_acknowledged", "delivery", delivery_id,
+                      title=f"Delivery #{delivery_id}", barangay=barangay)
     db.flush()
     return {"delivery_id": delivery_id, "acknowledged": True}
 

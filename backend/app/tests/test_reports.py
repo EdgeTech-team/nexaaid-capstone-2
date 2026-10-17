@@ -47,10 +47,18 @@ def test_create_report_missing_required_field_rejected(reporter_client, seed):
     assert resp.status_code == 422  # FastAPI/Pydantic validation error
 
 
-def test_reporter_cannot_list_all_reports(reporter_client):
+def test_citizen_cannot_list_all_reports(citizen_client):
     # list_reports is staff-only (require_role); a plain "citizen" role
-    # submitter should be forbidden.
-    resp = reporter_client.get("/reports/")
+    # should be forbidden.
+    resp = citizen_client.get("/reports/")
+    assert resp.status_code == 403
+
+
+def test_only_the_disaster_unit_submits_reports(citizen_client, seed):
+    # Appendix H 2.1 (Oct 17 run-through): any logged-in account could.
+    resp = citizen_client.post("/reports/", json={
+        "disaster_type_id": seed["disaster_type_id"], "barangay_id": seed["barangay_id"],
+        "affected_families": 3, "assistance_needed": "Rice"})
     assert resp.status_code == 403
 
 
@@ -61,6 +69,7 @@ def test_admin_validate_report(admin_client, reporter_client, seed):
             "disaster_type_id": seed["disaster_type_id"],
             "barangay_id": seed["barangay_id"],
             "description": "Report to validate.",
+            "affected_families": 12,
             "source": "web",
         },
     )
@@ -185,3 +194,23 @@ def test_list_reports_monitoring_with_fulfillment(admin_client, seed, db_session
     assert item["total_items_delivered"] == 75
     assert item["fulfillment_percentage"] == "75.00"
     assert item["fulfillment_status"] == "Partial"
+
+def test_a_report_with_no_data_is_corrected_before_validation(admin_client, reporter_client, seed):
+    """UC-A3 7a / priority module 1a (Oct 17 run-through): no affected
+    families, needs or quantity means no priority guidance, so the Admin
+    rejects it for correction instead of publishing it."""
+    rid = reporter_client.post("/reports/", json={
+        "disaster_type_id": seed["disaster_type_id"], "barangay_id": seed["barangay_id"]}).json()["report_id"]
+    r = admin_client.post(f"/reports/{rid}/validate", json={})
+    assert r.status_code == 422 and "Reject it" in r.json()["detail"]
+    assert admin_client.post(f"/reports/{rid}/reject", json={"rejection_reason": "Add the families"}).status_code == 200
+
+
+def test_only_the_admin_changes_status_or_priority_directly(admin_client, reporter_client, seed):
+    """PATCH /reports/{id} sets status and priority, so it is the
+    Administrator's alone (Appendix H 2.3; Oct 17 run-through)."""
+    rid = reporter_client.post("/reports/", json={
+        "disaster_type_id": seed["disaster_type_id"], "barangay_id": seed["barangay_id"],
+        "affected_families": 5}).json()["report_id"]
+    assert reporter_client.patch(f"/reports/{rid}", json={"status": "Validated"}).status_code == 403
+    assert admin_client.patch(f"/reports/{rid}", json={"description": "Fixed"}).status_code == 200

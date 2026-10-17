@@ -34,6 +34,7 @@ from core.audit import log_action
 from core.auth import has_role, require_role
 from core.database import get_db
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
+from services.delivery_notices import tell_donors
 from models.delivery import Delivery, DeliveryTrip
 from models.inventory_model import Inventory
 from models.logistics_request_model import LogisticsRequest
@@ -129,6 +130,8 @@ def _reschedule(db: Session, d: Delivery, when: datetime, reason: Optional[str],
     notify_event_many(db, _people(db, d, user.user_id), "delivery_rescheduled", "delivery",
                       d.delivery_id, title=f"Delivery #{d.delivery_id}",
                       date=when.strftime("%b %d, %Y %I:%M %p"), reason=reason or "")
+    tell_donors(db, d, "donation_delivery_rescheduled",
+                date=when.strftime("%b %d, %Y %I:%M %p"), reason=reason or "")
 
 
 def _return(db: Session, d: Delivery, reason: str, user: User) -> None:
@@ -142,6 +145,7 @@ def _return(db: Session, d: Delivery, reason: str, user: User) -> None:
                old={"status": "In Transit"}, new={"status": "Preparing", "reason": reason})
     notify_event_many(db, _people(db, d, user.user_id), "delivery_returned", "delivery",
                       d.delivery_id, title=f"Delivery #{d.delivery_id}", reason=reason)
+    tell_donors(db, d, "donation_delivery_returned", reason=reason)
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +217,7 @@ def cancel_delivery(
                     "returned_to_stock": returned, "cancelled_requests": requests})
     notify_event_many(db, _people(db, d, current_user.user_id), "delivery_cancelled", "delivery",
                       d.delivery_id, title=f"Delivery #{d.delivery_id}", reason=payload.reason)
+    tell_donors(db, d, "donation_delivery_cancelled", reason=payload.reason)
     db.commit()
     return {"delivery_id": d.delivery_id, "status": d.status,
             "returned_to_stock": returned, "cancelled_requests": requests}

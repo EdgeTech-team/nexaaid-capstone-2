@@ -109,6 +109,13 @@ def _get_report(db: Session, report_id: int, require_validated: bool) -> Disaste
 def _donor_ids(db: Session, current_user: Optional[User], guest_info) -> tuple:
     """(user_id, guest_donor_id). Guests are allowed by UC-D2 preconditions."""
     if current_user is not None:
+        # Appendix H 4.1/4.2: donors, relief organizations and guests give.
+        # Staff accounts record and process donations, they do not make them.
+        if not has_role(current_user, "Individual Donor", "Relief Organization"):
+            raise HTTPException(
+                status_code=403,
+                detail="Staff accounts cannot submit donations. Log out to donate as a guest.",
+            )
         return current_user.user_id, None
     if guest_info is None:
         raise HTTPException(
