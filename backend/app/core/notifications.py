@@ -34,6 +34,9 @@ EVENTS: dict[str, tuple[str, str]] = {
     "donation_received": ("Donation received", "Donation #{batch_no} was received at the CSWS office."),
         "donation_confirmed": ("Donation acknowledged", "Donation #{batch_no} was acknowledged by the CMO."),
     "donation_held": ("Donation on hold", "Donation #{batch_no} is on hold. {reason}"),
+    # CSWS Main Office (Oct 17): the CMO's decision on a donation entry.
+    "donation_ready_for_delivery": ("Donation acknowledged", "The CMO acknowledged donation #{batch_no} for {report}. It can now go on a delivery."),
+    "donation_held_staff": ("Donation on hold", "The CMO put donation #{batch_no} for {report} on hold. {reason}"),
     # Donation expiry / cancellation (services/donation_expiry.py)
     "donation_expiring_soon": ("Donation due soon", "Please hand over donation {batch_no} by {date}, or it will expire."),
     "donation_expired": ("Donation expired", "Donation {batch_no} expired because it was not handed over in time. Contact CSWS if you still want to give it."),

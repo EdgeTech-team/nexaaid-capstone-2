@@ -11,7 +11,7 @@ from models.physical_donation_model import PhysicalDonation
 from models.donation_confirmation_model import DonationConfirmation
 from models.report import DisasterReport, DisasterType, Barangay
 from schemas.donation_confirmation_schema import ConfirmDonationRequest, DonationConfirmationResponse
-from core.notifications import notify_event
+from core.notifications import notify_event, notify_event_many, user_ids_with_role
 
 
 router = APIRouter(prefix="/cmo", tags=["cmo"])
@@ -115,6 +115,28 @@ def _tell_donor(db: Session, donation: PhysicalDonation, decision: str, notes) -
                      donation.donation_id, batch_no=ref, reason=notes or "")
 
 
+def _tell_main_office(db: Session, donation: PhysicalDonation, decision: str, notes) -> None:
+    # Oct 17 (Mark): CSWS Main Office hears when the CMO acknowledges a
+    # donation entry (it can now go on a delivery), or puts it on hold. One
+    # notice per entry, like the donor's.
+    ref = donation.batch_reference or donation.qr_reference
+    report = _report_labels(db, [donation.report_id]).get(donation.report_id, "")
+    if decision == "Confirmed":
+        waiting = (db.query(PhysicalDonation)
+                   .filter(PhysicalDonation.batch_reference == donation.batch_reference,
+                           PhysicalDonation.status == "Received")
+                   .count()) if donation.batch_reference else 0
+        if waiting:
+            return
+        event = "donation_ready_for_delivery"
+    elif decision == "On Hold":
+        event = "donation_held_staff"
+    else:
+        return
+    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]), event, "donation",
+                      donation.donation_id, batch_no=ref, report=report, reason=notes or "")
+
+
 @router.post("/donations/{donation_id}/confirm", response_model=DonationConfirmationResponse, status_code=status.HTTP_201_CREATED)
 def confirm_donation(
     donation_id: int,
@@ -136,6 +158,7 @@ def confirm_donation(
 
     confirmation = _decide(db, current_user, donation, payload.status, payload.notes)
     _tell_donor(db, donation, payload.status, payload.notes)
+    _tell_main_office(db, donation, payload.status, payload.notes)
     db.commit()
     db.refresh(confirmation)
     return confirmation
@@ -253,6 +276,7 @@ def decide_entry(
     for r in received:
         _decide(db, current_user, r, payload.status, payload.notes)
     _tell_donor(db, received[0], payload.status, payload.notes)
+    _tell_main_office(db, received[0], payload.status, payload.notes)
     db.commit()
     return {
         "batch_reference": rows[0].batch_reference,
