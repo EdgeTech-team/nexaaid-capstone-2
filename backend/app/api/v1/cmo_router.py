@@ -11,7 +11,7 @@ from models.physical_donation_model import PhysicalDonation
 from models.donation_confirmation_model import DonationConfirmation
 from models.report import DisasterReport, DisasterType, Barangay
 from schemas.donation_confirmation_schema import ConfirmDonationRequest, DonationConfirmationResponse
-from core.notifications import notify_event
+from core.notifications import notify_event, notify_event_many, user_ids_with_role
 
 
 router = APIRouter(prefix="/cmo", tags=["cmo"])
@@ -115,6 +115,62 @@ def _tell_donor(db: Session, donation: PhysicalDonation, decision: str, notes) -
                      donation.donation_id, batch_no=ref, reason=notes or "")
 
 
+def _tell_main_office(db: Session, donation: PhysicalDonation, decision: str, notes) -> None:
+    # Oct 17 (Mark): CSWS Main Office hears when the CMO acknowledges a
+    # donation entry (it can now go on a delivery), or puts it on hold. One
+    # notice per entry, like the donor's.
+    ref = donation.batch_reference or donation.qr_reference
+    report = _report_labels(db, [donation.report_id]).get(donation.report_id, "")
+    if decision == "Confirmed":
+        waiting = (db.query(PhysicalDonation)
+                   .filter(PhysicalDonation.batch_reference == donation.batch_reference,
+                           PhysicalDonation.status == "Received")
+                   .count()) if donation.batch_reference else 0
+        if waiting:
+            return
+        event = "donation_ready_for_delivery"
+    elif decision == "On Hold":
+        event = "donation_held_staff"
+    else:
+        return
+    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]), event, "donation",
+                      donation.donation_id, batch_no=ref, report=report, reason=notes or "")
+
+
+def _not_on_a_delivery(db: Session, rows) -> None:
+    """Oct 17 run-through: once acknowledged goods are on a delivery (not
+    cancelled), the acknowledgement cannot be undone; cancel the delivery
+    first. Otherwise the entry would wait for the CMO again while its goods
+    are already on the road, or delivered."""
+    from models.delivery import Delivery, DeliveryAllocation, DeliveryItem
+    hit = (
+        db.query(Delivery.delivery_id)
+        .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.delivery_id)
+        .join(DeliveryAllocation, DeliveryAllocation.delivery_item_id == DeliveryItem.delivery_item_id)
+        .filter(DeliveryAllocation.donation_id.in_([r.donation_id for r in rows]),
+                Delivery.status != "Cancelled")
+        .first()
+    )
+    if hit:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This donation is already on delivery #{hit[0]}, so its acknowledgement cannot "
+                   "be undone. Main Office can cancel that delivery first.",
+        )
+
+
+def _tell_undone(db: Session, donation: PhysicalDonation) -> None:
+    """The donor and CSWS Main Office were told it was acknowledged; tell
+    them it is not any more."""
+    ref = donation.batch_reference or donation.qr_reference
+    if donation.user_id:
+        notify_event(db, donation.user_id, "donation_unacknowledged", "donation",
+                     donation.donation_id, batch_no=ref)
+    report = _report_labels(db, [donation.report_id]).get(donation.report_id, "")
+    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]), "donation_unacknowledged_staff",
+                      "donation", donation.donation_id, batch_no=ref, report=report)
+
+
 @router.post("/donations/{donation_id}/confirm", response_model=DonationConfirmationResponse, status_code=status.HTTP_201_CREATED)
 def confirm_donation(
     donation_id: int,
@@ -136,6 +192,7 @@ def confirm_donation(
 
     confirmation = _decide(db, current_user, donation, payload.status, payload.notes)
     _tell_donor(db, donation, payload.status, payload.notes)
+    _tell_main_office(db, donation, payload.status, payload.notes)
     db.commit()
     db.refresh(confirmation)
     return confirmation
@@ -253,6 +310,7 @@ def decide_entry(
     for r in received:
         _decide(db, current_user, r, payload.status, payload.notes)
     _tell_donor(db, received[0], payload.status, payload.notes)
+    _tell_main_office(db, received[0], payload.status, payload.notes)
     db.commit()
     return {
         "batch_reference": rows[0].batch_reference,
@@ -272,10 +330,12 @@ def revert_entry(
     rows = [r for r in _entry(db, reference) if r.status == "Confirmed"]
     if not rows:
         raise HTTPException(status_code=409, detail="This donation entry is not acknowledged.")
+    _not_on_a_delivery(db, rows)
     for r in rows:
         r.status = "Received"
         log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", r.donation_id,
                    old={"status": "Confirmed"}, new={"status": "Received"})
+    _tell_undone(db, rows[0])
     db.commit()
     return {"batch_reference": rows[0].batch_reference, "items": len(rows)}
 
@@ -293,9 +353,11 @@ def revert_confirmation(
         raise HTTPException(status_code=404, detail="Donation not found")
     if donation.status != "Confirmed":
         raise HTTPException(status_code=400, detail="Only acknowledged donations can be reverted")
+    _not_on_a_delivery(db, [donation])
     donation.status = "Received"
     log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", donation_id,
                old={"status": "Confirmed"}, new={"status": "Received"})
+    _tell_undone(db, donation)
     db.commit()
     return {"donation_id": donation_id, "status": donation.status}
 

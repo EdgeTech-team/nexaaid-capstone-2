@@ -39,6 +39,7 @@ from schemas.delivery import ReceiptConfirm
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
 from services.delivery_allocation import allocate_delivery, chosen_refs, ready_lines
+from services.delivery_notices import tell_barangay_prepared
 from services.delivery_views import delivery_views, report_labels
 
 router = APIRouter(prefix="/trips", tags=["Delivery trips"])
@@ -283,6 +284,7 @@ def create_trip(
     db.flush()
 
     stop_of: dict = {}   # barangay -> stop number, in the order staff listed them
+    made = []
     for stop in payload.reports:
         brgy = stop.destination_barangay_id or reports[stop.report_id].barangay_id
         stop_of.setdefault(brgy, len(stop_of) + 1)
@@ -298,6 +300,7 @@ def create_trip(
         )
         db.add(delivery)
         db.flush()
+        made.append(delivery)
         for line in lines_of[stop.report_id]:
             db.add(DeliveryItem(delivery_id=delivery.delivery_id, item_id=line.item_id, quantity=line.quantity))
         db.flush()
@@ -308,6 +311,7 @@ def create_trip(
                         "items": [l.model_dump() for l in lines_of[stop.report_id]]})
     log_action(db, current_user, "PREPARE TRIP", "delivery_trips", trip.trip_id,
                new={"reports": [s.report_id for s in payload.reports], "stops": len(stop_of)})
+    tell_barangay_prepared(db, made)   # each stop's barangay gets ready to receive
     db.commit()
     return _trip_view(db, _get_trip(db, trip.trip_id))
 

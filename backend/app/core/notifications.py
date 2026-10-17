@@ -28,12 +28,25 @@ EVENTS: dict[str, tuple[str, str]] = {
     "report_validated": ("Report validated", "{title} has been validated."),
     "report_rejected": ("Report rejected", "{title} was rejected. {reason}"),
     "report_open_for_donations": ("New report needs help", "{title} is now accepting donations."),
+    "report_withdrawn": ("Report withdrawn", "{title} was withdrawn by the Disaster Unit before validation."),
     # Donations
     "donation_submitted": ("New donation submitted", "Donation batch #{batch_no} is awaiting receipt."),
     "donation_submitted_confirm": ("Donation submitted", "Thank you! Your donation #{batch_no} was recorded. Next, CSWS receives it."),
     "donation_received": ("Donation received", "Donation #{batch_no} was received at the CSWS office."),
-        "donation_confirmed": ("Donation acknowledged", "Donation #{batch_no} was acknowledged by the CMO."),
+    "donation_confirmed": ("Donation acknowledged", "Donation #{batch_no} was acknowledged by the CMO."),
     "donation_held": ("Donation on hold", "Donation #{batch_no} is on hold. {reason}"),
+    "donation_unacknowledged": ("Acknowledgement undone", "The CMO undid the acknowledgement of donation #{batch_no}. It is waiting for the CMO again."),
+    # CSWS Main Office (Oct 17): the CMO's decision on a donation entry.
+    "donation_ready_for_delivery": ("Donation acknowledged", "The CMO acknowledged donation #{batch_no} for {report}. It can now go on a delivery."),
+    "donation_held_staff": ("Donation on hold", "The CMO put donation #{batch_no} for {report} on hold. {reason}"),
+    "donation_unacknowledged_staff": ("Acknowledgement undone", "The CMO undid the acknowledgement of donation #{batch_no} for {report}. It cannot go on a delivery until it is acknowledged again."),
+    # Donors follow their donation's delivery (Oct 17, services/delivery_notices.py)
+    "donation_in_transit": ("Your donation is on the way", "Donation #{batch_no} left the CSWS office for {barangay} (delivery #{delivery_id})."),
+    "donation_delivered": ("Your donation arrived", "Donation #{batch_no} was delivered to {barangay}. The barangay will confirm receipt."),
+    "donation_barangay_confirmed": ("The barangay received your donation", "{barangay} confirmed receiving donation #{batch_no}. Thank you!"),
+    "donation_delivery_rescheduled": ("Delivery date changed", "Donation #{batch_no} will now go to {barangay} on {date}. {reason}"),
+    "donation_delivery_returned": ("Delivery delayed", "Donation #{batch_no} went back to the CSWS office: {reason}. A new date will follow."),
+    "donation_delivery_cancelled": ("Delivery cancelled", "The delivery of donation #{batch_no} was cancelled: {reason}. It will go on a later delivery."),
     # Donation expiry / cancellation (services/donation_expiry.py)
     "donation_expiring_soon": ("Donation due soon", "Please hand over donation {batch_no} by {date}, or it will expire."),
     "donation_expired": ("Donation expired", "Donation {batch_no} expired because it was not handed over in time. Contact CSWS if you still want to give it."),
@@ -45,10 +58,13 @@ EVENTS: dict[str, tuple[str, str]] = {
     "logistics_scheduled": ("Logistics scheduled", "Pickup for {title}: {schedule}."),
     "logistics_declined": ("Logistics request declined", "{reason}"),
     "logistics_cancelled": ("Logistics request cancelled", "CSWS no longer needs transport for {title}: {reason}"),
+    "logistics_completed": ("Logistics support completed", "DRRMO completed the support for {title}. {summary}"),
     "logistics_withdrawn": ("DRRMO can no longer help", "Transport for {title} was withdrawn: {reason}. Ask again or arrange another vehicle."),
     # Delivery
     "delivery_status_changed": ("Delivery update", "{title} is now: {status}."),
+    "delivery_prepared": ("Aid is being prepared", "{title} for {barangay} is being prepared. Planned date: {date}."),
     "delivery_receipt_confirmed": ("Receipt confirmed", "The barangay confirmed receipt for {title}."),
+    "delivery_acknowledged": ("Aid acknowledged", "{barangay} acknowledged {title}. This is the final record of the delivery."),
     # Unexpected problems (api/v1/delivery_problems.py)
     "delivery_rescheduled": ("Delivery date changed", "{title} is now set for {date}. {reason}"),
     "delivery_returned": ("Delivery delayed", "{title} went back to the CSWS office: {reason}. A new date will follow."),

@@ -256,6 +256,10 @@ def complete_request(
     req.notes = f"{req.notes}\n{summary}" if req.notes else summary
     log_action(db, current_user, "COMPLETE LOGISTICS SUPPORT", "logistics_requests", request_id,
                old={"status": "Accepted"}, new={"status": "Completed", "summary": summary})
+    # Oct 17 run-through: CSWS hears that the support is done, as it does
+    # when DRRMO accepts or declines.
+    notify_event(db, req.requested_by_user_id, "logistics_completed", "logistics_request",
+                 request_id, title=req.title, summary=payload.summary)
     db.flush()
     return request_rows(db, [req])[0]
 
