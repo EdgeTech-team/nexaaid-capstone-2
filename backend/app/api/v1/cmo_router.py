@@ -137,6 +137,40 @@ def _tell_main_office(db: Session, donation: PhysicalDonation, decision: str, no
                       donation.donation_id, batch_no=ref, report=report, reason=notes or "")
 
 
+def _not_on_a_delivery(db: Session, rows) -> None:
+    """Oct 17 run-through: once acknowledged goods are on a delivery (not
+    cancelled), the acknowledgement cannot be undone; cancel the delivery
+    first. Otherwise the entry would wait for the CMO again while its goods
+    are already on the road, or delivered."""
+    from models.delivery import Delivery, DeliveryAllocation, DeliveryItem
+    hit = (
+        db.query(Delivery.delivery_id)
+        .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.delivery_id)
+        .join(DeliveryAllocation, DeliveryAllocation.delivery_item_id == DeliveryItem.delivery_item_id)
+        .filter(DeliveryAllocation.donation_id.in_([r.donation_id for r in rows]),
+                Delivery.status != "Cancelled")
+        .first()
+    )
+    if hit:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This donation is already on delivery #{hit[0]}, so its acknowledgement cannot "
+                   "be undone. Main Office can cancel that delivery first.",
+        )
+
+
+def _tell_undone(db: Session, donation: PhysicalDonation) -> None:
+    """The donor and CSWS Main Office were told it was acknowledged; tell
+    them it is not any more."""
+    ref = donation.batch_reference or donation.qr_reference
+    if donation.user_id:
+        notify_event(db, donation.user_id, "donation_unacknowledged", "donation",
+                     donation.donation_id, batch_no=ref)
+    report = _report_labels(db, [donation.report_id]).get(donation.report_id, "")
+    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]), "donation_unacknowledged_staff",
+                      "donation", donation.donation_id, batch_no=ref, report=report)
+
+
 @router.post("/donations/{donation_id}/confirm", response_model=DonationConfirmationResponse, status_code=status.HTTP_201_CREATED)
 def confirm_donation(
     donation_id: int,
@@ -296,10 +330,12 @@ def revert_entry(
     rows = [r for r in _entry(db, reference) if r.status == "Confirmed"]
     if not rows:
         raise HTTPException(status_code=409, detail="This donation entry is not acknowledged.")
+    _not_on_a_delivery(db, rows)
     for r in rows:
         r.status = "Received"
         log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", r.donation_id,
                    old={"status": "Confirmed"}, new={"status": "Received"})
+    _tell_undone(db, rows[0])
     db.commit()
     return {"batch_reference": rows[0].batch_reference, "items": len(rows)}
 
@@ -317,9 +353,11 @@ def revert_confirmation(
         raise HTTPException(status_code=404, detail="Donation not found")
     if donation.status != "Confirmed":
         raise HTTPException(status_code=400, detail="Only acknowledged donations can be reverted")
+    _not_on_a_delivery(db, [donation])
     donation.status = "Received"
     log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", donation_id,
                old={"status": "Confirmed"}, new={"status": "Received"})
+    _tell_undone(db, donation)
     db.commit()
     return {"donation_id": donation_id, "status": donation.status}
 
