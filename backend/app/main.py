@@ -66,7 +66,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:8080",
-        "https://jolly-cobbler-deaa50.netlify.app",
+        "https://nexaaid1.netlify.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
