@@ -101,7 +101,7 @@ class Api extends ChangeNotifier {
 
   /// Use the deployed backend on Android, Chrome, and other platforms.
   static String _defaultBase() {
-    return 'https://nexaaid-capstone-2.onrender.com';
+    return 'https://nexaaid-1.onrender.com';
   }
 
   void setBase(String v) {
