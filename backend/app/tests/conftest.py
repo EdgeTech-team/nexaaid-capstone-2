@@ -189,6 +189,17 @@ def make_client(db_session, current_user: FakeUser) -> AuthedTestClient:
  
 @pytest.fixture()
 def reporter_client(db_session, seed):
+    """The reporter: a CSWS Disaster Unit member (Appendix H 2.1, Oct 17:
+    only the Disaster Unit submits reports)."""
+    user = FakeUser(user_id=seed["reporter_id"], role_name="CSWS Disaster Unit")
+    yield make_client(db_session, user)
+    app.dependency_overrides.clear()
+    _fake_users_by_id.clear()
+
+
+@pytest.fixture()
+def citizen_client(db_session, seed):
+    """A logged-in account with no staff role (e.g. a donor)."""
     user = FakeUser(user_id=seed["reporter_id"], role_name="citizen")
     yield make_client(db_session, user)
     app.dependency_overrides.clear()

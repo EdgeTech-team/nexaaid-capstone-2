@@ -211,7 +211,7 @@ def test_appendix_h_module_access(api):
     me = {k: db.query(User.user_id).filter(User.first_name == k).scalar() for k in ("admin", "unit")}
     db.close()
     sms = {"contact_number": "+63 917 000 0000", "raw_message": "FLOOD 5FAM",
-           "disaster_type_id": 1, "barangay_id": 1}
+           "disaster_type_id": 1, "barangay_id": 1, "affected_families": 5}
     for role in ("unit", "csws", "brgy", "donor"):
         ok(client.post("/reports/sms", json=sms, headers=t[role]), 403)
     created = ok(client.post("/reports/sms", json=sms, headers=t["admin"]), 201)

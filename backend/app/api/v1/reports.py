@@ -210,7 +210,9 @@ def _apply_sitios(db: Session, report: DisasterReport, sitio_id, sitio_ids) -> N
 def create_report(
     payload: DisasterReportCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    # Appendix H 2.1 / UC-CD1: only the CSWS Disaster Unit submits reports
+    # (Oct 17 run-through: any logged-in account could before).
+    current_user=Depends(require_role("csws_disaster_unit")),
 ):
     report = DisasterReport(
         **payload.model_dump(exclude={"sitio_ids"}), user_id=current_user.user_id
@@ -407,6 +409,9 @@ def withdraw_my_report(
     reason = (payload.reason or "").strip() if payload else ""
     log_action(db, current_user, "WITHDRAW REPORT", "disaster_reports", report.report_id,
                old={"status": old}, new={"status": "Cancelled", "reason": reason or None})
+    # It leaves the Administrators' validation queue: tell them why it went.
+    notify_event_many(db, user_ids_with_role(db, ["Administrator"]), "report_withdrawn",
+                      "report", report.report_id, title=f"Report #{report.report_id}")
     db.flush()
     db.refresh(report)
     return report
@@ -452,7 +457,10 @@ def update_report(
     report_id: int,
     payload: DisasterReportUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin")),
+    # Administrator only (Oct 17 run-through): it can set status and
+    # priority, so CSWS staff could otherwise validate their own reports
+    # (Appendix H 2.3). Reporters correct reports with PUT /{id}/mine.
+    current_user=Depends(require_role("admin")),
 ):
     report = db.get(DisasterReport, report_id)
     if not report:
@@ -484,6 +492,15 @@ def validate_report(
         raise HTTPException(status_code=400, detail="Report is already validated")
     if report.status == "Cancelled":
         raise HTTPException(status_code=409, detail="The reporter withdrew this report")
+    # UC-A3 7a / priority module 1a: no priority guidance can be computed
+    # without data, so the report is corrected first (reject it with a
+    # reason; the Disaster Unit fixes it and it comes back).
+    if not (report.affected_families or report.estimated_quantity or report.assistance_needed):
+        raise HTTPException(
+            status_code=422,
+            detail="This report has no affected families, assistance needed or quantity, so "
+                   "priority guidance cannot be computed. Reject it so the Disaster Unit can complete it.",
+        )
 
     report.status = "Validated"
     report.validated_by = current_user.user_id
