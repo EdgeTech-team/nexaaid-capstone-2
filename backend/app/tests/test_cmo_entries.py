@@ -89,3 +89,37 @@ def test_cmo_hears_only_after_csws_receives_and_opens_that_entry(api):
     assert e["batch_reference"] == ref and e["total_items"] == 2 and e["acknowledged"] is False
     assert client.get(f"/cmo/entries/by-donation/{first}", headers=t["donor"]).status_code == 403
     assert client.get("/cmo/entries/by-donation/999999", headers=t["cmo"]).status_code == 404
+
+
+def test_main_office_hears_when_the_cmo_acknowledges_or_holds_an_entry(api):
+    """Oct 17 (Mark): CSWS Main Office is told once per entry when the CMO
+    acknowledges it (it can now go on a delivery) or puts it on hold."""
+    client, t = api
+    db = database.SessionLocal()
+    db.query(User).update({User.is_active: True})   # see the test above
+    db.commit()
+    db.close()
+
+    def office_notes(kind):
+        items = ok(client.get("/notifications/", headers=t["csws"]))["items"]
+        return [n for n in items if n["type"] == kind]
+
+    rid = _report(client, t)
+    b = _entry(client, t, rid)
+    ref = b["batch_reference"]
+    ok(client.post(f"/donations/entries/{ref}/receive", headers=t["csws"], json={
+        "items": [{"donation_id": i["donation_id"], "actual_quantity": i["quantity"]} for i in b["items"]]}))
+
+    ok(client.post(f"/cmo/entries/{ref}/decide", headers=t["cmo"],
+                   json={"status": "On Hold", "notes": "Check expiry dates"}))
+    held = office_notes("donation_held_staff")
+    assert len(held) == 1 and ref in held[0]["message"] and "Check expiry dates" in held[0]["message"]
+
+    ok(client.post(f"/cmo/entries/{ref}/decide", headers=t["cmo"], json={"status": "Acknowledged"}))
+    ready = office_notes("donation_ready_for_delivery")
+    assert len(ready) == 1                                   # one per entry, not per item
+    assert ref in ready[0]["message"] and f"#{rid} " in ready[0]["message"]
+    assert ready[0]["entity_type"] == "donation"
+    # Only Main Office: the CMO itself is not told.
+    assert not [n for n in ok(client.get("/notifications/", headers=t["cmo"]))["items"]
+                if n["type"] == "donation_ready_for_delivery"]
