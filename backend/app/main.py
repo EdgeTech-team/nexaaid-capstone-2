@@ -65,9 +65,12 @@ def root():
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:8080",
         "https://nexaaid1.netlify.app",
     ],
+    # flutter run -d chrome opens a random port (localhost:45803, ...):
+    # allow the local web app on any port, not only 8080. Phones are not
+    # affected by CORS.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
