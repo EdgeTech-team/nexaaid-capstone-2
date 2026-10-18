@@ -466,11 +466,13 @@ void main() {
       expect(find.text('All Reports'), findsOneWidget);
       expect(find.text('Find communities that need assistance.'), findsOneWidget);
       expect(find.text('Done'), findsNothing); // no separate Done section
-      // Active and fulfilled reports in one list, each with View details.
+      // Active and fulfilled reports in one list. Every card has Details;
+      // only the open ones (Banilad, Tipolo) have Donate.
       expect(find.text('3 reports found'), findsOneWidget);
       expect(find.text('Flood in Barangay Banilad'), findsOneWidget);
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
-      expect(find.text('View details'), findsNWidgets(3));
+      expect(find.text('Details'), findsNWidgets(3));
+      expect(find.text('Donate'), findsNWidgets(2));
       expect(find.text('More filters'), findsOneWidget);
       expect(find.text('Sort: Most urgent'), findsOneWidget);
 
@@ -486,7 +488,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('1 report found'), findsOneWidget);
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
-      await tester.tap(find.text('View details'));
+      expect(find.text('Donate'), findsNothing);
+      await tester.tap(find.text('Details'));
       await tester.pumpAndSettle();
       expect(find.text('Assistance needed'), findsOneWidget);
       expect(find.text('Donate'), findsNothing);
@@ -503,16 +506,49 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('Reports tab: View details of an open report can Donate', (
+  testWidgets('Reports tab: Details of an open report can Donate too', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const DonorReportsTab());
-      await tester.tap(find.text('View details').first);
+      await tester.tap(find.text('Details').first);
       await tester.pumpAndSettle();
       expect(find.text('Assistance needed'), findsOneWidget);
-      expect(find.text('Donate'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text('Donate'),
+        ),
+        findsOneWidget,
+      );
+    }, () => _server);
+  });
+
+  testWidgets('Reports tab: More filters has type and priority, no progress', (
+    tester,
+  ) async {
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await _pump(tester, const DonorReportsTab());
+      await tester.tap(find.text('More filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('Disaster type'), findsOneWidget);
+      expect(find.text('Priority'), findsOneWidget);
+      expect(find.text('Progress'), findsNothing);
+      // Pick Medium: only Tipolo, shown as a removable chip.
+      await tester.tap(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text('Medium'),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Apply filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 report found'), findsOneWidget);
+      expect(find.text('Flood in Barangay Tipolo'), findsOneWidget);
+      expect(find.widgetWithText(InputChip, 'Medium'), findsOneWidget);
     }, () => _server);
   });
 }

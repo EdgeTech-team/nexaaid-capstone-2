@@ -43,7 +43,6 @@ class _ReportsFeedState extends State<ReportsFeed> {
   final _searchC = TextEditingController();
   String search = '';
   String? barangay, type, priority;
-  String? progress; // fulfillment status, null = any
   _Quick quick = _Quick.all;
   ReportSort sort = ReportSort.urgent;
 
@@ -60,22 +59,20 @@ class _ReportsFeedState extends State<ReportsFeed> {
       barangay != null ||
       type != null ||
       priority != null ||
-      progress != null ||
       quick != _Quick.all;
 
   void _resetFilters() => setState(() {
     _searchC.clear();
     search = '';
-    barangay = type = priority = progress = null;
+    barangay = type = priority = null;
     quick = _Quick.all;
   });
 
   /// Number of filters inside the "More filters" sheet that are on.
-  int get _sheetCount =>
-      [type, priority, progress].where((v) => v != null).length;
+  int get _sheetCount => [type, priority].where((v) => v != null).length;
 
   Future<void> _moreFilters(Names names) async {
-    final result = await showModalBottomSheet<(String?, String?, String?)>(
+    final result = await showModalBottomSheet<(String?, String?)>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
@@ -84,15 +81,14 @@ class _ReportsFeedState extends State<ReportsFeed> {
         priorities: _priorities,
         type: type,
         priority: priority,
-        progress: progress,
       ),
     );
     if (result == null || !mounted) return;
     setState(() {
       type = result.$1;
       priority = result.$2;
-      progress = result.$3;
-      if (progress != null) quick = _Quick.all;
+      // A priority picked here replaces the Urgent shortcut.
+      if (priority != null && quick == _Quick.urgent) quick = _Quick.all;
     });
   }
 
@@ -137,11 +133,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
               (priority == null || r['priority_level'] == priority) &&
               quickOk(r);
         }).toList();
-        final reports = sortAndFilterReports(
-          matching,
-          fulfillment: progress,
-          sort: sort,
-        );
+        final reports = sortAndFilterReports(matching, sort: sort);
 
         // Active filters, shown as chips that can be removed one by one.
         final active = <(String, IconData, VoidCallback)>[
@@ -162,8 +154,6 @@ class _ReportsFeedState extends State<ReportsFeed> {
           if (priority != null)
             (priority!, Icons.flag_outlined,
                 () => setState(() => priority = null)),
-          if (progress != null)
-            (progress!, Icons.timelapse, () => setState(() => progress = null)),
         ];
 
         Widget quickChip(_Quick value, String label, IconData icon, Color c) =>
@@ -176,7 +166,9 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 showCheckmark: false,
                 onSelected: (_) => setState(() {
                   quick = value;
-                  if (value != _Quick.all) progress = null;
+                  // Urgent is a priority shortcut: it replaces a priority
+                  // picked in More filters.
+                  if (value == _Quick.urgent) priority = null;
                 }),
               ),
             );
@@ -277,18 +269,34 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   ),
                 ),
                 Gaps.h8,
-                OutlinedButton.icon(
-                  onPressed: () => _moreFilters(names),
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 48),
+                // Small phones (under 360 px): the icon only, so the
+                // barangay dropdown keeps its room.
+                if (MediaQuery.sizeOf(context).width < 360)
+                  IconButton.outlined(
+                    tooltip: 'More filters',
+                    onPressed: () => _moreFilters(names),
+                    style: IconButton.styleFrom(
+                      minimumSize: const Size(48, 48),
+                    ),
+                    icon: Badge(
+                      isLabelVisible: _sheetCount > 0,
+                      label: Text('$_sheetCount'),
+                      child: const Icon(Icons.tune),
+                    ),
+                  )
+                else
+                  OutlinedButton.icon(
+                    onPressed: () => _moreFilters(names),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    icon: Badge(
+                      isLabelVisible: _sheetCount > 0,
+                      label: Text('$_sheetCount'),
+                      child: const Icon(Icons.tune),
+                    ),
+                    label: const Text('More filters'),
                   ),
-                  icon: Badge(
-                    isLabelVisible: _sheetCount > 0,
-                    label: Text('$_sheetCount'),
-                    child: const Icon(Icons.tune),
-                  ),
-                  label: const Text('More filters'),
-                ),
               ],
             ),
             if (active.isNotEmpty) ...[
@@ -363,6 +371,11 @@ class _ReportsFeedState extends State<ReportsFeed> {
               _ReportListCard(
                 report: r,
                 onDetails: () => _showDetails(context, r, names),
+                // A fulfilled report has what it needs: no Donate button.
+                onDonate:
+                    widget.done == true || (fulfillmentPercent(r) ?? 0) >= 100
+                    ? null
+                    : () => _donate(r, names),
               ),
           ],
         );
@@ -370,7 +383,14 @@ class _ReportsFeedState extends State<ReportsFeed> {
     );
   }
 
-  /// "View details": the whole report in a bottom sheet, with Donate.
+  void _donate(Map<String, dynamic> r, Names names) =>
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => DonateScreen(report: r, names: names),
+        ),
+      );
+
+  /// "Details": the whole report in a bottom sheet, with Donate.
   void _showDetails(BuildContext context, Map<String, dynamic> r, Names names) {
     final canDonate =
         widget.done != true && (fulfillmentPercent(r) ?? 0) < 100;
@@ -449,11 +469,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                     expand: true,
                     onPressed: () {
                       Navigator.of(ctx).pop();
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => DonateScreen(report: r, names: names),
-                        ),
-                      );
+                      _donate(r, names);
                     },
                   ),
                 ],
@@ -474,11 +490,16 @@ String _place(Map r) => [
 ].join(', ');
 
 /// One report in the list: picture, priority, title, place, families, a
-/// short description, progress, and "View details".
+/// short description, progress, then Donate (open reports) and Details.
 class _ReportListCard extends StatelessWidget {
   final Map<String, dynamic> report;
   final VoidCallback onDetails;
-  const _ReportListCard({required this.report, required this.onDetails});
+  final VoidCallback? onDonate; // null: fulfilled, no Donate button
+  const _ReportListCard({
+    required this.report,
+    required this.onDetails,
+    this.onDonate,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -576,17 +597,37 @@ class _ReportListCard extends StatelessWidget {
             ],
           ),
           Gaps.v8,
-          FilledButton(
-            onPressed: onDetails,
-            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text('View details'),
+          Row(
+            children: [
+              if (onDonate != null) ...[
+                Expanded(
+                  child: AppButton(
+                    'Donate',
+                    icon: Icons.volunteer_activism_outlined,
+                    variant: AppButtonVariant.donate,
+                    expand: true,
+                    onPressed: onDonate,
+                  ),
+                ),
                 Gaps.h8,
-                Icon(Icons.arrow_forward, size: 18),
               ],
-            ),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onDetails,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('Details'),
+                      Gaps.h8,
+                      Icon(Icons.arrow_forward, size: 18),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -639,18 +680,18 @@ class _NoReports extends StatelessWidget {
   }
 }
 
-/// "More filters" bottom sheet: disaster type, priority and progress.
-/// Pops (type, priority, progress); nothing when closed without applying.
+/// "More filters" bottom sheet: disaster type and priority. Progress is
+/// the quick chips (Needs assistance / Fulfilled), so it is not repeated
+/// here. Pops (type, priority); nothing when closed without applying.
 class _MoreFiltersSheet extends StatefulWidget {
   final List<String> types;
   final List<String> priorities;
-  final String? type, priority, progress;
+  final String? type, priority;
   const _MoreFiltersSheet({
     required this.types,
     required this.priorities,
     required this.type,
     required this.priority,
-    required this.progress,
   });
 
   @override
@@ -658,9 +699,7 @@ class _MoreFiltersSheet extends StatefulWidget {
 }
 
 class _MoreFiltersSheetState extends State<_MoreFiltersSheet> {
-  late String? type = widget.type,
-      priority = widget.priority,
-      progress = widget.progress;
+  late String? type = widget.type, priority = widget.priority;
 
   @override
   Widget build(BuildContext context) {
@@ -725,19 +764,11 @@ class _MoreFiltersSheetState extends State<_MoreFiltersSheet> {
               priority,
               (v) => setState(() => priority = v),
             ),
-            group(
-              'Progress',
-              fulfillmentStates,
-              progress,
-              (v) => setState(() => progress = v),
-            ),
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () => setState(
-                      () => type = priority = progress = null,
-                    ),
+                    onPressed: () => setState(() => type = priority = null),
                     style: OutlinedButton.styleFrom(
                       minimumSize: const Size(0, 48),
                     ),
@@ -748,7 +779,7 @@ class _MoreFiltersSheetState extends State<_MoreFiltersSheet> {
                 Expanded(
                   child: FilledButton(
                     onPressed: () =>
-                        Navigator.of(context).pop((type, priority, progress)),
+                        Navigator.of(context).pop((type, priority)),
                     style: FilledButton.styleFrom(
                       minimumSize: const Size(0, 48),
                     ),
