@@ -69,7 +69,7 @@ def create_internal_account(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email is not set up on the server, so the temporary password "
-                   "cannot be sent. Set SMTP_USER and SMTP_PASSWORD.",
+                   "cannot be sent. Set BREVO_API_KEY and EMAIL_FROM.",
         )
     if payload.assigned_barangay_id is not None:
         _check_barangay(db, payload.assigned_barangay_id)
