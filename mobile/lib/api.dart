@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Role names exactly as they are in the `roles` table.
 class Roles {
@@ -80,6 +81,64 @@ class Api extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---- Saved login: stays signed in after the app closes or the page refreshes ----
+
+  static const _kToken = 'session_token';
+  static const _kEmail = 'session_email';
+  static const _kRole = 'session_role';
+  static const _kMustChange = 'session_must_change';
+
+  Future<void> _saveSession() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kToken, token ?? '');
+      await p.setString(_kEmail, email ?? '');
+      await p.setString(_kRole, role ?? '');
+      await p.setBool(_kMustChange, mustChangePassword);
+    } catch (_) {}
+  }
+
+  Future<void> _clearSavedSession() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove(_kToken);
+      await p.remove(_kEmail);
+      await p.remove(_kRole);
+      await p.remove(_kMustChange);
+    } catch (_) {}
+  }
+
+  /// Call once before runApp(). Restores the saved login without any network
+  /// call, so the app opens straight to the role's home screen even while the
+  /// Render backend is still waking up.
+  Future<void> restoreSession() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final saved = p.getString(_kToken);
+      if (saved == null || saved.isEmpty) return;
+      token = saved;
+      email = p.getString(_kEmail);
+      final savedRole = p.getString(_kRole);
+      role = (savedRole == null || savedRole.isEmpty) ? null : savedRole;
+      mustChangePassword = p.getBool(_kMustChange) ?? false;
+    } catch (_) {}
+  }
+
+  /// Runs in the background after startup: refreshes the role. If the saved
+  /// token has expired, send() signs the user out (see the 401 check there).
+  Future<void> validateSession() async {
+    if (token == null) return;
+    final me = await get('/health/secure');
+    if (me.ok && me.json is Map) {
+      final r = me.json['role']?.toString();
+      if (r != null && r != role) {
+        role = r;
+        await _saveSession();
+        notifyListeners();
+      }
+    }
+  }
+
   /// Dropdown data from GET /lookups:
   /// disaster_types, barangays, sitios, items, reports -> list of {id, name}.
   /// Cached; cleared after any change.
@@ -153,6 +212,15 @@ class Api extends ChangeNotifier {
           res.statusCode < 300 &&
           !path.startsWith('/token')) {
         refreshLookups();
+      }
+
+      // The login expired or is invalid: sign out so the app goes back to the
+      // landing page instead of showing errors on every screen.
+      if (res.statusCode == 401 &&
+          token != null &&
+          decoded is Map &&
+          decoded['detail'].toString().startsWith('Could not validate')) {
+        logout();
       }
 
       return ApiResult(res.statusCode, decoded, res.body);
@@ -261,6 +329,7 @@ class Api extends ChangeNotifier {
         role = me.json['role']?.toString();
       }
 
+      await _saveSession();
       notifyListeners();
     }
 
@@ -293,6 +362,7 @@ class Api extends ChangeNotifier {
     role = null;
     guest = false;
     mustChangePassword = false;
+    _clearSavedSession();
     notifyListeners();
   }
 
@@ -313,6 +383,7 @@ class Api extends ChangeNotifier {
 
     if (r.ok) {
       mustChangePassword = false;
+      await _saveSession();
       notifyListeners();
     }
 
