@@ -474,6 +474,9 @@ void main() {
       expect(find.text('Details'), findsNWidgets(3));
       expect(find.text('Donate'), findsNWidgets(2));
       expect(find.text('More filters'), findsOneWidget);
+      // The two summary cards stay.
+      expect(find.text('Validated reports'), findsOneWidget);
+      expect(find.text('High / critical priority'), findsOneWidget);
       expect(find.text('Sort: Most urgent'), findsOneWidget);
 
       // Urgent = Critical and High; it shows as a removable chip.
