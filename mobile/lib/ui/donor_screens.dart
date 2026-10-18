@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'disaster_art.dart';
 import 'report_filters.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
@@ -20,7 +21,7 @@ class DonorReportsTab extends StatelessWidget {
 }
 
 /// UC-D2 / UC-R2 step 1-3: browse validated reports and pick one to
-/// support. Layout follows the "Validated Disaster Reports" wireframe.
+/// support. Layout follows Ivan's Oct 18 "All Reports" mockup.
 ///
 /// [done]: null shows every validated report (guests); false only the ones
 /// still under 100%; true only the fulfilled ones, without Donate buttons.
@@ -32,35 +33,67 @@ class ReportsFeed extends StatefulWidget {
   State<ReportsFeed> createState() => _ReportsFeedState();
 }
 
+/// Quick filters at the top of the list.
+enum _Quick { all, urgent, needs, fulfilled }
+
 class _ReportsFeedState extends State<ReportsFeed> {
+  // Ivan (Oct 18 mockup): search, quick chips, barangay + "More filters"
+  // (bottom sheet), active filters as removable chips, count + sort, and
+  // compact cards with a picture and "View details".
+  final _searchC = TextEditingController();
   String search = '';
   String? barangay, type, priority;
   String? progress; // fulfillment status, null = any
+  _Quick quick = _Quick.all;
   ReportSort sort = ReportSort.urgent;
 
-  Widget _filter(
-    String hint,
-    String? value,
-    List<String> options,
-    ValueChanged<String?> onChanged,
-  ) {
-    return DropdownButtonFormField<String>(
-      initialValue: value,
-      isExpanded: true,
-      decoration: InputDecoration(
-        isDense: true,
-        hintText: hint,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 12,
-          vertical: 12,
-        ),
+  @override
+  void dispose() {
+    _searchC.dispose();
+    super.dispose();
+  }
+
+  static const _priorities = ['Critical', 'High', 'Medium', 'Low'];
+
+  bool get _anyFilter =>
+      search.isNotEmpty ||
+      barangay != null ||
+      type != null ||
+      priority != null ||
+      progress != null ||
+      quick != _Quick.all;
+
+  void _resetFilters() => setState(() {
+    _searchC.clear();
+    search = '';
+    barangay = type = priority = progress = null;
+    quick = _Quick.all;
+  });
+
+  /// Number of filters inside the "More filters" sheet that are on.
+  int get _sheetCount =>
+      [type, priority, progress].where((v) => v != null).length;
+
+  Future<void> _moreFilters(Names names) async {
+    final result = await showModalBottomSheet<(String?, String?, String?)>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) => _MoreFiltersSheet(
+        types: [for (final t in names.rows('disaster_types')) '${t['name']}'],
+        priorities: _priorities,
+        type: type,
+        priority: priority,
+        progress: progress,
       ),
-      items: [
-        DropdownMenuItem<String>(value: null, child: Text(hint)),
-        for (final o in options) DropdownMenuItem(value: o, child: Text(o)),
-      ],
-      onChanged: onChanged,
     );
+    if (result == null || !mounted) return;
+    setState(() {
+      type = result.$1;
+      priority = result.$2;
+      progress = result.$3;
+      if (progress != null) quick = _Quick.all;
+    });
   }
 
   @override
@@ -70,12 +103,26 @@ class _ReportsFeedState extends State<ReportsFeed> {
       builder: (context, data) {
         final names = Names(Map<String, dynamic>.from(data[0] as Map));
         final done = widget.done;
+        final cs = Theme.of(context).colorScheme;
+        final t = Theme.of(context).textTheme;
         final all = names.rows('validated_reports').where((r) {
           if (done == null) return true;
-          final full = (r['fulfillment_percentage'] as num? ?? 0) >= 100;
+          final full = (fulfillmentPercent(r) ?? 0) >= 100;
           return done ? full : !full;
         }).toList();
         final q = search.toLowerCase();
+        bool quickOk(Map r) {
+          final pct = fulfillmentPercent(r) ?? 0;
+          return switch (quick) {
+            _Quick.all => true,
+            _Quick.urgent =>
+              r['priority_level'] == 'Critical' ||
+                  r['priority_level'] == 'High',
+            _Quick.needs => pct < 100,
+            _Quick.fulfilled => pct >= 100,
+          };
+        }
+
         final matching = all.where((r) {
           final text = [
             r['barangay'],
@@ -87,272 +134,629 @@ class _ReportsFeedState extends State<ReportsFeed> {
           return (q.isEmpty || text.contains(q)) &&
               (barangay == null || r['barangay'] == barangay) &&
               (type == null || r['disaster'] == type) &&
-              (priority == null || r['priority_level'] == priority);
+              (priority == null || r['priority_level'] == priority) &&
+              quickOk(r);
         }).toList();
         final reports = sortAndFilterReports(
           matching,
           fulfillment: progress,
           sort: sort,
         );
-        final cs = Theme.of(context).colorScheme;
-        return ListView(
-          padding: EdgeInsets.zero,
-          children: [
+
+        // Active filters, shown as chips that can be removed one by one.
+        final active = <(String, IconData, VoidCallback)>[
+          if (quick == _Quick.urgent)
+            ('Urgent', Icons.warning_amber_rounded,
+                () => setState(() => quick = _Quick.all)),
+          if (quick == _Quick.needs)
+            ('Needs assistance', Icons.volunteer_activism_outlined,
+                () => setState(() => quick = _Quick.all)),
+          if (quick == _Quick.fulfilled)
+            ('Fulfilled', Icons.check_circle_outline,
+                () => setState(() => quick = _Quick.all)),
+          if (barangay != null)
+            (barangay!, Icons.place_outlined,
+                () => setState(() => barangay = null)),
+          if (type != null)
+            (type!, Icons.flood_outlined, () => setState(() => type = null)),
+          if (priority != null)
+            (priority!, Icons.flag_outlined,
+                () => setState(() => priority = null)),
+          if (progress != null)
+            (progress!, Icons.timelapse, () => setState(() => progress = null)),
+        ];
+
+        Widget quickChip(_Quick value, String label, IconData icon, Color c) =>
             Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // problema_napud 3.3: the same header as every other
-                  // page, so it follows the light/dark theme.
-                  PageHeader(
-                    done == null
-                        ? 'All Reports'
-                        : done
-                        ? 'Completed Reports'
-                        : 'Active Reports',
-                    subtitle: done == null
-                        ? 'Every validated report in Mandaue City, active and '
-                              'done. Filter by progress or sort below.'
-                        : done
-                        ? 'Reports that received everything they needed. '
-                              'Thank you to everyone who helped.'
-                        : 'Reports that still need help. Pick one and '
-                              'pledge goods.',
-                  ),
-                  StatCardGrid([
-                    StatCard(
-                      label: done == null
-                          ? 'Validated reports'
-                          : done
-                          ? 'Completed reports'
-                          : 'Active reports',
-                      value: '${all.length}',
-                      icon: done == true
-                          ? Icons.task_alt_outlined
-                          : Icons.report_outlined,
-                    ),
-                    if (done != true)
-                      StatCard(
-                        label: 'High / critical priority',
-                        value:
-                            '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
-                        icon: Icons.trending_up,
-                        color: PriorityColors.base('High'),
+              padding: const EdgeInsets.only(right: Space.xs),
+              child: ChoiceChip(
+                avatar: Icon(icon, size: 18, color: c),
+                label: Text(label),
+                selected: quick == value,
+                showCheckmark: false,
+                onSelected: (_) => setState(() {
+                  quick = value;
+                  if (value != _Quick.all) progress = null;
+                }),
+              ),
+            );
+
+        return ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+          children: [
+            PageHeader(
+              done == null
+                  ? 'All Reports'
+                  : done
+                  ? 'Completed Reports'
+                  : 'Active Reports',
+              subtitle: done == null
+                  ? 'Find communities that need assistance.'
+                  : done
+                  ? 'Reports that received everything they needed. '
+                        'Thank you to everyone who helped.'
+                  : 'Reports that still need help. Pick one and pledge '
+                        'goods.',
+            ),
+            TextField(
+              controller: _searchC,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search),
+                hintText: 'Search by barangay or need...',
+                suffixIcon: search.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(() {
+                          _searchC.clear();
+                          search = '';
+                        }),
                       ),
-                  ]),
-                  const SizedBox(height: 14),
-                  TextField(
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      hintText:
-                          'Search reports, barangay, or assistance needed...',
+              ),
+              onChanged: (v) => setState(() => search = v.trim()),
+            ),
+            if (done == null) ...[
+              Gaps.v12,
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    quickChip(_Quick.all, 'All', Icons.apps, cs.primary),
+                    quickChip(
+                      _Quick.urgent,
+                      'Urgent',
+                      Icons.warning_amber_rounded,
+                      PriorityColors.base('Critical'),
                     ),
-                    onChanged: (v) => setState(() => search = v.trim()),
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _filter('All Barangays', barangay, [
-                          for (final b in names.rows('barangays'))
-                            '${b['name']}',
-                        ], (v) => setState(() => barangay = v)),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _filter('All Types', type, [
-                          for (final t in names.rows('disaster_types'))
-                            '${t['name']}',
-                        ], (v) => setState(() => type = v)),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  _filter('All Priorities', priority, const [
-                    'Critical',
-                    'High',
-                    'Medium',
-                    'Low',
-                    'Needs Review',
-                  ], (v) => setState(() => priority = v)),
-                  // Fulfillment status filter and sort (Ivan's note):
-                  // replaces the separate Done section.
-                  if (done == null) ...[
-                    const SizedBox(height: 10),
-                    FulfillmentChips(
-                      rows: matching,
-                      value: progress,
-                      onChanged: (v) => setState(() => progress = v),
+                    quickChip(
+                      _Quick.needs,
+                      'Needs assistance',
+                      Icons.volunteer_activism_outlined,
+                      cs.primary,
                     ),
-                    const SizedBox(height: 10),
-                    ReportSortField(
-                      value: sort,
-                      onChanged: (v) => setState(() => sort = v),
+                    quickChip(
+                      _Quick.fulfilled,
+                      'Fulfilled',
+                      Icons.check_circle_outline,
+                      StatusColors.base('Fulfilled'),
                     ),
                   ],
-                  const SizedBox(height: 14),
-                  Text.rich(
-                    TextSpan(
-                      text: 'Showing ',
-                      style: TextStyle(color: cs.onSurfaceVariant),
-                      children: [
-                        TextSpan(
-                          text: '${reports.length}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w700,
-                            color: cs.onSurface,
-                          ),
+                ),
+              ),
+            ],
+            Gaps.v12,
+            Row(
+              children: [
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    key: ValueKey('brgy-$barangay'),
+                    initialValue: barangay,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      prefixIcon: Icon(Icons.place_outlined, size: 20),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
+                    ),
+                    items: [
+                      const DropdownMenuItem<String>(
+                        value: null,
+                        child: Text('All barangays'),
+                      ),
+                      for (final b in names.rows('barangays'))
+                        DropdownMenuItem(
+                          value: '${b['name']}',
+                          child: Text('${b['name']}'),
                         ),
-                        const TextSpan(text: ' reports'),
+                    ],
+                    onChanged: (v) => setState(() => barangay = v),
+                  ),
+                ),
+                Gaps.h8,
+                OutlinedButton.icon(
+                  onPressed: () => _moreFilters(names),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                  ),
+                  icon: Badge(
+                    isLabelVisible: _sheetCount > 0,
+                    label: Text('$_sheetCount'),
+                    child: const Icon(Icons.tune),
+                  ),
+                  label: const Text('More filters'),
+                ),
+              ],
+            ),
+            if (active.isNotEmpty) ...[
+              Gaps.v12,
+              Wrap(
+                spacing: Space.xs,
+                runSpacing: Space.xs,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  for (final (label, icon, remove) in active)
+                    InputChip(
+                      avatar: Icon(icon, size: 18),
+                      label: Text(label),
+                      onDeleted: remove,
+                      deleteButtonTooltipMessage: 'Remove $label',
+                    ),
+                  TextButton.icon(
+                    onPressed: _resetFilters,
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    label: const Text('Clear all'),
+                  ),
+                ],
+              ),
+            ],
+            Gaps.v12,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${reports.length} '
+                    '${reports.length == 1 ? 'report' : 'reports'} found',
+                    style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                ),
+                PopupMenuButton<ReportSort>(
+                  tooltip: 'Sort reports',
+                  initialValue: sort,
+                  onSelected: (v) => setState(() => sort = v),
+                  itemBuilder: (_) => [
+                    for (final s in ReportSort.values)
+                      PopupMenuItem(value: s, child: Text(s.label)),
+                  ],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Sort: ${sort.label}',
+                          style: t.labelLarge?.copyWith(color: cs.primary),
+                        ),
+                        Icon(Icons.arrow_drop_down, color: cs.primary),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  if (reports.isEmpty)
-                    EmptyState(
-                      done == true && all.isEmpty
-                          ? 'No completed reports yet.'
-                          : 'No validated reports match.',
-                    ),
-                  for (final r in reports) _card(context, r, names),
-                ],
-              ),
+                ),
+              ],
             ),
+            Gaps.v8,
+            if (reports.isEmpty)
+              _NoReports(
+                message: all.isEmpty
+                    ? (done == true
+                          ? 'No completed reports yet.'
+                          : 'When the City validates a disaster report, it '
+                                'shows up here.')
+                    : 'Try adjusting your search or filters to find more '
+                          'reports.',
+                onReset: _anyFilter ? _resetFilters : null,
+              ),
+            for (final r in reports)
+              _ReportListCard(
+                report: r,
+                onDetails: () => _showDetails(context, r, names),
+              ),
           ],
         );
       },
     );
   }
 
-  Widget _card(BuildContext context, Map<String, dynamic> r, Names names) {
-    final cs = Theme.of(context).colorScheme;
-    final pct = (r['fulfillment_percentage'] as num? ?? 0).toDouble();
-    final state = pct >= 100
-        ? 'Fulfilled'
-        : pct > 0
-        ? 'In Progress'
-        : 'Not Started';
-    Widget info(String label, dynamic value) => Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '$label:',
-            style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+  /// "View details": the whole report in a bottom sheet, with Donate.
+  void _showDetails(BuildContext context, Map<String, dynamic> r, Names names) {
+    final canDonate =
+        widget.done != true && (fulfillmentPercent(r) ?? 0) < 100;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx).textTheme;
+        final cs = Theme.of(ctx).colorScheme;
+        Widget row(IconData icon, String text) => Padding(
+          padding: const EdgeInsets.only(bottom: Space.xs),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 18, color: cs.onSurfaceVariant),
+              Gaps.h8,
+              Expanded(child: Text(text, style: t.bodyMedium)),
+            ],
           ),
-          Text('${value ?? '-'}', style: const TextStyle(fontSize: 14)),
+        );
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                DisasterArt(
+                  disasterKind(r['disaster']),
+                  height: 140,
+                  borderRadius: BorderRadius.circular(Radii.lg),
+                ),
+                Gaps.v12,
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${r['disaster'] ?? 'Disaster'} in Barangay '
+                        '${r['barangay'] ?? '-'}',
+                        style: t.titleLarge,
+                      ),
+                    ),
+                    Gaps.h8,
+                    PriorityChip(r['priority_level'] as String?),
+                  ],
+                ),
+                Gaps.v12,
+                row(Icons.place_outlined, _place(r)),
+                if (r['affected_families'] != null)
+                  row(
+                    Icons.groups_outlined,
+                    '${r['affected_families']} families affected',
+                  ),
+                if ('${r['description'] ?? ''}'.isNotEmpty)
+                  row(Icons.notes, '${r['description']}'),
+                Gaps.v8,
+                Text(
+                  'Assistance needed',
+                  style: t.titleSmall?.copyWith(color: cs.primary),
+                ),
+                Gaps.v8,
+                NeedChips(NeedChips.split(r['assistance_needed'])),
+                Gaps.v16,
+                Progress(
+                  delivered: r['total_items_delivered'] as num? ?? 0,
+                  needed: r['total_items_needed'] as num? ?? 0,
+                  percent: fulfillmentPercent(r),
+                ),
+                if (canDonate) ...[
+                  Gaps.v16,
+                  AppButton(
+                    'Donate',
+                    icon: Icons.volunteer_activism_outlined,
+                    variant: AppButtonVariant.donate,
+                    expand: true,
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => DonateScreen(report: r, names: names),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// "Sitio Ibabao, Banilad, Mandaue City"
+String _place(Map r) => [
+  if ('${r['sitio'] ?? ''}'.isNotEmpty) 'Sitio ${r['sitio']}',
+  if (r['barangay'] != null) '${r['barangay']}',
+  'Mandaue City',
+].join(', ');
+
+/// One report in the list: picture, priority, title, place, families, a
+/// short description, progress, and "View details".
+class _ReportListCard extends StatelessWidget {
+  final Map<String, dynamic> report;
+  final VoidCallback onDetails;
+  const _ReportListCard({required this.report, required this.onDetails});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final r = report;
+    final pct = (fulfillmentPercent(r) ?? 0).clamp(0, 100);
+    Widget meta(IconData icon, String text) => Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: cs.onSurfaceVariant),
+          Gaps.h4,
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
+          ),
         ],
       ),
     );
-    return Card(
-      margin: const EdgeInsets.only(bottom: 14),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: Space.sm),
+      padding: const EdgeInsets.all(Space.sm),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DisasterArt(
+                disasterKind(r['disaster']),
+                width: 104,
+                height: 112,
+                borderRadius: BorderRadius.circular(Radii.md),
+              ),
+              Gaps.h12,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: PriorityChip(r['priority_level'] as String?),
+                    ),
+                    Gaps.v4,
+                    Text(
+                      '${r['disaster'] ?? 'Disaster'} in Barangay '
+                      '${r['barangay'] ?? '-'}',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: t.titleSmall,
+                    ),
+                    meta(Icons.place_outlined, _place(r)),
+                    if (r['affected_families'] != null)
+                      meta(
+                        Icons.groups_outlined,
+                        '${r['affected_families']} families affected',
+                      ),
+                    if ('${r['description'] ?? ''}'.isNotEmpty) ...[
+                      Gaps.v4,
+                      Text(
+                        '${r['description']}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: t.bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Gaps.v8,
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(Radii.pill),
+                  child: LinearProgressIndicator(
+                    value: pct / 100,
+                    minHeight: 6,
+                    backgroundColor: cs.surfaceContainerHighest,
+                  ),
+                ),
+              ),
+              Gaps.h8,
+              Text(
+                pct >= 100 ? 'Fulfilled' : '${pct.round()}% fulfilled',
+                style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+            ],
+          ),
+          Gaps.v8,
+          FilledButton(
+            onPressed: onDetails,
+            style: FilledButton.styleFrom(minimumSize: const Size(0, 44)),
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text('View details'),
+                Gaps.h8,
+                Icon(Icons.arrow_forward, size: 18),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Empty list: a picture, what to try, and Reset filters.
+class _NoReports extends StatelessWidget {
+  final String message;
+  final VoidCallback? onReset;
+  const _NoReports({required this.message, this.onReset});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Space.xl),
+      child: Column(
+        children: [
+          CircleAvatar(
+            radius: 40,
+            backgroundColor: cs.primaryContainer,
+            child: Icon(
+              Icons.search_off,
+              size: 40,
+              color: cs.onPrimaryContainer,
+            ),
+          ),
+          Gaps.v16,
+          Text('No reports found', style: t.titleMedium),
+          Gaps.v4,
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          if (onReset != null) ...[
+            Gaps.v16,
+            OutlinedButton.icon(
+              onPressed: onReset,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reset filters'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// "More filters" bottom sheet: disaster type, priority and progress.
+/// Pops (type, priority, progress); nothing when closed without applying.
+class _MoreFiltersSheet extends StatefulWidget {
+  final List<String> types;
+  final List<String> priorities;
+  final String? type, priority, progress;
+  const _MoreFiltersSheet({
+    required this.types,
+    required this.priorities,
+    required this.type,
+    required this.priority,
+    required this.progress,
+  });
+
+  @override
+  State<_MoreFiltersSheet> createState() => _MoreFiltersSheetState();
+}
+
+class _MoreFiltersSheetState extends State<_MoreFiltersSheet> {
+  late String? type = widget.type,
+      priority = widget.priority,
+      progress = widget.progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    Widget group(
+      String title,
+      List<String> options,
+      String? value,
+      ValueChanged<String?> onPick,
+    ) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: t.titleSmall),
+        Gaps.v8,
+        Wrap(
+          spacing: Space.xs,
+          runSpacing: Space.xs,
+          children: [
+            ChoiceChip(
+              label: const Text('All'),
+              selected: value == null,
+              onSelected: (_) => onPick(null),
+            ),
+            for (final o in options)
+              ChoiceChip(
+                label: Text(o),
+                selected: value == o,
+                onSelected: (_) => onPick(value == o ? null : o),
+              ),
+          ],
+        ),
+        Gaps.v16,
+      ],
+    );
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                Flexible(
-                  child: Text(
-                    '${r['disaster']} in Barangay ${r['barangay']}',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
+                Expanded(child: Text('More filters', style: t.titleLarge)),
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            Gaps.v8,
+            group(
+              'Disaster type',
+              widget.types,
+              type,
+              (v) => setState(() => type = v),
+            ),
+            group(
+              'Priority',
+              widget.priorities,
+              priority,
+              (v) => setState(() => priority = v),
+            ),
+            group(
+              'Progress',
+              fulfillmentStates,
+              progress,
+              (v) => setState(() => progress = v),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => setState(
+                      () => type = priority = progress = null,
                     ),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    child: const Text('Clear all'),
                   ),
                 ),
-                const SizedBox(width: 8),
-                PriorityChip(r['priority_level'] as String?),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                info('Barangay', r['barangay']),
-                info('Sitio', r['sitio']),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                info('Type', r['disaster']),
-                info(
-                  'Affected',
-                  r['affected_families'] == null
-                      ? null
-                      : '${r['affected_families']} families',
+                Gaps.h12,
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () =>
+                        Navigator.of(context).pop((type, priority, progress)),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    child: const Text('Apply filters'),
+                  ),
                 ),
               ],
             ),
-            if (r['description'] != null) ...[
-              const SizedBox(height: 10),
-              Text('${r['description']}'),
-            ],
-            const SizedBox(height: 8),
-            Text(
-              'Assistance Needed:',
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: cs.primary,
-              ),
-            ),
-            const SizedBox(height: 6),
-            // problema_napud 2.1 / 2.4: each need highlighted on its own.
-            NeedChips(NeedChips.split(r['assistance_needed'])),
-            const SizedBox(height: 12),
-            Progress(
-              delivered: r['total_items_delivered'] as num? ?? 0,
-              needed: r['total_items_needed'] as num? ?? 0,
-              percent: pct,
-            ),
-            const SizedBox(height: 10),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 5),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: statusTone(
-                  state == 'Fulfilled'
-                      ? 'Complete'
-                      : state == 'In Progress'
-                      ? 'Partial'
-                      : null,
-                ).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                state,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: statusTone(
-                    state == 'Fulfilled'
-                        ? 'Complete'
-                        : state == 'In Progress'
-                        ? 'Partial'
-                        : null,
-                  ),
-                ),
-              ),
-            ),
-            // A fulfilled report has what it needs: no Donate button.
-            if (widget.done != true && state != 'Fulfilled') ...[
-              const SizedBox(height: 10),
-              AppButton(
-                'Donate',
-                icon: Icons.volunteer_activism_outlined,
-                variant: AppButtonVariant.donate,
-                expand: true,
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => DonateScreen(report: r, names: names),
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       ),
