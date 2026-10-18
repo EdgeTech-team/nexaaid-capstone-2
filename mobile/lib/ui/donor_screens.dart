@@ -191,6 +191,37 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   : 'Reports that still need help. Pick one and pledge '
                         'goods.',
             ),
+            // Kept from the old screen (Ivan): the two summary cards.
+            // Tapping one shows those reports.
+            StatCardGrid([
+              StatCard(
+                label: done == null
+                    ? 'Validated reports'
+                    : done
+                    ? 'Completed reports'
+                    : 'Active reports',
+                value: '${all.length}',
+                icon: done == true
+                    ? Icons.task_alt_outlined
+                    : Icons.report_outlined,
+                onTap: done == null ? _resetFilters : null,
+              ),
+              if (done != true)
+                StatCard(
+                  label: 'High / critical priority',
+                  value:
+                      '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
+                  icon: Icons.trending_up,
+                  color: PriorityColors.base('High'),
+                  onTap: done == null
+                      ? () => setState(() {
+                          quick = _Quick.urgent;
+                          priority = null;
+                        })
+                      : null,
+                ),
+            ]),
+            Gaps.v12,
             TextField(
               controller: _searchC,
               decoration: InputDecoration(
