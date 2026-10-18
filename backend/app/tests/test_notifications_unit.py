@@ -19,12 +19,13 @@ def test_render_unknown_event_falls_back_to_key():
 
 
 def test_send_email_unconfigured_returns_false(monkeypatch):
-    for k in ("SMTP_USER", "SMTP_PASSWORD", "SMTP_APP_PASSWORD"):
+    for k in ("BREVO_API_KEY", "SMTP_USER", "SMTP_PASSWORD", "SMTP_APP_PASSWORD"):
         monkeypatch.delenv(k, raising=False)
     assert mail.send_email("a@b.com", "Hi", "body") is False
 
 
 def test_send_email_success_strips_app_password_spaces(monkeypatch):
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
     monkeypatch.setenv("SMTP_USER", "u@gmail.com")
     monkeypatch.setenv("SMTP_PASSWORD", "abcd efgh ijkl mnop")
     seen = {}
@@ -43,6 +44,7 @@ def test_send_email_success_strips_app_password_spaces(monkeypatch):
 
 
 def test_send_email_failure_returns_false(monkeypatch):
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
     monkeypatch.setenv("SMTP_USER", "u@gmail.com")
     monkeypatch.setenv("SMTP_PASSWORD", "pw")
 
@@ -50,4 +52,35 @@ def test_send_email_failure_returns_false(monkeypatch):
         raise OSError("network down")
 
     monkeypatch.setattr(mail.smtplib, "SMTP", boom)
+    assert mail.send_email("x@y.com", "S", "B") is False
+
+
+def test_send_email_uses_brevo_when_key_set(monkeypatch):
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-test")
+    monkeypatch.setenv("EMAIL_FROM", "team@example.com")
+    seen = {}
+
+    class FakeResponse:
+        def raise_for_status(self): pass
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        seen.update(url=url, json=json, key=headers["api-key"])
+        return FakeResponse()
+
+    monkeypatch.setattr(mail.httpx, "post", fake_post)
+    assert mail.send_email("x@y.com", "S", "B") is True
+    assert seen["url"] == mail.BREVO_URL
+    assert seen["key"] == "xkeysib-test"
+    assert seen["json"]["to"] == [{"email": "x@y.com"}]
+    assert seen["json"]["sender"]["email"] == "team@example.com"
+
+
+def test_send_email_brevo_failure_returns_false(monkeypatch):
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-test")
+    monkeypatch.setenv("EMAIL_FROM", "team@example.com")
+
+    def boom(*a, **k):
+        raise OSError("network down")
+
+    monkeypatch.setattr(mail.httpx, "post", boom)
     assert mail.send_email("x@y.com", "S", "B") is False
