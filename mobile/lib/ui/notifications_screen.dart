@@ -581,12 +581,60 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     _refreshList();
   }
 
+  /// Removes every notification the user has already read (unread stay).
+  Future<void> _deleteRead() async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.delete_outline, color: AppColors.danger),
+        title: const Text('Delete read notifications?'),
+        content: const Text(
+          'Notifications you have already read will be removed for good. '
+          'Unread ones stay.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    await act(
+      context,
+      () => api.delete('/notifications/read'),
+      success: 'Read notifications deleted',
+    );
+    _refreshList();
+  }
+
+  /// Removes one read notification (the trash icon on a read tile).
+  Future<void> _deleteOne(Map<String, dynamic> n) async {
+    await act(
+      context,
+      () => api.delete('/notifications/${n['notification_id']}'),
+      success: 'Notification deleted',
+    );
+    _refreshList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Notifications'),
         actions: [
+          IconButton(
+            tooltip: 'Delete read',
+            icon: const Icon(Icons.delete_sweep_outlined),
+            onPressed: _deleteRead,
+          ),
           TextButton(
             onPressed: () async {
               await act(
@@ -639,6 +687,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             fontWeight: read ? FontWeight.w500 : FontWeight.w800,
           ),
         ),
+        trailing: read
+            ? IconButton(
+                tooltip: 'Delete',
+                icon: const Icon(Icons.delete_outline, color: Brand.muted),
+                onPressed: () => _deleteOne(n),
+              )
+            : null,
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
