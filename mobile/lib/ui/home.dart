@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
 import 'admin_screens.dart';
@@ -188,6 +189,32 @@ class RoleHome extends StatefulWidget {
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
 
+  static const _kLastTab = 'last_tab';
+
+  /// Remember which tab the user opened, so a page refresh or app restart
+  /// returns to it instead of the first tab.
+  Future<void> _rememberTab(int i) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kLastTab, _allTabs[i].label);
+    } catch (_) {}
+  }
+
+  Future<void> _restoreTab() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final label = p.getString(_kLastTab);
+      if (label == null || !mounted || api.mustChangePassword) return;
+      final i = _allTabs.indexWhere((t) => t.label == label);
+      if (i >= 0) setState(() => index = i);
+    } catch (_) {}
+  }
+
+  void _selectTab(int i) {
+    setState(() => index = i);
+    _rememberTab(i);
+  }
+
   List<_Tab> get _allTabs => [
     ..._tabsFor(api.role),
     const _Tab('Profile', Icons.person_outline, ProfileScreen()),
@@ -218,6 +245,7 @@ class _RoleHomeState extends State<RoleHome> {
   void initState() {
     super.initState();
     HomeNav.target.addListener(_onHomeTarget);
+    _restoreTab();
     // I1: a temporary password must be changed first.
     if (api.mustChangePassword) {
       index = _tabsFor(api.role).length; // Profile is the last tab
@@ -289,7 +317,7 @@ class _RoleHomeState extends State<RoleHome> {
               children: [
                 NavigationRail(
                   selectedIndex: index,
-                  onDestinationSelected: (i) => setState(() => index = i),
+                  onDestinationSelected: _selectTab,
                   labelType: NavigationRailLabelType.all,
                   destinations: [
                     for (final tab in tabs)
@@ -308,7 +336,7 @@ class _RoleHomeState extends State<RoleHome> {
           ? null
           : FloatingNavBar(
               selectedIndex: index,
-              onSelected: (i) => setState(() => index = i),
+              onSelected: _selectTab,
               items: [
                 for (final tab in tabs) FloatingNavItem(tab.icon, tab.label),
               ],

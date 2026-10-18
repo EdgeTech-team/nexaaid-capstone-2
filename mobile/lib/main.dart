@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
@@ -6,8 +8,13 @@ import 'design/design.dart';
 import 'ui/home.dart';
 import 'ui/landing/landing_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Restore the saved login so closing the app or refreshing the page does
+  // not sign the user out.
+  await Api.instance.restoreSession();
   runApp(const NexaAidApp());
+  unawaited(Api.instance.validateSession());
 }
 
 /// Lets every scrollable list be dragged with a mouse or touchpad too, not
