@@ -534,15 +534,14 @@ def update_report(
         needs_changed = True
 
     # Weak spot 5: changing what the report needs (or its families / type)
-    # after validation must move fulfillment and priority with it. A level
-    # the Administrator sets by hand in this same request is kept.
+    # after validation must move fulfillment and priority with it. Priority
+    # itself cannot be set here (schemas/report.py, testing #5).
     affects_priority = needs_changed or {"affected_families", "disaster_type_id"} & set(updates)
     if report.status == "Validated" and affects_priority:
         if needs_changed and report.fulfillment is not None:
             recalculate_fulfillment(db, report.report_id, None)
             db.refresh(report)
-        if "priority_level" not in updates:
-            apply_priority(report)
+        apply_priority(report)
 
     db.flush()
     db.refresh(report)

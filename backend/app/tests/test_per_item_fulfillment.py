@@ -126,8 +126,8 @@ def test_per_item_fulfillment_through_the_whole_chain(api):
     _needs(client, rid, t["unit"])
 
     validated = ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
-    # option A: 120 families 100*0.4 + Flood 70*0.3 + unmet 100*0.3 = 91
-    assert float(validated["ai_priority_score"]) == 91.0 and validated["priority_level"] == "Critical"
+    # option C: severity 100*4/7 + Flood 70*3/7 = 87.14, nothing delivered (x 100%)
+    assert float(validated["ai_priority_score"]) == 87.14 and validated["priority_level"] == "Critical"
     p = _needs(client, rid)                                # public now
     assert p["fulfillment_percentage"] == 0.0 and len(p["needs"]) == 3
 
@@ -191,8 +191,9 @@ def test_per_item_fulfillment_through_the_whole_chain(api):
     assert [n["delivered_percentage"] for n in p["needs"]] == [30.0, 34.5, 0.0]
     report = ok(client.get(f"/reports/{rid}", headers=t["admin"]))
     assert float(report["fulfillment_percentage"]) == 21.5
-    # priority moved with fulfillment: 40 + 21 + Partial 50*0.3 = 76 -> High
+    # priority moved with the real %: 87.14 x (0.4 + 0.6 x 0.785) = 75.9 -> High
     assert report["priority_level"] == "High"
+    assert float(report["ai_priority_score"]) == 75.9
 
     # Public feed and donor lookups carry the per-item lines.
     pub = next(r for r in ok(client.get("/public/reports")) if r["report_id"] == rid)
@@ -266,13 +267,28 @@ def test_editing_needs_and_matching_items_at_receiving(api):
     assert patched["ai_processed_at"] != before["ai_processed_at"]
 
 
-def test_priority_option_a_weights():
-    """Quantity no longer changes priority (option A)."""
+def test_quantity_is_not_scored():
+    """Quantity no longer changes priority (option A, kept in option C)."""
     def report(quantity):
         return SimpleNamespace(affected_families=60, estimated_quantity=quantity, assistance_needed="x",
                                disaster_type=SimpleNamespace(type_name="Typhoon"), fulfillment=None)
     small, big = compute_priority(report(1)), compute_priority(report(90_000))
-    assert small["score"] == big["score"] == 75 * 0.4 + 85 * 0.3 + 100 * 0.3
+    assert small["score"] == big["score"] == round(75 * 4 / 7 + 85 * 3 / 7, 2)
+
+
+def test_priority_cannot_be_set_by_hand(api):
+    """Testing #5: the Administrator can no longer overwrite the priority."""
+    client, t = api
+    rid = ok(client.post("/reports/", headers=t["unit"], json={
+        "disaster_type_id": 1, "barangay_id": 1, "affected_families": 120,
+        "needs": [{"item_id": RICE, "quantity": 10}]}), 201)["report_id"]
+    ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
+    r = client.patch(f"/reports/{rid}", headers=t["admin"], json={"priority_level": "Low"})
+    assert r.status_code == 422 and "computed by the system" in r.text
+    assert ok(client.get(f"/reports/{rid}", headers=t["admin"]))["priority_level"] == "Critical"
+    # other corrections still work, and priority is recomputed from them
+    ok(client.patch(f"/reports/{rid}", headers=t["admin"], json={"affected_families": 5}))
+    assert ok(client.get(f"/reports/{rid}", headers=t["admin"]))["priority_level"] != "Critical"
 
 
 def test_recompute_script_brings_old_priorities_in_line(api):

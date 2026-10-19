@@ -22,6 +22,9 @@ def validated_report_with_item(db_session, seed, admin_client, reporter_client):
             "disaster_type_id": seed["disaster_type_id"],
             "barangay_id": seed["barangay_id"],
             "description": "Flood relief needed.",
+            # Oct 2026 (option C): priority comes from families + disaster
+            # type x what is still missing; quantity is no longer scored.
+            "affected_families": 60,
             "estimated_quantity": 100,
             "source": "web",
         },
@@ -125,10 +128,7 @@ def test_priority_follows_fulfillment(admin_client, seed, validated_report_with_
     changed. It must be recomputed when a delivery changes the fulfillment."""
     report_id = validated_report_with_item["report_id"]
     before = admin_client.get(f"/reports/{report_id}").json()
-    # Nothing delivered yet. No affected families on this report, so under
-    # option A (Oct 2026: quantity no longer scored) it is Flood 70*0.3 +
-    # unmet 100*0.3 = 51 -> Medium (was High through the quantity factor).
-    assert before["priority_level"] == "Medium"
+    assert before["priority_level"] == "High"          # nothing delivered yet
 
     # Half delivered: still needs help.
     half = _create_delivery(admin_client, seed, validated_report_with_item, quantity=50).json()

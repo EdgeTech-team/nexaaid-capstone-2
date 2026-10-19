@@ -8,9 +8,20 @@ FULFILLED_SCORE_CAP = 34.99
 
 VALID_LEVELS = ("Low", "Medium", "High", "Critical")
 
-# Factor weights (sum to 1). Option A, Oct 2026: families 40%, disaster
-# severity 30%, unmet need (100 - fulfillment) 30%.
-WEIGHTS = {"families": 0.40, "severity": 0.30, "unmet_need": 0.30}
+# Option C (Oct 2026 team decision): priority = how severe x how much is
+# still missing.
+#   severity = affected families and disaster type, in the 40 : 30 ratio the
+#              team chose (option A), i.e. 4/7 and 3/7 of the severity score.
+#   missing  = 100 - the report's delivered fulfillment % (per item, averaged;
+#              services/fulfillment.py). It scales the severity from 100%
+#              (nothing delivered) down to MISSING_FLOOR (almost everything
+#              delivered), so the level steps down as goods arrive instead of
+#              sitting at High and jumping to Low at the end.
+#   100% delivered is always Low (FULFILLED_SCORE_CAP).
+# Example, 120 families + Flood (severity 87): 0% delivered 87 Critical,
+# 30% 71 High, 50% 61 High, 70% 50 Medium, 90% 40 Medium, 100% Low.
+SEVERITY_WEIGHTS = {"families": 4 / 7, "disaster_type": 3 / 7}
+MISSING_FLOOR = 0.40
 
 DISASTER_SEVERITY = {
     "Flood": 70,
@@ -53,6 +64,20 @@ def score_fulfillment(verification_status):
     else :
         return 100
 
+def missing_share(fulfillment) -> float:
+    """How much of the report's needs is still missing, 0.0 to 1.0, from the
+    delivered percentage (testing #2: "Partial" used to count as 50 whether
+    5% or 95% had arrived). No fulfillment record yet = all missing (alt 2a)."""
+    if fulfillment is None:
+        return 1.0
+    if fulfillment.verification_status == "Complete":
+        return 0.0
+    pct = fulfillment.fulfillment_percentage
+    if pct is None:
+        return {"Partial": 0.5}.get(fulfillment.verification_status, 1.0)
+    return max(0.0, min(1.0, 1 - float(pct) / 100))
+
+
 def score_estimated_quantity(estimated_quantity):
 
     if not estimated_quantity or estimated_quantity <= 0:
@@ -87,21 +112,14 @@ def compute_priority(report):
             "priority_level": "Needs Review",
             "recommendation": "Insufficient data to compute priority.",
         }
-    families = score_affected_families(report.affected_families)
-    severity = score_disaster_type(report)
-    fulfillment = score_fulfillment(
-        report.fulfillment.verification_status if report.fulfillment else None
+    severity = (
+        score_affected_families(report.affected_families) * SEVERITY_WEIGHTS["families"]
+        + score_disaster_type(report) * SEVERITY_WEIGHTS["disaster_type"]
     )
-
-    # Option A (Oct 2026 team decision): estimated quantity is no longer a
-    # factor. With per-item needs it is a sum of different units (kg + L +
-    # pcs), so it measured nothing; affected families already measures the
-    # size of the disaster. Its 20% was spread over the other three.
-    score = (
-        families * WEIGHTS["families"]
-        + severity * WEIGHTS["severity"]
-        + fulfillment * WEIGHTS["unmet_need"]
-    )
+    # Estimated quantity is not a factor (option A, Oct 2026): with per-item
+    # needs it is a sum of different units (kg + L + pcs).
+    missing = missing_share(report.fulfillment)
+    score = severity * (MISSING_FLOOR + (1 - MISSING_FLOOR) * missing)
 
     if not (0 <= score <= 100):
         return {
@@ -119,7 +137,9 @@ def compute_priority(report):
     else :
         priority_level ="Low"
 
-    recommendation = "Priority computed from report and fulfillment data."
+    recommendation = (
+        f"Severity {severity:.0f} x {missing * 100:.0f}% of needs still missing."
+    )
     if not report.fulfillment:
         recommendation = "Priority computed without data (2a: not yet validated/fulfilled)."
     elif report.fulfillment.verification_status == "Complete":
