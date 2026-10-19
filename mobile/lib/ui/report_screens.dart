@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
 import 'input_formatters.dart';
+import 'records_screens.dart' show SupportRecordsScreen;
 import 'report_filters.dart';
 import 'report_summary_card.dart';
 import 'sitio_picker.dart';
@@ -1302,6 +1303,20 @@ class DashboardScreen extends StatelessWidget {
           );
         }
 
+        // 9.3 (testing): the cards open what is behind the number.
+        void reportStatus() =>
+            HomeNav.go(context, const HomeTarget('Reports', view: 'status'));
+        void sheet(String title, List rows) => showModalBottomSheet<void>(
+          context: context,
+          showDragHandle: true,
+          builder: (_) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: bars(title, rows, 'status', statusTone),
+            ),
+          ),
+        );
+
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -1311,9 +1326,11 @@ class DashboardScreen extends StatelessWidget {
             ),
             StatCardGrid([
               StatCard(
+                // Rejected and withdrawn reports are not counted (backend).
                 label: 'Disaster reports',
                 value: '${s['total_reports']}',
                 icon: Icons.report_outlined,
+                onTap: reportStatus,
               ),
               StatCard(
                 label: 'Physical donations',
@@ -1324,11 +1341,25 @@ class DashboardScreen extends StatelessWidget {
                 label: 'Deliveries',
                 value: '${s['total_deliveries']}',
                 icon: Icons.local_shipping_outlined,
+                // The Disaster Unit has no delivery list (Appendix H 8.5):
+                // show the deliveries by status.
+                onTap: () => sheet(
+                  'Deliveries by status',
+                  l['deliveries_by_status'] as List,
+                ),
               ),
               StatCard(
                 label: 'Logistics requests',
                 value: '${s['total_logistics_requests']}',
                 icon: Icons.fire_truck_outlined,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: const Text('Logistics requests')),
+                      body: const SupportRecordsScreen(),
+                    ),
+                  ),
+                ),
               ),
               StatCard(
                 label: 'Average fulfillment',
@@ -1336,6 +1367,7 @@ class DashboardScreen extends StatelessWidget {
                     '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
                 icon: Icons.pie_chart_outline,
                 color: AppColors.success,
+                onTap: reportStatus,
               ),
               StatCard(
                 label: 'Est. value of donations',

@@ -206,8 +206,10 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
               ),
               // Every entry (one QR each) with the status chips, search,
               // report and handover filters and the sort, as on develop.
+              // 9.4 (testing): more room between donations.
               DonationEntriesView(
                 entries: entries,
+                gap: Space.lg,
                 footer: (e) => entryJourney(context, e),
                 onTap: (e) => _push(DonationDetailScreen(entry: e)),
               ),
@@ -427,6 +429,7 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
                     : widget.onTheWayOnly
                     ? 'When CSWS sends your goods to the barangay, they show here.'
                     : 'Pick a barangay that needs help and pledge goods.',
+                gap: Space.lg,
                 footer: (e) => entryJourney(context, e),
                 onTap: (e) async {
                   final changed = await Navigator.of(context).push<bool>(

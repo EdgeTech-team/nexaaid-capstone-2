@@ -760,6 +760,44 @@ class _OrgDocument extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
+/// 9.7: the donations behind a Barangay dashboard card, in the same rows
+/// as "Donation references".
+void _openBarangayDonations(
+  BuildContext context,
+  String title,
+  List<Map> donations,
+) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: donations.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.all(16),
+                child: EmptyState('No donations here yet.'),
+              )
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  for (final d in donations)
+                    Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        title: Text(
+                          '${d['quantity']} ${d['item_name']} · '
+                          '${d['qr_reference']}',
+                        ),
+                        subtitle: Text('${d['report_label']}'),
+                        trailing: Badge2.status('${d['status']}'),
+                      ),
+                    ),
+                ],
+              ),
+      ),
+    ),
+  );
+}
+
 class BarangayDashboard extends StatelessWidget {
   const BarangayDashboard({super.key});
 
@@ -778,28 +816,47 @@ class BarangayDashboard extends StatelessWidget {
               'Barangay ${m['barangay'] ?? ''} Dashboard',
               subtitle: roleLine(),
             ),
+            // 9.7 (testing): each card opens the donations behind it; Aid
+            // acknowledged goes to the Incoming aid tab.
             StatGrid([
               StatTile(
                 'Donations linked to our reports',
                 '${m['donations_linked']}',
                 Icons.volunteer_activism_outlined,
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Donations linked to our reports',
+                  donations,
+                ),
               ),
               StatTile(
                 'Waiting for CMO acknowledgement',
                 '${m['pending_city_confirmation']}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Waiting for CMO acknowledgement',
+                  donations.where((d) => d['status'] == 'Received').toList(),
+                ),
               ),
               StatTile(
                 'Acknowledged by CMO',
                 '${m['confirmed']}',
                 Icons.verified_outlined,
                 color: const Color(0xFF2E7D32),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Acknowledged by CMO',
+                  donations.where((d) => d['status'] == 'Confirmed').toList(),
+                ),
               ),
               StatTile(
                 'Aid acknowledged',
                 '${m['acknowledged']}',
                 Icons.task_alt,
+                onTap: () =>
+                    HomeNav.go(context, const HomeTarget('Incoming aid')),
               ),
             ]),
             const SectionTitle('Fulfillment per report'),
