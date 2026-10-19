@@ -24,7 +24,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.report import canonical_source
 
@@ -144,14 +144,27 @@ class DisasterReportUpdate(BaseModel):
     `status` here only for other lifecycle transitions after validation
     (e.g. 'Dispatched', 'Resolved')."""
     status: Optional[str] = None
-    priority_level: Optional[str] = None
-    ai_priority_score: Optional[Decimal] = None
-    ai_recommendation: Optional[str] = None
     description: Optional[str] = None
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
     needs: NeedsField = Field(default=None, max_length=30)
+
+    # Testing #5 (Oct 2026): priority is always computed by the system
+    # (manuscript Table 32: "automated but non-autonomous"; people decide
+    # the actual relief allocation). It can no longer be set by hand here:
+    # the next delivery receipt silently overwrote it anyway.
+    @model_validator(mode="before")
+    @classmethod
+    def _no_manual_priority(cls, data):
+        if isinstance(data, dict):
+            sent = {"priority_level", "ai_priority_score", "ai_recommendation"} & set(data)
+            if sent:
+                raise ValueError(
+                    "Priority is computed by the system and cannot be set by hand "
+                    f"({', '.join(sorted(sent))})."
+                )
+        return data
 
 
 class DisasterReportResponse(BaseModel):

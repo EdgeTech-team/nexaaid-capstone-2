@@ -1,6 +1,6 @@
-# Per-item fulfillment and base units (Oct 2026)
+# Per-item fulfillment, base units and priority (Oct 2026)
 
-Owner: Castillo (Module 3, fulfillment). Branch `castillo/per-item-fulfillment`, migration `9b3f7c1d2e48`.
+Owner: Castillo (Module 3, fulfillment). Branch `castillo/oct19-all-fixes`, migrations `9b3f7c1d2e48` (per-item) and `3e8a6f2c9d15` (account delete).
 
 ## Why
 
@@ -25,7 +25,11 @@ Before this change, a report's needs were one total. "Rice: 500 kg, Water: 200 g
    | delivered | deliveries the barangay confirmed receiving |
 5. **Goods that match no need** are listed as `additional_goods` and never raise the %.
 6. **Item list and sizes are fixed by the developers** in `database/seeds/demo_seed.sql`. There is no admin screen.
-7. **Priority, option A:** affected families 40%, disaster severity 30%, unmet need 30%. Estimated quantity is **no longer scored**, because it's a sum of different units.
+7. **Priority, option C: how severe × how much is still missing.**
+   - *Severity* = affected families and disaster type, in a 4 : 3 ratio (40 : 30). Estimated quantity is **no longer scored**, because it's a sum of different units.
+   - *Missing* = 100 − the report's delivered %. It scales the severity from 100% (nothing delivered) down to 40% (almost everything delivered). 100% delivered is always **Low**.
+   - Example, 120 families + flood: 0% delivered → Critical, 30% → High, 50% → High, 70% → Medium, 90% → Medium, 100% → Low. The real % is used, so "Partial" no longer counts as a flat 50 (testing #2), and the level steps down gradually instead of jumping from High to Low (#3).
+8. **Priority is never set by hand** (testing #5). The manuscript (Table 32) says the computation is "automated but non-autonomous": people decide the actual relief allocation, and the label is guidance. `PATCH /reports/{id}` with `priority_level`, `ai_priority_score` or `ai_recommendation` returns 422.
 
 ## Older apps keep working
 
@@ -66,7 +70,7 @@ New optional field:
 - When `needs` is sent, the server sets `estimated_quantity` = their sum (for older screens) and, if `assistance_needed` is empty, fills it with "Rice: 500 kg, Drinking Water: 200 L, Diapers: 100 pcs".
 - The same item twice → 422. A retired item → 422.
 - Responses now include `"needs": [{"need_id", "item_id", "item_name", "unit", "quantity"}]`. `item_id: null` = "General needs".
-- `PATCH` by the admin after validation: changing `needs`, `affected_families` or `disaster_type_id` recalculates fulfillment **and** priority straight away. A `priority_level` set by hand in the same request is kept.
+- `PATCH` by the admin after validation: changing `needs` or `affected_families` recalculates fulfillment **and** priority straight away. Priority fields can't be sent (422).
 
 ### `GET /reports/{id}/needs` (new)
 Public for validated reports. Otherwise the reporter, staff and barangay officials can see it.
@@ -110,10 +114,17 @@ Until each screen is updated, the old behaviour continues. Reports sent the old 
 
 ## Neon steps (Castillo applies migrations)
 
-1. `alembic upgrade head` (adds the tables and columns, backfills General needs, moves water to L).
+1. `alembic upgrade head` (adds the tables and columns, backfills General needs, moves water to L, adds users.deleted_at).
 2. Re-run `database/seeds/demo_seed.sql` (safe to re-run; adds the item sizes).
 3. `python scripts/recompute_priorities.py` (dry run: lists reports whose level changes under option A), then `--apply --as-user <admin email>`.
 
 ## Tests
 
 `backend/app/tests/test_per_item_fulfillment.py` walks the whole chain with real logins (report with needs → validate → donations in packs → receive, including a reclassify → CMO → delivery → barangay receipt → per-item meters and priority), and checks old-style clients and editing needs. The migration was checked on Postgres: water with existing donations, General needs backfill, re-run, downgrade.
+
+## Also on this branch: account delete and cleanup (Appendix H 1.2, testing feedback)
+
+- **Admin → a deactivated account → "Delete account".** The row is kept, because reports and deliveries point at it, but it's anonymized: name, email, username, phone, address, employee ID and ID photos are removed. The email and username can then register again. The account disappears from every list. "Restore account" (previously "Activate account") brings a deactivated account back.
+- **`DELETE /admin/users/{id}`**: only for deactivated accounts (409 otherwise), not for yourself (400), Administrator only.
+- **Login tokens** must now match the account's id, so a deleted account's old token can't open a new account that reuses the email (`core/auth.py`).
+- **`python scripts/delete_accounts.py --email <address>` or `--match "%@example.com"`**: dry run first, then `--apply --as-user <admin email>`. Use it for the sample accounts that blocked "email already registered". It never deletes Administrators. Read the list before applying a broad pattern: the demo seed's `.rep` / `.test` accounts also end in `@example.com`.
