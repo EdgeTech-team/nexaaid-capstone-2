@@ -11,7 +11,7 @@ def test_compute_priority_normal_case(db_session, seed):
         source="web",
         status="Validated",
         affected_families=60,       # -> 75
-        estimated_quantity=30,      # -> 50
+        estimated_quantity=30,      # no longer a factor (option A, Oct 2026)
         assistance_needed="Food and water",
     )
 
@@ -22,8 +22,9 @@ def test_compute_priority_normal_case(db_session, seed):
     result = compute_priority(report)
 
     # assertions will go here
-    assert result["score"] == 75.00
-    assert result["priority_level"] == "High"
+    # Option A: families 75*0.40 + Flood 70*0.30 + unmet 100*0.30 = 81
+    assert result["score"] == 81.00
+    assert result["priority_level"] == "Critical"
     assert result["recommendation"] == (
         "Priority computed without data (2a: not yet validated/fulfilled)."
     )
@@ -97,7 +98,7 @@ def _validated_flood_report(db_session, seed, status):
         source="web",
         status="Validated",
         affected_families=100,      # -> 100
-        estimated_quantity=100,     # -> 100
+        estimated_quantity=100,     # not a factor (option A)
         assistance_needed="Rice",
     )
     db_session.add(report)
@@ -113,7 +114,8 @@ def test_fully_fulfilled_report_drops_to_low(db_session, seed):
     """Testing, Module 3: with the old weights this report still scored 67.5
     (High) at 100% fulfillment, so it kept asking for donations."""
     partial = compute_priority(_validated_flood_report(db_session, seed, "Partial"))
-    assert partial["score"] == 80.0 and partial["priority_level"] == "Critical"
+    # Option A: 100*0.40 + 70*0.30 + Partial 50*0.30 = 76
+    assert partial["score"] == 76.0 and partial["priority_level"] == "High"
 
     done = compute_priority(_validated_flood_report(db_session, seed, "Complete"))
     assert done["priority_level"] == "Low"

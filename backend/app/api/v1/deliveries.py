@@ -26,6 +26,7 @@ from models.report import DisasterReport
 from core.auth import get_current_user, require_role, barangay_scope
 from core.audit import log_action
 from core.priority_engine import apply_priority
+from services.fulfillment import recalculate as recalculate_fulfillment
 from models.inventory_model import Inventory
 from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
@@ -429,67 +430,19 @@ def delivery_history(
 # Fulfillment recalculation — internal helper, not an endpoint
 
 def _recalculate_fulfillment(
-      db: Session, 
+      db: Session,
       report_id: int,
-      verified_by_user_id: int,     
-) -> ReportFulfillment: 
-  """
-  Sums delivered quantities across every CONFIRMED delivery this 
-  report, and updates the report fulfillments record accordingly
+      verified_by_user_id: int,
+) -> ReportFulfillment:
+  """Per-item fulfillment (Oct 2026): each need of the report is measured
+  against the confirmed deliveries of THAT item, capped at 100%, and the
+  report's percentage is the average (services/fulfillment.py). Old reports
+  have one "General needs" line, which counts every item like before.
 
   Alt flow 5a: if the linked report is already closed/resolved, this
-  still updates report_fulfillments — it deliberately does NOT touch
-  disaster_reports.status. Fulfillment and report status are tracked
-  independently; this function only ever writes to report_fulfillments.
+  still updates report_fulfillments; it never touches disaster_reports.status.
   """
-  fulfillment =(
-      db.query (ReportFulfillment)
-      .filter(ReportFulfillment.report_id == report_id)
-      .first()
-   )
-
-  if not fulfillment:
-     raise HTTPException(
-        status_code=409,
-        detail="This report hs no fulfillment record yet- it may"
-               "not have been validated. cannot delivered"
-     ) 
-
-  total_delivered =(
-     db.query(DeliveryItem)
-     .join(Delivery, DeliveryItem.delivery_id == Delivery.delivery_id)
-     .filter(Delivery.report_id == report_id, Delivery.status == "Confirmed")
-     .with_entities(DeliveryItem.quantity)
-     .all()
-  )
-
-  total_delivered_quantity = sum(q for (q,) in total_delivered)
-
-  fulfillment.total_items_delivered = total_delivered_quantity
-
-  if fulfillment.total_items_needed > 0:
-     pct = (Decimal(total_delivered_quantity)/ Decimal(fulfillment.total_items_needed)) * 100
-     pct = min(pct, Decimal("100.00"))
-
-  else: 
-     pct = Decimal("0.00")
-  fulfillment.fulfillment_percentage = round(pct, 2)
-
-  if fulfillment.fulfillment_percentage <= 0:
-     fulfillment_verification_status = "Not Started"
-
-  elif fulfillment.fulfillment_percentage >= 100:
-      fulfillment_verification_status = "Complete"
-
-  else:
-    fulfillment_verification_status ="Partial"
-
-  fulfillment.verification_status = fulfillment_verification_status
-
-  fulfillment.verified_by_user_id = verified_by_user_id
-  fulfillment.verified_at = datetime.now(timezone.utc)
-  
-  db.flush()
+  fulfillment = recalculate_fulfillment(db, report_id, verified_by_user_id)
 
   # Testing, Module 3: the priority depends on fulfillment, so recompute it
   # now. Before this it was set once, at validation, and never changed.

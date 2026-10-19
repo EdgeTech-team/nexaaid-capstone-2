@@ -15,6 +15,8 @@ from typing import Optional
 
 import httpx
 import qrcode
+from services.items import resolve_item_id
+from services.units import line_amounts, describe as describe_amount
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -133,22 +135,8 @@ def _donor_ids(db: Session, current_user: Optional[User], guest_info) -> tuple:
 
 
 def _resolve_item_id(db: Session, item_id, other_name, other_unit) -> int:
-    if item_id is not None:
-        if db.get(Item, item_id) is None:
-            raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-        return item_id
-    # "Other" item: reuse it if it already exists, else add it to the list.
-    name = other_name.strip()
-    item = db.query(Item).filter(Item.item_name.ilike(name)).first()
-    if item is None:
-        item = Item(
-            item_name=name,
-            category="Other",
-            unit_of_measure=(other_unit or "pcs").strip() or "pcs",
-        )
-        db.add(item)
-        db.flush()
-    return item.item_id
+    # Moved to services/items.py (reports use it for their needs too).
+    return resolve_item_id(db, item_id, other_name, other_unit)
 
 
 def _report_label(db: Session, report_id: int) -> Optional[str]:
@@ -262,6 +250,13 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
                 "unit": items[r.item_id].unit_of_measure if r.item_id in items else "",
                 "quantity": r.quantity,
                 "packaging": r.packaging,
+                # Per-item fulfillment: how the donor described it (NULL
+                # for older donations) and a readable line for the screens.
+                "pack_count": r.pack_count,
+                "per_pack": r.per_pack,
+                "size_amount": _num(r.size_amount),
+                "size_label": r.size_label,
+                "amount_text": describe_amount(r, items[r.item_id].unit_of_measure if r.item_id in items else ""),
                 "estimated_value": _num(r.estimated_value),
                 "status": r.status,
                 "actual_quantity_received": received.get(r.donation_id),
@@ -291,13 +286,14 @@ def create_donation_batch(
     batch_reference = _new_reference()
     rows = []
     for n, line in enumerate(payload.items, start=1):
+        item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
         row = PhysicalDonation(
             user_id=user_id,
             guest_donor_id=guest_donor_id,
             report_id=payload.report_id,
-            item_id=_resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit),
-            packaging=line.packaging,
-            quantity=line.quantity,
+            item_id=item_id,
+            # quantity (base unit) + packaging + breakdown (services/units.py)
+            **line_amounts(db, db.get(Item, item_id), line),
             estimated_value=line.estimated_value,
             handover_method=payload.handover_method,
             pickup_address=payload.pickup_address,
@@ -341,13 +337,13 @@ def create_donation(
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
     reference = _new_reference()
 
+    item_id = _resolve_item_id(db, payload.item_id, payload.other_item_name, payload.other_item_unit)
     donation = PhysicalDonation(
         user_id=user_id,
         guest_donor_id=guest_donor_id,
         report_id=payload.report_id,
-        item_id=_resolve_item_id(db, payload.item_id, payload.other_item_name, payload.other_item_unit),
-        packaging=payload.packaging,
-        quantity=payload.quantity,
+        item_id=item_id,
+        **line_amounts(db, db.get(Item, item_id), payload),
         estimated_value=payload.estimated_value,
         handover_method=payload.handover_method,
         pickup_address=payload.pickup_address,
@@ -439,8 +435,8 @@ def edit_my_entry(
 
     def apply(row, line):
         row.item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
-        row.packaging = line.packaging
-        row.quantity = line.quantity
+        for field, value in line_amounts(db, db.get(Item, row.item_id), line).items():
+            setattr(row, field, value)
         row.estimated_value = line.estimated_value
         row.handover_method = payload.handover_method
         row.pickup_address = payload.pickup_address

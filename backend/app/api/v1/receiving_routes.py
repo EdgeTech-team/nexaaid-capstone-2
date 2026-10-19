@@ -133,7 +133,8 @@ def find_by_qr(
 
 
 def _receive_line(db: Session, current_user: User, donation: PhysicalDonation,
-                  actual_quantity: int, notes: Optional[str]) -> ReceivedGoods:
+                  actual_quantity: int, notes: Optional[str],
+                  item_id: Optional[int] = None) -> ReceivedGoods:
     """UC-CM1 steps 3-8 for one item: record the actual quantity accepted
     (alt 4a: may be less than declared), mark it Received and add it to the
     report's inventory. Single receive and entry receive both use this.
@@ -148,6 +149,16 @@ def _receive_line(db: Session, current_user: User, donation: PhysicalDonation,
         )
     if donation.status != "Pending":
         raise HTTPException(status_code=400, detail=f"Donation is already '{donation.status}', cannot receive again")
+    # Per-item fulfillment (Oct 2026): staff can say what the goods really
+    # are before they enter the inventory. actual_quantity is then in THAT
+    # item's base unit. Only counted toward a need of the same item.
+    if item_id is not None and item_id != donation.item_id:
+        new_item = db.get(Item, item_id)
+        if new_item is None or not new_item.active:
+            raise HTTPException(status_code=422, detail="Choose an item from the list.")
+        log_action(db, current_user, "RECLASSIFY DONATION", "physical_donations", donation.donation_id,
+                   old={"item_id": donation.item_id}, new={"item_id": item_id})
+        donation.item_id = item_id
     receipt = ReceivedGoods(
         donation_id=donation.donation_id,
         actual_quantity=actual_quantity,
@@ -177,7 +188,8 @@ def receive_donation(
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found")
 
-    receipt = _receive_line(db, current_user, donation, payload.actual_quantity, payload.notes)
+    receipt = _receive_line(db, current_user, donation, payload.actual_quantity, payload.notes,
+                            payload.item_id)
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
                 "donation_awaiting_confirmation", "Donation awaiting acknowledgement",
                 f"Donation #{donation.donation_id} was received by CSWS and needs the CMO's acknowledgement.",
@@ -198,7 +210,8 @@ NOT_BROUGHT = "Not brought to CSWS"
 
 class EntryReceiveLine(BaseModel):
     donation_id: int
-    actual_quantity: int = Field(gt=0)
+    actual_quantity: int = Field(gt=0)   # in the item's base unit
+    item_id: Optional[int] = None        # what it really is (see _receive_line)
 
 
 class EntryReceive(BaseModel):
@@ -242,7 +255,8 @@ def receive_entry(
             raise HTTPException(status_code=409, detail=f"Donation #{donation_id} is no longer waiting, so it cannot be marked not brought.")
 
     for line in payload.items:
-        _receive_line(db, current_user, rows[line.donation_id], line.actual_quantity, payload.notes)
+        _receive_line(db, current_user, rows[line.donation_id], line.actual_quantity, payload.notes,
+                      line.item_id)
     closed = close_rows([rows[i] for i in payload.not_brought], "Cancelled", NOT_BROUGHT,
                         user_id=current_user.user_id)
     for r in closed:
