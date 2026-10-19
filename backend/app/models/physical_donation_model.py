@@ -23,6 +23,11 @@ class PhysicalDonation(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="physical_donations_quantity_check"),
         CheckConstraint(
+            "(pack_count IS NULL OR pack_count > 0) AND (per_pack IS NULL OR per_pack > 0)"
+            " AND (size_amount IS NULL OR size_amount > 0)",
+            name="chk_physical_donations_breakdown",
+        ),
+        CheckConstraint(
             "handover_method IN ('Drop Off', 'Door to Door')",
             name="physical_donations_handover_method_check",
         ),
@@ -49,7 +54,17 @@ class PhysicalDonation(Base):
     report_id = Column(Integer, ForeignKey("disaster_reports.report_id"), nullable=False)
     item_id = Column(Integer, ForeignKey("items.item_id"), nullable=False)
     packaging = Column(String(100), nullable=False)
+    # Total in the item's base unit (kg, L, pcs...). With the breakdown
+    # below it is worked out by the server: pack_count x per_pack x
+    # size_amount, rounded to a whole unit (services/units.py).
     quantity = Column(Integer, nullable=False)
+    # How the donor described it (Oct 2026, per-item fulfillment), e.g.
+    # 3 boxes x 16 x 1.5 L bottle. NULL for donations from older apps, which
+    # sent the total only. Migration 9b3f7c1d2e48.
+    pack_count = Column(Integer, nullable=True)
+    per_pack = Column(Integer, nullable=True)
+    size_amount = Column(Numeric(12, 4), nullable=True)   # one piece, in the base unit
+    size_label = Column(String(60), nullable=True)        # "1.5 L bottle", "25 kg sack"
     estimated_value = Column(Numeric(10, 2), nullable=True)
     handover_method = Column(String(20), nullable=False)
     pickup_address = Column(Text, nullable=True)

@@ -204,14 +204,31 @@ class _ItemFields(BaseModel):
     item_id: Optional[int] = None
     other_item_name: Optional[str] = Field(default=None, max_length=150)
     other_item_unit: Optional[str] = Field(default=None, max_length=50)
-    packaging: str = Field(min_length=1, max_length=100)
-    quantity: int = Field(gt=0)
+    # Older apps: the total in the item's base unit + a packaging label.
+    packaging: Optional[str] = Field(default=None, max_length=100)
+    quantity: Optional[int] = Field(default=None, gt=0)
+    # Newer apps (per-item fulfillment, Oct 2026): describe it instead and
+    # the server works out the total in the base unit (services/units.py):
+    #   pack_count x per_pack x size   e.g. 3 boxes x 16 x 1.5 L = 72 L
+    # size = one of the item's sizes (size_id, from /lookups), or a custom
+    # size_amount + size_unit (kg/g for weight, L/ml/gallon for volume),
+    # or nothing (= 1 base unit, e.g. 1 can).
+    pack_count: Optional[int] = Field(default=None, gt=0, le=100_000)
+    per_pack: Optional[int] = Field(default=None, gt=0, le=10_000)
+    size_id: Optional[int] = None
+    size_amount: Optional[Decimal] = Field(default=None, gt=0, le=100_000)
+    size_unit: Optional[str] = Field(default=None, max_length=20)
     estimated_value: Optional[Decimal] = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def check_item_given(self):
         if self.item_id is None and not (self.other_item_name or "").strip():
             raise ValueError("Choose an item, or enter the name of another item")
+        if self.pack_count is None:
+            if self.quantity is None:
+                raise ValueError("Enter the quantity, or the number of packs")
+            if not (self.packaging or "").strip():
+                raise ValueError("Choose the packaging")
         return self
 
 
@@ -325,6 +342,10 @@ class PhysicalDonationResponse(BaseModel):
     item_id: int
     packaging: str
     quantity: int
+    pack_count: Optional[int] = None
+    per_pack: Optional[int] = None
+    size_amount: Optional[Decimal] = None
+    size_label: Optional[str] = None
     estimated_value: Optional[Decimal]
     handover_method: str
     pickup_address: Optional[str]

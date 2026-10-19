@@ -50,9 +50,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timezone
 from core.priority_engine import apply_priority
+from services.fulfillment import progress as needs_progress, recalculate as recalculate_fulfillment, set_needs
+from services.items import resolve_item_id
 
 from core.database import get_db
-from core.auth import get_current_user, require_role, has_role, barangay_scope
+from core.auth import get_current_user, get_current_user_optional, require_role, has_role, barangay_scope
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from models.sitio_model import Sitio
@@ -203,6 +205,17 @@ def _apply_sitios(db: Session, report: DisasterReport, sitio_id, sitio_ids) -> N
     report.sitio_id = ids[0] if ids else None
 
 
+def _save_needs(db: Session, report: DisasterReport, needs, estimated_quantity) -> None:
+    """Per-item needs (Oct 2026). needs = list from newer apps; without it
+    estimated_quantity becomes one "General needs" line (older apps, SMS)."""
+    set_needs(db, report, needs, estimated_quantity,
+              lambda item_id, name, unit: resolve_item_id(db, item_id, name, unit))
+
+
+def _needs_log(report: DisasterReport) -> list:
+    return [{"item_id": n.item_id, "quantity": n.quantity} for n in report.needs]
+
+
 # ---------------------------------------------------------------------------
 # Create — any authenticated reporter (citizen / barangay official / staff)
 # ---------------------------------------------------------------------------
@@ -215,11 +228,12 @@ def create_report(
     current_user=Depends(require_role("csws_disaster_unit")),
 ):
     report = DisasterReport(
-        **payload.model_dump(exclude={"sitio_ids"}), user_id=current_user.user_id
+        **payload.model_dump(exclude={"sitio_ids", "needs"}), user_id=current_user.user_id
     )
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()   # get report.report_id before commit (commit happens in get_db)
+    _save_needs(db, report, payload.needs, payload.estimated_quantity)
     db.refresh(report)
 
     _notify_new_report(db, report, current_user.user_id)
@@ -383,20 +397,23 @@ def edit_my_report(
     """Correct a report before validation. A rejected report that is
     corrected goes back to the Administrator as Pending."""
     report = _own_open_report(db, report_id, current_user, "edit")
-    before = {k: getattr(report, k) for k in payload.model_dump()}
+    fields = payload.model_dump(exclude={"needs"})
+    before = {k: getattr(report, k) for k in fields}
     before["status"] = report.status
-    for field, value in payload.model_dump(exclude={"sitio_ids"}).items():
+    before["needs"] = _needs_log(report)
+    for field, value in payload.model_dump(exclude={"sitio_ids", "needs"}).items():
         setattr(report, field, value)
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
+    _save_needs(db, report, payload.needs, payload.estimated_quantity)
     resubmitted = report.status == "Rejected"
     if resubmitted:
         report.status = "Pending"
         report.rejection_reason = None
         report.validated_by = None
     log_action(db, current_user, "EDIT REPORT", "disaster_reports", report.report_id,
-               old={k: (str(v) if v is not None else None) for k, v in before.items()},
-               new={**{k: (str(v) if v is not None else None) for k, v in payload.model_dump().items()},
-                    "status": report.status})
+               old={k: (v if k == "needs" else str(v) if v is not None else None) for k, v in before.items()},
+               new={**{k: (str(v) if v is not None else None) for k, v in fields.items()},
+                    "needs": _needs_log(report), "status": report.status})
     if resubmitted:
         # Back in the validation queue, so the Administrators hear about it.
         _notify_new_report(db, report, current_user.user_id)
@@ -462,6 +479,30 @@ def get_report(
 
 
 # ---------------------------------------------------------------------------
+# Per-item fulfillment (Oct 2026): for every need of the report, how much is
+# pledged, confirmed by the CMO ("in stock") and delivered (barangay
+# receipt, the official figure), each capped at 100%. Validated reports
+# are public like the rest of the transparency data; others follow the
+# same rule as GET /reports/{id}.
+# ---------------------------------------------------------------------------
+@router.get("/{report_id}/needs")
+def report_needs_progress(
+    report_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_optional),
+):
+    report = _get_live_report(db, report_id)
+    if report.status != "Validated":
+        allowed = current_user is not None and (
+            report.user_id == current_user.user_id
+            or has_role(current_user, "csws_staff", "admin", "barangay_official")
+        )
+        if not allowed:
+            raise HTTPException(status_code=404, detail="Report not found")
+    return needs_progress(db, report)
+
+
+# ---------------------------------------------------------------------------
 # Update — staff only (status, priority, AI fields, corrections)
 # ---------------------------------------------------------------------------
 @router.patch("/{report_id}", response_model=DisasterReportResponse)
@@ -477,8 +518,31 @@ def update_report(
     report = _get_live_report(db, report_id)
 
     updates = payload.model_dump(exclude_unset=True)
+    needs = updates.pop("needs", None)
     for field, value in updates.items():
         setattr(report, field, value)
+
+    # Per-item needs (Oct 2026). A needs list replaces them; a new
+    # estimated_quantity alone only changes an older report's "General
+    # needs" line (it is ignored when the report has per-item needs).
+    needs_changed = False
+    if needs is not None:
+        _save_needs(db, report, payload.needs, None)
+        needs_changed = True
+    elif "estimated_quantity" in updates and all(n.item_id is None for n in report.needs):
+        _save_needs(db, report, None, updates["estimated_quantity"])
+        needs_changed = True
+
+    # Weak spot 5: changing what the report needs (or its families / type)
+    # after validation must move fulfillment and priority with it. A level
+    # the Administrator sets by hand in this same request is kept.
+    affects_priority = needs_changed or {"affected_families", "disaster_type_id"} & set(updates)
+    if report.status == "Validated" and affects_priority:
+        if needs_changed and report.fulfillment is not None:
+            recalculate_fulfillment(db, report.report_id, None)
+            db.refresh(report)
+        if "priority_level" not in updates:
+            apply_priority(report)
 
     db.flush()
     db.refresh(report)
@@ -531,6 +595,8 @@ def validate_report(
     # Flush so the newly-created fulfillment row is available
     # through report.fulfillment before priority is computed.
     db.flush()
+    # Per-item needs: totals and percentage from report_needs (0% now).
+    recalculate_fulfillment(db, report_id, None)
     db.refresh(report)
 
     apply_priority(report)
@@ -655,7 +721,7 @@ def ingest_sms_report(
     # (source "SMS"). It then waits in the validation queue as Pending.
     current_user=Depends(require_role("admin")),
 ):
-    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids"})
+    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids", "needs"})
     sender = _disaster_unit_member(db, payload.contact_number)
     report = DisasterReport(
         **report_fields,
@@ -665,6 +731,7 @@ def ingest_sms_report(
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()  # need report.report_id for the metadata FK
+    _save_needs(db, report, payload.needs, payload.estimated_quantity)
 
     sms_meta = SmsReportMetadata(
         report_id=report.report_id,
