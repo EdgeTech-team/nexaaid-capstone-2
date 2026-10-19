@@ -760,42 +760,107 @@ class _OrgDocument extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
-/// 9.7: the donations behind a Barangay dashboard card, in the same rows
-/// as "Donation references".
+/// 9.7: the donations behind a Barangay dashboard card. [empty] says, in
+/// plain words, what will show here and when.
 void _openBarangayDonations(
   BuildContext context,
   String title,
-  List<Map> donations,
-) {
+  List<Map> donations, {
+  required IconData icon,
+  required String empty,
+}) {
   Navigator.of(context).push(
     MaterialPageRoute(
       builder: (_) => Scaffold(
         appBar: AppBar(title: Text(title)),
         body: donations.isEmpty
-            ? const Padding(
-                padding: EdgeInsets.all(16),
-                child: EmptyState('No donations here yet.'),
+            ? Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: EmptyView(
+                    icon: icon,
+                    title: 'Nothing here yet',
+                    message: empty,
+                  ),
+                ),
               )
-            : ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  for (final d in donations)
-                    Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        title: Text(
-                          '${d['quantity']} ${d['item_name']} · '
-                          '${d['qr_reference']}',
-                        ),
-                        subtitle: Text('${d['report_label']}'),
-                        trailing: Badge2.status('${d['status']}'),
-                      ),
-                    ),
-                ],
-              ),
+            : _BarangayDonationList(donations: donations),
       ),
     ),
   );
+}
+
+class _BarangayDonationList extends StatelessWidget {
+  final List<Map> donations;
+  const _BarangayDonationList({required this.donations});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: Breakpoints.contentMax),
+        child: ListView(
+          padding: Space.page,
+          children: [
+            Text(
+              '${donations.length} '
+              '${donations.length == 1 ? 'donation' : 'donations'}',
+              style: t.titleMedium,
+            ),
+            Gaps.v12,
+            for (final d in donations) ...[
+              AppCard(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: cs.primaryContainer,
+                      child: Icon(
+                        Icons.inventory_2_outlined,
+                        size: 20,
+                        color: cs.onPrimaryContainer,
+                      ),
+                    ),
+                    Gaps.h12,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${d['quantity']} ${d['item_name']}',
+                            style: t.titleSmall,
+                          ),
+                          Gaps.v4,
+                          Text(
+                            '${d['report_label']}',
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                          Text(
+                            '${d['qr_reference']}',
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Gaps.h8,
+                    StatusChip('${d['status']}'),
+                  ],
+                ),
+              ),
+              Gaps.v12,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class BarangayDashboard extends StatelessWidget {
@@ -827,6 +892,10 @@ class BarangayDashboard extends StatelessWidget {
                   context,
                   'Donations linked to our reports',
                   donations,
+                  icon: Icons.volunteer_activism_outlined,
+                  empty:
+                      "When donors give to your barangay's reports, their "
+                      'donations show here.',
                 ),
               ),
               StatTile(
@@ -838,6 +907,10 @@ class BarangayDashboard extends StatelessWidget {
                   context,
                   'Waiting for CMO acknowledgement',
                   donations.where((d) => d['status'] == 'Received').toList(),
+                  icon: Icons.hourglass_top,
+                  empty:
+                      'Donations that CSWS received for your barangay show '
+                      "here until the City Mayor's Office acknowledges them.",
                 ),
               ),
               StatTile(
@@ -849,6 +922,10 @@ class BarangayDashboard extends StatelessWidget {
                   context,
                   'Acknowledged by CMO',
                   donations.where((d) => d['status'] == 'Confirmed').toList(),
+                  icon: Icons.verified_outlined,
+                  empty:
+                      "Donations the City Mayor's Office has acknowledged "
+                      'show here.',
                 ),
               ),
               StatTile(
