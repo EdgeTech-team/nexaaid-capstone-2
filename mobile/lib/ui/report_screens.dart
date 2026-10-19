@@ -1094,6 +1094,38 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
     );
   }
 
+  /// Testing 2.3: the Administrator deletes a Rejected report. The server
+  /// keeps the row for the audit trail and hides it from every list.
+  Future<void> _delete(Map<String, dynamic> r) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete report #${r['report_id']}?'),
+        content: const Text(
+          'It disappears from every list. The rejection and who made it '
+          'stay in the audit log.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep report'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await act(
+      context,
+      () => api.delete('/reports/${r['report_id']}'),
+      success: 'Report #${r['report_id']} deleted',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Loader(
@@ -1172,6 +1204,14 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
                           ),
                           icon: const Icon(Icons.check),
                           label: const Text('Validate'),
+                        ),
+                      ]
+                    : status == 'Rejected'
+                    ? [
+                        OutlinedButton.icon(
+                          onPressed: () => _delete(r),
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('Delete'),
                         ),
                       ]
                     : const [],

@@ -24,7 +24,8 @@ def get_dashboard_summary(
 ):
 
     return DashboardSummary(
-        total_reports=db.query(func.count(DisasterReport.report_id)).scalar() or 0,
+        total_reports=db.query(func.count(DisasterReport.report_id))
+            .filter(DisasterReport.deleted_at.is_(None)).scalar() or 0,
         total_donations=db.query(func.count(PhysicalDonation.donation_id)).scalar() or 0,
         total_deliveries=db.query(func.count(delivery.delivery_id)).scalar() or 0,
         total_logistics_requests=db.query(func.count(LogisticsRequest.request_id)).scalar() or 0,
@@ -39,12 +40,14 @@ def get_reports_breakdown(
 ):
     by_status = (
         db.query(DisasterReport.status, func.count(DisasterReport.report_id))
+        .filter(DisasterReport.deleted_at.is_(None))
         .group_by(DisasterReport.status)
         .all()
 
     )
     by_priority = (
         db.query(DisasterReport.priority_level, func.count(DisasterReport.report_id))
+        .filter(DisasterReport.deleted_at.is_(None))
         .group_by(DisasterReport.priority_level)
         .all()
     )
@@ -200,7 +203,8 @@ def barangay_dashboard(
 ):
     """Manuscript 7.6 / UC-B2, limited to the assigned barangay."""
     own = barangay_scope(user)
-    reports = db.query(DisasterReport).filter(DisasterReport.barangay_id == own).all()
+    reports = db.query(DisasterReport).filter(
+        DisasterReport.barangay_id == own, DisasterReport.deleted_at.is_(None)).all()
     report_ids = [r.report_id for r in reports]
     labels = _labels(db, set(report_ids))
     donations = db.query(PhysicalDonation).filter(
@@ -270,9 +274,11 @@ def admin_dashboard(
         # Organizations + individual donors not reviewed yet (Registrations).
         "pending_registrations": pending_orgs + pending_donors,
         "pending_validations": db.query(func.count(DisasterReport.report_id))
-            .filter(DisasterReport.status == "Pending").scalar() or 0,
+            .filter(DisasterReport.status == "Pending",
+                    DisasterReport.deleted_at.is_(None)).scalar() or 0,
         "validated_reports": db.query(func.count(DisasterReport.report_id))
-            .filter(DisasterReport.status == "Validated").scalar() or 0,
+            .filter(DisasterReport.status == "Validated",
+                    DisasterReport.deleted_at.is_(None)).scalar() or 0,
         "total_donations": db.query(func.count(PhysicalDonation.donation_id)).scalar() or 0,
         "held_donations": held,
         "recent_activity": _recent_logs(db, limit=15),
@@ -296,7 +302,7 @@ def admin_dashboard_reports(
     user=Depends(require_role("admin")),
 ):
     """5.1: the reports behind the admin dashboard's report tiles."""
-    q = db.query(DisasterReport)
+    q = db.query(DisasterReport).filter(DisasterReport.deleted_at.is_(None))
     if status:
         q = q.filter(DisasterReport.status == status)
     reports = q.order_by(DisasterReport.report_id.desc()).all()

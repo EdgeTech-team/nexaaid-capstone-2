@@ -16,6 +16,14 @@ const donationNote =
 
 const donationProviders = ['GCash', 'Maya', 'Bank', 'Other'];
 
+/// Testing 2.1: what donors see as the provider. "Other" shows the name the
+/// barangay typed (e.g. "Coins.ph") when there is one.
+String providerLabel(Map m) {
+  final other = '${m['provider_other'] ?? ''}'.trim();
+  if (m['provider'] == 'Other' && other.isNotEmpty) return other;
+  return '${m['provider'] ?? ''}';
+}
+
 // ---------------------------------------------------------------------------
 // Display
 // ---------------------------------------------------------------------------
@@ -70,7 +78,7 @@ class DonationInfoCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('${i['provider'] ?? ''}', style: t.labelLarge),
+                        Text(providerLabel(i), style: t.labelLarge),
                         SelectableText(
                           '${i['account_number']}',
                           style: t.titleMedium,
@@ -95,7 +103,7 @@ class DonationInfoCard extends StatelessWidget {
                 ],
               )
             else if (i['provider'] != null)
-              Text('${i['provider']}', style: t.labelLarge),
+              Text(providerLabel(i), style: t.labelLarge),
             if (i['instructions'] != null) ...[
               Gaps.v8,
               Text('${i['instructions']}', style: t.bodyMedium),
@@ -129,7 +137,7 @@ class DonationMethodsList extends StatelessWidget {
   const DonationMethodsList({super.key, required this.methods, this.heading});
 
   static String titleOf(Map m) {
-    if (m['provider'] != null) return '${m['provider']}';
+    if (m['provider'] != null) return providerLabel(m);
     return m['qr_url'] != null ? 'Donation QR' : 'Instructions';
   }
 
@@ -198,6 +206,9 @@ class ReportDonationInfo extends StatelessWidget {
 /// (schemas/donation_info_schema.py).
 class DonationInfoController extends ChangeNotifier {
   String? provider;
+
+  /// Testing 2.1: the provider's own name, asked only when provider is Other.
+  final providerOther = TextEditingController();
   final accountName = TextEditingController();
   final accountNumber = TextEditingController();
   final instructions = TextEditingController();
@@ -207,6 +218,7 @@ class DonationInfoController extends ChangeNotifier {
 
   void load(Map? info) {
     provider = info?['provider'] as String?;
+    providerOther.text = '${info?['provider_other'] ?? ''}';
     accountName.text = '${info?['account_name'] ?? ''}';
     accountNumber.text = '${info?['account_number'] ?? ''}';
     instructions.text = '${info?['instructions'] ?? ''}';
@@ -232,6 +244,14 @@ class DonationInfoController extends ChangeNotifier {
     qrUrl = null;
     uploadKey++;
     notifyListeners();
+  }
+
+  /// Required (2-50 characters) when the provider is Other.
+  String? providerOtherRule(String? v) {
+    if (provider != 'Other') return null;
+    final s = (v ?? '').trim();
+    if (s.isEmpty) return 'Enter the name of the provider';
+    return s.length < 2 || s.length > 50 ? '2-50 characters' : null;
   }
 
   String? accountNumberRule(String? v) {
@@ -282,6 +302,7 @@ class DonationInfoController extends ChangeNotifier {
         c.text.trim().isEmpty ? null : c.text.trim();
     return {
       'provider': provider,
+      'provider_other': provider == 'Other' ? v(providerOther) : null,
       'account_name': v(accountName),
       'account_number': v(accountNumber),
       'instructions': v(instructions),
@@ -291,6 +312,7 @@ class DonationInfoController extends ChangeNotifier {
 
   @override
   void dispose() {
+    providerOther.dispose();
     accountName.dispose();
     accountNumber.dispose();
     instructions.dispose();
@@ -330,6 +352,17 @@ class DonationInfoFields extends StatelessWidget {
             ],
             onChanged: c.setProvider,
           ),
+          if (c.provider == 'Other') ...[
+            Gaps.v16,
+            AppTextField(
+              controller: c.providerOther,
+              label: 'Provider name',
+              icon: Icons.account_balance_wallet_outlined,
+              hint: 'e.g. Coins.ph',
+              maxLength: 50,
+              validator: c.providerOtherRule,
+            ),
+          ],
           Gaps.v16,
           AppTextField(
             controller: c.accountName,

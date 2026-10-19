@@ -7,6 +7,9 @@ CHANGE LOG
   Spaces or hyphens between digit groups are allowed. GCash/Maya unchanged
   (11-digit 09 mobile number). Must match mobile/lib/ui/donation_info.dart.
   Input-only: no column or migration change; existing rows still display.
+- Testing 2.1: choosing provider "Other" now asks for the specific provider's
+  name (provider_other, 2-50 characters, migration c5d8f2a7b1e3). Any other
+  provider clears it. Rows saved before this keep showing "Other".
 """
 import re
 from typing import Literal, Optional
@@ -36,15 +39,21 @@ class DonationInfoIn(BaseModel):
     instructions, or any mix. At least one of QR / account number /
     instructions is required."""
     provider: Optional[Literal["GCash", "Maya", "Bank", "Other"]] = None
+    provider_other: Optional[str] = None
     account_name: Optional[str] = None
     account_number: Optional[str] = None
     instructions: Optional[str] = Field(default=None, max_length=500)
     qr_file_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
 
-    @field_validator("account_name", "account_number", "instructions", "qr_file_id", mode="before")
+    @field_validator("provider_other", "account_name", "account_number", "instructions", "qr_file_id", mode="before")
     @classmethod
     def _blank_is_none(cls, v):
         return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("provider_other")
+    @classmethod
+    def _provider_other(cls, v):
+        return None if v is None else clean_text(v, "Provider name", 2, 50)
 
     @field_validator("account_name")
     @classmethod
@@ -58,6 +67,11 @@ class DonationInfoIn(BaseModel):
 
     @model_validator(mode="after")
     def _check(self):
+        if self.provider == "Other":
+            if not self.provider_other:
+                raise ValueError("Enter the name of the provider")
+        else:
+            self.provider_other = None      # only "Other" has a specific name
         if not (self.qr_file_id or self.account_number or self.instructions):
             raise ValueError("Add a QR code, an account number, or instructions")
         if self.account_number:

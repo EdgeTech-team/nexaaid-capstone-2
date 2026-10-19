@@ -118,3 +118,30 @@ def test_full_delivery_marks_fulfillment_complete(admin_client, seed, validated_
 
     assert resp.json()["fulfillment"]["verification_status"] == "Complete"
     assert float(resp.json()["fulfillment"]["fulfillment_percentage"]) == 100.00
+
+
+def test_priority_follows_fulfillment(admin_client, seed, validated_report_with_item):
+    """Testing, Module 3: the priority was set once at validation and never
+    changed. It must be recomputed when a delivery changes the fulfillment."""
+    report_id = validated_report_with_item["report_id"]
+    before = admin_client.get(f"/reports/{report_id}").json()
+    assert before["priority_level"] == "High"          # nothing delivered yet
+
+    # Half delivered: still needs help.
+    half = _create_delivery(admin_client, seed, validated_report_with_item, quantity=50).json()
+    for _ in range(2):
+        admin_client.post(f"/deliveries/{half['delivery_id']}/advance")
+    admin_client.post(f"/deliveries/{half['delivery_id']}/confirm-receipt", json={})
+    mid = admin_client.get(f"/reports/{report_id}").json()
+    assert mid["fulfillment_status"] == "Partial"
+    assert mid["priority_level"] in ("High", "Medium")
+
+    # The rest delivered: fully fulfilled, so the priority drops to Low.
+    rest = _create_delivery(admin_client, seed, validated_report_with_item, quantity=50).json()
+    for _ in range(2):
+        admin_client.post(f"/deliveries/{rest['delivery_id']}/advance")
+    admin_client.post(f"/deliveries/{rest['delivery_id']}/confirm-receipt", json={})
+    after = admin_client.get(f"/reports/{report_id}").json()
+    assert after["fulfillment_status"] == "Complete"
+    assert after["priority_level"] == "Low"
+    assert float(after["ai_priority_score"]) < 35
