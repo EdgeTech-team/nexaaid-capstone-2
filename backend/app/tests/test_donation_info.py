@@ -178,3 +178,25 @@ def test_report_shows_default_override_and_guest_access(api):
     rid2 = _report(client, t, barangay_id=2)
     res = ok(client.get(f"/reports/{rid2}/donation-info"))
     assert res["info"] is None and res["methods"] == [] and res["source"] is None and res["note"]
+
+
+def test_other_provider_needs_its_own_name(api):
+    """Testing 2.1: choosing "Other" asks for the provider's name; any other
+    provider ignores it."""
+    client, t = api
+    other = {"provider": "Other", "account_name": "Brgy Test",
+             "account_number": "123456789"}
+    # "Other" without a name is rejected, blank or missing.
+    for extra in ({}, {"provider_other": "  "}, {"provider_other": "x"}):
+        assert client.post(METHODS.format(1), headers=t["brgy"],
+                           json={**other, **extra}).status_code == 422, extra
+    res = ok(client.post(METHODS.format(1), headers=t["brgy"],
+                         json={**other, "provider_other": "  Coins.ph  "}), 201)
+    assert res["provider"] == "Other" and res["provider_other"] == "Coins.ph"
+    pub = ok(client.get("/barangays/1/donation-info"))
+    assert pub["methods"][0]["provider_other"] == "Coins.ph"
+
+    # A name sent with a normal provider is dropped, not stored.
+    res = ok(client.post(METHODS.format(1), headers=t["brgy"],
+                         json={**GCASH, "provider_other": "Coins.ph"}), 201)
+    assert res["provider"] == "GCash" and res["provider_other"] is None

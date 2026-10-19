@@ -1,3 +1,12 @@
+from datetime import datetime, timezone
+
+# Testing, Module 3: a report whose needs are fully delivered ("Complete")
+# must stop competing for donations. Its score is capped just below the
+# Medium threshold (35), so it always reads Low. The weights above are
+# unchanged for every report that is not fully fulfilled.
+FULFILLED_SCORE_CAP = 34.99
+
+VALID_LEVELS = ("Low", "Medium", "High", "Critical")
 
 DISASTER_SEVERITY = {
     "Flood": 70,
@@ -107,12 +116,31 @@ def compute_priority(report):
     recommendation = "Priority computed from report and fulfillment data."
     if not report.fulfillment:
         recommendation = "Priority computed without data (2a: not yet validated/fulfilled)."
+    elif report.fulfillment.verification_status == "Complete":
+        score = min(score, FULFILLED_SCORE_CAP)
+        priority_level = "Low"
+        recommendation = "Fully fulfilled: every needed item was delivered and confirmed."
 
     return {
         "score": round(score, 2),
         "priority_level": priority_level,
         "recommendation": recommendation,
     }
+
+def apply_priority(report):
+    """Compute the priority and store it on the report. Used when a report is
+    validated and again whenever its fulfillment changes (a delivery receipt),
+    so the level never goes stale."""
+    result = compute_priority(report)
+    level = result["priority_level"]
+    report.ai_priority_score = result["score"]
+    # "Needs Review" / "Review Required" violate chk_disaster_reports_priority,
+    # so store NULL and keep the reason in ai_recommendation.
+    report.priority_level = level if level in VALID_LEVELS else None
+    report.ai_recommendation = result["recommendation"]
+    report.ai_processed_at = datetime.now(timezone.utc)
+    return result
+
 
 PRIORITY_MEANING = {
     "Critical": "Needs help immediately. Donations to this report are the most urgent.",
