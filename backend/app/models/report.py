@@ -128,6 +128,16 @@ class DisasterReport(Base):
     )
     rejection_reason = Column(Text, nullable=True)
 
+    # Testing 2.3: the Administrator "deletes" a Rejected report by marking it,
+    # so the validate/reject audit trail survives. Every list and count hides
+    # rows where deleted_at is set. Migration d6e9a3b8c2f4.
+    deleted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    deleted_by_user_id = Column(
+        Integer,
+        ForeignKey("users.user_id", ondelete="SET NULL", name="fk_disaster_reports_deleted_by"),
+        nullable=True,
+    )
+
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
         TIMESTAMP(timezone=True),

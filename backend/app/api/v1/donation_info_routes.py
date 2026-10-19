@@ -32,7 +32,7 @@ from schemas.donation_info_schema import NOTE, DonationInfoIn
 
 router = APIRouter(tags=["donation info"])
 
-FIELDS = ("provider", "account_name", "account_number", "instructions", "qr_file_id")
+FIELDS = ("provider", "provider_other", "account_name", "account_number", "instructions", "qr_file_id")
 REP_OR_ADMIN = ("Barangay Receiving Representative", "Administrator")
 UNIT_OR_ADMIN = ("CSWS Disaster Unit", "Administrator")
 
