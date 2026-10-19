@@ -84,6 +84,11 @@ def build_login_response(user: User) -> dict:
     }
 
 
+def _uid_matches(payload: dict, user: User) -> bool:
+    uid = payload.get("uid")
+    return uid is None or uid == user.user_id
+
+
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -100,7 +105,11 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise credentials_exception
 
     user = db.query(User).filter(User.email == email).first()
-    if user is None:
+    # Every token carries uid (build_login_response). If it doesn't match, the
+    # email now belongs to someone else (Appendix H 1.2: a deleted account's
+    # email can be registered again), so the old token must not log in as
+    # the new owner.
+    if user is None or not _uid_matches(payload, user):
         raise credentials_exception
     if not user.is_active:  # deactivation takes effect immediately, even on old tokens
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
@@ -123,7 +132,8 @@ def get_current_user_optional(
             return None
     except JWTError:
         return None
-    return db.query(User).filter(User.email == email).first()
+    user = db.query(User).filter(User.email == email).first()
+    return user if user is not None and _uid_matches(payload, user) else None
 
 def _norm_role(name) -> str:
     """'CSWS Main Office' / 'csws_main_office' -> 'csws_main_office'"""

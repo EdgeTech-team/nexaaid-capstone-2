@@ -205,6 +205,7 @@ class _UsersScreenState extends State<UsersScreen> {
   String role = '';
   String q = '';
   late String status = widget.status;
+  int reloads = 0; // bumped after an account is deleted, so the list reloads
 
   /// For a deactivated account, a labeled line with the reason the
   /// Administrator gave (or a note when none was recorded).
@@ -227,7 +228,7 @@ class _UsersScreenState extends State<UsersScreen> {
           },
         ),
       ],
-      key: ValueKey('$status|$role|$q'),
+      key: ValueKey('$status|$role|$q|$reloads'),
       builder: (context, data) {
         final users = (data[0] as List).cast<Map>();
         return ListView(
@@ -237,7 +238,7 @@ class _UsersScreenState extends State<UsersScreen> {
               'All accounts',
               subtitle:
                   'Active and deactivated accounts. Tap one to see its '
-                  'details, edit it, deactivate it or activate it again.',
+                  'details, edit it, deactivate it, restore it or delete it.',
             ),
             TextField(
               decoration: const InputDecoration(
@@ -325,12 +326,15 @@ class _UsersScreenState extends State<UsersScreen> {
                     '${_reasonLine(u)}',
                   ),
                   isThreeLine: true,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          AccountDetailScreen(userId: u['user_id'] as int),
-                    ),
-                  ),
+                  onTap: () async {
+                    final deleted = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            AccountDetailScreen(userId: u['user_id'] as int),
+                      ),
+                    );
+                    if (deleted == true && mounted) setState(() => reloads++);
+                  },
                   // UC-A1: tap the row for details, Edit details and
                   // Deactivate (account_detail_screen.dart).
                   trailing: const Icon(Icons.chevron_right),
