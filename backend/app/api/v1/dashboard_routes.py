@@ -17,6 +17,9 @@ router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 DASHBOARD_ROLES = ("admin", "csws_staff", "barangay_official")
 
+# Reports that are not part of the work: sent back, or withdrawn.
+NOT_COUNTED_REPORT_STATUSES = ("Rejected", "Cancelled")
+
 @router.get("/summary", response_model=DashboardSummary)
 def get_dashboard_summary(
     db: Session = Depends(get_db),
@@ -24,8 +27,12 @@ def get_dashboard_summary(
 ):
 
     return DashboardSummary(
+        # 9.3 (testing, Oct 18): rejected and withdrawn reports are not
+        # counted; they still show in "Reports by status".
         total_reports=db.query(func.count(DisasterReport.report_id))
-            .filter(DisasterReport.deleted_at.is_(None)).scalar() or 0,
+            .filter(DisasterReport.deleted_at.is_(None))
+            .filter(DisasterReport.status.notin_(NOT_COUNTED_REPORT_STATUSES))
+            .scalar() or 0,
         total_donations=db.query(func.count(PhysicalDonation.donation_id)).scalar() or 0,
         total_deliveries=db.query(func.count(delivery.delivery_id)).scalar() or 0,
         total_logistics_requests=db.query(func.count(LogisticsRequest.request_id)).scalar() or 0,
