@@ -8,6 +8,10 @@ FULFILLED_SCORE_CAP = 34.99
 
 VALID_LEVELS = ("Low", "Medium", "High", "Critical")
 
+# Factor weights (sum to 1). Option A, Oct 2026: families 40%, disaster
+# severity 30%, unmet need (100 - fulfillment) 30%.
+WEIGHTS = {"families": 0.40, "severity": 0.30, "unmet_need": 0.30}
+
 DISASTER_SEVERITY = {
     "Flood": 70,
     "Typhoon": 85,
@@ -84,17 +88,19 @@ def compute_priority(report):
             "recommendation": "Insufficient data to compute priority.",
         }
     families = score_affected_families(report.affected_families)
-    quantity = score_estimated_quantity(report.estimated_quantity)
     severity = score_disaster_type(report)
     fulfillment = score_fulfillment(
         report.fulfillment.verification_status if report.fulfillment else None
     )
 
-    score =(
-        families *0.30
-        + quantity *0.20
-        + severity *0.25
-        +fulfillment *0.25
+    # Option A (Oct 2026 team decision): estimated quantity is no longer a
+    # factor. With per-item needs it is a sum of different units (kg + L +
+    # pcs), so it measured nothing; affected families already measures the
+    # size of the disaster. Its 20% was spread over the other three.
+    score = (
+        families * WEIGHTS["families"]
+        + severity * WEIGHTS["severity"]
+        + fulfillment * WEIGHTS["unmet_need"]
     )
 
     if not (0 <= score <= 100):
