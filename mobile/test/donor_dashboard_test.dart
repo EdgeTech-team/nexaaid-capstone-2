@@ -457,38 +457,101 @@ void main() {
     expect(disasterKindOfLabel('Fire in Looc'), DisasterKind.fire);
   });
 
-  testWidgets('Reports tab: one list, Fulfilled is a filter not a section', (
+  testWidgets('Reports tab: quick chips, active filters, empty state', (
     tester,
   ) async {
     Api.instance.token = 'test-token';
     await http.runWithClient(() async {
       await _pump(tester, const DonorReportsTab());
       expect(find.text('All Reports'), findsOneWidget);
+      expect(find.text('Find communities that need assistance.'), findsOneWidget);
       expect(find.text('Done'), findsNothing); // no separate Done section
-      // Active and fulfilled reports are in the same list.
+      // Active and fulfilled reports in one list. Every card has Details;
+      // only the open ones (Banilad, Tipolo) have Donate.
+      expect(find.text('3 reports found'), findsOneWidget);
       expect(find.text('Flood in Barangay Banilad'), findsOneWidget);
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
-      // The Disaster Reports view as on develop: search, filters, sort,
-      // the report count, the details grid and the highlighted needs.
-      expect(find.text('Sort by'), findsOneWidget);
-      expect(find.text('All Priorities'), findsOneWidget);
-      expect(find.textContaining('Showing '), findsOneWidget);
-      expect(find.text('Barangay:'), findsWidgets);
-      expect(find.text('Sitio:'), findsWidgets);
-      expect(
-        find.text('Assistance Needed:'),
-        findsWidgets,
-      ); // + one chip per need
+      expect(find.text('Details'), findsNWidgets(3));
+      expect(find.text('Donate'), findsNWidgets(2));
+      expect(find.text('More filters'), findsOneWidget);
+      // The two summary cards stay.
+      expect(find.text('Validated reports'), findsOneWidget);
+      expect(find.text('High / critical priority'), findsOneWidget);
+      expect(find.text('Sort: Most urgent'), findsOneWidget);
 
-      // The chips scroll sideways: bring "Fulfilled" into view first.
-      final fulfilled = find.textContaining('Fulfilled (');
-      await tester.ensureVisible(fulfilled);
+      // Urgent = Critical and High; it shows as a removable chip.
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Urgent'));
       await tester.pumpAndSettle();
-      await tester.tap(fulfilled);
+      expect(find.text('2 reports found'), findsOneWidget);
+      expect(find.text('Flood in Barangay Tipolo'), findsNothing);
+      expect(find.text('Clear all'), findsOneWidget);
+
+      // Fulfilled: only Looc, and its details have no Donate button.
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Fulfilled'));
       await tester.pumpAndSettle();
+      expect(find.text('1 report found'), findsOneWidget);
       expect(find.text('Flood in Barangay Looc'), findsOneWidget);
-      expect(find.text('Flood in Barangay Banilad'), findsNothing);
-      expect(find.text('Donate'), findsNothing); // fulfilled: no Donate
+      expect(find.text('Donate'), findsNothing);
+      await tester.tap(find.text('Details'));
+      await tester.pumpAndSettle();
+      expect(find.text('Assistance needed'), findsOneWidget);
+      expect(find.text('Donate'), findsNothing);
+      Navigator.of(tester.element(find.text('Assistance needed'))).pop();
+      await tester.pumpAndSettle();
+
+      // Nothing matches: empty state, then Reset filters.
+      await tester.enterText(find.byType(TextField).first, 'zzz');
+      await tester.pumpAndSettle();
+      expect(find.text('No reports found'), findsOneWidget);
+      await tester.tap(find.text('Reset filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('3 reports found'), findsOneWidget);
+    }, () => _server);
+  });
+
+  testWidgets('Reports tab: Details of an open report can Donate too', (
+    tester,
+  ) async {
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await _pump(tester, const DonorReportsTab());
+      await tester.tap(find.text('Details').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Assistance needed'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text('Donate'),
+        ),
+        findsOneWidget,
+      );
+    }, () => _server);
+  });
+
+  testWidgets('Reports tab: More filters has type and priority, no progress', (
+    tester,
+  ) async {
+    Api.instance.token = 'test-token';
+    await http.runWithClient(() async {
+      await _pump(tester, const DonorReportsTab());
+      await tester.tap(find.text('More filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('Disaster type'), findsOneWidget);
+      expect(find.text('Priority'), findsOneWidget);
+      expect(find.text('Progress'), findsNothing);
+      // Pick Medium: only Tipolo, shown as a removable chip.
+      await tester.tap(
+        find.descendant(
+          of: find.byType(BottomSheet),
+          matching: find.text('Medium'),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Apply filters'));
+      await tester.pumpAndSettle();
+      expect(find.text('1 report found'), findsOneWidget);
+      expect(find.text('Flood in Barangay Tipolo'), findsOneWidget);
+      expect(find.widgetWithText(InputChip, 'Medium'), findsOneWidget);
     }, () => _server);
   });
 }
