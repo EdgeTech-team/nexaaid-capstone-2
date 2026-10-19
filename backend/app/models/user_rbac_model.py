@@ -47,5 +47,9 @@ class User(Base):
         nullable=True,
     )
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    # Set when the Administrator deletes the account (Appendix H 1.2, testing
+    # Oct 2026). The row stays (reports/deliveries point at it) but is
+    # anonymized, so its email and username can be used again; migration 3e8a6f2c9d15.
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
     role = relationship("Role")
