@@ -1,5 +1,5 @@
 from core.priority_engine import compute_priority
-from models.report import DisasterReport
+from models.report import DisasterReport, ReportFulfillment
 
 
 def test_compute_priority_normal_case(db_session, seed):
@@ -86,3 +86,36 @@ def test_admin_validate_report_computes_priority(
     assert body["ai_recommendation"] is not None
     assert body["ai_processed_at"] is not None
 
+
+
+def _validated_flood_report(db_session, seed, status):
+    report = DisasterReport(
+        user_id=seed["reporter_id"],
+        disaster_type_id=seed["disaster_type_id"],  # Flood, severity 70
+        barangay_id=seed["barangay_id"],
+        sitio_id=seed["sitio_id"],
+        source="web",
+        status="Validated",
+        affected_families=100,      # -> 100
+        estimated_quantity=100,     # -> 100
+        assistance_needed="Rice",
+    )
+    db_session.add(report)
+    db_session.flush()
+    db_session.add(ReportFulfillment(
+        report_id=report.report_id, total_items_needed=100, verification_status=status))
+    db_session.commit()
+    db_session.refresh(report)
+    return report
+
+
+def test_fully_fulfilled_report_drops_to_low(db_session, seed):
+    """Testing, Module 3: with the old weights this report still scored 67.5
+    (High) at 100% fulfillment, so it kept asking for donations."""
+    partial = compute_priority(_validated_flood_report(db_session, seed, "Partial"))
+    assert partial["score"] == 80.0 and partial["priority_level"] == "Critical"
+
+    done = compute_priority(_validated_flood_report(db_session, seed, "Complete"))
+    assert done["priority_level"] == "Low"
+    assert done["score"] < 35
+    assert "fulfilled" in done["recommendation"].lower()

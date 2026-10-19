@@ -14,6 +14,7 @@ are placeholders- swap for real RBAC role names once Known.
 
 from datetime import date, datetime, timezone 
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status 
@@ -24,6 +25,7 @@ from core.notifications import notify_event_many, user_ids_with_role
 from models.report import DisasterReport
 from core.auth import get_current_user, require_role, barangay_scope
 from core.audit import log_action
+from core.priority_engine import apply_priority
 from models.inventory_model import Inventory
 from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
@@ -488,4 +490,16 @@ def _recalculate_fulfillment(
   fulfillment.verified_at = datetime.now(timezone.utc)
   
   db.flush()
+
+  # Testing, Module 3: the priority depends on fulfillment, so recompute it
+  # now. Before this it was set once, at validation, and never changed.
+  report = db.get(DisasterReport, report_id)
+  if report is not None and report.status == "Validated":
+    old_level = report.priority_level
+    apply_priority(report)
+    if report.priority_level != old_level:
+      log_action(db, SimpleNamespace(user_id=verified_by_user_id), "UPDATE PRIORITY", "disaster_reports",
+                 report_id, old={"priority_level": old_level},
+                 new={"priority_level": report.priority_level})
+    db.flush()
   return fulfillment

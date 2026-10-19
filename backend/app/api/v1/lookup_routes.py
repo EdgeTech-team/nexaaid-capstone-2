@@ -23,7 +23,9 @@ def get_lookups(db: Session = Depends(get_db)):
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     sitios = db.query(Sitio).order_by(Sitio.barangay_id, Sitio.sitio_id).all()
 
+    # Deleted reports (testing 2.3, soft delete) stay out of every dropdown.
     reports = (db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
+               .filter(DisasterReport.deleted_at.is_(None))
                .order_by(DisasterReport.report_id.desc()).limit(200).all())
 
     def label(r):

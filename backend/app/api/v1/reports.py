@@ -45,11 +45,11 @@ CHANGE LOG
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timezone
-from core.priority_engine import compute_priority
+from core.priority_engine import apply_priority
 
 from core.database import get_db
 from core.auth import get_current_user, require_role, has_role, barangay_scope
@@ -241,7 +241,7 @@ def list_reports(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
-    query = db.query(DisasterReport)
+    query = db.query(DisasterReport).filter(DisasterReport.deleted_at.is_(None))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
         query = query.filter(DisasterReport.barangay_id == own_barangay)
@@ -277,7 +277,11 @@ def list_report_monitoring(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
-    query = db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
+    query = (
+        db.query(DisasterReport)
+        .options(joinedload(DisasterReport.fulfillment))
+        .filter(DisasterReport.deleted_at.is_(None))
+    )
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
         query = query.filter(DisasterReport.barangay_id == own_barangay)
@@ -313,7 +317,7 @@ def list_validated_reports(
     query = (
         db.query(DisasterReport)
         .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.status == "Validated")
+        .filter(DisasterReport.status == "Validated", DisasterReport.deleted_at.is_(None))
     )
     if barangay_id:
         query = query.filter(DisasterReport.barangay_id == barangay_id)
@@ -342,15 +346,22 @@ def my_reports(
     query = (
         db.query(DisasterReport)
         .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.user_id == current_user.user_id)
+        .filter(DisasterReport.user_id == current_user.user_id,
+                DisasterReport.deleted_at.is_(None))
     )
     return _monitoring_rows(query, 0, 200)
 
 
-def _own_open_report(db: Session, report_id: int, user, action: str) -> DisasterReport:
+def _get_live_report(db: Session, report_id: int) -> DisasterReport:
+    """The report, or 404 when it does not exist or was deleted (testing 2.3)."""
     report = db.get(DisasterReport, report_id)
-    if not report:
+    if not report or report.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Report not found")
+    return report
+
+
+def _own_open_report(db: Session, report_id: int, user, action: str) -> DisasterReport:
+    report = _get_live_report(db, report_id)
     if report.user_id != user.user_id:
         raise HTTPException(status_code=403, detail=f"You can only {action} reports you submitted")
     if report.status not in _EDITABLE_REPORT:
@@ -431,7 +442,8 @@ def get_report(
     report = (
         db.query(DisasterReport)
         .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.report_id == report_id)
+        .filter(DisasterReport.report_id == report_id,
+                DisasterReport.deleted_at.is_(None))
         .first()
     )
     if not report:
@@ -462,9 +474,7 @@ def update_report(
     # (Appendix H 2.3). Reporters correct reports with PUT /{id}/mine.
     current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = _get_live_report(db, report_id)
 
     updates = payload.model_dump(exclude_unset=True)
     for field, value in updates.items():
@@ -485,9 +495,7 @@ def validate_report(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = _get_live_report(db, report_id)
     if report.status == "Validated":
         raise HTTPException(status_code=400, detail="Report is already validated")
     if report.status == "Cancelled":
@@ -525,17 +533,7 @@ def validate_report(
     db.flush()
     db.refresh(report)
 
-    priority_result = compute_priority(report)
-
-    VALID_LEVELS = ("Low", "Medium", "High", "Critical")
-    level = priority_result["priority_level"]
-
-    report.ai_priority_score = priority_result["score"]
-    # "Needs Review" / "Review Required" violate chk_disaster_reports_priority,
-    # so store NULL and keep the reason in ai_recommendation.
-    report.priority_level = level if level in VALID_LEVELS else None
-    report.ai_recommendation = priority_result["recommendation"]
-    report.ai_processed_at = datetime.now(timezone.utc)
+    apply_priority(report)
     log_action(db, current_user, "VALIDATE REPORT", "disaster_reports", report.report_id,
                old={"status": "Pending"},
                new={"status": "Validated", "priority_level": report.priority_level})
@@ -569,9 +567,7 @@ def reject_report(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = _get_live_report(db, report_id)
     if report.status == "Cancelled":
         raise HTTPException(status_code=409, detail="The reporter withdrew this report")
 
@@ -592,18 +588,29 @@ def reject_report(
 
 
 # ---------------------------------------------------------------------------
-# Delete — admin only
+# Delete — admin only, Rejected reports only (testing 2.3).
+# A soft delete: the row stays (with who rejected it and why) so the audit
+# trail survives, and every list and count hides it from now on.
 # ---------------------------------------------------------------------------
 @router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_report(
     report_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    db.delete(report)
+    report = _get_live_report(db, report_id)
+    if report.status != "Rejected":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Only rejected reports can be deleted. This one is {report.status}.",
+        )
+    report.deleted_at = datetime.now(timezone.utc)
+    report.deleted_by_user_id = current_user.user_id
+    log_action(db, current_user, "DELETE REPORT", "disaster_reports", report.report_id,
+               old={"status": report.status, "rejection_reason": report.rejection_reason},
+               new={"deleted": True}, request=request)
+    db.flush()
     return None
 
 
