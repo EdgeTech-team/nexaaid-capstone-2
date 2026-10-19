@@ -75,13 +75,9 @@ class AdminDashboard extends StatelessWidget {
                 // Records > Donations: every entry with filters and sort.
                 onTap: () => HomeNav.go(context, const HomeTarget('Records')),
               ),
-              StatTile(
-                'Held donations',
-                '${m['held_donations']}',
-                Icons.pause_circle_outline,
-                color: const Color(0xFFC62828),
-                onTap: () => openHeldDonations(context),
-              ),
+              // 9.1 (testing, Oct 19): "Held donations" removed. It is not
+              // in the manuscript; held donations are in Records > Needs
+              // attention > On Hold.
             ]),
             const SectionTitle('Donation entries per report'),
             EntrySummaryList(entries),
