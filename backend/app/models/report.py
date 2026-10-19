@@ -33,6 +33,7 @@ from sqlalchemy import (
     TIMESTAMP,
     ForeignKey,
     CheckConstraint,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import relationship, validates
@@ -183,6 +184,15 @@ class DisasterReport(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    # Per-item needs (Oct 2026). Reports saved before this have one
+    # "General needs" row (item_id NULL) holding their old estimated_quantity.
+    needs = relationship(
+        "ReportNeed",
+        back_populates="report",
+        order_by="ReportNeed.need_id",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     # Display names for the mobile app (Report.fromJson reads
     # disaster_type_name / barangay_name). Plain properties built from the
@@ -237,6 +247,44 @@ class SmsReportMetadata(Base):
     # Relationships
     report = relationship("DisasterReport", back_populates="sms_metadata")
     encoded_by = relationship("User", foreign_keys=[encoded_by_user_id])
+
+
+class ReportNeed(Base):
+    """One thing a report needs, in the item's base unit (Oct 2026,
+    per-item fulfillment). e.g. Rice 500 (kg), Drinking Water 200 (L).
+
+    item_id NULL = "General needs": the single total of a report saved
+    before per-item needs existed (or sent by an older app). It matches any
+    delivered item, which is exactly how fulfillment worked before.
+
+    Fulfillment is worked out per need (delivered / needed, capped at 100%)
+    and the report's percentage is the average (services/fulfillment.py).
+    Migration 9b3f7c1d2e48."""
+
+    __tablename__ = "report_needs"
+    __table_args__ = (
+        UniqueConstraint("report_id", "item_id", name="uq_report_needs_report_item"),
+        CheckConstraint("quantity > 0", name="chk_report_needs_quantity"),
+    )
+
+    need_id = Column(Integer, primary_key=True, autoincrement=True)
+    report_id = Column(Integer, ForeignKey("disaster_reports.report_id", ondelete="CASCADE",
+                                           name="fk_report_needs_report_id"),
+                       nullable=False, index=True)
+    item_id = Column(Integer, ForeignKey("items.item_id", ondelete="RESTRICT",
+                                         name="fk_report_needs_item_id"), nullable=True)
+    quantity = Column(Integer, nullable=False)
+
+    report = relationship("DisasterReport", back_populates="needs")
+    item = relationship("Item", lazy="joined")
+
+    @property
+    def item_name(self) -> str:
+        return self.item.item_name if self.item else "General needs"
+
+    @property
+    def unit(self):
+        return self.item.unit_of_measure if self.item else None
 
 
 class ReportFulfillment(Base):
