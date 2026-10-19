@@ -128,6 +128,9 @@ class DonationEntriesView extends StatefulWidget {
   /// The "Report" dropdown. Off on a single report's records page.
   final bool reportFilter;
 
+  /// Space between two entry cards (9.4: the donor's list needs more).
+  final double gap;
+
   const DonationEntriesView({
     super.key,
     required this.entries,
@@ -136,6 +139,7 @@ class DonationEntriesView extends StatefulWidget {
     this.emptyTitle = 'No donations yet.',
     this.emptyMessage = 'Donation entries will show here once submitted.',
     this.reportFilter = true,
+    this.gap = Space.sm,
   });
 
   @override
@@ -280,7 +284,7 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
           ),
         for (final e in shown)
           Padding(
-            padding: const EdgeInsets.only(bottom: Space.sm),
+            padding: EdgeInsets.only(bottom: widget.gap),
             child: DonationEntryCard(
               entry: e,
               footer: widget.footer?.call(e),

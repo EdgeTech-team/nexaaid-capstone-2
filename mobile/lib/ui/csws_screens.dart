@@ -624,13 +624,9 @@ class CswsMainDashboard extends StatelessWidget {
                 color: const Color(0xFFEF6C00),
                 onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
               ),
-              // Donation expiry: what needs attention before it lapses.
-              StatTile(
-                'Due within 3 days',
-                '${m['due_soon_donations'] ?? 0}',
-                Icons.timer_outlined,
-                color: StatusColors.base('On Hold'),
-              ),
+              // 9.2 (testing, Oct 19): "Due within 3 days" removed. It is
+              // not in UC-CM3; expired donations are counted below and are
+              // in Records > Expired.
               StatTile(
                 'Expired or cancelled',
                 '${(m['expired_donations'] ?? 0) + (m['cancelled_donations'] ?? 0)}',

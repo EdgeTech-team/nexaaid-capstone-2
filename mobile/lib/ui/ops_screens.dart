@@ -1662,29 +1662,34 @@ class _DrrmoScreenState extends State<DrrmoScreen>
           padding: const EdgeInsets.all(16),
           children: [
             PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
+            // 9.6 (testing): each card shows its requests in the list below.
             StatGrid([
               StatTile(
                 'New requests',
                 '${dash['pending_requests']}',
                 Icons.mark_email_unread_outlined,
                 color: const Color(0xFFEF6C00),
+                onTap: () => setState(() => stage = 'Pending'),
               ),
               StatTile(
                 'Accepted',
                 '${dash['scheduled']}',
                 Icons.event_available,
+                onTap: () => setState(() => stage = 'Accepted'),
               ),
               StatTile(
                 'In transit',
                 '${dash['in_transit']}',
                 Icons.local_shipping_outlined,
                 color: const Color(0xFF1565C0),
+                onTap: () => setState(() => stage = 'In Transit'),
               ),
               StatTile(
                 'Completed',
                 '${dash['completed']}',
                 Icons.done_all,
                 color: const Color(0xFF2E7D32),
+                onTap: () => setState(() => stage = 'Completed'),
               ),
             ]),
             const SizedBox(height: 12),

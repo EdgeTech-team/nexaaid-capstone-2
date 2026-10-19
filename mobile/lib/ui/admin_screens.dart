@@ -75,13 +75,9 @@ class AdminDashboard extends StatelessWidget {
                 // Records > Donations: every entry with filters and sort.
                 onTap: () => HomeNav.go(context, const HomeTarget('Records')),
               ),
-              StatTile(
-                'Held donations',
-                '${m['held_donations']}',
-                Icons.pause_circle_outline,
-                color: const Color(0xFFC62828),
-                onTap: () => openHeldDonations(context),
-              ),
+              // 9.1 (testing, Oct 19): "Held donations" removed. It is not
+              // in the manuscript; held donations are in Records > Needs
+              // attention > On Hold.
             ]),
             const SectionTitle('Donation entries per report'),
             EntrySummaryList(entries),
@@ -760,6 +756,109 @@ class _OrgDocument extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
+/// 9.7: the donations behind a Barangay dashboard card. [empty] says, in
+/// plain words, what will show here and when.
+void _openBarangayDonations(
+  BuildContext context,
+  String title,
+  List<Map> donations, {
+  required IconData icon,
+  required String empty,
+}) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: donations.isEmpty
+            ? Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: EmptyView(
+                    icon: icon,
+                    title: 'Nothing here yet',
+                    message: empty,
+                  ),
+                ),
+              )
+            : _BarangayDonationList(donations: donations),
+      ),
+    ),
+  );
+}
+
+class _BarangayDonationList extends StatelessWidget {
+  final List<Map> donations;
+  const _BarangayDonationList({required this.donations});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: Breakpoints.contentMax),
+        child: ListView(
+          padding: Space.page,
+          children: [
+            Text(
+              '${donations.length} '
+              '${donations.length == 1 ? 'donation' : 'donations'}',
+              style: t.titleMedium,
+            ),
+            Gaps.v12,
+            for (final d in donations) ...[
+              AppCard(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: cs.primaryContainer,
+                      child: Icon(
+                        Icons.inventory_2_outlined,
+                        size: 20,
+                        color: cs.onPrimaryContainer,
+                      ),
+                    ),
+                    Gaps.h12,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${d['quantity']} ${d['item_name']}',
+                            style: t.titleSmall,
+                          ),
+                          Gaps.v4,
+                          Text(
+                            '${d['report_label']}',
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                          Text(
+                            '${d['qr_reference']}',
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Gaps.h8,
+                    StatusChip('${d['status']}'),
+                  ],
+                ),
+              ),
+              Gaps.v12,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class BarangayDashboard extends StatelessWidget {
   const BarangayDashboard({super.key});
 
@@ -778,28 +877,59 @@ class BarangayDashboard extends StatelessWidget {
               'Barangay ${m['barangay'] ?? ''} Dashboard',
               subtitle: roleLine(),
             ),
+            // 9.7 (testing): each card opens the donations behind it; Aid
+            // acknowledged goes to the Incoming aid tab.
             StatGrid([
               StatTile(
                 'Donations linked to our reports',
                 '${m['donations_linked']}',
                 Icons.volunteer_activism_outlined,
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Donations linked to our reports',
+                  donations,
+                  icon: Icons.volunteer_activism_outlined,
+                  empty:
+                      "When donors give to your barangay's reports, their "
+                      'donations show here.',
+                ),
               ),
               StatTile(
                 'Waiting for CMO acknowledgement',
                 '${m['pending_city_confirmation']}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Waiting for CMO acknowledgement',
+                  donations.where((d) => d['status'] == 'Received').toList(),
+                  icon: Icons.hourglass_top,
+                  empty:
+                      'Donations that CSWS received for your barangay show '
+                      "here until the City Mayor's Office acknowledges them.",
+                ),
               ),
               StatTile(
                 'Acknowledged by CMO',
                 '${m['confirmed']}',
                 Icons.verified_outlined,
                 color: const Color(0xFF2E7D32),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Acknowledged by CMO',
+                  donations.where((d) => d['status'] == 'Confirmed').toList(),
+                  icon: Icons.verified_outlined,
+                  empty:
+                      "Donations the City Mayor's Office has acknowledged "
+                      'show here.',
+                ),
               ),
               StatTile(
                 'Aid acknowledged',
                 '${m['acknowledged']}',
                 Icons.task_alt,
+                onTap: () =>
+                    HomeNav.go(context, const HomeTarget('Incoming aid')),
               ),
             ]),
             const SectionTitle('Fulfillment per report'),
