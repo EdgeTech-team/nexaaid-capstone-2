@@ -3,11 +3,13 @@ import 'package:flutter/services.dart';
 
 import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
+import 'form_draft.dart';
 import 'input_formatters.dart';
 import 'records_screens.dart' show SupportRecordsScreen;
 import 'report_filters.dart';
 import 'report_summary_card.dart';
 import 'sitio_picker.dart';
+import 'quantity_units.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
@@ -139,6 +141,126 @@ class _NewReportScreenState extends State<NewReportScreen> {
   late final bool sms = widget.smsEncode;
   bool get editing => widget.edit != null;
   bool _filledFromEdit = false;
+
+  // Testing fix (UI): what was typed survives a refresh or a closed app.
+  // Not used when correcting an existing report.
+  late final FormDraft? _draft = editing
+      ? null
+      : FormDraft(sms ? 'report-sms' : 'report');
+
+  @override
+  void initState() {
+    super.initState();
+    _draft?.load().then((d) async {
+      if (d == null || !mounted) return;
+      // The lists are needed to check the saved ids (cached after the
+      // first load, so this is quick).
+      final names = Names(await api.lookups());
+      if (!mounted) return;
+      setState(() => _applyDraft(d, names));
+    });
+  }
+
+  @override
+  void dispose() {
+    _draft?.flush(_snapshot);
+    super.dispose();
+  }
+
+  Map<String, dynamic> _snapshot() => {
+    'type_id': typeId,
+    'barangay_id': brgyId,
+    'sitio_rows': sitioRows,
+    'description': desc.text,
+    'families': families.text,
+    'sms_sender': smsSender.text,
+    'sms_text': smsText.text,
+    'needs': [
+      for (final n in needs)
+        {
+          'item_id': n.itemId,
+          'qty': n.qty.text,
+          'other_name': n.otherName.text,
+          'other_unit': n.otherUnit.text,
+        },
+    ],
+  };
+
+  void _saveDraft() => _draft?.save(_snapshot);
+
+  /// Fills the form from the saved draft. Ids that no longer exist in the
+  /// lists are skipped, so every dropdown gets a valid value.
+  void _applyDraft(Map<String, dynamic> d, Names names) {
+    bool known(String list, String? id) =>
+        id != null && names.rows(list).any((r) => '${r['id']}' == id);
+    final t = d.strOrNull('type_id');
+    final b = d.strOrNull('barangay_id');
+    typeId = known('disaster_types', t) ? t : null;
+    brgyId = known('barangays', b) ? b : null;
+    final rows = <String>[
+      for (final v
+          in (d['sitio_rows'] is List ? d['sitio_rows'] as List : const []))
+        if (v is String &&
+            (v.isEmpty ||
+                names
+                    .rows('sitios')
+                    .any(
+                      (st) =>
+                          '${st['id']}' == v &&
+                          '${st['barangay_id']}' == brgyId,
+                    )))
+          v,
+    ];
+    sitioRows = brgyId == null || rows.isEmpty ? [''] : rows;
+    desc.text = d.str('description');
+    families.text = d.str('families');
+    smsSender.text = d.str('sms_sender');
+    smsText.text = d.str('sms_text');
+    _smsLen = smsText.text.length; // a restored SMS is not a new paste
+    final restored = <_Need>[];
+    for (final m in d.maps('needs')) {
+      final id = m.strOrNull('item_id');
+      final need = _Need()
+        ..itemId = id == _other || known('items', id) ? id : null;
+      need.qty.text = m.str('qty');
+      need.otherName.text = m.str('other_name');
+      need.otherUnit.text = m.str('other_unit');
+      restored.add(need);
+    }
+    if (restored.isNotEmpty) {
+      needs
+        ..clear()
+        ..addAll(restored);
+    }
+    _fills++; // the dropdowns rebuild with these values
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppToast.info(
+        context,
+        'We kept what you typed last time.',
+        action: ToastAction('Start over', _startOver),
+      );
+    });
+  }
+
+  /// "Start over": an empty form and no draft.
+  void _startOver() {
+    _draft?.clear();
+    setState(() {
+      desc.clear();
+      families.clear();
+      smsSender.clear();
+      smsText.clear();
+      _smsLen = 0;
+      needs
+        ..clear()
+        ..add(_Need());
+      typeId = brgyId = null;
+      sitioRows = [''];
+      _fillNotes = const [];
+      _fills++;
+    });
+  }
 
   /// Fill the form from the report being corrected. The needs were saved
   /// as "Rice: 50 kg, Drinking Water: 20 gallons".
@@ -303,7 +425,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
             .replaceAll(RegExp(r'\s*\(.*\)$'), '');
 
   String _needUnit(_Need n, Names names) {
-    if (n.itemId == _other) return n.otherUnit.text.trim();
+    if (n.itemId == _other) {
+      return normalizeUnit(n.otherUnit.text) ?? n.otherUnit.text.trim();
+    }
     for (final i in names.rows('items')) {
       if ('${i['id']}' == n.itemId) return '${i['unit'] ?? ''}';
     }
@@ -412,6 +536,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         _fills++;
       }
     });
+    if (r.ok) _draft?.clear(); // submitted: the draft is no longer needed
   }
 
   Widget _needRow(int i, Names names) {
@@ -456,7 +581,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 if (needs.length > 1)
                   IconButton(
                     tooltip: 'Remove this need',
-                    onPressed: () => setState(() => needs.removeAt(i)),
+                    onPressed: () {
+                      setState(() => needs.removeAt(i));
+                      _saveDraft();
+                    },
                     icon: const Icon(Icons.close),
                   ),
               ],
@@ -478,15 +606,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: TextFormField(
+                    // Testing fix 4.1: same unit list as the donation form.
+                    child: QuantityUnitField(
                       controller: n.otherUnit,
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Unit',
-                        hintText: 'pcs, boxes',
-                      ),
-                      validator: (v) =>
-                          (v ?? '').trim().isEmpty ? 'Required' : null,
+                      onChanged: () => setState(() {}),
                     ),
                   ),
                 ],
@@ -528,6 +651,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             .toList();
         return Form(
           key: _form,
+          onChanged: _saveDraft,
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
@@ -680,7 +804,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
               SectionTitle(
                 'Assistance needed',
                 trailing: TextButton.icon(
-                  onPressed: () => setState(() => needs.add(_Need())),
+                  onPressed: () {
+                    setState(() => needs.add(_Need()));
+                    _saveDraft();
+                  },
                   icon: const Icon(Icons.add),
                   label: const Text('Add need'),
                 ),

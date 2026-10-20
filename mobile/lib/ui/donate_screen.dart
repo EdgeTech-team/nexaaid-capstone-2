@@ -2,13 +2,16 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
+import 'form_draft.dart';
 import 'input_formatters.dart';
 import 'location_picker.dart';
 import 'pickup_days.dart';
 import 'qr_save.dart';
+import 'quantity_units.dart';
 import 'widgets.dart';
 
 // Fallback drop-off details, shown only when GET /donations/drop-off-info
@@ -116,6 +119,114 @@ class _DonateScreenState extends State<DonateScreen> {
 
   bool get _editing => widget.edit != null;
 
+  // Testing fix (UI): what was typed survives a refresh or a closed app.
+  // One draft per report; not used when changing an existing donation.
+  late final FormDraft? _draft = _editing
+      ? null
+      : FormDraft('donate:${widget.report['id']}');
+
+  Map<String, dynamic> _snapshot() => {
+    'lines': [
+      for (final l in lines)
+        {
+          'item_id': l.itemId,
+          'packaging': l.packaging,
+          'qty': l.qty.text,
+          'value': l.value.text,
+          'other_name': l.otherName.text,
+          'other_unit': l.otherUnit.text,
+          'other_packaging': l.otherPackaging.text,
+        },
+    ],
+    'handover': handover,
+    'landmark': pickupLandmark.text,
+    'address': pickupAddress.text,
+    'notes': pickupNotes.text,
+    'days': pickupDays.toList(),
+    'guest_name': guestName.text,
+    'guest_phone': guestPhone.text,
+  };
+
+  void _saveDraft() => _draft?.save(_snapshot);
+
+  void _restoreDraft(Map<String, dynamic> d) {
+    final ids = {for (final it in widget.names.rows('items')) '${it['id']}'};
+    final restored = <_Line>[];
+    for (final m in d.maps('lines')) {
+      final id = m.strOrNull('item_id');
+      final pack = m.str('packaging');
+      final l = _Line()
+        ..itemId = id != null && (ids.contains(id) || id == _otherItem)
+            ? id
+            : null
+        ..packaging = packagingOptions.contains(pack)
+            ? pack
+            : packagingOptions.first;
+      l.qty.text = m.str('qty');
+      l.value.text = m.str('value');
+      l.otherName.text = m.str('other_name');
+      l.otherUnit.text = m.str('other_unit');
+      l.otherPackaging.text = m.str('other_packaging');
+      restored.add(l);
+    }
+    final old = List<_Line>.of(lines);
+    setState(() {
+      if (restored.isNotEmpty) {
+        lines
+          ..clear()
+          ..addAll(restored);
+      }
+      handover = d.str('handover') == 'Door to Door'
+          ? 'Door to Door'
+          : 'Drop Off';
+      pickupLandmark.text = d.str('landmark');
+      pickupAddress.text = d.str('address');
+      pickupNotes.text = d.str('notes');
+      pickupDays = {
+        for (final x in (d['days'] is List ? d['days'] as List : const []))
+          if (x is int) x,
+      };
+      guestName.text = d.str('guest_name');
+      guestPhone.text = d.str('guest_phone');
+    });
+    // The old fields are gone after this frame; then free their controllers.
+    if (restored.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final l in old) {
+          l.dispose();
+        }
+      });
+    }
+    AppToast.info(
+      context,
+      'We kept what you typed last time.',
+      action: ToastAction('Start over', _startOver),
+    );
+  }
+
+  /// "Start over": an empty form and no draft.
+  void _startOver() {
+    _draft?.clear();
+    final old = List<_Line>.of(lines);
+    setState(() {
+      lines
+        ..clear()
+        ..add(_Line());
+      handover = 'Drop Off';
+      pickupLandmark.clear();
+      pickupAddress.clear();
+      pickupNotes.clear();
+      pickupDays = {};
+      guestName.clear();
+      guestPhone.clear();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final l in old) {
+        l.dispose();
+      }
+    });
+  }
+
   /// Fill the form from the donation being changed.
   void _fillFromEntry(Map e) {
     lines
@@ -158,6 +269,9 @@ class _DonateScreenState extends State<DonateScreen> {
   void initState() {
     super.initState();
     if (_editing) _fillFromEntry(widget.edit!);
+    _draft?.load().then((d) {
+      if (d != null && mounted) _restoreDraft(d);
+    });
     PickupRules.load().then((rules) {
       if (mounted) setState(() => pickupRules = rules);
     });
@@ -176,6 +290,7 @@ class _DonateScreenState extends State<DonateScreen> {
 
   @override
   void dispose() {
+    _draft?.flush(_snapshot);
     for (final l in lines) {
       l.dispose();
     }
@@ -223,6 +338,7 @@ class _DonateScreenState extends State<DonateScreen> {
 
   void _addItem() {
     setState(() => lines.add(_Line()));
+    _saveDraft();
     // Bring the new item into view.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scroll.hasClients) return;
@@ -290,6 +406,7 @@ class _DonateScreenState extends State<DonateScreen> {
       Navigator.of(context).pop(true);
       return;
     }
+    _draft?.clear(); // submitted: the draft is no longer needed
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => DonationReceipt(
@@ -380,7 +497,10 @@ class _DonateScreenState extends State<DonateScreen> {
                 Expanded(child: Text('Item ${i + 1}', style: t.titleMedium)),
                 if (lines.length > 1)
                   TextButton.icon(
-                    onPressed: () => setState(() => lines.removeAt(i)),
+                    onPressed: () {
+                      setState(() => lines.removeAt(i));
+                      _saveDraft();
+                    },
                     icon: Icon(Icons.delete_outline, color: cs.error),
                     label: Text('Remove', style: TextStyle(color: cs.error)),
                   ),
@@ -427,14 +547,11 @@ class _DonateScreenState extends State<DonateScreen> {
                   Gaps.h12,
                   Expanded(
                     flex: 2,
-                    child: TextFormField(
+                    // Testing fix 4.1: a unit from the list (no "sack":
+                    // packaging is chosen below).
+                    child: QuantityUnitField(
                       controller: l.otherUnit,
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Unit',
-                        hintText: 'pcs, bottles',
-                      ),
-                      validator: _req,
+                      onChanged: () => setState(() {}),
                     ),
                   ),
                 ],
@@ -754,6 +871,7 @@ class _DonateScreenState extends State<DonateScreen> {
       bottomNavigationBar: _submitBar(),
       body: Form(
         key: _form,
+        onChanged: _saveDraft,
         child: Scrollbar(
           controller: _scroll,
           thumbVisibility: true,
@@ -795,7 +913,10 @@ class _DonateScreenState extends State<DonateScreen> {
                   title: 'Drop Off',
                   subtitle: 'Bring the goods to the CSWS office yourself.',
                   selected: !door,
-                  onTap: () => setState(() => handover = 'Drop Off'),
+                  onTap: () {
+                    setState(() => handover = 'Drop Off');
+                    _saveDraft();
+                  },
                 ),
                 Gaps.v8,
                 _ChoiceTile(
@@ -803,7 +924,10 @@ class _DonateScreenState extends State<DonateScreen> {
                   title: 'Door to Door',
                   subtitle: 'CSWS picks up the goods from your address.',
                   selected: door,
-                  onTap: () => setState(() => handover = 'Door to Door'),
+                  onTap: () {
+                    setState(() => handover = 'Door to Door');
+                    _saveDraft();
+                  },
                 ),
                 Gaps.v12,
                 AnimatedSwitcher(
@@ -982,10 +1106,131 @@ class DonationReceipt extends StatefulWidget {
 class _DonationReceiptState extends State<DonationReceipt> {
   final _scroll = ScrollController();
 
+  // Testing fix 4.2: a guest has no account, so this screen is the only
+  // place their QR code lives. They are warned, and cannot leave (Done,
+  // back button, back gesture) until the QR image is saved. If the page is
+  // refreshed or the app closed first, the landing page opens this receipt
+  // again (see reopenUnsavedGuestReceipt).
+  late final bool _guest = !api.loggedIn;
+  bool _saved = false;
+  bool _saveFailed = false; // then "I took a screenshot" is offered
+
+  bool get _mayLeave => !_guest || _saved;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_guest) {
+      _rememberGuestReceipt(widget.batch, widget.reportTitle);
+    }
+  }
+
   @override
   void dispose() {
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _onSaveResult(bool? result) {
+    if (result == true) {
+      setState(() => _saved = true);
+      _forgetGuestReceipt();
+    } else if (result == null) {
+      setState(() => _saveFailed = true);
+    }
+  }
+
+  Future<void> _leave() async {
+    if (_mayLeave) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final dropOff = widget.batch['handover_method'] == 'Drop Off';
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.qr_code_2, size: 32),
+        title: const Text('Save your QR code first'),
+        content: Text(
+          'You donated as a guest, so this QR code is not kept in any '
+          'account. CSWS needs it to '
+          '${dropOff ? 'receive your goods at the office' : 'pick up your goods'}'
+          '. Save the image before you leave this page.',
+        ),
+        actions: [
+          if (_saveFailed)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'screenshot'),
+              child: const Text('I took a screenshot'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Stay'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, 'save'),
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('Save QR image'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'screenshot') {
+      _forgetGuestReceipt();
+      setState(() => _saved = true);
+      Navigator.of(context).pop();
+      return;
+    }
+    final qr = widget.batch['qr_image_base64'] as String?;
+    if (qr == null) return;
+    final result = await saveQrImage(
+      context,
+      qrBase64: qr,
+      reference: '${widget.batch['batch_reference']}',
+      handover: '${widget.batch['handover_method']}',
+      forReport: widget.reportTitle,
+    );
+    if (!mounted) return;
+    _onSaveResult(result);
+    if (result == true) Navigator.of(context).pop();
+  }
+
+  /// Shown at the top of a guest's receipt until the QR is saved.
+  Widget _guestWarning() {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: Space.md),
+      padding: const EdgeInsets.all(Space.md),
+      decoration: BoxDecoration(
+        color: _saved ? cs.secondaryContainer : cs.errorContainer,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            _saved ? Icons.check_circle_outline : Icons.warning_amber_rounded,
+            color: _saved ? cs.onSecondaryContainer : cs.onErrorContainer,
+          ),
+          Gaps.h12,
+          Expanded(
+            child: Text(
+              _saved
+                  ? 'QR image saved. You can leave this page.'
+                  : 'Save your QR code now. You donated as a guest, so it is '
+                        'not kept in any account, and you will need it to hand '
+                        'over your goods.',
+              style: t.bodyMedium?.copyWith(
+                color: _saved ? cs.onSecondaryContainer : cs.onErrorContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1002,190 +1247,253 @@ class _DonationReceiptState extends State<DonationReceipt> {
     final pickupTime = formatPickupIso(batch['preferred_pickup_at']);
     final pickupDays = pickupDaysOf(batch['pickup_days']);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Donation recorded')),
-      bottomNavigationBar: Material(
-        elevation: 8,
-        color: cs.surface,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(side, Space.sm, side, Space.sm),
-            child: AppButton(
-              'Done',
-              expand: true,
-              onPressed: () => Navigator.pop(context),
+    return PopScope(
+      canPop: _mayLeave,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Donation recorded')),
+        bottomNavigationBar: Material(
+          elevation: 8,
+          color: cs.surface,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(side, Space.sm, side, Space.sm),
+              child: AppButton(
+                _mayLeave ? 'Done' : 'Save QR to finish',
+                expand: true,
+                onPressed: _leave,
+              ),
             ),
           ),
         ),
-      ),
-      body: Scrollbar(
-        controller: _scroll,
-        thumbVisibility: true,
-        child: ListView(
+        body: Scrollbar(
           controller: _scroll,
-          padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
-          children: [
-            const Icon(Icons.check_circle, color: AppColors.success, size: 56),
-            Gaps.v8,
-            Text(
-              'Thank you!',
-              textAlign: TextAlign.center,
-              style: t.headlineSmall,
-            ),
-            Gaps.v4,
-            Text(
-              'For ${widget.reportTitle}. '
-              '${dropOff ? 'Show this QR code at the CSWS office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
-              textAlign: TextAlign.center,
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            Gaps.v16,
-            AppCard(
-              child: Column(
-                children: [
-                  if (qr != null)
-                    Container(
-                      padding: const EdgeInsets.all(Space.sm),
-                      decoration: BoxDecoration(
-                        color: Colors
-                            .white, // QR codes need a light background to scan
-                        borderRadius: BorderRadius.circular(Radii.md),
-                      ),
-                      child: Image.memory(
-                        base64Decode(qr),
-                        width: 220,
-                        height: 220,
-                      ),
-                    ),
-                  Gaps.v8,
-                  SelectableText(
-                    '${batch['batch_reference']}',
-                    textAlign: TextAlign.center,
-                    style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
-                  ),
-                  Gaps.v8,
-                  SaveQrButton(
-                    qrBase64: qr,
-                    reference: '${batch['batch_reference']}',
-                    handover: '${batch['handover_method']}',
-                    forReport: widget.reportTitle,
-                  ),
-                  Gaps.v8,
-                  Wrap(
-                    spacing: Space.xs,
-                    runSpacing: Space.xs,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      Chip(
-                        avatar: Icon(
-                          dropOff
-                              ? Icons.store_mall_directory_outlined
-                              : Icons.local_shipping_outlined,
-                          size: 18,
-                        ),
-                        label: Text('${batch['handover_method']}'),
-                      ),
-                      StatusChip('${batch['status']}'),
-                    ],
-                  ),
-                ],
+          thumbVisibility: true,
+          child: ListView(
+            controller: _scroll,
+            padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
+            children: [
+              if (_guest) _guestWarning(),
+              const Icon(
+                Icons.check_circle,
+                color: AppColors.success,
+                size: 56,
               ),
-            ),
-            // How long the donor has to hand it over (donation expiry).
-            if (batch['expires_label'] != null) ...[
-              Gaps.v12,
-              ExpiryNote(batch),
-            ],
-            const SectionHeader('Items in this donation'),
-            AppCard(
-              padding: EdgeInsets.zero,
-              child: Column(
-                children: [
-                  for (var i = 0; i < items.length; i++) ...[
-                    if (i > 0) const Divider(height: 1),
-                    ListTile(
-                      leading: Icon(
-                        Icons.inventory_2_outlined,
-                        color: cs.primary,
+              Gaps.v8,
+              Text(
+                'Thank you!',
+                textAlign: TextAlign.center,
+                style: t.headlineSmall,
+              ),
+              Gaps.v4,
+              Text(
+                'For ${widget.reportTitle}. '
+                '${dropOff ? 'Show this QR code at the CSWS office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
+                textAlign: TextAlign.center,
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v16,
+              AppCard(
+                child: Column(
+                  children: [
+                    if (qr != null)
+                      Container(
+                        padding: const EdgeInsets.all(Space.sm),
+                        decoration: BoxDecoration(
+                          color: Colors.white, // QR codes need a light background to scan
+                          borderRadius: BorderRadius.circular(Radii.md),
+                        ),
+                        child: Image.memory(
+                          base64Decode(qr),
+                          width: 220,
+                          height: 220,
+                        ),
                       ),
-                      title: Text('${items[i]['item_name']}'),
-                      subtitle: Text('${items[i]['packaging']}'),
-                      trailing: Text(
-                        '${items[i]['quantity']} ${items[i]['unit'] ?? ''}'
-                            .trim(),
-                        style: t.titleMedium,
-                      ),
+                    Gaps.v8,
+                    SelectableText(
+                      '${batch['batch_reference']}',
+                      textAlign: TextAlign.center,
+                      style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
+                    ),
+                    Gaps.v8,
+                    SaveQrButton(
+                      qrBase64: qr,
+                      reference: '${batch['batch_reference']}',
+                      handover: '${batch['handover_method']}',
+                      forReport: widget.reportTitle,
+                      onResult: _onSaveResult,
+                    ),
+                    Gaps.v8,
+                    Wrap(
+                      spacing: Space.xs,
+                      runSpacing: Space.xs,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        Chip(
+                          avatar: Icon(
+                            dropOff
+                                ? Icons.store_mall_directory_outlined
+                                : Icons.local_shipping_outlined,
+                            size: 18,
+                          ),
+                          label: Text('${batch['handover_method']}'),
+                        ),
+                        StatusChip('${batch['status']}'),
+                      ],
                     ),
                   ],
-                ],
+                ),
               ),
-            ),
-            if (!dropOff && batch['pickup_address'] != null) ...[
-              const SectionHeader('Pickup'),
+              // How long the donor has to hand it over (donation expiry).
+              if (batch['expires_label'] != null) ...[
+                Gaps.v12,
+                ExpiryNote(batch),
+              ],
+              const SectionHeader('Items in this donation'),
               AppCard(
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
-                    if (batch['pickup_landmark'] != null) ...[
-                      ListTile(
-                        leading: Icon(Icons.place_outlined, color: cs.primary),
-                        title: const Text('Landmark'),
-                        subtitle: Text('${batch['pickup_landmark']}'),
-                      ),
-                      const Divider(height: 1),
-                    ],
-                    ListTile(
-                      leading: Icon(Icons.home_outlined, color: cs.primary),
-                      title: const Text('Address'),
-                      subtitle: Text('${batch['pickup_address']}'),
-                    ),
-                    if (pickupDays.isNotEmpty) ...[
-                      const Divider(height: 1),
+                    for (var i = 0; i < items.length; i++) ...[
+                      if (i > 0) const Divider(height: 1),
                       ListTile(
                         leading: Icon(
-                          Icons.event_available_outlined,
+                          Icons.inventory_2_outlined,
                           color: cs.primary,
                         ),
-                        title: const Text('Available pickup days'),
-                        subtitle: Text(
-                          '${pickupDaysLabel(pickupDays)} · pickup hours '
-                          '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                        title: Text('${items[i]['item_name']}'),
+                        subtitle: Text('${items[i]['packaging']}'),
+                        trailing: Text(
+                          '${items[i]['quantity']} ${items[i]['unit'] ?? ''}'
+                              .trim(),
+                          style: t.titleMedium,
                         ),
-                      ),
-                    ] else if (pickupTime != null) ...[
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(Icons.event_outlined, color: cs.primary),
-                        title: const Text('Preferred pickup'),
-                        subtitle: Text(pickupTime),
-                      ),
-                    ],
-                    if (batch['pickup_notes'] != null) ...[
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(
-                          Icons.sticky_note_2_outlined,
-                          color: cs.primary,
-                        ),
-                        title: const Text('Notes for pickup'),
-                        subtitle: Text('${batch['pickup_notes']}'),
                       ),
                     ],
                   ],
                 ),
               ),
+              if (!dropOff && batch['pickup_address'] != null) ...[
+                const SectionHeader('Pickup'),
+                AppCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      if (batch['pickup_landmark'] != null) ...[
+                        ListTile(
+                          leading: Icon(
+                            Icons.place_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Landmark'),
+                          subtitle: Text('${batch['pickup_landmark']}'),
+                        ),
+                        const Divider(height: 1),
+                      ],
+                      ListTile(
+                        leading: Icon(Icons.home_outlined, color: cs.primary),
+                        title: const Text('Address'),
+                        subtitle: Text('${batch['pickup_address']}'),
+                      ),
+                      if (pickupDays.isNotEmpty) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.event_available_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Available pickup days'),
+                          subtitle: Text(
+                            '${pickupDaysLabel(pickupDays)} · pickup hours '
+                            '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                          ),
+                        ),
+                      ] else if (pickupTime != null) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.event_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Preferred pickup'),
+                          subtitle: Text(pickupTime),
+                        ),
+                      ],
+                      if (batch['pickup_notes'] != null) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.sticky_note_2_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Notes for pickup'),
+                          subtitle: Text('${batch['pickup_notes']}'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+              if (dropOff) ...[
+                Gaps.v16,
+                const DropOffCard(
+                  fallbackAddress: storageAddress,
+                  fallbackHours: storageHours,
+                ),
+              ],
             ],
-            if (dropOff) ...[
-              Gaps.v16,
-              const DropOffCard(
-                fallbackAddress: storageAddress,
-                fallbackHours: storageHours,
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Testing fix 4.2: a guest's unsaved QR survives a refresh or a closed app.
+// The receipt is kept on this device until the guest saves the QR image;
+// the landing page opens it again.
+// ---------------------------------------------------------------------------
+const _kGuestReceipt = 'guest_unsaved_receipt';
+
+Future<void> _rememberGuestReceipt(Map batch, String reportTitle) async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _kGuestReceipt,
+      jsonEncode({'batch': batch, 'report_title': reportTitle}),
+    );
+  } catch (_) {}
+}
+
+Future<void> _forgetGuestReceipt() async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_kGuestReceipt);
+  } catch (_) {}
+}
+
+/// Call from the landing page: if a guest left (refresh, closed app) before
+/// saving their QR code, show that receipt again.
+Future<void> reopenUnsavedGuestReceipt(BuildContext context) async {
+  if (api.loggedIn) return;
+  Map? saved;
+  try {
+    final p = await SharedPreferences.getInstance();
+    final s = p.getString(_kGuestReceipt);
+    if (s != null && s.isNotEmpty) saved = jsonDecode(s) as Map?;
+  } catch (_) {
+    saved = null;
+  }
+  if (saved == null || saved['batch'] is! Map || !context.mounted) return;
+  final batch = Map<String, dynamic>.from(saved['batch'] as Map);
+  final title = '${saved['report_title'] ?? 'your donation'}';
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => DonationReceipt(batch: batch, reportTitle: title),
+    ),
+  );
 }

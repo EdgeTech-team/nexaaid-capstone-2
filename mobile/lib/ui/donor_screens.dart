@@ -122,7 +122,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
         final matching = all.where((r) {
           final text = [
             r['barangay'],
-            r['sitio'],
+            if (api.loggedIn) r['sitio'], // 4.2: guests search by barangay
             r['disaster'],
             r['assistance_needed'],
             r['description'],
@@ -138,22 +138,37 @@ class _ReportsFeedState extends State<ReportsFeed> {
         // Active filters, shown as chips that can be removed one by one.
         final active = <(String, IconData, VoidCallback)>[
           if (quick == _Quick.urgent)
-            ('Urgent', Icons.warning_amber_rounded,
-                () => setState(() => quick = _Quick.all)),
+            (
+              'Urgent',
+              Icons.warning_amber_rounded,
+              () => setState(() => quick = _Quick.all),
+            ),
           if (quick == _Quick.needs)
-            ('Needs assistance', Icons.volunteer_activism_outlined,
-                () => setState(() => quick = _Quick.all)),
+            (
+              'Needs assistance',
+              Icons.volunteer_activism_outlined,
+              () => setState(() => quick = _Quick.all),
+            ),
           if (quick == _Quick.fulfilled)
-            ('Fulfilled', Icons.check_circle_outline,
-                () => setState(() => quick = _Quick.all)),
+            (
+              'Fulfilled',
+              Icons.check_circle_outline,
+              () => setState(() => quick = _Quick.all),
+            ),
           if (barangay != null)
-            (barangay!, Icons.place_outlined,
-                () => setState(() => barangay = null)),
+            (
+              barangay!,
+              Icons.place_outlined,
+              () => setState(() => barangay = null),
+            ),
           if (type != null)
             (type!, Icons.flood_outlined, () => setState(() => type = null)),
           if (priority != null)
-            (priority!, Icons.flag_outlined,
-                () => setState(() => priority = null)),
+            (
+              priority!,
+              Icons.flag_outlined,
+              () => setState(() => priority = null),
+            ),
         ];
 
         Widget quickChip(_Quick value, String label, IconData icon, Color c) =>
@@ -414,8 +429,8 @@ class _ReportsFeedState extends State<ReportsFeed> {
     );
   }
 
-  void _donate(Map<String, dynamic> r, Names names) =>
-      Navigator.of(context).push(
+  void _donate(Map<String, dynamic> r, Names names) => Navigator.of(context)
+      .push(
         MaterialPageRoute(
           builder: (_) => DonateScreen(report: r, names: names),
         ),
@@ -423,8 +438,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
 
   /// "Details": the whole report in a bottom sheet, with Donate.
   void _showDetails(BuildContext context, Map<String, dynamic> r, Names names) {
-    final canDonate =
-        widget.done != true && (fulfillmentPercent(r) ?? 0) < 100;
+    final canDonate = widget.done != true && (fulfillmentPercent(r) ?? 0) < 100;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -513,10 +527,13 @@ class _ReportsFeedState extends State<ReportsFeed> {
   }
 }
 
-/// "Sitio Ibabao, Banilad, Mandaue City"
+/// "Sitio Ibabao, Banilad, Mandaue City". Testing fix 4.2: a guest sees
+/// the whole barangay ("Whole Barangay Banilad, Mandaue City"), not the
+/// sitio.
 String _place(Map r) => [
-  if ('${r['sitio'] ?? ''}'.isNotEmpty) 'Sitio ${r['sitio']}',
-  if (r['barangay'] != null) '${r['barangay']}',
+  if (api.loggedIn && '${r['sitio'] ?? ''}'.isNotEmpty) 'Sitio ${r['sitio']}',
+  if (r['barangay'] != null)
+    api.loggedIn ? '${r['barangay']}' : 'Whole Barangay ${r['barangay']}',
   'Mandaue City',
 ].join(', ');
 

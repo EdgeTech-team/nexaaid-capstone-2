@@ -36,7 +36,9 @@ def test_csws_picks_what_is_needed_and_drrmo_just_accepts(api):
     assert "driver" not in req["notes"]
 
     acc = ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json={}))
-    assert acc["status"] == "Accepted" and acc["scheduled_date"] is None
+    # DRRMO only accepts. Testing fix 7.4: the schedule is the delivery date
+    # CSWS Main Office set, not a date DRRMO picks.
+    assert acc["status"] == "Accepted" and acc["scheduled_date"].startswith("2026-10-01")
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["scheduled"] == 1
 
 

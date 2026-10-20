@@ -177,7 +177,11 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     final v = await formDialog(
       context,
       title: 'Request DRRMO logistics support',
-      message: 'For delivery #${d['delivery_id']}. Choose what is needed.',
+      // Testing fix 7.4: Main Office schedules. DRRMO is asked for the
+      // delivery date set here (change it with Reschedule).
+      message:
+          'For delivery #${d['delivery_id']} on ${niceDate(d['delivery_date'])}. '
+          'DRRMO will be asked for this date. Choose what is needed.',
       fields: [
         DialogField(
           'trucks',
@@ -1553,6 +1557,8 @@ class _DrrmoScreenState extends State<DrrmoScreen>
       message:
           '${r['needs'] ?? r['notes'] ?? 'No details'}\n'
           '${r['request_type'] == 'Pickup' ? 'Pickup run on ${pickupDay(r['pickup_date'])}: ${r['destination'] ?? '-'}' : 'Destination: ${r['destination'] ?? '-'}'}\n'
+          // Testing fix 7.4: CSWS Main Office already set the date.
+          '${r['request_type'] != 'Pickup' && r['scheduled_date'] != null ? 'Scheduled by CSWS Main Office: ${niceDate(r['scheduled_date'])}\n' : ''}'
           'Requested ${requestWhen(r['created_at'])}',
       fields: const [],
       confirm: 'Accept',
@@ -1735,9 +1741,13 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                         onPressed: () => _withdraw(r),
                         child: const Text('Can no longer do this'),
                       ),
+                    // Testing fix 7.5: only after the date, In Transit (8.1)
+                    // and the barangay's receipt (8.2). The card shows why.
                     if (r['stage'] == 'Accepted' || r['stage'] == 'In Transit')
                       FilledButton.icon(
-                        onPressed: () => _complete(r),
+                        onPressed: r['can_complete'] == true
+                            ? () => _complete(r)
+                            : null,
                         icon: const Icon(Icons.done_all),
                         label: const Text('Mark completed'),
                       ),

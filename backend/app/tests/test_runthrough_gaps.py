@@ -13,8 +13,8 @@ def _types(client, headers):
     return [n["type"] for n in ok(client.get("/notifications/", headers=headers))["items"]]
 
 
-def _deliver(client, t, rid, refs=None):
-    body = {"report_id": rid, "destination_barangay_id": 1, "delivery_date": "2026-10-20T08:00:00"}
+def _deliver(client, t, rid, refs=None, when="2026-10-20T08:00:00"):
+    body = {"report_id": rid, "destination_barangay_id": 1, "delivery_date": when}
     if refs is not None:
         body["batch_references"] = refs
     return ok(client.post("/deliveries/", headers=t["csws"], json=body), 201)["delivery_id"]
@@ -101,9 +101,13 @@ def test_main_office_hears_when_drrmo_completes_the_support(api):
     _activate_everyone()
     rid = _report(client, t)
     _give(client, t, rid, 6)
-    did = _deliver(client, t, rid)
+    did = _deliver(client, t, rid, when="2026-01-05T08:00:00")
     req = ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": did, "trucks": 1}), 201)
     ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json={}))
+    # Testing fix 7.5: In Transit (8.1), then the barangay's receipt (8.2).
+    ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
+    ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
     ok(client.patch(f"/drrmo/requests/{req['request_id']}/complete", headers=t["drrmo"],
                     json={"summary": "Delivered to Banilad"}))
     items = ok(client.get("/notifications/", headers=t["csws"]))["items"]

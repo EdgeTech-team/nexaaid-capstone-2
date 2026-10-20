@@ -326,20 +326,30 @@ Future<ApiResult> act(
   required String success,
 }) async {
   final messenger = ScaffoldMessenger.of(context);
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
   final r = await call();
   messenger.hideCurrentSnackBar();
-  messenger.showSnackBar(
-    SnackBar(
-      backgroundColor: r.ok ? AppColors.success : AppColors.danger,
-      content: Text(
-        r.ok
-            ? success
-            : r.status == 0
-            ? 'Cannot reach the server'
-            : r.errorText,
+  final text = r.ok
+      ? success
+      : r.status == 0
+      ? 'Cannot reach the server'
+      : r.errorText;
+  // Testing fix (UI notifications): a toast at the top with an X that also
+  // closes by itself, instead of a bottom bar that covered the form.
+  if (overlay != null && overlay.mounted) {
+    AppToast.showOn(
+      overlay,
+      text,
+      kind: r.ok ? ToastKind.success : ToastKind.error,
+    );
+  } else {
+    messenger.showSnackBar(
+      SnackBar(
+        backgroundColor: r.ok ? AppColors.success : AppColors.danger,
+        content: Text(text),
       ),
-    ),
-  );
+    );
+  }
   return r;
 }
 
