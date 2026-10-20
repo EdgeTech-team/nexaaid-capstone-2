@@ -15,8 +15,9 @@ class NeedsProgress extends StatefulWidget {
 }
 
 class _NeedsProgressState extends State<NeedsProgress> {
-  late final Future<ApiResult> _load =
-      Api.instance.get('/reports/${widget.reportId}/needs');
+  late final Future<ApiResult> _load = Api.instance.get(
+    '/reports/${widget.reportId}/needs',
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -38,9 +39,14 @@ class _NeedsProgressState extends State<NeedsProgress> {
           );
         }
         final data = r.json as Map;
-        final needs = (data['needs'] as List).cast<Map>();
-        final extra = (data['additional_goods'] as List).cast<Map>();
-        final overall = (data['fulfillment_percentage'] as num).toDouble();
+        // An unexpected answer (e.g. an older server) shows nothing
+        // instead of crashing the sheet it is in.
+        final needs = (data['needs'] as List? ?? const []).cast<Map>();
+        final extra = (data['additional_goods'] as List? ?? const [])
+            .cast<Map>();
+        final overall =
+            (data['fulfillment_percentage'] as num?)?.toDouble() ?? 0;
+        if (needs.isEmpty) return const SizedBox.shrink();
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -82,14 +88,14 @@ class _NeedRow extends StatelessWidget {
     double pct(String key) => ((need[key] as num).toDouble() / 100).clamp(0, 1);
 
     Widget layer(double factor, Color color) => FractionallySizedBox(
-          widthFactor: factor,
-          child: Container(
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(8),
-            ),
-          ),
-        );
+      widthFactor: factor,
+      child: Container(
+        decoration: BoxDecoration(
+          color: color,
+          borderRadius: BorderRadius.circular(8),
+        ),
+      ),
+    );
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -120,8 +126,14 @@ class _NeedRow extends StatelessWidget {
               ),
               child: Stack(
                 children: [
-                  layer(pct('pledged_percentage'), cs.primary.withValues(alpha: 0.25)),
-                  layer(pct('confirmed_percentage'), cs.primary.withValues(alpha: 0.55)),
+                  layer(
+                    pct('pledged_percentage'),
+                    cs.primary.withValues(alpha: 0.25),
+                  ),
+                  layer(
+                    pct('confirmed_percentage'),
+                    cs.primary.withValues(alpha: 0.55),
+                  ),
                   layer(pct('delivered_percentage'), cs.primary),
                 ],
               ),
@@ -137,4 +149,23 @@ class _NeedRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// What each need still lacks (needed minus delivered), for report cards:
+/// "Rice 400 kg · Drinking Water 131 L", or '' when every need is
+/// delivered. Null for an older report with one "General needs" total.
+String? stillNeededText(Map r) {
+  final needs = [
+    for (final n in (r['needs'] as List? ?? const []))
+      if (n is Map) n,
+  ];
+  if (needs.isEmpty || needs.any((n) => n['item_id'] == null)) return null;
+  return [
+    for (final n in needs)
+      if (((n['needed'] as num?) ?? 0) > ((n['delivered'] as num?) ?? 0))
+        '${n['item_name']} '
+                '${((n['needed'] as num) - ((n['delivered'] as num?) ?? 0)).toInt()} '
+                '${n['unit'] ?? ''}'
+            .trim(),
+  ].join(' · ');
 }

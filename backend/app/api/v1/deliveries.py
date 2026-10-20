@@ -34,6 +34,7 @@ from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
+from services.donation_expiry import MANILA, nice_date, now_utc, utc
 from services.delivery_allocation import allocate_delivery, chosen_refs, ready_donations, ready_lines
 from services.delivery_notices import tell_barangay_prepared, tell_donors, tell_status
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
@@ -258,6 +259,18 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
 
     current_index = _STATUS_SEQUENCE.index(delivery.status)
 
+    # Testing feedback (Oct 20): the truck can't leave before the day it is
+    # scheduled for (trips start through here too, so "Arrived" can't come
+    # first either). Leaving earlier means changing the date first.
+    if delivery.status == "Preparing" and delivery.delivery_date is not None:
+        leaves = utc(delivery.delivery_date)
+        if now_utc().astimezone(MANILA).date() < leaves.astimezone(MANILA).date():
+            raise HTTPException(
+                status_code=409,
+                detail=f"This delivery is scheduled to leave on {nice_date(leaves)}. "
+                       f"If the truck is leaving now, change the date first.",
+            )
+
     old_status = delivery.status
     delivery.status = _STATUS_SEQUENCE[current_index + 1]
     # Timestamped status history (UC-CM2 / delivery module step 3)
@@ -333,6 +346,11 @@ def confirm_receipt(
     delivery.status = "Confirmed"
     log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
                old={"status": "Delivered"}, new={"status": "Confirmed", "remarks": payload.remarks})
+    # Testing feedback (Oct 20): confirming receipt is also the barangay's
+    # acknowledgement (UC-B1 step 5), so the rep taps once. The
+    # "receipt confirmed" notice below reaches the same people.
+    log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery.delivery_id,
+               new={"acknowledged": True, "with_receipt": True})
     
     report = db.get(DisasterReport, delivery.report_id)
     recipients = set(user_ids_with_role(db, ["CSWS Main Office"],
@@ -356,8 +374,9 @@ def confirm_receipt(
     return ReceiptConfirmResponse(receipt=receipt, delivery=delivery, fulfillment=fulfillment)
 
 # Acknowledge — Barangay Receiving Representative (UC-B1 step 5).
-# Acknowledgment is separate from receipt confirmation and only allowed
-# after it (delivery module alt flow 4a). Stored in audit_logs.
+# Since Oct 20 confirm-receipt records the acknowledgement too, so the app
+# no longer calls this; kept for deliveries confirmed before that.
+# Only allowed after receipt is confirmed (alt flow 4a). Stored in audit_logs.
 
 @router.post("/{delivery_id}/acknowledge")
 def acknowledge_delivery(

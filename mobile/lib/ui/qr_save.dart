@@ -129,12 +129,16 @@ class SaveQrButton extends StatefulWidget {
   final String? handover;
   final String? forReport;
 
+  /// Called after the image was saved (the guest receipt uses it, 4.2).
+  final VoidCallback? onSaved;
+
   const SaveQrButton({
     super.key,
     required this.qrBase64,
     required this.reference,
     this.handover,
     this.forReport,
+    this.onSaved,
   });
 
   @override
@@ -150,6 +154,7 @@ class _SaveQrButtonState extends State<SaveQrButton> {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     String message;
+    var saved = false;
     try {
       final bytes = await buildQrPass(
         qrBase64: b64,
@@ -166,14 +171,16 @@ class _SaveQrButtonState extends State<SaveQrButton> {
       );
       // On the web the browser downloads the file itself and the picker
       // returns nothing, so null there still means it was saved.
-      message = where == null && !kIsWeb
-          ? 'Not saved.'
-          : 'Saved. You can show this QR even without internet.';
+      saved = where != null || kIsWeb;
+      message = saved
+          ? 'Saved. You can show this QR even without internet.'
+          : 'Not saved.';
     } catch (_) {
       message = 'Could not save the QR image. Take a screenshot instead.';
     }
     if (!mounted) return;
     setState(() => _busy = false);
+    if (saved) widget.onSaved?.call();
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
