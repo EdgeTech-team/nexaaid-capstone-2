@@ -180,6 +180,20 @@ class _NewReportScreenState extends State<NewReportScreen> {
   /// What could not be filled from the SMS, shown to the Administrator.
   List<String> _fillNotes = const [];
 
+  /// Length of the SMS box the last time it changed, to tell a paste (many
+  /// characters at once) from typing.
+  int _smsLen = 0;
+
+  /// Problema 2.2: pasting the received SMS fills the form by itself. The
+  /// "Fill the form from this SMS" button stays for hand-typed or edited text.
+  void _smsChanged(String value, Names names) {
+    final grew = value.length - _smsLen;
+    _smsLen = value.length;
+    if (grew > 15 && value.toUpperCase().contains(smsReportHeader)) {
+      _fillFromSms(names, quiet: true);
+    }
+  }
+
   /// "Rice (kg)" / " rice " -> "rice"
   static String _norm(String s) => s
       .replaceAll(RegExp(r'\s*\(.*\)$'), '')
@@ -215,9 +229,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
   /// Reads the pasted SMS (sms_report_format.dart) and fills the form.
   /// Nothing is saved: the Administrator still checks every field and taps
   /// "Encode SMS report" (manual review, Scope 2.4).
-  void _fillFromSms(Names names) {
+  void _fillFromSms(Names names, {bool quiet = false}) {
     final parsed = SmsReport.parse(smsText.text);
     if (parsed == null) {
+      if (quiet) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -387,6 +402,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         families.clear();
         smsSender.clear();
         smsText.clear();
+        _smsLen = 0;
         needs
           ..clear()
           ..add(_Need());
@@ -559,8 +575,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   controller: smsText,
                   minLines: 4,
                   maxLines: 10,
+                  onChanged: (v) => _smsChanged(v, names),
                   decoration: const InputDecoration(
                     labelText: 'SMS text (paste it exactly as received)',
+                    helperText:
+                        'Paste the text and the form below fills itself in.',
                     hintText: 'NEXAAID REPORT\nTYPE: ...\nBRGY: ...',
                   ),
                   validator: (v) =>
