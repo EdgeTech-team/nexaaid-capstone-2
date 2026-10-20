@@ -124,6 +124,12 @@ def _reschedule(db: Session, d: Delivery, when: datetime, reason: Optional[str],
     _not_finished(d)
     old = d.delivery_date
     d.delivery_date = when
+    # Testing fix 7.4: Main Office's date is DRRMO's schedule too.
+    for req in db.query(LogisticsRequest).filter(
+        LogisticsRequest.delivery_id == d.delivery_id,
+        LogisticsRequest.status.in_(OPEN_REQUEST),
+    ):
+        req.scheduled_date = when
     log_action(db, user, "RESCHEDULE DELIVERY", "deliveries", d.delivery_id,
                old={"delivery_date": old.isoformat() if old else None},
                new={"delivery_date": when.isoformat(), "reason": reason})

@@ -147,6 +147,9 @@ abstract final class AppTheme {
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
+        // Testing fix (UI notifications): every remaining message bar gets
+        // an X too (most messages now use AppToast).
+        showCloseIcon: true,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Radii.md),
         ),
