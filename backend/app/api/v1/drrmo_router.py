@@ -16,6 +16,7 @@ from models.item_model import Item
 from models.report import DisasterReport, DisasterType, Barangay
 from models.physical_donation_model import PhysicalDonation
 from services.donation_expiry import entry_status
+from schemas.physical_donation_schema import MANILA
 from core.notifications import notify_event
 from schemas.logistics_request_schema import (
     AcceptLogisticsRequest, DeclineLogisticsRequest, LogisticsRequestResponse
@@ -33,6 +34,67 @@ PRIORITY_RANK = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
 def priority_sort_key(row: dict):
     """Most urgent report first. Within the same level, the oldest request first."""
     return (PRIORITY_RANK.get(row.get("priority_level"), len(PRIORITY_RANK)), row["request_id"])
+
+
+# ---------------------------------------------------------------------------
+# Testing fix 7.4: CSWS Main Office does the scheduling, not DRRMO. A
+# delivery request's schedule IS the delivery date Main Office set (and can
+# change with POST /deliveries/{id}/reschedule); a pickup run's schedule is
+# its pickup day. DRRMO only accepts, declines or withdraws.
+# NOTE: the manuscript (UC-DR1 step 5, Scope 5.3 item 3, Appendix H 7.4) still
+# says DRRMO schedules. Confirm with the adviser and update the manuscript.
+#
+# Testing fix 7.5: DRRMO cannot mark support completed before the scheduled
+# date, before Main Office marks the delivery In Transit (8.1), or before the
+# barangay representative confirms receipt (8.2). Pickup runs have no
+# barangay receipt, so only the date applies to them.
+# ---------------------------------------------------------------------------
+
+# Delivery statuses from Module 8 (deliveries.py). If 8.1 / 8.2 rename them,
+# change them here only.
+_LEFT_THE_OFFICE = ("In Transit", "Delivered", "Confirmed")   # 8.1 done
+_BARANGAY_RECEIVED = ("Confirmed",)                            # 8.2 done
+
+
+def _manila_day(value):
+    """Calendar day in Mandaue of a date or datetime (naive = UTC)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(MANILA).date()
+    return value  # already a date (pickup_date)
+
+
+def schedule_of(req: LogisticsRequest, delivery: Optional[Delivery]):
+    """7.4: the date Main Office set for this support."""
+    if req.request_type == "Pickup":
+        return req.pickup_date
+    if delivery is not None:
+        return delivery.delivery_date
+    return req.scheduled_date
+
+
+def completion_blocker(req: LogisticsRequest, delivery: Optional[Delivery], now=None) -> Optional[str]:
+    """7.5: why DRRMO cannot mark this request completed yet (None = it can)."""
+    if req.status != "Accepted":
+        return "Only accepted requests can be completed."
+    today = _manila_day(now or datetime.now(timezone.utc))
+    day = _manila_day(schedule_of(req, delivery))
+    if day is not None and today < day:
+        return f"Wait for the scheduled date ({day:%b %d, %Y}) set by CSWS Main Office."
+    if req.request_type == "Pickup":
+        return None
+    if delivery is None:
+        return "The delivery for this request no longer exists."
+    if delivery.status == "Cancelled":
+        return "CSWS Main Office cancelled this delivery."
+    if delivery.status not in _LEFT_THE_OFFICE:
+        return "CSWS Main Office has not marked the delivery In Transit yet."
+    if delivery.status not in _BARANGAY_RECEIVED:
+        return "Wait for the barangay representative to confirm receipt."
+    return None
 
 
 def _pickup_stops(db: Session, requests) -> dict:
@@ -108,8 +170,11 @@ def request_rows(db: Session, requests) -> list:
         else:
             rep = reports.get(d.report_id) if d else None
         stage = r.status
-        if r.status == "Accepted" and d is not None and d.status in ("In Transit", "Delivered"):
-            stage = "In Transit"  # UC-DR2: in-transit support, from the delivery's tracking status
+        if r.status == "Accepted" and d is not None and d.status in _LEFT_THE_OFFICE:
+            # UC-DR2: in-transit support, from the delivery's tracking status.
+            # It stays here after the barangay confirms receipt, until DRRMO
+            # marks it completed (7.5), instead of jumping back to Accepted.
+            stage = "In Transit"
         who = requesters.get(r.requested_by_user_id)
         landmarks = []
         for s in stops:
@@ -121,7 +186,13 @@ def request_rows(db: Session, requests) -> list:
             "delivery_id": r.delivery_id,
             "status": r.status,
             "stage": stage,
-            "scheduled_date": r.scheduled_date,
+            # 7.4: the schedule always comes from Main Office (delivery date
+            # or pickup day), so a reschedule shows up here right away.
+            "scheduled_date": schedule_of(r, d),
+            "scheduled_by": "CSWS Main Office",
+            # 7.5: the app greys out "Mark completed" and shows this reason.
+            "can_complete": r.status == "Accepted" and completion_blocker(r, d) is None,
+            "complete_blocker": completion_blocker(r, d) if r.status == "Accepted" else None,
             "notes": r.notes,
             # 7.2: what is needed, on its own line for the request card.
             "needs": next((line for line in (r.notes or "").splitlines()
@@ -248,6 +319,11 @@ def complete_request(
         raise HTTPException(status_code=404, detail="Logistics request not found")
     if req.status != "Accepted":
         raise HTTPException(status_code=400, detail="Only accepted (scheduled) requests can be completed")
+    # 7.5: not before the date, In Transit (8.1) and the barangay's receipt (8.2).
+    delivery = db.get(Delivery, req.delivery_id) if req.delivery_id else None
+    blocker = completion_blocker(req, delivery)
+    if blocker:
+        raise HTTPException(status_code=409, detail=blocker)
     row = request_rows(db, [req])[0]
     done = payload.completed_at or datetime.now(timezone.utc)
     summary = (f"Completed {done:%Y-%m-%d}: {payload.summary}. "

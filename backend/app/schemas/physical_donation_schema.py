@@ -189,6 +189,33 @@ def normalize_ph_mobile(raw: str) -> str:
     return "0" + digits[-10:]
 
 
+# Testing fix 4.1: the quantity unit says how much (kg, pcs, gallons...). A
+# sack is packaging, which already has its own field, so it is not a unit.
+# Same list as mobile/lib/ui/quantity_units.dart.
+# Base units (per-item fulfillment): weight is kg, volume is L; grams, ml
+# and gallons are given as the size of each (services/units.py).
+QUANTITY_UNITS = (
+    "kg", "L", "pcs", "packs", "cans", "bottles", "boxes", "kits", "sets", "pairs",
+)
+_PACKAGING_WORDS = {"sack", "sacks"}
+
+
+def clean_quantity_unit(value: Optional[str]) -> Optional[str]:
+    """None/blank -> None. Rejects packaging words; matches the list
+    case-insensitively so "KG" is stored as "kg"."""
+    unit = (value or "").strip()
+    if not unit:
+        return None
+    if unit.lower() in _PACKAGING_WORDS:
+        raise ValueError(
+            "A sack is packaging, not a quantity unit. Choose the packaging "
+            "in the Packaging field and a unit like kg or pcs here.")
+    for u in QUANTITY_UNITS:
+        if u.lower() == unit.lower():
+            return u
+    raise ValueError(f"Unit must be one of: {', '.join(QUANTITY_UNITS)}")
+
+
 class GuestDonorInfo(BaseModel):
     full_name: str
     contact_number: str
@@ -219,6 +246,11 @@ class _ItemFields(BaseModel):
     size_amount: Optional[Decimal] = Field(default=None, gt=0, le=100_000)
     size_unit: Optional[str] = Field(default=None, max_length=20)
     estimated_value: Optional[Decimal] = Field(default=None, ge=0)
+
+    @field_validator("other_item_unit")
+    @classmethod
+    def _unit_not_packaging(cls, v: Optional[str]) -> Optional[str]:
+        return clean_quantity_unit(v)   # testing fix 4.1
 
     @model_validator(mode="after")
     def check_item_given(self):

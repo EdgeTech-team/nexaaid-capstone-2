@@ -57,6 +57,9 @@ def submit_logistics_request(
         request_type="Delivery",
         delivery_id=delivery.delivery_id,
         requested_by_user_id=current_user.user_id,
+        # Testing fix 7.4: Main Office schedules. The truck is needed on the
+        # delivery date Main Office chose; DRRMO does not pick a date.
+        scheduled_date=delivery.delivery_date,
         notes=payload.needs_text(),   # I4: "Needs 2 trucks, 2 drivers, 3 volunteers"
     )
     db.add(logistics_request)
