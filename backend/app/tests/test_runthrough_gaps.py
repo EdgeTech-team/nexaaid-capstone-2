@@ -3,6 +3,9 @@
 Each hand-off now reaches the next person, staff cannot donate, and the
 CMO cannot undo an acknowledgement whose goods are already on a delivery.
 """
+from datetime import datetime, timedelta, timezone
+
+import api.v1.deliveries as deliveries
 from tests.test_delivery_allocation import _give
 from tests.test_donation_batch import _report
 from tests.test_pickup_days_and_runs import _activate_everyone
@@ -57,7 +60,7 @@ def test_the_cmo_cannot_undo_once_the_goods_are_on_a_delivery(api):
     ok(client.post(f"/cmo/entries/{a['batch_reference']}/revert", headers=t["cmo"]))
 
 
-def test_donors_and_the_barangay_follow_the_delivery(api):
+def test_donors_and_the_barangay_follow_the_delivery(api, monkeypatch):
     client, t = api
     _activate_everyone()
     rid = _report(client, t)
@@ -67,9 +70,14 @@ def test_donors_and_the_barangay_follow_the_delivery(api):
     assert "delivery_prepared" in _types(client, t["brgy"])          # the barangay gets ready
     assert "delivery_prepared" not in _types(client, t["brgy2"])     # not another barangay
 
+    tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
     ok(client.post(f"/deliveries/{did}/reschedule", headers=t["csws"],
-                   json={"delivery_date": "2026-10-21T08:00:00", "reason": "Rain"}))
+                   json={"delivery_date": tomorrow.isoformat(), "reason": "Rain"}))
+    monkeypatch.setattr(deliveries, "now_utc", lambda: tomorrow)        # the new day comes
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))   # In Transit
+    # Transport is asked for while Preparing, not once the truck has left.
+    assert client.post("/logistics/requests", headers=t["csws"], json={
+        "delivery_id": did, "trucks": 1, "drivers": 1, "volunteers": 0}).status_code == 409
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))   # Delivered
     ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={"remarks": "Complete"}), 201)
     got = _types(client, t["donor"])[: len(_types(client, t["donor"])) - before]
@@ -80,10 +88,11 @@ def test_donors_and_the_barangay_follow_the_delivery(api):
                 if n["type"] == "donation_in_transit")
     assert b["batch_reference"] in note["message"] and note["entity_type"] == "donation"
 
-    # The barangay's final acknowledgement reaches Main Office and the reporter.
-    ok(client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]))
-    assert "delivery_acknowledged" in _types(client, t["csws"])
-    assert "delivery_acknowledged" in _types(client, t["unit"])
+    # Confirming receipt is also the barangay's acknowledgement (one tap,
+    # Oct 20): its notice reaches Main Office and the reporter.
+    assert "delivery_receipt_confirmed" in _types(client, t["csws"])
+    assert "delivery_receipt_confirmed" in _types(client, t["unit"])
+    assert ok(client.get(f"/deliveries/{did}/history", headers=t["csws"]))["acknowledged"]
 
 
 def test_a_cancelled_delivery_tells_its_donors(api):

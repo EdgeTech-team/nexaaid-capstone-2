@@ -102,8 +102,8 @@ def test_qr_inventory_stock_and_delivery_history(api):
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
     # UC-B1 alt 4a: acknowledge only after receipt is confirmed
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]).status_code == 409
+    # Since Oct 20 confirming receipt also acknowledges (one tap).
     ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
-    ok(client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]))
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]).status_code == 409
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy2"]).status_code == 404
 

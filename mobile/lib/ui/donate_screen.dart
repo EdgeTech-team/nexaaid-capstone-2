@@ -388,7 +388,7 @@ class _DonateScreenState extends State<DonateScreen> {
     if (digits.isEmpty) return 'Required';
     return _phMobile.hasMatch(digits)
         ? null
-        : 'Enter a mobile number like 0917 123 4567';
+        : 'Enter an 11-digit mobile number, e.g. 09171234567';
   }
 
   void _snack(String msg, {bool error = false}) {
@@ -687,18 +687,21 @@ class _DonateScreenState extends State<DonateScreen> {
               Gaps.v12,
               _totalNote(l, info),
             ],
-            Gaps.v12,
-            TextFormField(
-              controller: l.value,
-              keyboardType: TextInputType.number,
-              // problema_napud 4.1: numbers only, with commas.
-              inputFormatters: const [ThousandsFormatter()],
-              decoration: const InputDecoration(
-                labelText: 'Estimated value (optional)',
-                prefixText: '₱ ',
-                hintText: '0',
+            // Testing feedback (Oct 20): guests don't give an estimated value.
+            if (api.loggedIn) ...[
+              Gaps.v12,
+              TextFormField(
+                controller: l.value,
+                keyboardType: TextInputType.number,
+                // problema_napud 4.1: numbers only, with commas.
+                inputFormatters: const [ThousandsFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Estimated value (optional)',
+                  prefixText: '₱ ',
+                  hintText: '0',
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),
@@ -1131,9 +1134,11 @@ class _DonateScreenState extends State<DonateScreen> {
           TextFormField(
             controller: guestPhone,
             keyboardType: TextInputType.phone,
+            // Testing feedback (Oct 20): digits only, stops at 11.
+            inputFormatters: phoneFormatters,
             decoration: const InputDecoration(
               labelText: 'Contact number',
-              hintText: '0917 123 4567',
+              hintText: '09171234567',
               prefixIcon: Icon(Icons.phone_outlined),
             ),
             validator: _phone,
@@ -1425,6 +1430,44 @@ class DonationReceipt extends StatefulWidget {
 class _DonationReceiptState extends State<DonationReceipt> {
   final _scroll = ScrollController();
 
+  /// 4.2 (testing feedback): a guest has no account to find this QR code
+  /// again, so leaving before saving it asks first.
+  bool _saved = false;
+  bool get _mustSave => !api.loggedIn && !_saved;
+
+  Future<void> _leave() async {
+    if (!_mustSave) {
+      Navigator.pop(context);
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.qr_code_2),
+        title: const Text('Save your QR code first'),
+        content: const Text(
+          'You are donating as a guest, so you cannot open this QR code '
+          'again in the app. CSWS needs it to receive your donation. Save '
+          'the image, or take a screenshot, before you leave.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('I took a screenshot'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Go back and save it'),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) {
+      setState(() => _saved = true); // lets the pop through
+      Navigator.pop(context);
+    }
+  }
+
   @override
   void dispose() {
     _scroll.dispose();
@@ -1445,188 +1488,200 @@ class _DonationReceiptState extends State<DonationReceipt> {
     final pickupTime = formatPickupIso(batch['preferred_pickup_at']);
     final pickupDays = pickupDaysOf(batch['pickup_days']);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Donation recorded')),
-      bottomNavigationBar: Material(
-        elevation: 8,
-        color: cs.surface,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(side, Space.sm, side, Space.sm),
-            child: AppButton(
-              'Done',
-              expand: true,
-              onPressed: () => Navigator.pop(context),
+    return PopScope(
+      canPop: !_mustSave,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Donation recorded')),
+        bottomNavigationBar: Material(
+          elevation: 8,
+          color: cs.surface,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(side, Space.sm, side, Space.sm),
+              child: AppButton('Done', expand: true, onPressed: _leave),
             ),
           ),
         ),
-      ),
-      body: Scrollbar(
-        controller: _scroll,
-        thumbVisibility: true,
-        child: ListView(
+        body: Scrollbar(
           controller: _scroll,
-          padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
-          children: [
-            const Icon(Icons.check_circle, color: AppColors.success, size: 56),
-            Gaps.v8,
-            Text(
-              'Thank you!',
-              textAlign: TextAlign.center,
-              style: t.headlineSmall,
-            ),
-            Gaps.v4,
-            Text(
-              'For ${widget.reportTitle}. '
-              '${dropOff ? 'Show this QR code at the CSWS office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
-              textAlign: TextAlign.center,
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            Gaps.v16,
-            AppCard(
-              child: Column(
-                children: [
-                  if (qr != null)
-                    Container(
-                      padding: const EdgeInsets.all(Space.sm),
-                      decoration: BoxDecoration(
-                        color: Colors
-                            .white, // QR codes need a light background to scan
-                        borderRadius: BorderRadius.circular(Radii.md),
-                      ),
-                      child: Image.memory(
-                        base64Decode(qr),
-                        width: 220,
-                        height: 220,
-                      ),
-                    ),
-                  Gaps.v8,
-                  SelectableText(
-                    '${batch['batch_reference']}',
-                    textAlign: TextAlign.center,
-                    style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
-                  ),
-                  Gaps.v8,
-                  SaveQrButton(
-                    qrBase64: qr,
-                    reference: '${batch['batch_reference']}',
-                    handover: '${batch['handover_method']}',
-                    forReport: widget.reportTitle,
-                  ),
-                  Gaps.v8,
-                  Wrap(
-                    spacing: Space.xs,
-                    runSpacing: Space.xs,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      Chip(
-                        avatar: Icon(
-                          dropOff
-                              ? Icons.store_mall_directory_outlined
-                              : Icons.local_shipping_outlined,
-                          size: 18,
-                        ),
-                        label: Text('${batch['handover_method']}'),
-                      ),
-                      StatusChip('${batch['status']}'),
-                    ],
-                  ),
-                ],
+          thumbVisibility: true,
+          child: ListView(
+            controller: _scroll,
+            padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
+            children: [
+              const Icon(
+                Icons.check_circle,
+                color: AppColors.success,
+                size: 56,
               ),
-            ),
-            // How long the donor has to hand it over (donation expiry).
-            if (batch['expires_label'] != null) ...[
-              Gaps.v12,
-              ExpiryNote(batch),
-            ],
-            const SectionHeader('Items in this donation'),
-            AppCard(
-              padding: EdgeInsets.zero,
-              child: Column(
-                children: [
-                  for (var i = 0; i < items.length; i++) ...[
-                    if (i > 0) const Divider(height: 1),
-                    ListTile(
-                      leading: Icon(
-                        Icons.inventory_2_outlined,
-                        color: cs.primary,
+              Gaps.v8,
+              Text(
+                'Thank you!',
+                textAlign: TextAlign.center,
+                style: t.headlineSmall,
+              ),
+              Gaps.v4,
+              Text(
+                'For ${widget.reportTitle}. '
+                '${dropOff ? 'Show this QR code at the CSWS office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
+                textAlign: TextAlign.center,
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v16,
+              AppCard(
+                child: Column(
+                  children: [
+                    if (qr != null)
+                      Container(
+                        padding: const EdgeInsets.all(Space.sm),
+                        decoration: BoxDecoration(
+                          color: Colors.white, // QR codes need a light background to scan
+                          borderRadius: BorderRadius.circular(Radii.md),
+                        ),
+                        child: Image.memory(
+                          base64Decode(qr),
+                          width: 220,
+                          height: 220,
+                        ),
                       ),
-                      title: Text('${items[i]['item_name']}'),
-                      subtitle: Text('${items[i]['packaging']}'),
-                      trailing: Text(
-                        '${items[i]['quantity']} ${items[i]['unit'] ?? ''}'
-                            .trim(),
-                        style: t.titleMedium,
-                      ),
+                    Gaps.v8,
+                    SelectableText(
+                      '${batch['batch_reference']}',
+                      textAlign: TextAlign.center,
+                      style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
+                    ),
+                    Gaps.v8,
+                    SaveQrButton(
+                      qrBase64: qr,
+                      reference: '${batch['batch_reference']}',
+                      handover: '${batch['handover_method']}',
+                      forReport: widget.reportTitle,
+                      onSaved: () => setState(() => _saved = true),
+                    ),
+                    Gaps.v8,
+                    Wrap(
+                      spacing: Space.xs,
+                      runSpacing: Space.xs,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        Chip(
+                          avatar: Icon(
+                            dropOff
+                                ? Icons.store_mall_directory_outlined
+                                : Icons.local_shipping_outlined,
+                            size: 18,
+                          ),
+                          label: Text('${batch['handover_method']}'),
+                        ),
+                        StatusChip('${batch['status']}'),
+                      ],
                     ),
                   ],
-                ],
+                ),
               ),
-            ),
-            if (!dropOff && batch['pickup_address'] != null) ...[
-              const SectionHeader('Pickup'),
+              // How long the donor has to hand it over (donation expiry).
+              if (batch['expires_label'] != null) ...[
+                Gaps.v12,
+                ExpiryNote(batch),
+              ],
+              const SectionHeader('Items in this donation'),
               AppCard(
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
-                    if (batch['pickup_landmark'] != null) ...[
-                      ListTile(
-                        leading: Icon(Icons.place_outlined, color: cs.primary),
-                        title: const Text('Landmark'),
-                        subtitle: Text('${batch['pickup_landmark']}'),
-                      ),
-                      const Divider(height: 1),
-                    ],
-                    ListTile(
-                      leading: Icon(Icons.home_outlined, color: cs.primary),
-                      title: const Text('Address'),
-                      subtitle: Text('${batch['pickup_address']}'),
-                    ),
-                    if (pickupDays.isNotEmpty) ...[
-                      const Divider(height: 1),
+                    for (var i = 0; i < items.length; i++) ...[
+                      if (i > 0) const Divider(height: 1),
                       ListTile(
                         leading: Icon(
-                          Icons.event_available_outlined,
+                          Icons.inventory_2_outlined,
                           color: cs.primary,
                         ),
-                        title: const Text('Available pickup days'),
-                        subtitle: Text(
-                          '${pickupDaysLabel(pickupDays)} · pickup hours '
-                          '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                        title: Text('${items[i]['item_name']}'),
+                        subtitle: Text('${items[i]['packaging']}'),
+                        trailing: Text(
+                          '${items[i]['quantity']} ${items[i]['unit'] ?? ''}'
+                              .trim(),
+                          style: t.titleMedium,
                         ),
-                      ),
-                    ] else if (pickupTime != null) ...[
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(Icons.event_outlined, color: cs.primary),
-                        title: const Text('Preferred pickup'),
-                        subtitle: Text(pickupTime),
-                      ),
-                    ],
-                    if (batch['pickup_notes'] != null) ...[
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(
-                          Icons.sticky_note_2_outlined,
-                          color: cs.primary,
-                        ),
-                        title: const Text('Notes for pickup'),
-                        subtitle: Text('${batch['pickup_notes']}'),
                       ),
                     ],
                   ],
                 ),
               ),
+              if (!dropOff && batch['pickup_address'] != null) ...[
+                const SectionHeader('Pickup'),
+                AppCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      if (batch['pickup_landmark'] != null) ...[
+                        ListTile(
+                          leading: Icon(
+                            Icons.place_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Landmark'),
+                          subtitle: Text('${batch['pickup_landmark']}'),
+                        ),
+                        const Divider(height: 1),
+                      ],
+                      ListTile(
+                        leading: Icon(Icons.home_outlined, color: cs.primary),
+                        title: const Text('Address'),
+                        subtitle: Text('${batch['pickup_address']}'),
+                      ),
+                      if (pickupDays.isNotEmpty) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.event_available_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Available pickup days'),
+                          subtitle: Text(
+                            '${pickupDaysLabel(pickupDays)} · pickup hours '
+                            '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                          ),
+                        ),
+                      ] else if (pickupTime != null) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.event_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Preferred pickup'),
+                          subtitle: Text(pickupTime),
+                        ),
+                      ],
+                      if (batch['pickup_notes'] != null) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.sticky_note_2_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Notes for pickup'),
+                          subtitle: Text('${batch['pickup_notes']}'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+              if (dropOff) ...[
+                Gaps.v16,
+                const DropOffCard(
+                  fallbackAddress: storageAddress,
+                  fallbackHours: storageHours,
+                ),
+              ],
             ],
-            if (dropOff) ...[
-              Gaps.v16,
-              const DropOffCard(
-                fallbackAddress: storageAddress,
-                fallbackHours: storageHours,
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );

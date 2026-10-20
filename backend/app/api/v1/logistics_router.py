@@ -36,8 +36,13 @@ def submit_logistics_request(
     delivery = db.get(Delivery, payload.delivery_id)
     if delivery is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
-    if delivery.status in ("Delivered", "Confirmed", "Cancelled"):
-        raise HTTPException(status_code=409, detail=f"Delivery is already {delivery.status}")
+    # Testing feedback (Oct 20): transport is asked for while the goods are
+    # still being prepared, not once the truck has left.
+    if delivery.status != "Preparing":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Delivery is already {delivery.status}. Ask DRRMO for transport while it is still Preparing.",
+        )
     open_request = (
         db.query(LogisticsRequest)
         .filter(LogisticsRequest.delivery_id == delivery.delivery_id,
