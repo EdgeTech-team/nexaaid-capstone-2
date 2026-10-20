@@ -112,6 +112,12 @@ Each line may now send the breakdown **instead of** `quantity` + `packaging`:
 
 Until each screen is updated, the old behaviour continues. Reports sent the old way get a "General needs" line, so their % works like before but isn't per item.
 
+**Already done (Oct 20, Castillo):**
+- **Report form** (`report_screens.dart`): sends `needs` (item + quantity, or "Other" name + unit) on submit, edit and Encode SMS. Editing a report opens from its saved needs.
+- **Donate form** (`donate_screen.dart`): item → size of each (chips from `sizes`, or "Other size" = amount + unit) → items per pack (Single / 6 / 10 / 12 / 15 / 16 / 24 / Other) → how many. It shows "You're donating 72 L" with the breakdown, and sends the breakdown fields instead of `quantity` + `packaging`. The fixed packaging list (with "Sack") is gone. Counted items (cans, kits, pcs) have no size. The report card at the top shows what is still needed per item, and each item says whether the report asked for it.
+- **Receiving** (`batch_sheet.dart`): "Declared" shows the donor's breakdown ("3 x 16 x 1.5 L bottle = 72 L"). **Wrong item?** lets CSWS pick what the goods really are, and sends `item_id`. If the unit changes, the amount is cleared so it is entered again in the new unit.
+- Tests: `mobile/test/per_item_fulfillment_test.dart`.
+
 ## Neon steps (Castillo applies migrations)
 
 1. `alembic upgrade head` (adds the tables and columns, backfills General needs, moves water to L, adds users.deleted_at).

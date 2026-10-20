@@ -140,8 +140,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
   bool get editing => widget.edit != null;
   bool _filledFromEdit = false;
 
-  /// Fill the form from the report being corrected. The needs were saved
-  /// as "Rice: 50 kg, Drinking Water: 20 gallons".
+  /// Fill the form from the report being corrected. Per-item fulfillment
+  /// (Oct 2026): the needs come back as rows (`needs`). Older reports only
+  /// have one "General needs" row, so their text "Rice: 50 kg, Drinking
+  /// Water: 20 L" is read instead.
   void _fillFromReport(Map<String, dynamic> r, Names names) {
     typeId = '${r['disaster_type_id']}';
     brgyId = '${r['barangay_id']}';
@@ -150,6 +152,27 @@ class _NewReportScreenState extends State<NewReportScreen> {
     sitioRows = ids.isEmpty ? [''] : [for (final i in ids) '$i'];
     desc.text = '${r['description'] ?? ''}';
     families.text = '${r['affected_families'] ?? ''}';
+    final rows = [
+      for (final n in (r['needs'] as List? ?? const []))
+        if (n is Map && n['item_id'] != null) n,
+    ];
+    if (rows.isNotEmpty) {
+      final offered = {for (final i in names.rows('items')) '${i['id']}'};
+      needs
+        ..clear()
+        ..addAll([
+          for (final n in rows)
+            _Need()
+              ..qty.text = '${n['quantity']}'
+              // A retired item (e.g. the old gallons water) is no longer
+              // in the list: the reporter picks the current one again.
+              ..itemId = offered.contains('${n['item_id']}')
+                  ? '${n['item_id']}'
+                  : null,
+        ]);
+      _fills++;
+      return;
+    }
     final parsed = <_Need>[];
     for (final part in '${r['assistance_needed'] ?? ''}'.split(',')) {
       final m = RegExp(r'^\s*(.+?):\s*(\d+)\s*(.*)$').firstMatch(part);
@@ -345,8 +368,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
       return;
     }
     setState(() => busy = true);
-    // The report table has one text field for the needs and one total
-    // quantity, so the list is stored as "Rice: 50 kg, Drinking Water: 20 gallons".
+    // Per-item fulfillment (Oct 2026): `needs` is one line per item, in the
+    // item's own unit, and fulfillment is measured per need. The readable
+    // summary "Rice: 50 kg, Drinking Water: 20 L" and the total are still
+    // sent for the screens that show them.
     final summary = needs
         .map(
           (n) =>
@@ -363,6 +388,20 @@ class _NewReportScreenState extends State<NewReportScreen> {
       'affected_families': int.parse(families.text.trim()),
       'assistance_needed': summary,
       'estimated_quantity': total,
+      'needs': [
+        for (final n in needs)
+          if (n.itemId == _other)
+            {
+              'other_item_name': n.otherName.text.trim(),
+              'other_item_unit': n.otherUnit.text.trim(),
+              'quantity': int.parse(n.qty.text.trim()),
+            }
+          else
+            {
+              'item_id': int.parse(n.itemId!),
+              'quantity': int.parse(n.qty.text.trim()),
+            },
+      ],
     };
     if (editing) {
       final r = await act(
@@ -483,7 +522,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
                         labelText: 'Unit',
-                        hintText: 'pcs, boxes',
+                        hintText: 'pcs, kg, L',
                       ),
                       validator: (v) =>
                           (v ?? '').trim().isEmpty ? 'Required' : null,
