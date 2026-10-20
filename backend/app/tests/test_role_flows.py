@@ -11,6 +11,15 @@ Walks the whole relief chain the way the test app does:
   -> DRRMO accepts / declines -> CSWS advances -> Barangay confirms receipt
 and checks each role is blocked from what it shouldn't reach.
 """
+import asyncio
+import json
+
+from fastapi import HTTPException
+from starlette.requests import Request
+
+from core.auth import get_current_user_optional
+from core.config import settings
+from main import show_server_errors
 
 import pytest
 from fastapi.testclient import TestClient
@@ -318,3 +327,63 @@ def test_donor_dashboard_and_other_item(api):
     assert {d["item_name"] for d in mine["donations"]} == {"Rice", "Face Masks"}
     assert mine["supported_reports"][0]["total_items_needed"] == 50
     assert client.get("/donations/mine").status_code == 401
+
+
+def test_optional_auth_rejects_deactivated_user(api):   
+    client, tokens = api
+
+    session = database.SessionLocal()
+    try:
+        user = (
+            session.query(User)
+            .filter(User.email == "donor.test@example.com")
+            .one()
+        )
+
+        # Simulate an account being deactivated after login.
+        user.is_active = False
+        session.commit()
+
+        # Reuse the token issued before deactivation.
+        token = tokens["donor"]["Authorization"].split(" ", 1)[1]
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_current_user_optional(token=token, db=session)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "Account is deactivated"
+
+    finally:
+        session.close()
+
+
+def test_production_errors_hide_exception_details(monkeypatch):
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/test-unexpected-error",
+        "raw_path": b"/test-unexpected-error",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [],
+        "client": ("testclient", 12345),
+        "server": ("testserver", 80),
+    }
+
+    request = Request(scope)
+
+    async def call_next(_request):
+        raise RuntimeError("sensitive internal test detail")
+
+    response = asyncio.run(show_server_errors(request, call_next))
+
+    assert response.status_code == 500
+    assert json.loads(response.body) == {
+        "detail": "Internal server error"
+    }
+    assert b"sensitive internal test detail" not in response.body
