@@ -3,6 +3,7 @@ Public, no-login summaries for the landing page (Item 8).
 Only validated reports are exposed, and never who reported them
 (no user_id, source, contact number or SMS text).
 """
+from services.fulfillment import progress_for_reports
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -37,6 +38,8 @@ def public_reports(db: Session = Depends(get_db)):
         .all()
     )
 
+    # Per-item progress for every report in a few queries (Oct 2026).
+    progress = progress_for_reports(db, rows)
     out = []
     for r in rows:
         f = r.fulfillment
@@ -59,6 +62,8 @@ def public_reports(db: Session = Depends(get_db)):
             "total_items_needed": f.total_items_needed if f else (r.estimated_quantity or 0),
             "total_items_delivered": f.total_items_delivered if f else 0,
             "fulfillment_percentage": float(f.fulfillment_percentage) if f else 0.0,
+            # One line per need: needed / pledged / confirmed / delivered.
+            "needs": progress[r.report_id]["needs"],
         })
     return out
 

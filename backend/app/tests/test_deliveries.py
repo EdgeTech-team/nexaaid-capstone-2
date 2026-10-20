@@ -22,6 +22,9 @@ def validated_report_with_item(db_session, seed, admin_client, reporter_client):
             "disaster_type_id": seed["disaster_type_id"],
             "barangay_id": seed["barangay_id"],
             "description": "Flood relief needed.",
+            # Oct 2026 (option C): priority comes from families + disaster
+            # type x what is still missing; quantity is no longer scored.
+            "affected_families": 60,
             "estimated_quantity": 100,
             "source": "web",
         },

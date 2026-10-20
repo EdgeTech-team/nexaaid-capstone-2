@@ -6,6 +6,7 @@ import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 import 'donate_screen.dart';
 export 'donate_screen.dart' show DonateScreen, DonationReceipt;
+import 'needs_progress.dart';
 
 /// Ivan's note #2: the signed-in donor / relief organization's middle tab.
 /// It shows every validated report, active and done, in one list. There is
@@ -486,11 +487,18 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 Gaps.v8,
                 NeedChips(NeedChips.split(r['assistance_needed'])),
                 Gaps.v16,
-                Progress(
+                                Progress(
                   delivered: r['total_items_delivered'] as num? ?? 0,
                   needed: r['total_items_needed'] as num? ?? 0,
                   percent: fulfillmentPercent(r),
                 ),
+                Gaps.v16,
+                Text(
+                  'Progress per item',
+                  style: t.titleSmall?.copyWith(color: cs.primary),
+                ),
+                Gaps.v8,
+                NeedsProgress(reportId: r['id'] as int),
                 if (canDonate) ...[
                   Gaps.v16,
                   AppButton(

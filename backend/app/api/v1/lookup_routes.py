@@ -4,6 +4,8 @@ items, reports), so users pick names instead of typing ids.
 Public: it holds no personal data (no donor names or contacts), and guest
 donors need it too.
 """
+from services.fulfillment import progress_for_reports
+from services.units import dimension, units_for
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
 
@@ -33,6 +35,7 @@ def get_lookups(db: Session = Depends(get_db)):
                 f"{barangays.get(r.barangay_id, 'Barangay')}")
 
     items = {i.item_id: i.item_name for i in db.query(Item).all()}
+    progress = progress_for_reports(db, [r for r in reports if r.status == "Validated"])
 
     def donations(status):
         rows = (db.query(PhysicalDonation).filter(PhysicalDonation.status == status)
@@ -60,10 +63,17 @@ def get_lookups(db: Session = Depends(get_db)):
             {"id": s.sitio_id, "name": s.sitio_name, "barangay_id": s.barangay_id}
             for s in sitios
         ],
+        # Retired items (active = false) stay out of the dropdowns.
+        # Per-item fulfillment (Oct 2026): the base unit, what a custom size
+        # may be typed in, and the item's common sizes (amount = base units).
         "items": [
             {"id": i.item_id, "name": f"{i.item_name} ({i.unit_of_measure})",
-             "item_name": i.item_name, "unit": i.unit_of_measure}
-            for i in db.query(Item).order_by(Item.item_name).all()
+             "item_name": i.item_name, "unit": i.unit_of_measure,
+             "kind": dimension(i.unit_of_measure),
+             "size_units": units_for(i.unit_of_measure),
+             "sizes": [{"id": z.size_id, "label": z.label, "amount": float(z.amount)}
+                       for z in i.sizes]}
+            for i in db.query(Item).filter(Item.active.is_(True)).order_by(Item.item_name).all()
         ],
         # Staff screens: every report, with its status.
         "reports": [
@@ -90,6 +100,9 @@ def get_lookups(db: Session = Depends(get_db)):
                 "total_items_needed": r.fulfillment.total_items_needed if r.fulfillment else r.estimated_quantity,
                 "total_items_delivered": r.fulfillment.total_items_delivered if r.fulfillment else 0,
                 "fulfillment_percentage": float(r.fulfillment.fulfillment_percentage) if r.fulfillment else 0.0,
+                # Per need: needed / pledged / confirmed / delivered, so the
+                # donate screen can say what is still missing.
+                "needs": progress[r.report_id]["needs"],
                 # Ivan (donor feed): "New validated report · 2h".
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }

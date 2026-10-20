@@ -24,7 +24,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.report import canonical_source
 
@@ -69,6 +69,31 @@ def _quantity_field():
 # DisasterReport schemas
 # ---------------------------------------------------------------------------
 
+class ReportNeedIn(BaseModel):
+    """One need of a report (per-item fulfillment, Oct 2026): an item from
+    the list, or "something else" (name + unit), and how much is needed in
+    that item's base unit (kg, L, pcs...)."""
+    item_id: Optional[int] = None
+    other_item_name: Optional[str] = Field(default=None, max_length=150)
+    other_item_unit: Optional[str] = Field(default=None, max_length=50)
+    quantity: int = Field(ge=1, le=MAX_ESTIMATED_QUANTITY)
+
+
+class ReportNeedOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    need_id: int
+    item_id: Optional[int]          # None = "General needs" (older report)
+    item_name: str
+    unit: Optional[str]
+    quantity: int
+
+
+# needs: newer apps send one line per item. When it is missing (older apps,
+# SMS), estimated_quantity becomes a single "General needs" line, as before.
+NeedsField = Optional[List[ReportNeedIn]]
+
+
 class DisasterReportCreate(BaseModel):
     disaster_type_id: int
     barangay_id: int
@@ -80,6 +105,7 @@ class DisasterReportCreate(BaseModel):
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
     source: SourceType = "Web"
 
     @field_validator("source", mode="before")
@@ -102,6 +128,7 @@ class DisasterReportEdit(BaseModel):
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
 
 
 class ReportWithdraw(BaseModel):
@@ -117,13 +144,27 @@ class DisasterReportUpdate(BaseModel):
     `status` here only for other lifecycle transitions after validation
     (e.g. 'Dispatched', 'Resolved')."""
     status: Optional[str] = None
-    priority_level: Optional[str] = None
-    ai_priority_score: Optional[Decimal] = None
-    ai_recommendation: Optional[str] = None
     description: Optional[str] = None
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
+
+    # Testing #5 (Oct 2026): priority is always computed by the system
+    # (manuscript Table 32: "automated but non-autonomous"; people decide
+    # the actual relief allocation). It can no longer be set by hand here:
+    # the next delivery receipt silently overwrote it anyway.
+    @model_validator(mode="before")
+    @classmethod
+    def _no_manual_priority(cls, data):
+        if isinstance(data, dict):
+            sent = {"priority_level", "ai_priority_score", "ai_recommendation"} & set(data)
+            if sent:
+                raise ValueError(
+                    "Priority is computed by the system and cannot be set by hand "
+                    f"({', '.join(sorted(sent))})."
+                )
+        return data
 
 
 class DisasterReportResponse(BaseModel):
@@ -153,6 +194,7 @@ class DisasterReportResponse(BaseModel):
     disaster_type_name: Optional[str] = None
     barangay_name: Optional[str] = None
     priority_guidance: Optional[str] = None
+    needs: List[ReportNeedOut] = []
 
     @field_validator("source", mode="before")
     @classmethod
@@ -197,6 +239,7 @@ class SmsReportIngest(BaseModel):
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
 
 
 class SmsReportMetadataResponse(BaseModel):

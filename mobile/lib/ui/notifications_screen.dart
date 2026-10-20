@@ -350,11 +350,6 @@ class ReportSheet extends StatelessWidget {
                       '${report['fulfillment_percentage']}',
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '$delivered of $needed items delivered',
-                    style: t.bodyLarge,
-                  ),
                 ],
               ),
             ),
