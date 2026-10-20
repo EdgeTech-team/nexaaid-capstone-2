@@ -31,6 +31,8 @@ from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
 from api.v1.trips import router as trips_router
 from api.v1.delivery_problems import router as delivery_problems_router
 
+from core.config import settings
+
 app = FastAPI()
 
 @app.exception_handler(RequestValidationError)
@@ -40,19 +42,29 @@ async def validation_handler(request: Request, exc: RequestValidationError):
           [(e["loc"], e["msg"]) for e in errors], flush=True)
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
-# DEV ONLY: turn unexpected crashes into a JSON error the app can show.
-# Without this a 500 has no CORS headers, so Chrome hides it and the app
-# can only say "cannot reach the server". Registered before CORS so the
-# CORS middleware still wraps these responses.
+# Convert unexpected crashes into JSON error responses.
+# Detailed exception messages are available only in development.
+# Production responses use a generic error message.
+# CORS middleware wraps these responses.
 @app.middleware("http")
 async def show_server_errors(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception as exc:
-        logging.getLogger("uvicorn.error").exception("Unhandled error on %s", request.url.path)
+        logging.getLogger("uvicorn.error").exception(
+            "Unhandled error on %s", request.url.path
+        )
+
+        if settings.APP_ENV == "development":
+            lines = str(exc).splitlines()
+            error_message = lines[0][:300] if lines else "Unexpected error"
+            detail = f"Server error: {type(exc).__name__}: {error_message}"
+        else:
+            detail = "Internal server error"
+
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Server error: {type(exc).__name__}: {str(exc).splitlines()[0][:300]}"},
+            content={"detail": detail},
         )
 
 @app.get("/")
@@ -60,16 +72,11 @@ def root():
     return {"status": "ok", "service": "NexaAid API"}
 
 
-# DEV ONLY: lets the Flutter test app (Chrome / emulator) call the API.
-# Tighten allow_origins before deployment.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://nexaaid1.netlify.app",
     ],
-    # flutter run -d chrome opens a random port (localhost:45803, ...):
-    # allow the local web app on any port, not only 8080. Phones are not
-    # affected by CORS.
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],

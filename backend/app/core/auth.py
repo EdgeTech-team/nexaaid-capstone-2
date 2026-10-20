@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, timedelta, timezone
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
@@ -26,9 +27,15 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+    )
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return jwt.encode(
+        to_encode,
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
 
 
 def user_payload(user: User) -> dict:
@@ -40,7 +47,9 @@ def user_payload(user: User) -> dict:
         "role_name": user.role.role_name,
         "organization_id": user.organization_id,
         "assigned_barangay_id": user.assigned_barangay_id,
-        "must_change_password": user.must_change_password in (True, 1, "1", "true"),
+        "must_change_password": user.must_change_password in (
+            True, 1, "1", "true"
+        ),
     }
 
 
@@ -50,32 +59,60 @@ def authenticate_user(db: Session, email: str, password: str) -> User:
     The first argument is still called `email` so existing callers keep
     working, but it may also be an organization's username. A value with an
     "@" is looked up as an email; anything else as a username (usernames can
-    never contain "@", and are saved in lowercase)."""
+    never contain "@", and are saved in lowercase).
+    """
     login = (email or "").strip()
+
     if "@" in login:
-        user = db.query(User).filter(func.lower(User.email) == login.lower()).first()
+        user = (
+            db.query(User)
+            .filter(func.lower(User.email) == login.lower())
+            .first()
+        )
     elif login:
-        user = db.query(User).filter(User.username == login.lower()).first()
+        user = (
+            db.query(User)
+            .filter(User.username == login.lower())
+            .first()
+        )
     else:
         user = None
-    # Same message for unknown email/username and wrong password, so accounts can't be probed
+
+    # Use the same message for unknown email/username and wrong password.
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
     if not user.is_active:
-        # Only shown after the password is right, so it can't be used to probe accounts.
+        # Only shown after the password is correct.
         reason = (user.deactivation_reason or "").strip()
         detail = "Account is deactivated."
-        detail += f" Reason: {reason}" if reason else " No reason was recorded."
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+        detail += (
+            f" Reason: {reason}"
+            if reason
+            else " No reason was recorded."
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=detail,
+        )
+
     return user
 
 
 def build_login_response(user: User) -> dict:
-    token = create_access_token({"sub": user.email, "uid": user.user_id, "role": user.role.role_name})
+    token = create_access_token(
+        {
+            "sub": user.email,
+            "uid": user.user_id,
+            "role": user.role.role_name,
+        }
+    )
+
     return {
         "access_token": token,
         "token_type": "bearer",
@@ -84,31 +121,52 @@ def build_login_response(user: User) -> dict:
     }
 
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials (invalid or expired token)",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
     try:
-        # python-jose rejects expired tokens automatically (raises JWTError)
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        # Expired tokens are rejected by python-jose.
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
         email: str = payload.get("sub")
+
         if email is None:
             raise credentials_exception
+
     except JWTError:
         raise credentials_exception
 
     user = db.query(User).filter(User.email == email).first()
+
     if user is None:
         raise credentials_exception
-    if not user.is_active:  # deactivation takes effect immediately, even on old tokens
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
+
+    # Deactivation takes effect immediately, even on existing tokens.
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated",
+        )
+
     return user
 
 
-# Same token URL, but auto_error=False so a missing token doesn't raise 401
-oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+# Same token URL, but auto_error=False so a missing token doesn't raise 401.
+oauth2_scheme_optional = OAuth2PasswordBearer(
+    tokenUrl="token",
+    auto_error=False,
+)
+
 
 def get_current_user_optional(
     token: str | None = Depends(oauth2_scheme_optional),
@@ -116,59 +174,118 @@ def get_current_user_optional(
 ) -> User | None:
     if token is None:
         return None
+
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
         email: str = payload.get("sub")
+
         if email is None:
             return None
+
     except JWTError:
         return None
-    return db.query(User).filter(User.email == email).first()
+
+    # Find the user associated with the token.
+    user = db.query(User).filter(User.email == email).first()
+
+    if user is None:
+        return None
+
+    # Do not allow deactivated accounts to use existing tokens.
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is deactivated",
+        )
+
+    return user
+
 
 def _norm_role(name) -> str:
-    """'CSWS Main Office' / 'csws_main_office' -> 'csws_main_office'"""
-    return re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    """'CSWS Main Office' / 'csws_main_office' -> 'csws_main_office'."""
+    return re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        (name or "").lower(),
+    ).strip("_")
+
 
 # Routers use different spellings ("Administrator" vs "admin", etc.).
 # This maps every spelling used in the codebase onto the real roles
-# in the `roles` table (checked against Neon on Sep 30).
+# in the `roles` table.
 _ROLE_GROUPS = {
     "admin": {"admin", "administrator"},
     "administrator": {"admin", "administrator"},
     "csws_staff": {"csws_main_office", "csws_disaster_unit"},
-    "barangay_official": {"barangay_receiving_representative", "barangay_receiving_rep"},
-    "barangay_receiving_rep": {"barangay_receiving_representative", "barangay_receiving_rep"},
-    "barangay_receiving_representative": {"barangay_receiving_representative", "barangay_receiving_rep"},
+    "barangay_official": {
+        "barangay_receiving_representative",
+        "barangay_receiving_rep",
+    },
+    "barangay_receiving_rep": {
+        "barangay_receiving_representative",
+        "barangay_receiving_rep",
+    },
+    "barangay_receiving_representative": {
+        "barangay_receiving_representative",
+        "barangay_receiving_rep",
+    },
 }
+
 
 def expand_roles(*roles) -> set:
     allowed = set()
-    for r in roles:
-        n = _norm_role(r)
-        allowed.add(n)
-        allowed |= _ROLE_GROUPS.get(n, set())
+
+    for role in roles:
+        normalized_role = _norm_role(role)
+        allowed.add(normalized_role)
+        allowed |= _ROLE_GROUPS.get(normalized_role, set())
+
     return allowed
 
+
 def has_role(user: User, *roles) -> bool:
-    return user.role is not None and _norm_role(user.role.role_name) in expand_roles(*roles)
+    return (
+        user.role is not None
+        and _norm_role(user.role.role_name) in expand_roles(*roles)
+    )
+
 
 def barangay_scope(user: User):
-    """Barangay Receiving Representatives only see and act on their own
-    assigned barangay (manuscript UC-B1, alt flow 3a). Returns that
-    barangay_id for them, or None for every other role (no restriction)."""
+    """Return the assigned barangay ID for receiving representatives.
+
+    Other roles have no barangay restriction.
+    """
     if not has_role(user, "barangay_receiving_rep"):
         return None
+
     barangay_id = getattr(user, "assigned_barangay_id", None)
+
     if barangay_id is None:
         raise HTTPException(
             status_code=403,
-            detail="Your account has no assigned barangay. Ask the Administrator to set one.",
+            detail=(
+                "Your account has no assigned barangay. "
+                "Ask the Administrator to set one."
+            ),
         )
+
     return barangay_id
 
+
 def require_role(*allowed_roles):
-    def role_checker(user: User = Depends(get_current_user)):
+    def role_checker(
+        user: User = Depends(get_current_user),
+    ):
         if not has_role(user, *allowed_roles):
-            raise HTTPException(status_code=403, detail="You do not have permission to access this resource")
+            raise HTTPException(
+                status_code=403,
+                detail="You do not have permission to access this resource",
+            )
+
         return user
+
     return role_checker
