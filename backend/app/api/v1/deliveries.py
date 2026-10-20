@@ -26,6 +26,7 @@ from models.report import DisasterReport
 from core.auth import get_current_user, require_role, barangay_scope
 from core.audit import log_action
 from core.priority_engine import apply_priority
+from services.fulfillment import recalculate as recalculate_fulfillment
 from models.inventory_model import Inventory
 from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
@@ -33,6 +34,7 @@ from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
+from services.donation_expiry import MANILA, nice_date, now_utc, utc
 from services.delivery_allocation import allocate_delivery, chosen_refs, ready_donations, ready_lines
 from services.delivery_notices import tell_barangay_prepared, tell_donors, tell_status
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
@@ -257,6 +259,18 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
 
     current_index = _STATUS_SEQUENCE.index(delivery.status)
 
+    # Testing feedback (Oct 20): the truck can't leave before the day it is
+    # scheduled for (trips start through here too, so "Arrived" can't come
+    # first either). Leaving earlier means changing the date first.
+    if delivery.status == "Preparing" and delivery.delivery_date is not None:
+        leaves = utc(delivery.delivery_date)
+        if now_utc().astimezone(MANILA).date() < leaves.astimezone(MANILA).date():
+            raise HTTPException(
+                status_code=409,
+                detail=f"This delivery is scheduled to leave on {nice_date(leaves)}. "
+                       f"If the truck is leaving now, change the date first.",
+            )
+
     old_status = delivery.status
     delivery.status = _STATUS_SEQUENCE[current_index + 1]
     # Timestamped status history (UC-CM2 / delivery module step 3)
@@ -332,6 +346,11 @@ def confirm_receipt(
     delivery.status = "Confirmed"
     log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
                old={"status": "Delivered"}, new={"status": "Confirmed", "remarks": payload.remarks})
+    # Testing feedback (Oct 20): confirming receipt is also the barangay's
+    # acknowledgement (UC-B1 step 5), so the rep taps once. The
+    # "receipt confirmed" notice below reaches the same people.
+    log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery.delivery_id,
+               new={"acknowledged": True, "with_receipt": True})
     
     report = db.get(DisasterReport, delivery.report_id)
     recipients = set(user_ids_with_role(db, ["CSWS Main Office"],
@@ -355,8 +374,9 @@ def confirm_receipt(
     return ReceiptConfirmResponse(receipt=receipt, delivery=delivery, fulfillment=fulfillment)
 
 # Acknowledge — Barangay Receiving Representative (UC-B1 step 5).
-# Acknowledgment is separate from receipt confirmation and only allowed
-# after it (delivery module alt flow 4a). Stored in audit_logs.
+# Since Oct 20 confirm-receipt records the acknowledgement too, so the app
+# no longer calls this; kept for deliveries confirmed before that.
+# Only allowed after receipt is confirmed (alt flow 4a). Stored in audit_logs.
 
 @router.post("/{delivery_id}/acknowledge")
 def acknowledge_delivery(
@@ -429,67 +449,19 @@ def delivery_history(
 # Fulfillment recalculation — internal helper, not an endpoint
 
 def _recalculate_fulfillment(
-      db: Session, 
+      db: Session,
       report_id: int,
-      verified_by_user_id: int,     
-) -> ReportFulfillment: 
-  """
-  Sums delivered quantities across every CONFIRMED delivery this 
-  report, and updates the report fulfillments record accordingly
+      verified_by_user_id: int,
+) -> ReportFulfillment:
+  """Per-item fulfillment (Oct 2026): each need of the report is measured
+  against the confirmed deliveries of THAT item, capped at 100%, and the
+  report's percentage is the average (services/fulfillment.py). Old reports
+  have one "General needs" line, which counts every item like before.
 
   Alt flow 5a: if the linked report is already closed/resolved, this
-  still updates report_fulfillments — it deliberately does NOT touch
-  disaster_reports.status. Fulfillment and report status are tracked
-  independently; this function only ever writes to report_fulfillments.
+  still updates report_fulfillments; it never touches disaster_reports.status.
   """
-  fulfillment =(
-      db.query (ReportFulfillment)
-      .filter(ReportFulfillment.report_id == report_id)
-      .first()
-   )
-
-  if not fulfillment:
-     raise HTTPException(
-        status_code=409,
-        detail="This report hs no fulfillment record yet- it may"
-               "not have been validated. cannot delivered"
-     ) 
-
-  total_delivered =(
-     db.query(DeliveryItem)
-     .join(Delivery, DeliveryItem.delivery_id == Delivery.delivery_id)
-     .filter(Delivery.report_id == report_id, Delivery.status == "Confirmed")
-     .with_entities(DeliveryItem.quantity)
-     .all()
-  )
-
-  total_delivered_quantity = sum(q for (q,) in total_delivered)
-
-  fulfillment.total_items_delivered = total_delivered_quantity
-
-  if fulfillment.total_items_needed > 0:
-     pct = (Decimal(total_delivered_quantity)/ Decimal(fulfillment.total_items_needed)) * 100
-     pct = min(pct, Decimal("100.00"))
-
-  else: 
-     pct = Decimal("0.00")
-  fulfillment.fulfillment_percentage = round(pct, 2)
-
-  if fulfillment.fulfillment_percentage <= 0:
-     fulfillment_verification_status = "Not Started"
-
-  elif fulfillment.fulfillment_percentage >= 100:
-      fulfillment_verification_status = "Complete"
-
-  else:
-    fulfillment_verification_status ="Partial"
-
-  fulfillment.verification_status = fulfillment_verification_status
-
-  fulfillment.verified_by_user_id = verified_by_user_id
-  fulfillment.verified_at = datetime.now(timezone.utc)
-  
-  db.flush()
+  fulfillment = recalculate_fulfillment(db, report_id, verified_by_user_id)
 
   # Testing, Module 3: the priority depends on fulfillment, so recompute it
   # now. Before this it was set once, at validation, and never changed.

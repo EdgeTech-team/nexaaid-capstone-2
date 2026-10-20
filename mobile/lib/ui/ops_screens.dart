@@ -232,7 +232,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       title: 'Confirm receipt',
       message:
-          'Confirm that delivery #${d['delivery_id']} arrived. If it is '
+          'Confirm that delivery #${d['delivery_id']} arrived. This is also '
+          'your barangay\'s acknowledgement of the aid. If it is '
           'incomplete you can wait until it is resolved (UC-B1 4a).',
       fields: const [
         DialogField(
@@ -251,7 +252,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
         '/deliveries/${d['delivery_id']}/confirm-receipt',
         body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
       ),
-      success: 'Receipt confirmed. Fulfillment updated.',
+      success: 'Receipt confirmed and aid acknowledged. Fulfillment updated.',
     );
   }
 
@@ -281,7 +282,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
         '/trips/$tripId/confirm-receipt',
         body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
       ),
-      success: '$n deliveries confirmed. Fulfillment updated.',
+      success: '$n deliveries confirmed and acknowledged. Fulfillment updated.',
     );
   }
 
@@ -717,9 +718,11 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     icon: const Icon(Icons.report_problem_outlined),
                     label: const Text('Something went wrong?'),
                   ),
+                // Testing feedback (Oct 20): transport is asked for before
+                // the truck leaves, so only while Preparing.
                 if (!barangay &&
                     !readOnly &&
-                    (status == 'Preparing' || status == 'In Transit') &&
+                    status == 'Preparing' &&
                     (request == null ||
                         reqStage == 'Declined' ||
                         reqStage == 'Cancelled' ||

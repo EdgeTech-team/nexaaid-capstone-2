@@ -20,6 +20,7 @@ from schemas.user_schema import (
     AccountUpdateRequest, BARANGAY_REP, INTERNAL_ROLES, InternalAccountCreateRequest, UserResponse,
 )
 from core.notifications import notify_event
+from services.accounts import delete_account
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -160,7 +161,8 @@ def list_users(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
-    query = db.query(User).join(Role, Role.role_id == User.role_id)
+    # Deleted accounts (1.2) are gone from every section.
+    query = db.query(User).join(Role, Role.role_id == User.role_id).filter(User.deleted_at.is_(None))
     if role:
         query = query.filter(Role.role_name == role)
     if q:
@@ -201,7 +203,7 @@ def update_user(
     it). The reason and the time are kept on the account and cleared when it
     is activated again."""
     user = db.get(User, user_id)
-    if user is None:
+    if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Account not found")  # UC-A1 3a
     changes = payload.model_dump(exclude_unset=True)
     card = changes.pop("employee_id_card", None)
@@ -296,6 +298,28 @@ def update_user(
     return _user_row(user, orgs, barangays)
 
 
+# Appendix H 1.2 (testing feedback, Oct 2026): delete a deactivated account.
+# Anonymized, not removed: see services/accounts.py for why. Restore = the
+# existing PATCH with is_active = true (the app's "Restore account" button).
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    user = db.get(User, user_id)
+    if user is None or user.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if user.user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    if user.is_active:
+        # Two steps on purpose: deactivate (reversible) first, then delete.
+        raise HTTPException(status_code=409, detail="Deactivate the account before deleting it")
+    delete_account(db, user, current_user, request=request)
+    return {"user_id": user.user_id, "deleted": True}
+
+
 # UC-A2 Review Organization Registrations.
 # Capstone 2 adviser comment 1.3: organizations are validated automatically
 # when they register, so this list is for review only. There is no approve /
@@ -324,7 +348,8 @@ def list_organizations(
         decided[log.entity_id] = log.timestamp
     # The organization's own account, for "View account" in Registrations.
     accounts = {}
-    for u in db.query(User).filter(User.organization_id.isnot(None)).order_by(User.user_id):
+    for u in (db.query(User).filter(User.organization_id.isnot(None), User.deleted_at.is_(None))
+              .order_by(User.user_id)):
         accounts.setdefault(u.organization_id, u.user_id)
     rows = []
     for o in query.order_by(Organization.created_at.desc()).all():
@@ -373,7 +398,7 @@ def review_donor(
     if not isinstance(reviewed, bool):
         raise HTTPException(status_code=422, detail="'reviewed' must be true or false")
     user = db.get(User, user_id)
-    if user is None:
+    if user is None or user.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Account not found")
     if not user.role or user.role.role_name != DONOR:
         raise HTTPException(

@@ -13,6 +13,7 @@ import 'landing/landing_extras.dart' show kImpactImage;
 import 'donor_screens.dart' show DonateScreen;
 import 'qr_save.dart';
 import 'home_nav.dart';
+import 'needs_progress.dart' show stillNeededText;
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -257,9 +258,16 @@ class NeedCard extends StatelessWidget {
                   ),
                   Gaps.v8,
                   Text(
-                    needed > 0
-                        ? 'Still needs $left of $needed items'
-                        : 'Needs help',
+                    switch (stillNeededText(r)) {
+                      // Per-item needs: what each one still lacks.
+                      final String s when s.isEmpty => 'All needs delivered',
+                      final String s => 'Still needs $s',
+                      null when needed > 0 =>
+                        'Still needs $left of $needed items',
+                      null => 'Needs help',
+                    },
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                     style: t.labelLarge,
                   ),
                   if (needs.isNotEmpty)

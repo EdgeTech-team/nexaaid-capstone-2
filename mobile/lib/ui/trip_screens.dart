@@ -200,8 +200,7 @@ class _TripsScreenState extends State<TripsScreen> {
                         Text(
                           '${trip['total_stops']} '
                           '${trip['total_stops'] == 1 ? 'stop' : 'stops'} · '
-                          '${trip['total_reports']} reports · '
-                          '${trip['total_quantity']} items'
+                          '${trip['total_reports']} reports'
                           '${trip['vehicle_details'] != null ? ' · ${trip['vehicle_details']}' : ''}',
                           style: t.bodySmall,
                         ),
@@ -397,7 +396,6 @@ class TripDetailScreen extends StatelessWidget {
                       '${trip['total_stops']} '
                       '${trip['total_stops'] == 1 ? 'stop' : 'stops'} · '
                       '${trip['total_reports']} reports · '
-                      '${trip['total_quantity']} items · '
                       '${counts['Confirmed']} of '
                       '${stops.fold<int>(0, (n, s) => n + (s['deliveries'] as List).length)} '
                       'confirmed by the barangays',
@@ -644,10 +642,13 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   List<Map> _items(int reportId) =>
       (reports[reportId]!['items'] as List).cast<Map>();
 
-  int _total(int reportId) => linesFrom(
-    _items(reportId),
-    _ctrlFor(reportId),
-  ).fold(0, (a, l) => a + l['quantity']!);
+  /// How many different goods go for this report. Quantities are not
+  /// added up: they are in different units (kg, L, pcs).
+  int _goods(int reportId) =>
+      linesFrom(_items(reportId), _ctrlFor(reportId)).length;
+
+  static String _goodsLabel(int n) =>
+      '$n ${n == 1 ? 'kind' : 'kinds'} of goods';
 
   void _toggle(int reportId, bool on) {
     setState(() {
@@ -902,7 +903,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   Widget _stepWhen() {
     final t = Theme.of(context).textTheme;
     final stops = _stops;
-    final items = chosen.fold<int>(0, (a, r) => a + _total(r));
+    final goods = chosen.fold<int>(0, (a, r) => a + _goods(r));
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -944,7 +945,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
             subtitle: Text(
               '${stops[n].value.length} '
               '${stops[n].value.length == 1 ? 'report' : 'reports'} · '
-              '${stops[n].value.fold<int>(0, (a, r) => a + _total(r))} items',
+              '${_goodsLabel(stops[n].value.fold<int>(0, (a, r) => a + _goods(r)))}',
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -978,7 +979,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
             'Summary: ${chosen.length} '
             '${chosen.length == 1 ? 'report' : 'reports'}, '
             '${stops.length} ${stops.length == 1 ? 'stop' : 'stops'}, '
-            '$items items'
+            '${_goodsLabel(goods)}'
             '${date == null ? '' : ', leaving ${niceWhen(date)}'}.',
             style: t.bodyMedium,
           ),

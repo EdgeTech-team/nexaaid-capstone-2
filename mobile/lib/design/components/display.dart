@@ -315,9 +315,7 @@ class FulfillmentBar extends StatelessWidget {
     final done = pct >= 100;
     final muted = t.bodySmall?.copyWith(color: cs.onSurfaceVariant);
     return Semantics(
-      label:
-          '$label ${pct.toStringAsFixed(0)} percent, '
-          '$delivered of $needed items delivered',
+      label: '$label ${pct.toStringAsFixed(0)} percent',
       excludeSemantics: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -345,8 +343,10 @@ class FulfillmentBar extends StatelessWidget {
               ),
             ),
           ),
-          Gaps.v4,
-          Text('$delivered of $needed items delivered', style: muted),
+          // Per-item fulfillment (Oct 2026): no "X of Y items" total here.
+          // Needs are in different units (kg + L + pcs), so a sum means
+          // nothing; the % is the average of the needs, and the per-item
+          // bars (needs_progress.dart) give the amounts.
         ],
       ),
     );

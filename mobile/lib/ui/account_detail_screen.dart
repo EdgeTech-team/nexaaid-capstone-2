@@ -59,9 +59,49 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
         '/admin/users/${widget.userId}',
         body: {'is_active': activate, 'deactivation_reason': ?reason},
       ),
-      success: activate ? 'Account activated' : 'Account deactivated',
+      success: activate ? 'Account restored' : 'Account deactivated',
     );
     if (mounted) setState(() => busy = false);
+  }
+
+  /// Appendix H 1.2: delete a deactivated account. The server keeps the
+  /// row for the records it made, but removes the name, email, username and
+  /// ID photos, so the email can register again.
+  Future<void> _delete(Map u) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this account?'),
+        content: Text(
+          '${u['first_name']} ${u['last_name']} will be removed for good. '
+          'Their name, email and ID photos are erased and the email can be '
+          'used to register again. Reports and donations they made stay, '
+          'shown as "Deleted User". This cannot be undone.',
+        ),
+        actions: [
+          AppButton(
+            'Cancel',
+            variant: AppButtonVariant.text,
+            onPressed: () => Navigator.pop(ctx, false),
+          ),
+          AppButton(
+            'Delete',
+            variant: AppButtonVariant.danger,
+            onPressed: () => Navigator.pop(ctx, true),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => busy = true);
+    final r = await act(
+      context,
+      () => api.delete('/admin/users/${widget.userId}'),
+      success: 'Account deleted',
+    );
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (r.ok) Navigator.of(context).pop(true);
   }
 
   @override
@@ -240,7 +280,7 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
         Gaps.v8,
         if (u['user_id'] != null)
           AppButton(
-            active ? 'Deactivate account' : 'Activate account',
+            active ? 'Deactivate account' : 'Restore account',
             key: const ValueKey('toggle-active'),
             icon: active ? Icons.person_off_outlined : Icons.person_outline,
             variant: active
@@ -250,6 +290,19 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
             expand: true,
             onPressed: () => _setActive(u, !active),
           ),
+        // 1.2: only a deactivated account can be deleted (two steps on purpose).
+        if (u['user_id'] != null && !active) ...[
+          Gaps.v8,
+          AppButton(
+            'Delete account',
+            key: const ValueKey('delete-account'),
+            icon: Icons.delete_outline,
+            variant: AppButtonVariant.danger,
+            loading: busy,
+            expand: true,
+            onPressed: () => _delete(u),
+          ),
+        ],
         Gaps.v24,
       ],
     );

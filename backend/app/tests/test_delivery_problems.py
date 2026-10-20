@@ -4,6 +4,9 @@ truck came back, cancel (goods back to stock), cancel a DRRMO request, and
 DRRMO withdrawing an accepted request. Each keeps a record and tells the
 people affected.
 """
+from datetime import datetime
+
+import api.v1.deliveries as deliveries
 import core.database as database
 from models.logistics_request_model import LogisticsRequest
 from models.notification import Notification
@@ -112,7 +115,7 @@ def test_nothing_changes_after_it_arrived(api):
         assert client.post(f"/deliveries/{d}/{path}", headers=t["csws"], json=body).status_code == 409
 
 
-def test_trip_reschedule_return_and_cancel_one_stop(api):
+def test_trip_reschedule_return_and_cancel_one_stop(api, monkeypatch):
     client, t = api
     a, b = _stocked(client, t), _stocked(client, t, barangay_id=2)
     trip = ok(_trip(client, t, [
@@ -123,7 +126,10 @@ def test_trip_reschedule_return_and_cancel_one_stop(api):
     out = ok(client.post(f"/trips/{tid}/reschedule", headers=t["csws"], json={"delivery_date": LATER}))
     assert len(out["rescheduled_deliveries"]) == 2
     assert ok(client.get(f"/trips/{tid}", headers=t["csws"]))["trip_date"].startswith("2030-01-15")
+    # The truck can't leave before its day (Oct 20 testing feedback).
+    assert client.post(f"/trips/{tid}/start", headers=t["csws"]).status_code == 409
 
+    monkeypatch.setattr(deliveries, "now_utc", lambda: datetime.fromisoformat(LATER))  # the day comes
     ok(client.post(f"/trips/{tid}/start", headers=t["csws"]))
     ok(client.post(f"/trips/{tid}/stops/1/arrived", headers=t["csws"]))      # stop A done
     back = ok(client.post(f"/trips/{tid}/return-to-office", headers=t["csws"],

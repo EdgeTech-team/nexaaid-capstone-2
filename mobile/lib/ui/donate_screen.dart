@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
@@ -18,58 +19,186 @@ const storageAddress =
     'City of Mandaue City Social Services (CSWS), P.J. Burgos Street, Mandaue City';
 const storageHours = 'Monday to Friday, 8:00 AM to 5:00 PM';
 
-// Packaging options (manuscript 3.1: "packaging size, based on the
-// available packaging options shown in the system"; data dictionary
-// example "50kg sack").
-const packagingOptions = [
-  'Sack (50 kg)',
-  'Sack (25 kg)',
-  'Box',
-  'Pack',
-  'Plastic bag',
-  'Bottle',
-  'Gallon container',
-  'Loose / no packaging',
-  'Other',
-];
+// Per-item fulfillment (Oct 2026, docs/architecture/per-item-fulfillment.md).
+// Every item has one base unit: kg, L, or a count (cans, kits, pcs...). The
+// donor describes a line as
+//   number of packs x items per pack x size of each
+// (manuscript 3.1: "packaging size, based on the available packaging
+// options shown in the system") and the server works out the total in the
+// base unit, e.g. 3 boxes x 16 x 1.5 L bottle = 72 L. Packaging is only a
+// description, so "sack" is no longer a unit (testing item 4.1).
 
 const _otherItem = 'other';
+
+/// A size typed by the donor instead of one of the item's sizes.
+const _customSize = 'custom';
+
+/// Quick choices for "items per pack". 1 = single items, not in packs.
+const _perPackChoices = [1, 6, 10, 12, 15, 16, 24];
+
+/// Same limits as the server (schemas/physical_donation_schema.py).
+const _maxPacks = 100000;
+const _maxPerPack = 10000;
+
+/// How many base units (kg or L) one of each unit is. Same as FACTORS in
+/// the backend's services/units.py.
+const _unitFactors = {
+  'kg': 1.0,
+  'g': 0.001,
+  'L': 1.0,
+  'ml': 0.001,
+  'gallon': 3.785411784,
+};
+
+/// "kilos" -> kg, "liters" -> L (the backend's _ALIASES), for a unit typed
+/// under "Something else…".
+String? _measuredUnit(String unit) {
+  final u = unit.trim().toLowerCase();
+  if (const [
+    'kg',
+    'kgs',
+    'kilo',
+    'kilos',
+    'kilogram',
+    'kilograms',
+  ].contains(u)) {
+    return 'kg';
+  }
+  if (const ['l', 'liter', 'liters', 'litre', 'litres'].contains(u)) return 'L';
+  return null;
+}
+
+/// What the form needs to know about the chosen item: its base unit, the
+/// units a custom size may be typed in, and its common sizes (/lookups).
+class _ItemInfo {
+  final String unit;
+  final List<String> sizeUnits;
+  final List<Map<String, dynamic>> sizes; // {id, label, amount in base units}
+  const _ItemInfo(this.unit, this.sizeUnits, this.sizes);
+
+  factory _ItemInfo.fromLookup(Map<String, dynamic> it) {
+    final unit = '${it['unit'] ?? ''}';
+    return _ItemInfo(
+      unit,
+      [for (final u in (it['size_units'] as List? ?? const [])) '$u'],
+      [
+        for (final s in (it['sizes'] as List? ?? const []))
+          Map<String, dynamic>.from(s as Map),
+      ],
+    );
+  }
+
+  /// "Something else…": the unit the donor typed decides how it's measured.
+  factory _ItemInfo.typed(String unit) => switch (_measuredUnit(unit)) {
+    'kg' => _ItemInfo(unit, const ['kg', 'g'], const []),
+    'L' => _ItemInfo(unit, const ['L', 'ml', 'gallon'], const []),
+    _ => _ItemInfo(unit, [unit], const []),
+  };
+
+  /// Counted items (cans, kits, pcs) need no size: each one is 1.
+  bool get counted => !_unitFactors.containsKey(sizeUnits.firstOrNull);
+}
+
+/// One item line on the donation form.
+class _Line {
+  String? itemId;
+
+  /// One of the item's sizes (its id), [_customSize], or null.
+  String? sizeId;
+  String? sizeUnit; // unit of a custom size
+  int? perPack = 1; // null = typed in [perPackOther]
+  final packs = TextEditingController();
+  final perPackOther = TextEditingController();
+  final sizeAmount = TextEditingController();
+  final value = TextEditingController();
+  final otherName = TextEditingController();
+  final otherUnit = TextEditingController();
+
+  int? get packCount => int.tryParse(packs.text.trim());
+  int? get perPackValue => perPack ?? int.tryParse(perPackOther.text.trim());
+
+  /// A typed size is used when the item has no sizes, or "Other size".
+  bool usesCustomSize(_ItemInfo info) =>
+      !info.counted && (info.sizes.isEmpty || sizeId == _customSize);
+
+  String unitOf(_ItemInfo info) =>
+      info.sizeUnits.contains(sizeUnit) ? sizeUnit! : info.sizeUnits.first;
+
+  Map<String, dynamic>? _size(_ItemInfo info) {
+    for (final s in info.sizes) {
+      if ('${s['id']}' == sizeId) return s;
+    }
+    return null;
+  }
+
+  /// Size of one item in base units, or null while it isn't chosen.
+  double? sizeInBase(_ItemInfo info) {
+    if (info.counted) return 1;
+    if (usesCustomSize(info)) {
+      final amount = double.tryParse(sizeAmount.text.trim());
+      if (amount == null || amount <= 0) return null;
+      return amount * _unitFactors[unitOf(info)]!;
+    }
+    return (_size(info)?['amount'] as num?)?.toDouble();
+  }
+
+  /// packs x per pack x size, before rounding.
+  double? exactTotal(_ItemInfo info) {
+    final n = packCount, per = perPackValue, size = sizeInBase(info);
+    if (n == null || n <= 0 || per == null || per <= 0 || size == null) {
+      return null;
+    }
+    // Rounded to 6 places first so 0.33 x 50 gives 16.5, as on the server.
+    return (n * per * size * 1e6).round() / 1e6;
+  }
+
+  /// The total the server will save: a whole number of base units, half up
+  /// (3 x 500 ml = 1.5 L -> 2 L).
+  int? total(_ItemInfo info) => exactTotal(info)?.round();
+
+  /// "3 packs x 16 x 1.5 L bottle", "10 packs x 6 cans", "4 x 25 kg sack".
+  String breakdown(_ItemInfo info) {
+    final n = packCount ?? 0, per = perPackValue ?? 1;
+    if (info.counted) {
+      return per > 1 ? '$n packs × $per ${info.unit}' : '$n ${info.unit}';
+    }
+    final size = usesCustomSize(info)
+        ? '${sizeAmount.text.trim()} ${unitOf(info)}'
+        : '${_size(info)?['label'] ?? ''}';
+    return per > 1 ? '$n packs × $per × $size' : '$n × $size';
+  }
+
+  Map<String, dynamic> toJson(_ItemInfo info) => {
+    if (itemId == _otherItem) ...{
+      'other_item_name': otherName.text.trim(),
+      'other_item_unit': otherUnit.text.trim(),
+    } else
+      'item_id': int.parse(itemId!),
+    'pack_count': packCount,
+    'per_pack': perPackValue,
+    if (usesCustomSize(info)) ...{
+      'size_amount': double.parse(sizeAmount.text.trim()),
+      'size_unit': unitOf(info),
+    } else if (!info.counted)
+      'size_id': int.parse(sizeId!),
+    'estimated_value': ThousandsFormatter.parse(value.text),
+  };
+
+  void dispose() {
+    packs.dispose();
+    perPackOther.dispose();
+    sizeAmount.dispose();
+    value.dispose();
+    otherName.dispose();
+    otherUnit.dispose();
+  }
+}
 
 /// Side padding that keeps content at a readable width on wide screens
 /// (Chrome, tablets) and normal page padding on phones.
 double _sidePadding(BuildContext context) {
   final w = MediaQuery.sizeOf(context).width;
   return math.max(Space.md, (w - Breakpoints.contentMax) / 2);
-}
-
-/// One item line on the donation form.
-class _Line {
-  String? itemId;
-  String packaging = packagingOptions.first;
-  final qty = TextEditingController();
-  final value = TextEditingController();
-  final otherName = TextEditingController();
-  final otherUnit = TextEditingController();
-  final otherPackaging = TextEditingController();
-
-  Map<String, dynamic> toJson() => {
-    if (itemId == _otherItem) ...{
-      'other_item_name': otherName.text.trim(),
-      'other_item_unit': otherUnit.text.trim(),
-    } else
-      'item_id': int.parse(itemId!),
-    'packaging': packaging == 'Other' ? otherPackaging.text.trim() : packaging,
-    'quantity': int.parse(qty.text.trim()),
-    'estimated_value': ThousandsFormatter.parse(value.text),
-  };
-
-  void dispose() {
-    qty.dispose();
-    value.dispose();
-    otherName.dispose();
-    otherUnit.dispose();
-    otherPackaging.dispose();
-  }
 }
 
 /// UC-D2 step 5-6: physical donation form (one or more items). The whole
@@ -122,16 +251,7 @@ class _DonateScreenState extends State<DonateScreen> {
       ..forEach((l) => l.dispose())
       ..clear();
     for (final i in (e['items'] as List? ?? const []).cast<Map>()) {
-      final l = _Line()
-        ..itemId = '${i['item_id']}'
-        ..qty.text = '${i['quantity']}';
-      final pack = '${i['packaging'] ?? ''}';
-      if (packagingOptions.contains(pack)) {
-        l.packaging = pack;
-      } else {
-        l.packaging = 'Other';
-        l.otherPackaging.text = pack;
-      }
+      final l = _lineFromEntryItem(i);
       final value =
           (i['estimated_value'] as num?) ??
           num.tryParse('${i['estimated_value'] ?? ''}');
@@ -153,6 +273,76 @@ class _DonateScreenState extends State<DonateScreen> {
         : null;
     useSavedAddress = false; // show the address that was given
   }
+
+  /// One saved item back into the form. Newer donations kept their
+  /// breakdown (pack_count, per_pack, size_label); older ones only a total
+  /// in the base unit, which opens as that many single items of 1 kg / 1 L.
+  _Line _lineFromEntryItem(Map i) {
+    final l = _Line()..itemId = '${i['item_id']}';
+    final info = _infoOf(l);
+    final packs = i['pack_count'] ?? i['quantity'];
+    l.packs.text = packs == null ? '' : '$packs';
+    if (info == null) {
+      // A retired item (e.g. "Rice (sacks, old)"): choose the current one.
+      l.itemId = null;
+      return l;
+    }
+    final per = (i['per_pack'] as num?)?.toInt() ?? 1;
+    if (_perPackChoices.contains(per)) {
+      l.perPack = per;
+    } else {
+      l
+        ..perPack = null
+        ..perPackOther.text = '$per';
+    }
+    if (info.counted) return l;
+    final label = '${i['size_label'] ?? ''}';
+    final saved = i['pack_count'] == null
+        ? info.sizes.where((s) => s['amount'] == 1).firstOrNull
+        : info.sizes.where((s) => s['label'] == label).firstOrNull;
+    if (saved != null) {
+      l.sizeId = '${saved['id']}';
+      return l;
+    }
+    // A typed size, saved as e.g. "2 L"; or 1 base unit for older entries.
+    final m = i['pack_count'] == null
+        ? null
+        : RegExp(r'^(\d+(?:\.\d+)?)\s*(\S+)$').firstMatch(label);
+    final typed = m != null && info.sizeUnits.contains(m.group(2));
+    l
+      ..sizeId = info.sizes.isEmpty ? null : _customSize
+      ..sizeAmount.text = typed ? m.group(1)! : '1'
+      ..sizeUnit = typed ? m.group(2) : info.sizeUnits.first;
+    return l;
+  }
+
+  _ItemInfo? _infoOf(_Line l) {
+    if (l.itemId == _otherItem) {
+      final unit = l.otherUnit.text.trim();
+      return unit.isEmpty ? null : _ItemInfo.typed(unit);
+    }
+    for (final it in widget.names.rows('items')) {
+      if ('${it['id']}' == l.itemId) return _ItemInfo.fromLookup(it);
+    }
+    return null;
+  }
+
+  /// The report's per-item needs (from /lookups or /public/reports), or
+  /// empty for an older report with only "General needs".
+  late final List<Map> _reportNeeds = () {
+    final rows = [
+      for (final n in (widget.report['needs'] as List? ?? const []))
+        if (n is Map) n,
+    ];
+    return rows.any((n) => n['item_id'] == null) ? <Map>[] : rows;
+  }();
+
+  /// What is still missing of a need: needed minus what donors pledged.
+  static int _stillNeeded(Map n) => math.max(
+    0,
+    ((n['needed'] as num?) ?? 0).toInt() -
+        ((n['pledged'] as num?) ?? 0).toInt(),
+  );
 
   @override
   void initState() {
@@ -198,7 +388,7 @@ class _DonateScreenState extends State<DonateScreen> {
     if (digits.isEmpty) return 'Required';
     return _phMobile.hasMatch(digits)
         ? null
-        : 'Enter a mobile number like 0917 123 4567';
+        : 'Enter an 11-digit mobile number, e.g. 09171234567';
   }
 
   void _snack(String msg, {bool error = false}) {
@@ -263,7 +453,7 @@ class _DonateScreenState extends State<DonateScreen> {
         if (pickupNotes.text.trim().isNotEmpty)
           'pickup_notes': pickupNotes.text.trim(),
       },
-      'items': [for (final l in lines) l.toJson()],
+      'items': [for (final l in lines) l.toJson(_infoOf(l)!)],
       if (!api.loggedIn && !_editing)
         'guest_donor': {
           'full_name': guestName.text.trim(),
@@ -337,7 +527,25 @@ class _DonateScreenState extends State<DonateScreen> {
                   '${r['disaster']} in Barangay ${r['barangay']}',
                   style: t.titleMedium,
                 ),
-                if (needs.isNotEmpty) ...[
+                // Per-item fulfillment: what nobody has pledged yet, so
+                // donors give what is missing ("Water is covered").
+                if (_reportNeeds.isNotEmpty) ...[
+                  Gaps.v8,
+                  Text(
+                    'Still needed',
+                    style: t.labelMedium?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                  for (final n in _reportNeeds)
+                    Text(
+                      _stillNeeded(n) > 0
+                          ? '${n['item_name']}: ${_stillNeeded(n)} of '
+                                '${n['needed']} ${n['unit'] ?? ''}'
+                          : '${n['item_name']}: fully pledged',
+                      style: t.bodyMedium?.copyWith(
+                        color: _stillNeeded(n) > 0 ? null : cs.onSurfaceVariant,
+                      ),
+                    ),
+                ] else if (needs.isNotEmpty) ...[
                   Gaps.v4,
                   Text(
                     'Needs: $needs',
@@ -361,11 +569,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final items = widget.names.rows('items');
-    String unit = '';
-    for (final it in items) {
-      if ('${it['id']}' == l.itemId) unit = '${it['unit'] ?? ''}';
-    }
-    if (l.itemId == _otherItem) unit = l.otherUnit.text.trim();
+    final info = _infoOf(l);
     return Padding(
       key: ObjectKey(l),
       padding: const EdgeInsets.only(bottom: Space.sm),
@@ -405,7 +609,13 @@ class _DonateScreenState extends State<DonateScreen> {
                   child: Text('Something else…'),
                 ),
               ],
-              onChanged: (v) => setState(() => l.itemId = v),
+              // Another item has other sizes: choose the size again.
+              onChanged: (v) => setState(() {
+                l
+                  ..itemId = v
+                  ..sizeId = null
+                  ..sizeUnit = null;
+              }),
               validator: (v) => v == null ? 'Choose an item' : null,
             ),
             if (l.itemId == _otherItem) ...[
@@ -419,7 +629,7 @@ class _DonateScreenState extends State<DonateScreen> {
                       controller: l.otherName,
                       decoration: const InputDecoration(
                         labelText: 'Item name',
-                        hintText: 'e.g. Bottled water',
+                        hintText: 'e.g. Diapers',
                       ),
                       validator: _req,
                     ),
@@ -431,8 +641,8 @@ class _DonateScreenState extends State<DonateScreen> {
                       controller: l.otherUnit,
                       onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
-                        labelText: 'Unit',
-                        hintText: 'pcs, bottles',
+                        labelText: 'Counted in',
+                        hintText: 'pcs, kg, L',
                       ),
                       validator: _req,
                     ),
@@ -440,62 +650,298 @@ class _DonateScreenState extends State<DonateScreen> {
                 ],
               ),
             ],
-            Gaps.v12,
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: l.qty,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: 'Quantity',
-                      suffixText: unit.isEmpty ? null : unit,
-                    ),
-                    validator: (v) => (int.tryParse(v?.trim() ?? '') ?? 0) > 0
-                        ? null
-                        : 'Enter a number above 0',
-                  ),
-                ),
-                Gaps.h12,
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: l.packaging,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Packaging'),
-                    items: [
-                      for (final o in packagingOptions)
-                        DropdownMenuItem(value: o, child: Text(o)),
-                    ],
-                    onChanged: (v) => setState(() => l.packaging = v!),
-                  ),
-                ),
-              ],
-            ),
-            if (l.packaging == 'Other') ...[
+            if (l.itemId != null) _needNote(l),
+            if (info != null) ...[
+              if (!info.counted) ...[Gaps.v16, _sizeField(l, info)],
+              Gaps.v16,
+              _perPackField(l),
               Gaps.v12,
               TextFormField(
-                controller: l.otherPackaging,
-                decoration: const InputDecoration(
-                  labelText: 'Describe the packaging',
+                controller: l.packs,
+                keyboardType: TextInputType.number,
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(6),
+                ],
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: l.perPackValue == 1
+                      ? 'How many?'
+                      : 'How many packs?',
+                  suffixText: l.perPackValue == 1
+                      ? (info.counted ? info.unit : null)
+                      : 'packs',
                 ),
-                validator: _req,
+                validator: (v) {
+                  final n = int.tryParse(v?.trim() ?? '') ?? 0;
+                  if (n <= 0) return 'Enter a number above 0';
+                  if (n > _maxPacks) return 'Maximum is $_maxPacks';
+                  final total = l.total(info);
+                  if (total != null && total < 1) {
+                    return 'That is less than 1 ${info.unit}. Add more, or '
+                        'choose a bigger size.';
+                  }
+                  return null;
+                },
+              ),
+              Gaps.v12,
+              _totalNote(l, info),
+            ],
+            // Testing feedback (Oct 20): guests don't give an estimated value.
+            if (api.loggedIn) ...[
+              Gaps.v12,
+              TextFormField(
+                controller: l.value,
+                keyboardType: TextInputType.number,
+                // problema_napud 4.1: numbers only, with commas.
+                inputFormatters: const [ThousandsFormatter()],
+                decoration: const InputDecoration(
+                  labelText: 'Estimated value (optional)',
+                  prefixText: '₱ ',
+                  hintText: '0',
+                ),
               ),
             ],
-            Gaps.v12,
-            TextFormField(
-              controller: l.value,
-              keyboardType: TextInputType.number,
-              // problema_napud 4.1: numbers only, with commas.
-              inputFormatters: const [ThousandsFormatter()],
-              decoration: const InputDecoration(
-                labelText: 'Estimated value (optional)',
-                prefixText: '₱ ',
-                hintText: '0',
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Under the item: how much of it the report still needs, or that the
+  /// report did not ask for it (it is still accepted, as additional goods,
+  /// but does not count toward the report's progress).
+  Widget _needNote(_Line l) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    String? text;
+    if (l.itemId == _otherItem) {
+      text = 'CSWS checks items that are not on the list when they arrive.';
+    } else if (_reportNeeds.isNotEmpty) {
+      final need = _reportNeeds
+          .where((n) => '${n['item_id']}' == l.itemId)
+          .firstOrNull;
+      if (need == null) {
+        text =
+            'This report did not ask for this item. It is still welcome, '
+            'but it does not count toward the report\'s progress.';
+      } else {
+        final still = _stillNeeded(need);
+        text = still > 0
+            ? 'This report still needs $still ${need['unit'] ?? ''}.'
+            : 'This item is already fully pledged. Other needs of this '
+                  'report may be more urgent.';
+      }
+    }
+    if (text == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: Space.xs),
+      child: Text(
+        text,
+        style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+      ),
+    );
+  }
+
+  /// Size of each item: the item's common sizes as chips, plus "Other size"
+  /// (amount + unit). Items without sizes only have the typed size.
+  Widget _sizeField(_Line l, _ItemInfo info) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return FormField<String>(
+      key: ValueKey('size-${l.itemId}'),
+      validator: (_) => info.sizes.isNotEmpty && l.sizeId == null
+          ? 'Choose a size, or "Other size"'
+          : null,
+      builder: (field) {
+        void pick(String id) {
+          setState(() => l.sizeId = id);
+          field.didChange(id);
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Size of each', style: t.labelLarge),
+            if (info.sizes.isNotEmpty) ...[
+              Gaps.v8,
+              Wrap(
+                spacing: Space.xs,
+                runSpacing: Space.xs,
+                children: [
+                  for (final s in info.sizes)
+                    ChoiceChip(
+                      label: Text('${s['label']}'),
+                      selected: l.sizeId == '${s['id']}',
+                      onSelected: (_) => pick('${s['id']}'),
+                    ),
+                  ChoiceChip(
+                    label: const Text('Other size'),
+                    selected: l.sizeId == _customSize,
+                    onSelected: (_) => pick(_customSize),
+                  ),
+                ],
               ),
+              if (field.errorText != null) ...[
+                Gaps.v4,
+                Text(
+                  field.errorText!,
+                  style: t.bodySmall?.copyWith(color: cs.error),
+                ),
+              ],
+            ],
+            if (l.usesCustomSize(info)) ...[
+              Gaps.v12,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 3,
+                    child: TextFormField(
+                      controller: l.sizeAmount,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                        LengthLimitingTextInputFormatter(9),
+                      ],
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Size',
+                        hintText: 'e.g. 2',
+                      ),
+                      validator: (v) {
+                        final a = double.tryParse(v?.trim() ?? '');
+                        if (a == null || a <= 0) return 'Enter the size';
+                        if (a > 100000) return 'Too big';
+                        return null;
+                      },
+                    ),
+                  ),
+                  Gaps.h12,
+                  Expanded(
+                    flex: 2,
+                    child: DropdownButtonFormField<String>(
+                      key: ValueKey('unit-${l.itemId}-${info.unit}'),
+                      initialValue: l.unitOf(info),
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Unit'),
+                      items: [
+                        for (final u in info.sizeUnits)
+                          DropdownMenuItem(value: u, child: Text(u)),
+                      ],
+                      onChanged: (v) => setState(() => l.sizeUnit = v),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  /// Items per pack: Single, 6, 10, 12, 15, 16, 24, or a typed number.
+  Widget _perPackField(_Line l) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Items per pack', style: t.labelLarge),
+        Gaps.v4,
+        Text(
+          'Single = not in packs or boxes',
+          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+        Gaps.v8,
+        Wrap(
+          spacing: Space.xs,
+          runSpacing: Space.xs,
+          children: [
+            for (final n in _perPackChoices)
+              ChoiceChip(
+                label: Text(n == 1 ? 'Single' : '$n'),
+                selected: l.perPack == n,
+                onSelected: (_) => setState(() => l.perPack = n),
+              ),
+            ChoiceChip(
+              label: const Text('Other'),
+              selected: l.perPack == null,
+              onSelected: (_) => setState(() => l.perPack = null),
             ),
           ],
         ),
+        if (l.perPack == null) ...[
+          Gaps.v12,
+          TextFormField(
+            controller: l.perPackOther,
+            keyboardType: TextInputType.number,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(5),
+            ],
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(labelText: 'Items in each pack'),
+            validator: (v) {
+              final n = int.tryParse(v?.trim() ?? '') ?? 0;
+              if (n <= 0) return 'Enter a number above 0';
+              if (n > _maxPerPack) return 'Maximum is $_maxPerPack';
+              return null;
+            },
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// "You're donating 72 L" with the breakdown, as the server will save it.
+  Widget _totalNote(_Line l, _ItemInfo info) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final exact = l.exactTotal(info);
+    final total = l.total(info);
+    String fmt(double x) => x == x.roundToDouble() ? '${x.round()}' : '$x';
+    return Container(
+      padding: const EdgeInsets.all(Space.sm),
+      decoration: BoxDecoration(
+        color: cs.primaryContainer.withValues(alpha: 0.45),
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.calculate_outlined, color: cs.primary),
+          Gaps.h12,
+          Expanded(
+            child: total == null || exact == null
+                ? Text(
+                    'Fill in the size and how many to see the total.',
+                    style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "You're donating $total ${info.unit}",
+                        style: t.titleMedium,
+                      ),
+                      // "10 cans" alone would only repeat the line above.
+                      if (!info.counted || (l.perPackValue ?? 1) > 1)
+                        Text(
+                          exact == total
+                              ? l.breakdown(info)
+                              : '${l.breakdown(info)} = ${fmt(exact)} '
+                                    '${info.unit}, counted as $total',
+                          style: t.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -688,9 +1134,11 @@ class _DonateScreenState extends State<DonateScreen> {
           TextFormField(
             controller: guestPhone,
             keyboardType: TextInputType.phone,
+            // Testing feedback (Oct 20): digits only, stops at 11.
+            inputFormatters: phoneFormatters,
             decoration: const InputDecoration(
               labelText: 'Contact number',
-              hintText: '0917 123 4567',
+              hintText: '09171234567',
               prefixIcon: Icon(Icons.phone_outlined),
             ),
             validator: _phone,
@@ -982,6 +1430,44 @@ class DonationReceipt extends StatefulWidget {
 class _DonationReceiptState extends State<DonationReceipt> {
   final _scroll = ScrollController();
 
+  /// 4.2 (testing feedback): a guest has no account to find this QR code
+  /// again, so leaving before saving it asks first.
+  bool _saved = false;
+  bool get _mustSave => !api.loggedIn && !_saved;
+
+  Future<void> _leave() async {
+    if (!_mustSave) {
+      Navigator.pop(context);
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.qr_code_2),
+        title: const Text('Save your QR code first'),
+        content: const Text(
+          'You are donating as a guest, so you cannot open this QR code '
+          'again in the app. CSWS needs it to receive your donation. Save '
+          'the image, or take a screenshot, before you leave.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('I took a screenshot'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Go back and save it'),
+          ),
+        ],
+      ),
+    );
+    if (leave == true && mounted) {
+      setState(() => _saved = true); // lets the pop through
+      Navigator.pop(context);
+    }
+  }
+
   @override
   void dispose() {
     _scroll.dispose();
@@ -1002,188 +1488,200 @@ class _DonationReceiptState extends State<DonationReceipt> {
     final pickupTime = formatPickupIso(batch['preferred_pickup_at']);
     final pickupDays = pickupDaysOf(batch['pickup_days']);
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Donation recorded')),
-      bottomNavigationBar: Material(
-        elevation: 8,
-        color: cs.surface,
-        child: SafeArea(
-          top: false,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(side, Space.sm, side, Space.sm),
-            child: AppButton(
-              'Done',
-              expand: true,
-              onPressed: () => Navigator.pop(context),
+    return PopScope(
+      canPop: !_mustSave,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Donation recorded')),
+        bottomNavigationBar: Material(
+          elevation: 8,
+          color: cs.surface,
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(side, Space.sm, side, Space.sm),
+              child: AppButton('Done', expand: true, onPressed: _leave),
             ),
           ),
         ),
-      ),
-      body: Scrollbar(
-        controller: _scroll,
-        thumbVisibility: true,
-        child: ListView(
+        body: Scrollbar(
           controller: _scroll,
-          padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
-          children: [
-            const Icon(Icons.check_circle, color: AppColors.success, size: 56),
-            Gaps.v8,
-            Text(
-              'Thank you!',
-              textAlign: TextAlign.center,
-              style: t.headlineSmall,
-            ),
-            Gaps.v4,
-            Text(
-              'For ${widget.reportTitle}. '
-              '${dropOff ? 'Show this QR code at the CSWS office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
-              textAlign: TextAlign.center,
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            Gaps.v16,
-            AppCard(
-              child: Column(
-                children: [
-                  if (qr != null)
-                    Container(
-                      padding: const EdgeInsets.all(Space.sm),
-                      decoration: BoxDecoration(
-                        color: Colors
-                            .white, // QR codes need a light background to scan
-                        borderRadius: BorderRadius.circular(Radii.md),
-                      ),
-                      child: Image.memory(
-                        base64Decode(qr),
-                        width: 220,
-                        height: 220,
-                      ),
-                    ),
-                  Gaps.v8,
-                  SelectableText(
-                    '${batch['batch_reference']}',
-                    textAlign: TextAlign.center,
-                    style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
-                  ),
-                  Gaps.v8,
-                  SaveQrButton(
-                    qrBase64: qr,
-                    reference: '${batch['batch_reference']}',
-                    handover: '${batch['handover_method']}',
-                    forReport: widget.reportTitle,
-                  ),
-                  Gaps.v8,
-                  Wrap(
-                    spacing: Space.xs,
-                    runSpacing: Space.xs,
-                    alignment: WrapAlignment.center,
-                    children: [
-                      Chip(
-                        avatar: Icon(
-                          dropOff
-                              ? Icons.store_mall_directory_outlined
-                              : Icons.local_shipping_outlined,
-                          size: 18,
-                        ),
-                        label: Text('${batch['handover_method']}'),
-                      ),
-                      StatusChip('${batch['status']}'),
-                    ],
-                  ),
-                ],
+          thumbVisibility: true,
+          child: ListView(
+            controller: _scroll,
+            padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
+            children: [
+              const Icon(
+                Icons.check_circle,
+                color: AppColors.success,
+                size: 56,
               ),
-            ),
-            // How long the donor has to hand it over (donation expiry).
-            if (batch['expires_label'] != null) ...[
-              Gaps.v12,
-              ExpiryNote(batch),
-            ],
-            const SectionHeader('Items in this donation'),
-            AppCard(
-              padding: EdgeInsets.zero,
-              child: Column(
-                children: [
-                  for (var i = 0; i < items.length; i++) ...[
-                    if (i > 0) const Divider(height: 1),
-                    ListTile(
-                      leading: Icon(
-                        Icons.inventory_2_outlined,
-                        color: cs.primary,
+              Gaps.v8,
+              Text(
+                'Thank you!',
+                textAlign: TextAlign.center,
+                style: t.headlineSmall,
+              ),
+              Gaps.v4,
+              Text(
+                'For ${widget.reportTitle}. '
+                '${dropOff ? 'Show this QR code at the CSWS office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
+                textAlign: TextAlign.center,
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v16,
+              AppCard(
+                child: Column(
+                  children: [
+                    if (qr != null)
+                      Container(
+                        padding: const EdgeInsets.all(Space.sm),
+                        decoration: BoxDecoration(
+                          color: Colors.white, // QR codes need a light background to scan
+                          borderRadius: BorderRadius.circular(Radii.md),
+                        ),
+                        child: Image.memory(
+                          base64Decode(qr),
+                          width: 220,
+                          height: 220,
+                        ),
                       ),
-                      title: Text('${items[i]['item_name']}'),
-                      subtitle: Text('${items[i]['packaging']}'),
-                      trailing: Text(
-                        '${items[i]['quantity']} ${items[i]['unit'] ?? ''}'
-                            .trim(),
-                        style: t.titleMedium,
-                      ),
+                    Gaps.v8,
+                    SelectableText(
+                      '${batch['batch_reference']}',
+                      textAlign: TextAlign.center,
+                      style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
+                    ),
+                    Gaps.v8,
+                    SaveQrButton(
+                      qrBase64: qr,
+                      reference: '${batch['batch_reference']}',
+                      handover: '${batch['handover_method']}',
+                      forReport: widget.reportTitle,
+                      onSaved: () => setState(() => _saved = true),
+                    ),
+                    Gaps.v8,
+                    Wrap(
+                      spacing: Space.xs,
+                      runSpacing: Space.xs,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        Chip(
+                          avatar: Icon(
+                            dropOff
+                                ? Icons.store_mall_directory_outlined
+                                : Icons.local_shipping_outlined,
+                            size: 18,
+                          ),
+                          label: Text('${batch['handover_method']}'),
+                        ),
+                        StatusChip('${batch['status']}'),
+                      ],
                     ),
                   ],
-                ],
+                ),
               ),
-            ),
-            if (!dropOff && batch['pickup_address'] != null) ...[
-              const SectionHeader('Pickup'),
+              // How long the donor has to hand it over (donation expiry).
+              if (batch['expires_label'] != null) ...[
+                Gaps.v12,
+                ExpiryNote(batch),
+              ],
+              const SectionHeader('Items in this donation'),
               AppCard(
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
-                    if (batch['pickup_landmark'] != null) ...[
-                      ListTile(
-                        leading: Icon(Icons.place_outlined, color: cs.primary),
-                        title: const Text('Landmark'),
-                        subtitle: Text('${batch['pickup_landmark']}'),
-                      ),
-                      const Divider(height: 1),
-                    ],
-                    ListTile(
-                      leading: Icon(Icons.home_outlined, color: cs.primary),
-                      title: const Text('Address'),
-                      subtitle: Text('${batch['pickup_address']}'),
-                    ),
-                    if (pickupDays.isNotEmpty) ...[
-                      const Divider(height: 1),
+                    for (var i = 0; i < items.length; i++) ...[
+                      if (i > 0) const Divider(height: 1),
                       ListTile(
                         leading: Icon(
-                          Icons.event_available_outlined,
+                          Icons.inventory_2_outlined,
                           color: cs.primary,
                         ),
-                        title: const Text('Available pickup days'),
-                        subtitle: Text(
-                          '${pickupDaysLabel(pickupDays)} · pickup hours '
-                          '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                        title: Text('${items[i]['item_name']}'),
+                        subtitle: Text('${items[i]['packaging']}'),
+                        trailing: Text(
+                          '${items[i]['quantity']} ${items[i]['unit'] ?? ''}'
+                              .trim(),
+                          style: t.titleMedium,
                         ),
-                      ),
-                    ] else if (pickupTime != null) ...[
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(Icons.event_outlined, color: cs.primary),
-                        title: const Text('Preferred pickup'),
-                        subtitle: Text(pickupTime),
-                      ),
-                    ],
-                    if (batch['pickup_notes'] != null) ...[
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: Icon(
-                          Icons.sticky_note_2_outlined,
-                          color: cs.primary,
-                        ),
-                        title: const Text('Notes for pickup'),
-                        subtitle: Text('${batch['pickup_notes']}'),
                       ),
                     ],
                   ],
                 ),
               ),
+              if (!dropOff && batch['pickup_address'] != null) ...[
+                const SectionHeader('Pickup'),
+                AppCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      if (batch['pickup_landmark'] != null) ...[
+                        ListTile(
+                          leading: Icon(
+                            Icons.place_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Landmark'),
+                          subtitle: Text('${batch['pickup_landmark']}'),
+                        ),
+                        const Divider(height: 1),
+                      ],
+                      ListTile(
+                        leading: Icon(Icons.home_outlined, color: cs.primary),
+                        title: const Text('Address'),
+                        subtitle: Text('${batch['pickup_address']}'),
+                      ),
+                      if (pickupDays.isNotEmpty) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.event_available_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Available pickup days'),
+                          subtitle: Text(
+                            '${pickupDaysLabel(pickupDays)} · pickup hours '
+                            '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
+                          ),
+                        ),
+                      ] else if (pickupTime != null) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.event_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Preferred pickup'),
+                          subtitle: Text(pickupTime),
+                        ),
+                      ],
+                      if (batch['pickup_notes'] != null) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: Icon(
+                            Icons.sticky_note_2_outlined,
+                            color: cs.primary,
+                          ),
+                          title: const Text('Notes for pickup'),
+                          subtitle: Text('${batch['pickup_notes']}'),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+              if (dropOff) ...[
+                Gaps.v16,
+                const DropOffCard(
+                  fallbackAddress: storageAddress,
+                  fallbackHours: storageHours,
+                ),
+              ],
             ],
-            if (dropOff) ...[
-              Gaps.v16,
-              const DropOffCard(
-                fallbackAddress: storageAddress,
-                fallbackHours: storageHours,
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
