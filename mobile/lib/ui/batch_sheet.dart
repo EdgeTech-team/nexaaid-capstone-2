@@ -82,6 +82,12 @@ class _BatchSheetState extends State<BatchSheet> {
   /// so the donation reads Received, never Partly Received.
   final Set<int> _notBrought = {};
 
+  /// Per-item fulfillment (Oct 2026): what an item really is, when the
+  /// donor typed "Bigas" or picked the wrong item. donation_id -> the
+  /// /lookups item ({id, item_name, unit}). Sent as item_id, so the goods
+  /// count toward the matching need (RECLASSIFY DONATION in the audit log).
+  final Map<int, Map<String, dynamic>> _itemAs = {};
+
   List<Map<String, dynamic>> get _items => (b['items'] as List? ?? const [])
       .map((e) => Map<String, dynamic>.from(e as Map))
       .toList();
@@ -113,6 +119,7 @@ class _BatchSheetState extends State<BatchSheet> {
           {
             'donation_id': e.key,
             'actual_quantity': int.parse(e.value.text.trim()),
+            if (_itemAs[e.key] != null) 'item_id': _itemAs[e.key]!['id'],
           },
     ];
     setState(() => _busy = true);
@@ -136,6 +143,44 @@ class _BatchSheetState extends State<BatchSheet> {
     if (!mounted) return;
     setState(() => _busy = false);
     if (r.ok) Navigator.of(context).pop(true);
+  }
+
+  /// "Wrong item?": CSWS picks what the goods really are. When the unit
+  /// changes (sacks -> kg), the amount is cleared so it is typed again in
+  /// the new unit.
+  Future<void> _changeItem(Map<String, dynamic> line) async {
+    final lookups = await api.lookups();
+    if (!mounted) return;
+    final items = Names(lookups)
+        .rows('items')
+        .where((i) => '${i['id']}' != '${line['item_id']}')
+        .toList();
+    final picked = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('What is "${line['item_name']}" really?'),
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 0, 24, 8),
+            child: Text(
+              'It will count toward the report\'s need for that item.',
+              style: TextStyle(fontSize: 13, color: Brand.muted),
+            ),
+          ),
+          for (final i in items)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(i),
+              child: Text('${i['item_name'] ?? i['name']} (${i['unit']})'),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+    final id = line['donation_id'] as int;
+    setState(() {
+      _itemAs[id] = picked;
+      if ('${picked['unit']}' != '${line['unit']}') _actual[id]?.clear();
+    });
   }
 
   /// After Reopen / Cancel: load the entry again and show its new state.
@@ -359,6 +404,13 @@ class _BatchSheetState extends State<BatchSheet> {
 
   Widget _itemCard(Map<String, dynamic> line) {
     final ctrl = _actual[line['donation_id']];
+    final relabel = _itemAs[line['donation_id']];
+    // Quantities are in the item's base unit (kg, L, pcs). Newer donations
+    // also say how the donor described it: "3 x 16 x 1.5 L bottle = 72 L".
+    final declared = line['pack_count'] != null && line['amount_text'] != null
+        ? '${line['amount_text']}'
+        : '${line['quantity']} ${line['unit']} · ${line['packaging']}';
+    final unit = '${(relabel ?? line)['unit'] ?? ''}';
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
@@ -379,8 +431,7 @@ class _BatchSheetState extends State<BatchSheet> {
             ),
             const SizedBox(height: 4),
             Text(
-              'Declared: ${line['quantity']} ${line['unit']} · '
-              '${line['packaging']}'
+              'Declared: $declared'
               '${line['estimated_value'] != null ? ' · ${pesos(line['estimated_value'])}' : ''}',
             ),
             Text(
@@ -395,6 +446,33 @@ class _BatchSheetState extends State<BatchSheet> {
                 ),
               ),
             if (ctrl != null) ...[
+              if (relabel != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.swap_horiz, size: 18),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Received as ${relabel['item_name'] ?? relabel['name']} '
+                          '(${relabel['unit']})',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => setState(() {
+                          final id = line['donation_id'] as int;
+                          _itemAs.remove(id);
+                          if ('${relabel['unit']}' != '${line['unit']}') {
+                            ctrl.text = '${line['quantity']}';
+                          }
+                        }),
+                        child: const Text('Undo'),
+                      ),
+                    ],
+                  ),
+                ),
               if (!_notBrought.contains(line['donation_id']))
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
@@ -403,7 +481,7 @@ class _BatchSheetState extends State<BatchSheet> {
                     keyboardType: TextInputType.number,
                     decoration: InputDecoration(
                       labelText: 'Actual quantity received',
-                      suffixText: '${line['unit'] ?? ''}',
+                      suffixText: unit,
                       isDense: true,
                     ),
                     validator: (v) {
@@ -415,21 +493,32 @@ class _BatchSheetState extends State<BatchSheet> {
                     },
                   ),
                 ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilterChip(
-                  key: ValueKey('not-brought-${line['donation_id']}'),
-                  label: const Text('Not brought'),
-                  avatar: const Icon(
-                    Icons.remove_shopping_cart_outlined,
-                    size: 18,
+              Wrap(
+                spacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  FilterChip(
+                    key: ValueKey('not-brought-${line['donation_id']}'),
+                    label: const Text('Not brought'),
+                    avatar: const Icon(
+                      Icons.remove_shopping_cart_outlined,
+                      size: 18,
+                    ),
+                    selected: _notBrought.contains(line['donation_id']),
+                    onSelected: (on) => setState(() {
+                      final id = line['donation_id'] as int;
+                      on ? _notBrought.add(id) : _notBrought.remove(id);
+                    }),
                   ),
-                  selected: _notBrought.contains(line['donation_id']),
-                  onSelected: (on) => setState(() {
-                    final id = line['donation_id'] as int;
-                    on ? _notBrought.add(id) : _notBrought.remove(id);
-                  }),
-                ),
+                  if (!_notBrought.contains(line['donation_id']) &&
+                      line['item_id'] != null)
+                    TextButton.icon(
+                      key: ValueKey('change-item-${line['donation_id']}'),
+                      onPressed: () => _changeItem(line),
+                      icon: const Icon(Icons.edit_outlined, size: 18),
+                      label: const Text('Wrong item?'),
+                    ),
+                ],
               ),
             ],
           ],
