@@ -13,6 +13,7 @@ import 'location_picker.dart';
 import 'pickup_days.dart';
 import 'qr_save.dart';
 import 'quantity_units.dart';
+import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 
 // Fallback drop-off details, shown only when GET /donations/drop-off-info
@@ -658,22 +659,18 @@ class _DonateScreenState extends State<DonateScreen> {
                     'Still needed',
                     style: t.labelMedium?.copyWith(color: cs.onSurfaceVariant),
                   ),
-                  for (final n in _reportNeeds)
-                    Text(
+                  Gaps.v4,
+                  // Highlighted like the needs on the report cards.
+                  NeedChips([
+                    for (final n in _reportNeeds)
                       _stillNeeded(n) > 0
                           ? '${n['item_name']}: ${_stillNeeded(n)} of '
                                 '${n['needed']} ${n['unit'] ?? ''}'
                           : '${n['item_name']}: fully pledged',
-                      style: t.bodyMedium?.copyWith(
-                        color: _stillNeeded(n) > 0 ? null : cs.onSurfaceVariant,
-                      ),
-                    ),
+                  ]),
                 ] else if (needs.isNotEmpty) ...[
-                  Gaps.v4,
-                  Text(
-                    'Needs: $needs',
-                    style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                  ),
+                  Gaps.v8,
+                  NeedChips(NeedChips.split(needs)),
                 ],
                 if (r['priority_level'] != null) ...[
                   Gaps.v8,
