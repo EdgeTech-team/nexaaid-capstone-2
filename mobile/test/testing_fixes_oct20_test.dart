@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/donate_screen.dart';
+import 'package:mobile/ui/donation_info.dart' show DonationInfoCard;
 import 'package:mobile/ui/needs_progress.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
@@ -122,6 +123,29 @@ void main() {
       }),
       isNull,
     );
+  });
+
+  testWidgets('Every donor can save the barangay\'s GCash QR image', (
+    tester,
+  ) async {
+    await http.runWithClient(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: const Scaffold(
+            body: DonationInfoCard(
+              info: {
+                'provider': 'GCash',
+                'qr_url': '/uploads/qr.png',
+                'account_number': '09171234567',
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Save QR image'), findsOneWidget);
+    }, () => _offline);
   });
 
   testWidgets('Fulfillment bar shows the %, not "X of Y items"', (

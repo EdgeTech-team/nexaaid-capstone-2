@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../design/design.dart';
 
@@ -163,6 +164,36 @@ Future<bool?> saveQrImage(
     ..hideCurrentSnackBar()
     ..showSnackBar(SnackBar(content: Text(message)));
   return saved;
+}
+
+/// Testing feedback (Oct 21): donors (guest, individual, organization) can
+/// save the barangay's GCash / bank QR image to pay later from their own
+/// app. Downloads it from [url] and opens the phone's "Save to" screen.
+Future<void> saveImageFromUrl(
+  BuildContext context, {
+  required String url,
+  required String fileName,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  String message;
+  try {
+    final r = await http.get(Uri.parse(url));
+    if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
+    final where = await FilePicker.saveFile(
+      dialogTitle: 'Save the QR image',
+      fileName: fileName,
+      bytes: r.bodyBytes,
+      mimeType: 'image/png',
+      type: FileType.image,
+    );
+    // On the web the browser downloads the file itself (see saveQrImage).
+    message = where != null || kIsWeb ? 'QR image saved.' : 'Not saved.';
+  } catch (_) {
+    message = 'Could not save the QR image. Take a screenshot instead.';
+  }
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
 }
 
 /// "Save QR image" button. Shows a message when it is saved (or why not).
