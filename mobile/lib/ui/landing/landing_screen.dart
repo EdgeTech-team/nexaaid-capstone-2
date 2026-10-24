@@ -273,12 +273,14 @@ class _LandingScreenState extends State<LandingScreen> {
         err.status,
         err.detail,
         onRetry: _reload,
-        secondary: AppButton(
-          'Server address',
-          icon: Icons.dns_outlined,
-          variant: AppButtonVariant.text,
-          onPressed: _serverAddress,
-        ),
+        secondary: api.devOptions
+            ? AppButton(
+                'Server address',
+                icon: Icons.dns_outlined,
+                variant: AppButtonVariant.text,
+                onPressed: _serverAddress,
+              )
+            : null,
       ),
     );
   }

@@ -39,6 +39,15 @@ const _cacheLookups = 'sms_cache_lookups';
 const _cacheReceivers = 'sms_cache_receivers_admin';
 const _cacheSavedAt = 'sms_cache_saved_at';
 const _cacheDraft = 'sms_draft_v1';
+/// The /lookups lists this screen uses. Only these are kept in memory and in
+/// the offline copy on the phone, so lists of internal records (F-01) are
+/// never saved on the device.
+const _offlineLookupKeys = ['disaster_types', 'barangays', 'sitios', 'items'];
+
+Map<String, dynamic> _offlineLookups(Map source) => {
+  for (final key in _offlineLookupKeys)
+    if (source.containsKey(key)) key: source[key],
+};
 
 class SmsSendScreen extends StatefulWidget {
   const SmsSendScreen({super.key});
@@ -133,7 +142,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       prefs = await SharedPreferences.getInstance();
       final l = prefs.getString(_cacheLookups);
       final r = prefs.getString(_cacheReceivers);
-      if (l != null) lookups = Map<String, dynamic>.from(jsonDecode(l) as Map);
+      if (l != null) lookups = _offlineLookups(jsonDecode(l) as Map);
       if (r != null) receivers = (jsonDecode(r) as List).cast<Map>();
       savedAt = prefs.getString(_cacheSavedAt);
     } catch (e) {
@@ -151,7 +160,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       final r = await api
           .get('/contacts/sms-receivers')
           .timeout(const Duration(seconds: 8));
-      lookups = Map<String, dynamic>.from(fresh);
+      lookups = _offlineLookups(fresh);
       if (r.ok && r.json is List) receivers = (r.json as List).cast<Map>();
       savedAt = DateTime.now().toIso8601String();
       online = true;
