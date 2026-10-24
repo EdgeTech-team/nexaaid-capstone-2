@@ -21,7 +21,7 @@ import 'widgets.dart';
 
 /// Plain words for each trip status (same colors as delivery statuses).
 const tripStatusLabels = {
-  'Preparing': 'Being prepared',
+  'Preparing': 'Active',
   'In Transit': 'On the road',
   'Delivered': 'Waiting for barangay confirmation',
   'Completed': 'Completed',
@@ -308,7 +308,7 @@ class TripDetailScreen extends StatelessWidget {
       context,
       title: 'Truck came back?',
       message:
-          'Stops the truck did not reach go back to "Preparing", so you can '
+         'Stops the truck did not reach go back to "Active", so you can '
           'send them again or cancel them. Why did it come back?',
       choices: const [
         'The truck broke down',
@@ -534,7 +534,7 @@ class _StopDelivery extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Delivery #${d['delivery_id']} · ${d['report_label'] ?? 'Report #${d['report_id']}'}',
+                 'Delivery #${d['delivery_id']} · ${reportName(d['report_label'] ?? 'Report')}',
                   style: t.titleSmall,
                 ),
                 Text(items, style: t.bodyMedium),
