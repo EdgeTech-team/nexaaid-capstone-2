@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from core.audit import log_action
-from core.auth import barangay_scope, get_current_user_optional, has_role, require_role
+from core.auth import barangay_scope, can_view_unvalidated_report, get_current_user_optional, has_role, require_role
 from core.database import get_db
 from core.uploads import file_url
 from models.barangay_model import Barangay
@@ -191,6 +191,28 @@ def _report(db: Session, report_id: int) -> DisasterReport:
         raise HTTPException(status_code=404, detail="Report not found")
     return r
 
+def _may_change_override(user: User, r: DisasterReport) -> None:
+    """F-04: the payment details donors see on a report. The Administrator
+    may change them on any report that still exists. A Disaster Unit member
+    only on a report they submitted, and only before it is validated
+    (Pending or Rejected), so the Administrator sees the details when
+    validating and nobody can quietly swap the account number on a report
+    donors are already sending money to."""
+    if r.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if has_role(user, "Administrator"):
+        return
+    if r.user_id != user.user_id:
+        raise HTTPException(status_code=403,
+                            detail="You can only change the donation info of reports you submitted.")
+    if r.status not in ("Pending", "Rejected"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"This report is already {r.status}, so only the Administrator "
+                   "can change its donation info.",
+        )
+
+
 
 @router.get("/reports/{report_id}/donation-info")
 def get_report_info(
@@ -201,9 +223,9 @@ def get_report_info(
     """UC-D2: shown with the report, to guests too. The report's override
     if the Disaster Unit set one, else all of the barangay's methods."""
     r = _report(db, report_id)
-    staff = user is not None and user.is_active and has_role(
-        user, "csws_staff", "admin", "barangay_official")
-    if r.status != "Validated" and not staff:
+    may_see = user is not None and user.is_active and can_view_unvalidated_report(user, r)  # F-05
+    if r.status != "Validated" and not may_see:
+
         raise HTTPException(status_code=404, detail="Report not found")
     override = db.get(ReportDonationInfo, report_id)
     methods = [] if override else _methods(db, r.barangay_id)
@@ -229,6 +251,9 @@ def put_report_info(
     user: User = Depends(require_role(*UNIT_OR_ADMIN)),
 ):
     r = _report(db, report_id)
+    r = _report(db, report_id)
+    _may_change_override(user, r)
+
     row = db.get(ReportDonationInfo, report_id)
     keep = {m.qr_file_id for m in _methods(db, r.barangay_id)}
     if row is not None:
@@ -250,7 +275,9 @@ def delete_report_info(
     user: User = Depends(require_role(*UNIT_OR_ADMIN)),
 ):
     """Remove the override; the report shows the barangay's methods again."""
-    _report(db, report_id)
+    r = _report(db, report_id)
+    _may_change_override(user, r)
+
     row = db.get(ReportDonationInfo, report_id)
     if row is not None:
         log_action(db, user, "REMOVE DONATION INFO", "report_donation_info", report_id,

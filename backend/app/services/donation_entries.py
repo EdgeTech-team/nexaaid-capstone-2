@@ -119,7 +119,10 @@ def build_entries(
                     "qr_reference": l.qr_reference,
                     "item_id": l.item_id,
                     "item_name": items[l.item_id].item_name if l.item_id in items else "Item",
-                    "unit": items[l.item_id].unit_of_measure if l.item_id in items else "",
+                    "unit": items[l.item_id].unit_of_measure if l.item_id 
+                    in items else "",
+                    "item_pending": bool(items[l.item_id].pending_review) if l.item_id in items else False,
+
                     "quantity": l.quantity,
                     "packaging": l.packaging,
                     "estimated_value": float(l.estimated_value) if l.estimated_value is not None else None,

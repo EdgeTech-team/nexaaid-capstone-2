@@ -30,6 +30,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from services.inventory import add_to_stock
+
 from core.audit import log_action
 from core.auth import has_role, require_role
 from core.database import get_db
@@ -197,22 +199,20 @@ def cancel_delivery(
     """The delivery will not happen. Every item goes back to its report's
     stock, open DRRMO requests are cancelled, and the record is kept as
     Cancelled with the reason. A delivery on the road must come back first."""
-    d = _delivery(db, delivery_id)
+    d = (db.query(Delivery).filter(Delivery.delivery_id == delivery_id)
+         .with_for_update().populate_existing().first())   # F-06: one cancel at a time
+    if d is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
     _not_finished(d)
     if d.status == "In Transit":
         raise HTTPException(
             status_code=409,
             detail="This delivery is on the road. Tap \"Truck came back\" first, then cancel it.",
         )
-    returned = []
-    for line in d.items:
-        inv = (db.query(Inventory)
-               .filter(Inventory.item_id == line.item_id, Inventory.report_id == d.report_id).first())
-        if inv is None:
-            inv = Inventory(item_id=line.item_id, report_id=d.report_id, quantity=0)
-            db.add(inv)
-        inv.quantity += line.quantity
-        returned.append({"item_id": line.item_id, "quantity": line.quantity})
+    for line in sorted(d.items, key=lambda l: l.item_id):   # F-06: same lock order everywhere
+        add_to_stock(db, line.item_id, d.report_id, line.quantity)
+    returned = [{"item_id": line.item_id, "quantity": line.quantity} for line in d.items]
+
     requests = _close_requests(db, d, current_user, payload.reason)
     d.status = "Cancelled"
     d.cancelled_at = datetime.now(timezone.utc)
