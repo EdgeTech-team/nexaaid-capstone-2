@@ -179,9 +179,10 @@ def test_donor_cancels_own_pending_donation(api):
     ok(client.post("/donations/receive", headers=t["csws"],
                    json={"donation_id": first, "actual_quantity": 2}))
 
-    # Someone else's account cannot cancel it; no login and no phone: 401.
+     # Someone else's account cannot cancel it; no login and no phone: 403 (F-17).
     assert client.post(f"/donations/entries/{ref}/cancel", headers=t["unit"], json={}).status_code == 403
-    assert client.post(f"/donations/entries/{ref}/cancel", json={}).status_code == 401
+    assert client.post(f"/donations/entries/{ref}/cancel", json={}).status_code == 403
+
 
     out = ok(client.post(f"/donations/entries/{ref.lower()}/cancel", headers=t["donor"],
                          json={"reason": "I gave the items another way"}))
@@ -197,7 +198,9 @@ def test_donor_cancels_own_pending_donation(api):
 def test_guest_cancels_with_their_phone_number(api):
     client, t = api
     rid = _report(client, t)
-    e = _entry(client, {}, rid, guest_donor={"full_name": "Guest", "contact_number": "0917 123 4567"})
+    e = _entry(client, {}, rid, guest_donor={"full_name": "Guest", "contact_number": "0917 123 4567", "consent": True})
+
+
     ref = e["batch_reference"]
     wrong = client.post(f"/donations/entries/{ref}/cancel", json={"contact_number": "09181234567"})
     assert wrong.status_code == 403
