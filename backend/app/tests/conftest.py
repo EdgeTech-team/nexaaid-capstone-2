@@ -12,7 +12,7 @@ test here doesn't 100% guarantee Postgres behaves identically for
 edge cases (e.g. exact NUMERIC precision) — but for CRUD/status-flow
 logic like this module, it's a faithful stand-in.
  
-⚠️ ASSUMPTION: auth is mocked here via dependency_overrides on
+ASSUMPTION: auth is mocked here via dependency_overrides on
 `get_current_user` / `require_role`, since I still haven't seen the
 real app.core.auth. Once that file is merged, these overrides may
 need to match its actual dependency names/signatures — but the
@@ -21,14 +21,15 @@ need to match its actual dependency names/signatures — but the
  
 import pytest
 from fastapi import Request
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine 
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
  
-from main import app
+from main import app 
 from core.database import Base, get_db
-from core.auth import get_current_user
+from core.auth import clear_failed_logins, get_current_user, get_current_user_optional
+
 from models.report import DisasterType, Barangay, Sitio, DisasterReport
 from models.city_model import City
 from models.user_rbac_model import User
@@ -213,14 +214,14 @@ def admin_client(db_session, seed):
     app.dependency_overrides.clear()
     _fake_users_by_id.clear()
  
-
-
-
-
-
-
-
-
+@pytest.fixture()
+def optional_login_as_client():
+    """Opt-in: endpoints where logging in is optional (e.g. GET /lookups)
+    see the same fake user as get_current_user (the client's X-Test-User-Id
+    header) instead of a guest. Use it together with a *_client fixture."""
+    app.dependency_overrides[get_current_user_optional] = _get_current_user_override
+    yield
+    app.dependency_overrides.pop(get_current_user_optional, None)
 
 
 
@@ -248,6 +249,23 @@ def _temp_upload_storage(tmp_path):
     previous = set_storage(LocalStorage(tmp_path / "uploads"))
     yield
     set_storage(previous)
+
+@pytest.fixture(autouse=True)
+def _fresh_login_counts():
+    """F-02: failed sign-ins are counted in memory; every test starts from zero."""
+    clear_failed_logins()
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _fresh_address_search():
+    """F-19: the address-search cache and the count of calls to Photon are
+    kept in memory; every test starts from zero."""
+    from api.v1 import donation_routes
+    donation_routes._GEO_CACHE.clear()
+    donation_routes._geo_calls.clear()
+    yield
+
 
 
 @pytest.fixture(autouse=True)

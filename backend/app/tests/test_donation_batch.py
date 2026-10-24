@@ -51,7 +51,7 @@ def test_one_qr_for_many_items_and_per_item_receiving(api):
     # Public re-show of the QR returns only the reference + image
     qr = ok(client.get(f"/donations/batch/{ref}/qr"))
     assert qr["batch_reference"] == ref and qr["qr_image_base64"]
-    assert ok(client.get(f"/donations/{b['items'][2]['donation_id']}/qr"))["batch_reference"] == ref
+    assert ok(client.get(f"/donations/{b['items'][2]['donation_id']}/qr", headers=t["donor"]))["batch_reference"] == ref
 
     # UC-CM1 step 2: the one QR opens the whole donation
     found = ok(client.get(f"/donations/by-batch/{ref.lower()}", headers=t["csws"]))
@@ -115,7 +115,7 @@ def test_batch_rules_and_door_to_door_pickup(api):
     g = ok(post({**door, "pickup_address": "  P.J. Burgos St, Mandaue City ",
                  "pickup_lat": 10.32456, "pickup_lng": 123.94302,
                  "preferred_pickup_at": slot.isoformat(),
-                 "guest_donor": {"full_name": "Guest", "contact_number": "0917 123 4567"}},
+                 "guest_donor": {"full_name": "Guest", "contact_number": "0917 123 4567", "consent": True}},
                 headers={}), 201)
     assert g["pickup_address"] == "P.J. Burgos St, Mandaue City"
     assert (g["pickup_lat"], g["pickup_lng"]) == (10.32456, 123.94302)
@@ -135,7 +135,7 @@ def test_guest_phone_must_be_a_ph_mobile_number(api):
     client, t = api
     rid = _report(client, t)
     body = {"report_id": rid, "handover_method": "Drop Off", "items": [LINE],
-            "guest_donor": {"full_name": "Guest", "contact_number": "12345"}}
+    "guest_donor": {"full_name": "Guest", "contact_number": "12345", "consent": True}}
     r = client.post("/donations/batch", json=body)
     assert r.status_code == 422 and "Philippine mobile number" in r.text
     body["guest_donor"]["contact_number"] = "+63 917-123-4567"
@@ -157,8 +157,7 @@ def test_pickup_board_lists_waiting_door_to_door_donations(api):
                       "pickup_notes": "Blue gate, call when outside",
                       "preferred_pickup_at": _pickup_slot(hour=9).isoformat(),
                       "items": [LINE, {"item_id": 1, "packaging": "Pack", "quantity": 5}],
-                      "guest_donor": {"full_name": "Ana Guest", "contact_number": "09181234567"}},
-                     headers={}), 201)
+                      "guest_donor": {"full_name": "Ana Guest", "contact_number": "09181234567", "consent": True}},                     headers={}), 201)
     ok(post({"report_id": rid, "handover_method": "Drop Off", "items": [LINE]}), 201)  # not a pickup
     done = ok(post({**door, "pickup_address": "Done St", "items": [LINE],
                     "preferred_pickup_at": _pickup_slot(hour=11).isoformat()}), 201)
@@ -209,6 +208,30 @@ def test_single_item_endpoint_still_works(api):
     found = ok(client.get(f"/donations/by-qr/{d['qr_reference']}", headers=t["csws"]))
     assert found["donation_id"] == d["donation_id"]
     assert ok(client.get(f"/donations/by-batch/{d['qr_reference']}", headers=t["csws"]))["total_items"] == 1
+def test_single_item_endpoint_only_accepts_validated_reports(api):
+    """F-16: the older endpoint follows UC-D2 alt 2a like /donations/batch:
+    no donations to Pending, Rejected (or deleted) or withdrawn reports."""
+    client, t = api
+    pending = _report(client, t, validate=False)
+    rejected = _report(client, t, validate=False)
+    ok(client.post(f"/reports/{rejected}/reject", headers=t["admin"],
+                   json={"rejection_reason": "Duplicate"}))
+    withdrawn = _report(client, t, validate=False)
+    ok(client.post(f"/reports/{withdrawn}/withdraw", headers=t["unit"], json={}))
+
+    line = {"item_id": 1, "packaging": "Box", "quantity": 3, "handover_method": "Drop Off"}
+    guest = {"full_name": "Gina Guest", "contact_number": "09171234567", "consent": True}
+    for rid in (pending, rejected, withdrawn):
+        r = client.post("/donations/", headers=t["donor"], json={**line, "report_id": rid})
+        assert r.status_code == 400, rid
+        assert r.json()["detail"] == "Only validated reports can receive donations"
+        assert client.post("/donations/", json={**line, "report_id": rid,
+                                                "guest_donor": guest}).status_code == 400, rid
+    assert client.post("/donations/", headers=t["donor"],
+                       json={**line, "report_id": 99999}).status_code == 404
+    ok(client.post("/donations/", headers=t["donor"],
+                   json={**line, "report_id": _report(client, t)}))   # validated: still works
+
 
 
 def test_drop_off_info(api, monkeypatch):

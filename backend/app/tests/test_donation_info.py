@@ -11,6 +11,13 @@ never processes or verifies money (Scope Limitation #5).
 from tests.reg_helpers import png, upload
 from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
 
+
+import core.database as database
+from core.auth import hash_password
+from models.user_rbac_model import User
+from tests.reg_helpers import png, upload
+from tests.test_role_flows import PASSWORD, api, ok  # noqa: F401  (fixture)
+
 METHODS = "/barangays/{}/donation-info/methods"
 
 GCASH = {"provider": "GCash", "account_name": "Barangay Test Relief Fund",
@@ -143,29 +150,35 @@ def test_report_shows_default_override_and_guest_access(api):
     ok(client.post(METHODS.format(1), headers=t["brgy"],
                    json={**GCASH, "qr_file_id": qr["file_id"]}), 201)
     ok(client.post(METHODS.format(1), headers=t["brgy"], json=BANK), 201)
-    rid = _report(client, t)
+    rid = _report(client, t, validate=False)
 
-    # UC-D2: guests see all of the barangay's methods with the note.
-    res = ok(client.get(f"/reports/{rid}/donation-info"))
-    assert res["source"] == "barangay" and res["info"]["provider"] == "GCash"
-    assert [m["provider"] for m in res["methods"]] == ["GCash", "Bank"]
-    assert res["note"] == "NexaAid does not process or verify payments. Send directly to the barangay."
-
-    # UC-CD1: the Disaster Unit overrides it for this report only (and may keep the QR).
+    # UC-CD1: the Disaster Unit overrides it for its own report, before
+    # validation (F-04), and may keep the barangay's QR.
     override = {"provider": "Maya", "account_name": "Typhoon Relief Desk",
                 "account_number": "09180000000", "qr_file_id": qr["file_id"]}
     res = ok(client.put(f"/reports/{rid}/donation-info", headers=t["unit"], json=override))
     assert res["source"] == "report" and res["info"]["provider"] == "Maya"
     assert res["methods"] == []                                    # the override replaces the list
-    other_report = _report(client, t)
-    assert ok(client.get(f"/reports/{other_report}/donation-info"))["source"] == "barangay"
     for key in ("brgy", "donor", "csws"):
         assert client.put(f"/reports/{rid}/donation-info", headers=t[key], json=override).status_code == 403
+    ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
 
-    # Removing the override falls back to the barangay's methods.
-    assert client.delete(f"/reports/{rid}/donation-info", headers=t["unit"]).status_code == 204
+    # UC-D2: guests see the override on this report, and the barangay's
+    # methods (with the note) on any other.
+    assert ok(client.get(f"/reports/{rid}/donation-info"))["source"] == "report"
+    other_report = _report(client, t)
+    res = ok(client.get(f"/reports/{other_report}/donation-info"))
+    assert res["source"] == "barangay" and res["info"]["provider"] == "GCash"
+    assert [m["provider"] for m in res["methods"]] == ["GCash", "Bank"]
+    assert res["note"] == "NexaAid does not process or verify payments. Send directly to the barangay."
+
+    # Removing the override falls back to the barangay's methods. The report
+    # is validated, so only the Administrator can do it now (F-04).
+    assert client.delete(f"/reports/{rid}/donation-info", headers=t["unit"]).status_code == 409
+    assert client.delete(f"/reports/{rid}/donation-info", headers=t["admin"]).status_code == 204
     res = ok(client.get(f"/reports/{rid}/donation-info"))
     assert res["source"] == "barangay" and len(res["methods"]) == 2
+
 
     # A report not yet validated is hidden from guests and donors, visible to staff.
     pending = _report(client, t, validate=False)
@@ -200,3 +213,59 @@ def test_other_provider_needs_its_own_name(api):
     res = ok(client.post(METHODS.format(1), headers=t["brgy"],
                          json={**GCASH, "provider_other": "Coins.ph"}), 201)
     assert res["provider"] == "GCash" and res["provider_other"] is None
+
+
+
+def test_f04_report_payment_info_owner_before_validation_or_admin(api):
+    """F-04: a Disaster Unit member changes a report's payment details only on
+    a report they submitted, and only before it is validated; after that only
+    the Administrator can. A withdrawn report is refused, a deleted one is gone."""
+    client, t = api
+    db = database.SessionLocal()
+    try:
+        db.add(User(first_name="other", last_name="Test", contact_number="09170000000",
+                    email="unit2.test@example.com", password_hash=hash_password(PASSWORD),
+                    role_id=6))                                     # CSWS Disaster Unit
+        db.commit()
+    finally:
+        db.close()
+    login = ok(client.post("/token", data={"username": "unit2.test@example.com",
+                                           "password": PASSWORD}))
+    unit2 = {"Authorization": f"Bearer {login['access_token']}"}
+    path = "/reports/{}/donation-info"
+    info = {"provider": "GCash", "account_name": "Typhoon Relief Desk",
+            "account_number": "09180000000"}
+
+    report = _report(client, t, validate=False)
+    # Another Disaster Unit member: refused, nothing saved.
+    assert client.put(path.format(report), headers=unit2, json=info).status_code == 403
+    assert client.delete(path.format(report), headers=unit2).status_code == 403
+    assert ok(client.get(path.format(report), headers=t["unit"]))["source"] is None
+    # The submitter sets it while Pending; it is what donors see once validated.
+    ok(client.put(path.format(report), headers=t["unit"], json=info))
+    ok(client.post(f"/reports/{report}/validate", headers=t["admin"], json={}))
+    assert ok(client.get(path.format(report)))["info"]["account_number"] == "09180000000"
+
+    # Validated: the submitter can no longer swap or remove it; the Administrator can.
+    swap = {**info, "account_number": "09189999999"}
+    assert client.put(path.format(report), headers=t["unit"], json=swap).status_code == 409
+    assert client.delete(path.format(report), headers=t["unit"]).status_code == 409
+    assert ok(client.get(path.format(report)))["info"]["account_number"] == "09180000000"
+    ok(client.put(path.format(report), headers=t["admin"], json=swap))
+    assert ok(client.get(path.format(report)))["info"]["account_number"] == "09189999999"
+
+    # Rejected (being corrected): the submitter may still set it.
+    rejected = _report(client, t, validate=False)
+    ok(client.post(f"/reports/{rejected}/reject", headers=t["admin"],
+                   json={"rejection_reason": "Fix the numbers"}))
+    ok(client.put(path.format(rejected), headers=t["unit"], json=info))
+
+    # Withdrawn: refused for the submitter. Deleted: refused for everyone.
+    withdrawn = _report(client, t, validate=False)
+    ok(client.post(f"/reports/{withdrawn}/withdraw", headers=t["unit"], json={}))
+    assert client.put(path.format(withdrawn), headers=t["unit"], json=info).status_code == 409
+    deleted = _report(client, t, validate=False)
+    ok(client.post(f"/reports/{deleted}/reject", headers=t["admin"],
+                   json={"rejection_reason": "Duplicate"}))
+    assert client.delete(f"/reports/{deleted}", headers=t["admin"]).status_code == 204
+    assert client.put(path.format(deleted), headers=t["admin"], json=info).status_code == 404

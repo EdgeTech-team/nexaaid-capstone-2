@@ -34,8 +34,7 @@ def test_staff_accounts_cannot_submit_donations(api):
         assert r.status_code == 403, who
     assert client.post("/donations/batch", headers=t["donor"], json=body).status_code == 201
     assert client.post("/donations/batch", json={**body, "guest_donor": {
-        "full_name": "Gina Guest", "contact_number": "09179999999"}}).status_code == 201
-
+    "full_name": "Gina Guest", "contact_number": "09179999999", "consent": True}}).status_code == 201
 
 def test_the_cmo_cannot_undo_once_the_goods_are_on_a_delivery(api):
     client, t = api
