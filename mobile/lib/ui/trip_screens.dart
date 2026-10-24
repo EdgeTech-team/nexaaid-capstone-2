@@ -308,7 +308,7 @@ class TripDetailScreen extends StatelessWidget {
       context,
       title: 'Truck came back?',
       message:
-         'Stops the truck did not reach go back to "Active", so you can '
+          'Stops the truck did not reach go back to "Active", so you can '
           'send them again or cancel them. Why did it come back?',
       choices: const [
         'The truck broke down',
@@ -534,7 +534,7 @@ class _StopDelivery extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                 'Delivery #${d['delivery_id']} · ${reportName(d['report_label'] ?? 'Report')}',
+                  'Delivery #${d['delivery_id']} · ${reportName(d['report_label'] ?? 'Report')}',
                   style: t.titleSmall,
                 ),
                 Text(items, style: t.bodyMedium),
