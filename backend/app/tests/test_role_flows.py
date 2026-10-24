@@ -157,12 +157,16 @@ def test_full_relief_chain_across_all_roles(api):
         "disaster_type_id": 1, "barangay_id": 1, "source": "mobile"}), 201)
     assert mobile["source"] == "Mobile"
 
+    
     # dropdown data (public, used by the app instead of typed ids)
     lk = ok(client.get("/lookups"))
     assert lk["disaster_types"] == [{"id": 1, "name": "Flood"}]
     assert lk["items"][0]["name"] == "Rice (kg)"
-    assert {r["id"] for r in lk["reports"]} == {rid, mobile["report_id"]}
+    assert lk["reports"] == []                    # F-01: unvalidated reports are staff only
     assert lk["validated_reports"] == []          # nothing validated yet
+    staff = ok(client.get("/lookups", headers=t["admin"]))   # the Administrator validates them
+    assert {r["id"] for r in staff["reports"]} == {rid, mobile["report_id"]}
+
     ok(client.get(f"/reports/{rid}", headers=t["csws"]))   # staff can view any report
     ok(client.get(f"/reports/{rid}", headers=t["unit"]))
     assert client.post(f"/reports/{rid}/validate", headers=t["csws"], json={}).status_code == 403
@@ -186,10 +190,14 @@ def test_full_relief_chain_across_all_roles(api):
     base = {"report_id": rid, "item_id": 1, "packaging": "Box", "handover_method": "Drop Off"}
     d1 = ok(client.post("/donations/", headers=t["donor"], json={**base, "quantity": 60}))
     d2 = ok(client.post("/donations/", json={**base, "quantity": 5,
-             "guest_donor": {"full_name": "Guest", "contact_number": "0917"}}))
+    "guest_donor": {"full_name": "Guest", "contact_number": "09171234567", "consent": True}}))    # CSWS Main Office's receive dropdown lists both; guests see none (F-01).
+    assert len(ok(client.get("/lookups", headers=t["csws"]))["pending_donations"]) == 2
+    assert ok(client.get("/lookups"))["pending_donations"] == []
+
     # 6.1: a new donation starts Pending; nothing approves it automatically
     assert d1["status"] == d2["status"] == "Pending"
-    assert ok(client.get(f"/donations/{d1['donation_id']}/qr"))["qr_image_base64"]
+    assert ok(client.get(f"/donations/{d1['donation_id']}/qr", headers=t["donor"]))["qr_image_base64"]
+    assert client.get(f"/donations/{d1['donation_id']}/qr").status_code == 404   # F-17
 
     # --- 3.6 CSWS receives, inventory updates ----------------------------
     assert client.get("/donations/pending", headers=t["brgy"]).status_code == 403
@@ -198,8 +206,11 @@ def test_full_relief_chain_across_all_roles(api):
     for d, qty in ((d1, 60), (d2, 5)):
         ok(client.post("/donations/receive", headers=t["csws"],
                        json={"donation_id": d["donation_id"], "actual_quantity": qty}))
-    assert ok(client.get("/lookups"))["pending_donations"] == []
-    assert len(ok(client.get("/lookups"))["received_donations"]) == 2
+        
+    assert ok(client.get("/lookups", headers=t["csws"]))["pending_donations"] == []
+    assert len(ok(client.get("/lookups", headers=t["cmo"]))["received_donations"]) == 2
+    assert ok(client.get("/lookups"))["received_donations"] == []   # F-01: not for guests
+
     inv = ok(client.get("/donations/inventory", headers=t["csws"]))
     assert inv[0]["quantity"] == 65
 
@@ -313,13 +324,16 @@ def test_donor_dashboard_and_other_item(api):
     again = ok(client.post("/donations/", headers=t["donor"], json={
         **base, "other_item_name": "face masks", "quantity": 2}))
     assert other["item_id"] == again["item_id"] != 1
+        # F-15: a typed-in item waits for CSWS review before it is in the list.
+    assert "Face Masks (boxes)" not in [i["name"] for i in ok(client.get("/lookups"))["items"]]
+    ok(client.post(f"/items/{other['item_id']}/approve", headers=t["csws"], json={}))
     assert "Face Masks (boxes)" in [i["name"] for i in ok(client.get("/lookups"))["items"]]
+
     assert client.post("/donations/", headers=t["donor"], json={**base, "quantity": 1}).status_code == 422
 
     # someone else's donation must not show on this donor's dashboard
     ok(client.post("/donations/", json={**base, "item_id": 1, "quantity": 3,
-                                        "guest_donor": {"full_name": "G", "contact_number": "0917"}}))
-
+    "guest_donor": {"full_name": "Gina Guest", "contact_number": "09171234567", "consent": True}}))
     mine = ok(client.get("/donations/mine", headers=t["donor"]))
     assert mine["summary"]["total_donations"] == 3
     assert mine["summary"]["pending"] == 3

@@ -30,10 +30,14 @@ def _reject(admin_client, report_id):
 
 
 def test_admin_deletes_rejected_report_and_it_disappears(
-    admin_client, reporter_client, seed, db_session
+    admin_client, reporter_client, seed, db_session, optional_login_as_client
 ):
     report_id = _new_report(reporter_client, seed)
     _reject(admin_client, report_id)
+    # The Administrator's report dropdown (staff only since F-01) lists it
+    # while it is Rejected, so the "gone" check below is not checking an empty list.
+    before = admin_client.get("/lookups").json()
+    assert report_id in [r["id"] for r in before["reports"]]
 
     assert admin_client.delete(f"/reports/{report_id}").status_code == 204
 

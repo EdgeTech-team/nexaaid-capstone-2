@@ -4,4 +4,8 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- F-13: http:// (10.0.2.2, localhost) only in debug and profile builds.
+         Release builds talk HTTPS only. -->
+    <application android:usesCleartextTraffic="true" />
+
 </manifest>
