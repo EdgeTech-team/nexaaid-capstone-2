@@ -705,7 +705,7 @@ Future<void> showDeliveryProblems(
               title: const Text('The truck came back with the goods'),
               subtitle: const Text(
                 'Breakdown, road closed, nobody to receive. It goes back '
-                'to "Preparing" so you can send it again or cancel it.',
+                'to "Active" so you can send it again or cancel it.',
               ),
               onTap: () => Navigator.pop(ctx, 'back'),
             ),
@@ -753,7 +753,7 @@ Future<void> showDeliveryProblems(
         final why = await askReason(
           context,
           title: 'Truck came back',
-          message: 'Delivery #$id goes back to "Preparing". Why?',
+          message: 'Delivery #$id goes back to "Active". Why?',
           choices: const [
             'The truck broke down',
             'The road is closed or unsafe',

@@ -68,8 +68,15 @@ abstract final class StatusColors {
     'fulfilled': (_green, Icons.task_alt),
   };
 
-  /// Every status the palette knows, for the component gallery.
+    /// Every status the palette knows, for the component gallery.
   static Iterable<String> get known => _map.keys;
+
+  /// Words shown for a status when they differ from the stored value
+  /// (testing #17: the delivery status "Preparing" is shown as "Active").
+  static const Map<String, String> _labels = {'preparing': 'Active'};
+
+  static String label(String? status) =>
+      _labels[(status ?? '').trim().toLowerCase()] ?? (status ?? 'Unknown');
 
   static ToneStyle of(String? status, Brightness b) {
     final e = _map[(status ?? '').trim().toLowerCase()];

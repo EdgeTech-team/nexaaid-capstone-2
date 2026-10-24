@@ -699,7 +699,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                     ? 'Edit Report #${widget.edit!['report_id']}'
                     : sms
                     ? 'Encode SMS Report'
-                    : 'Submit Post-Disaster Report',
+                    : 'Submit Disaster Report',
                 subtitle: editing
                     ? (widget.edit!['status'] == 'Rejected'
                           ? 'Rejected: ${widget.edit!['rejection_reason'] ?? ''}\n'
