@@ -167,8 +167,17 @@ def test_pickups_stay_in_cebu_and_far_ones_can_be_declined(api, monkeypatch):
     r = post(_door(rid, [1], landmark="Rizal Park", lat=14.5826, lng=120.9787))
     assert r.status_code == 422 and "Cebu province" in r.text
 
+    # Geofence (Oct 2026): Bogo is not Mandaue or a neighbour, so it is
+    # refused up front (offline in tests: checked by distance).
+    r = post(_door(rid, [1], landmark="Bogo City Hall", lat=11.0517, lng=124.0055))
+    assert r.status_code == 422 and "Door to Door area" in r.text
+
+    # A pin OSM places in an accepted city but far from the office is still
+    # accepted and flagged "too far" for CSWS to decide.
+    import api.v1.donation_routes as routes
+    monkeypatch.setattr(routes, "_reverse_city", lambda lat, lng: "Cebu City")
     near = ok(post(_door(rid, [1])), 201)                                   # Mandaue City Hall
-    far = ok(post(_door(rid, [1], landmark="Bogo City Hall", lat=11.0517, lng=124.0055)), 201)
+    far = ok(post(_door(rid, [1], landmark="Far pin", lat=11.0517, lng=124.0055)), 201)
     board = {p["batch_reference"]: p for p in ok(client.get("/donations/pickups", headers=t["csws"]))}
     assert board[near["batch_reference"]]["too_far"] is False
     assert board[far["batch_reference"]]["too_far"] is True

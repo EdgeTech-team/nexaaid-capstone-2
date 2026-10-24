@@ -567,7 +567,7 @@ class _StopDelivery extends StatelessWidget {
                           visualDensity: VisualDensity.compact,
                         ),
                         onPressed: () => showDeliveryProblems(context, d),
-                        child: const Text('Something went wrong?'),
+                        child: const Text('Edit'),
                       ),
                   ],
                 ),

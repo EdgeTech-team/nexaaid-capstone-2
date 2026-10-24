@@ -962,6 +962,12 @@ class _DonateScreenState extends State<DonateScreen> {
             'CSWS will come to this address on one of the days you are home.',
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
+          // Geofence (Oct 2026): where Door to Door is offered.
+          if (pickupRules.cities.isNotEmpty)
+            Text(
+              'Door to Door is only in ${pickupRules.cities.join(', ')}.',
+              style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
           Gaps.v12,
           if (savedAddress != null) ...[
             RadioGroup<bool>(
@@ -988,13 +994,14 @@ class _DonateScreenState extends State<DonateScreen> {
           // 1. Landmark: suggestions appear as the donor types. Picking one
           //    also saves the map pin so CSWS can navigate.
           // Required, and picked from the suggestions (Oct 11): that gives
-          // the pin on the CSWS pickup map, and suggestions only come from
-          // the pickup area (Cebu province).
+          // the pin on the CSWS pickup map. Places outside the Door to Door
+          // cities are greyed out (geofence, Oct 2026).
           AddressAutocompleteField(
             controller: pickupLandmark,
             label: 'Landmark',
             hint: 'Start typing a nearby landmark, e.g. church, school, store',
             icon: Icons.place_outlined,
+            pickupAreaOnly: true,
             onChanged: (p) => picked = p.lat == null ? null : p,
             validator: (v) {
               if (handover != 'Door to Door') return null;
