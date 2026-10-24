@@ -239,14 +239,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Confirm that delivery #${d['delivery_id']} arrived. This is also '
           'your barangay\'s acknowledgement of the aid. If it is '
           'incomplete you can wait until it is resolved (UC-B1 4a).',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+            fields: const [],
       confirm: 'Confirm receipt',
     );
     if (v == null || !context.mounted) return;
@@ -254,7 +247,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       () => api.post(
         '/deliveries/${d['delivery_id']}/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+        body: const {},
       ),
       success: 'Receipt confirmed and aid acknowledged. Fulfillment updated.',
     );
@@ -269,14 +262,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Trip #$tripId brought $n deliveries to your barangay. Confirm only '
           'if everything arrived. If something is missing, confirm the '
           'deliveries one by one instead.',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+        fields: const [],
       confirm: 'Confirm all',
     );
     if (v == null || !context.mounted) return;
@@ -284,7 +270,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       () => api.post(
         '/trips/$tripId/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+        body: const {},
       ),
       success: '$n deliveries confirmed and acknowledged. Fulfillment updated.',
     );
