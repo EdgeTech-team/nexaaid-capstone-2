@@ -45,3 +45,4 @@ backend/app/var/
 .neon/
 .neon
 .env.*
+.claude/
