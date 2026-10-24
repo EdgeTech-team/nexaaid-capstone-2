@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Role names exactly as they are in the `roles` table.
 class Roles {
@@ -87,13 +88,49 @@ class Api extends ChangeNotifier {
   static const _kRole = 'session_role';
   static const _kMustChange = 'session_must_change';
 
+  // F-12: on Android and iOS the login token is kept in the Android
+  // Keystore / iOS Keychain, never in plain shared_preferences. The web and
+  // desktop builds keep it in shared_preferences (browsers have no secure
+  // store; a Content-Security-Policy protects the web build).
+  static const _secure = FlutterSecureStorage();
+
+  static bool get _onPhone =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  Future<void> _writeToken(SharedPreferences p) async {
+    if (!_onPhone) {
+      await p.setString(_kToken, token ?? '');
+      return;
+    }
+    if (token == null) {
+      await _secure.delete(key: _kToken);
+    } else {
+      await _secure.write(key: _kToken, value: token);
+    }
+    await p.remove(_kToken); // no plain copy left on the phone
+  }
+
+  Future<String?> _readToken(SharedPreferences p) async {
+    final plain = p.getString(_kToken);
+    if (!_onPhone) return plain;
+    // A session saved before F-12 moves to secure storage once.
+    if (plain != null && plain.isNotEmpty) {
+      await _secure.write(key: _kToken, value: plain);
+      await p.remove(_kToken);
+      return plain;
+    }
+    return _secure.read(key: _kToken);
+  }
+
   Future<void> _saveSession() async {
     try {
       final p = await SharedPreferences.getInstance();
-      await p.setString(_kToken, token ?? '');
       await p.setString(_kEmail, email ?? '');
       await p.setString(_kRole, role ?? '');
       await p.setBool(_kMustChange, mustChangePassword);
+      await _writeToken(p);
     } catch (_) {}
   }
 
@@ -104,6 +141,7 @@ class Api extends ChangeNotifier {
       await p.remove(_kEmail);
       await p.remove(_kRole);
       await p.remove(_kMustChange);
+      if (_onPhone) await _secure.delete(key: _kToken);
     } catch (_) {}
   }
 
@@ -113,7 +151,7 @@ class Api extends ChangeNotifier {
   Future<void> restoreSession() async {
     try {
       final p = await SharedPreferences.getInstance();
-      final saved = p.getString(_kToken);
+      final saved = await _readToken(p);
       if (saved == null || saved.isEmpty) return;
       token = saved;
       email = p.getString(_kEmail);
@@ -132,6 +170,8 @@ class Api extends ChangeNotifier {
       final r = me.json['role']?.toString();
       if (r != null && r != role) {
         role = r;
+        _lookups = null; // F-01: the lookup lists depend on the role
+
         await _saveSession();
         notifyListeners();
       }
@@ -162,7 +202,13 @@ class Api extends ChangeNotifier {
     return 'https://nexaaid-1.onrender.com';
   }
 
+  /// F-13: the server address and the developer tools exist only in debug
+  /// and profile builds; a release build always uses the HTTPS default.
+  /// Tests switch it off to check the release behaviour.
+  bool devOptions = !kReleaseMode;
+
   void setBase(String v) {
+    if (!devOptions) return;
     baseUrl = v.trim().replaceAll(RegExp(r'/+$'), '');
     refreshLookups();
   }
@@ -318,6 +364,9 @@ class Api extends ChangeNotifier {
       email = emailIn.trim();
       role = null;
       guest = false;
+      // F-01: /lookups answers per account, so lists cached as a guest (or as
+      // another account) must not be reused after signing in.
+      _lookups = null;
 
       final user = r.json['user'];
       mustChangePassword = user is Map && user['must_change_password'] == true;
@@ -361,6 +410,9 @@ class Api extends ChangeNotifier {
     role = null;
     guest = false;
     mustChangePassword = false;
+    // F-01: staff-only lookup lists must not stay cached after signing out.
+    _lookups = null;
+
     _clearSavedSession();
     notifyListeners();
   }
@@ -381,6 +433,10 @@ class Api extends ChangeNotifier {
     );
 
     if (r.ok) {
+      // F-10: the server ends every older token after a password change and
+      // sends this device a fresh one.
+      final fresh = r.json is Map ? r.json['access_token'] : null;
+      if (fresh is String) token = fresh;
       mustChangePassword = false;
       await _saveSession();
       notifyListeners();

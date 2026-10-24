@@ -7,6 +7,7 @@ import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
 import 'widgets.dart';
+import 'pending_items.dart';
 import 'entry_report_views.dart';
 import 'home_nav.dart';
 
@@ -34,6 +35,8 @@ class AdminDashboard extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const PendingItemsCard(), // F-15
+
             PageHeader('Administrator Dashboard', subtitle: roleLine()),
             StatGrid([
               StatTile(
