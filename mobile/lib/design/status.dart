@@ -68,7 +68,7 @@ abstract final class StatusColors {
     'fulfilled': (_green, Icons.task_alt),
   };
 
-    /// Every status the palette knows, for the component gallery.
+  /// Every status the palette knows, for the component gallery.
   static Iterable<String> get known => _map.keys;
 
   /// Words shown for a status when they differ from the stored value

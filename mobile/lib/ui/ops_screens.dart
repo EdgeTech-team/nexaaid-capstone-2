@@ -354,10 +354,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
 
   Widget _filters(BuildContext context, Map counts) {
     final t = Theme.of(context).textTheme;
-    String chip(String? s) =>
-     s == null
-     ? 'All (${counts['total'] ?? 0})'
-     : '${StatusColors.label(s)} (${counts[s] ?? 0})';
+    String chip(String? s) => s == null
+        ? 'All (${counts['total'] ?? 0})'
+        : '${StatusColors.label(s)} (${counts[s] ?? 0})';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
