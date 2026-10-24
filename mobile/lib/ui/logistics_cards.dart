@@ -272,8 +272,27 @@ class LogisticsRequestCard extends StatelessWidget {
               ),
             )
           else if (goods.isNotEmpty) ...[
+            // Testing (Oct 23): DRRMO sees what is in the prepared delivery,
+            // one line per item, so they know what the truck will carry.
             Gaps.v8,
-            Text('Goods: ${goods.join(', ')}', style: t.bodyMedium),
+            Text('Items to load (${goods.length})', style: t.titleSmall),
+            Gaps.v4,
+            for (final g in goods)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      size: 18,
+                      color: cs.primary,
+                    ),
+                    Gaps.h8,
+                    Expanded(child: Text(g, style: t.bodyMedium)),
+                  ],
+                ),
+              ),
           ],
           if (r['scheduled_date'] != null) ...[
             Gaps.v4,

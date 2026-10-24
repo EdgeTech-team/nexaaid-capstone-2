@@ -103,6 +103,10 @@ class AddressAutocompleteField extends StatefulWidget {
   final String label;
   final String hint;
   final IconData icon;
+
+  /// Door to Door geofence (Oct 2026): places outside the pickup cities are
+  /// shown but can't be picked. Off for addresses that aren't pickups.
+  final bool pickupAreaOnly;
   const AddressAutocompleteField({
     super.key,
     required this.controller,
@@ -111,6 +115,7 @@ class AddressAutocompleteField extends StatefulWidget {
     this.label = 'Pickup address',
     this.hint = 'Start typing: house no., street, barangay',
     this.icon = Icons.home_outlined,
+    this.pickupAreaOnly = false,
   });
 
   @override
@@ -232,14 +237,31 @@ class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
               children: [
                 for (var i = 0; i < _suggestions.length; i++) ...[
                   if (i > 0) const Divider(height: 1),
-                  ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.place_outlined),
-                    title: Text('${_suggestions[i]['main']}'),
-                    subtitle: '${_suggestions[i]['secondary']}'.isEmpty
-                        ? null
-                        : Text('${_suggestions[i]['secondary']}'),
-                    onTap: () => _choose(_suggestions[i]),
+                  Builder(
+                    builder: (context) {
+                      final s = _suggestions[i];
+                      final outside =
+                          widget.pickupAreaOnly && s['in_pickup_area'] == false;
+                      final where = '${s['secondary']}';
+                      return ListTile(
+                        dense: true,
+                        enabled: !outside,
+                        leading: Icon(
+                          outside ? Icons.block : Icons.place_outlined,
+                        ),
+                        title: Text('${s['main']}'),
+                        subtitle: outside
+                            ? Text(
+                                '${where.isEmpty ? '' : '$where\n'}'
+                                'Outside the Door to Door area. '
+                                'Choose Drop Off instead.',
+                              )
+                            : where.isEmpty
+                            ? null
+                            : Text(where),
+                        onTap: outside ? null : () => _choose(s),
+                      );
+                    },
                   ),
                 ],
               ],
@@ -274,6 +296,9 @@ class PickupRules {
   final int maxDaysAhead;
   final String label;
 
+  /// Door to Door geofence (Oct 2026): the cities CSWS picks up in.
+  final List<String> cities;
+
   const PickupRules({
     this.days = const {1, 2, 3, 4, 5},
     this.startHour = 9,
@@ -281,6 +306,7 @@ class PickupRules {
     this.minLeadHours = 1,
     this.maxDaysAhead = 30,
     this.label = 'Monday to Friday, 9:00 AM to 5:00 PM',
+    this.cities = const [],
   });
 
   factory PickupRules.fromJson(Map<String, dynamic> j) => PickupRules(
@@ -292,6 +318,10 @@ class PickupRules {
     minLeadHours: (j['min_lead_hours'] as num?)?.toInt() ?? 1,
     maxDaysAhead: (j['max_days_ahead'] as num?)?.toInt() ?? 30,
     label: '${j['label'] ?? 'Monday to Friday, 9:00 AM to 5:00 PM'}',
+    cities: [
+      for (final c in ((j['area'] as Map?)?['cities'] as List? ?? const []))
+        '$c',
+    ],
   );
 
   static Future<PickupRules> load() async {

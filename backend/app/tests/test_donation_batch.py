@@ -266,6 +266,9 @@ def test_location_search_and_reverse_use_openstreetmap(api, monkeypatch):
         "address": "Ayala Center Cebu, Archbishop Reyes Avenue, Lahug, Cebu City",
         "lat": 10.3181,
         "lng": 123.9055,
+        # Geofence (Oct 2026): Cebu City is a Door to Door city.
+        "city": "Cebu City",
+        "in_pickup_area": True,
     }]
     url, kwargs = calls[0]
     assert url.endswith("/api")

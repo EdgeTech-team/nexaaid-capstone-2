@@ -154,7 +154,7 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     assert client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                         json={"summary": "done"}).status_code == 400   # not accepted yet
     ok(client.patch(f"/drrmo/requests/{rid_}/accept", headers=t["drrmo"], json={}))
-    ok(client.post(f"/deliveries/{delivery['delivery_id']}/advance", headers=t["csws"]))
+    ok(client.post(f"/drrmo/requests/{rid_}/picked-up", headers=t["drrmo"]))   # advisor, Oct 24
     dash = ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))
     assert (dash["scheduled"], dash["in_transit"]) == (0, 1)
     assert client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
