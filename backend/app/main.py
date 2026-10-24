@@ -30,10 +30,30 @@ from api.v1.account_router import router as account_router
 from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
 from api.v1.trips import router as trips_router
 from api.v1.delivery_problems import router as delivery_problems_router
+from api.v1.item_routes import router as item_router
 
 from core.config import settings
+from core.client_ip import ClientIPMiddleware
+from core.log_privacy import hide_query_strings_in_access_log
 
-app = FastAPI()
+# F-22: the access log keeps method, path and status, not the query string.
+hide_query_strings_in_access_log()
+
+
+
+def api_docs_settings(app_env: str) -> dict:
+    """F-20: /docs, /redoc and /openapi.json only when APP_ENV=development.
+    Production corrections call the endpoints directly with an
+    Administrator token."""
+    dev = app_env == "development"
+    return {
+        "docs_url": "/docs" if dev else None,
+        "redoc_url": "/redoc" if dev else None,
+        "openapi_url": "/openapi.json" if dev else None,
+    }
+
+
+app = FastAPI(**api_docs_settings(settings.APP_ENV))
 
 @app.exception_handler(RequestValidationError)
 async def validation_handler(request: Request, exc: RequestValidationError):
@@ -78,7 +98,8 @@ app.add_middleware(
         "https://nexaaid1.netlify.app",
     ],
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
-    allow_credentials=True,
+    # F-20: no cookies anywhere; the app sends a Bearer token.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -107,3 +128,8 @@ app.include_router(admin_document_router)
 app.include_router(donation_info_router)
 app.include_router(contacts_router)
 app.include_router(account_router)
+app.include_router(item_router)          # F-15: new items waiting for review
+
+# F-21: the real client address behind Render's proxy (core/client_ip.py).
+# Added last, so it runs first.
+app.add_middleware(ClientIPMiddleware)

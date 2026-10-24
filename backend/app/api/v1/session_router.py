@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from core import email as mail_service
 from core.database import get_db
-from core.auth import authenticate_user, build_login_response, get_current_user, user_payload
+from core.auth import (authenticate_user, build_login_response,
+                       get_current_user_allow_temporary_password, user_payload)
 from models.user_rbac_model import User
 from schemas.user_schema import LoginRequest
 
@@ -44,5 +45,5 @@ def login(payload: LoginRequest, background_tasks: BackgroundTasks, db: Session 
 
 
 @router.get("/auth/me")  # Flutter calls this on app start to restore the session
-def me(user: User = Depends(get_current_user)):
+def me(user: User = Depends(get_current_user_allow_temporary_password)):
     return user_payload(user)

@@ -5,6 +5,10 @@ from decimal import Decimal
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import EmailStr
+
+from core.validators import clean_email, clean_person_name
+
 
 HandoverMethod = Literal["Drop Off", "Door to Door"]
 
@@ -217,9 +221,41 @@ def clean_quantity_unit(value: Optional[str]) -> Optional[str]:
 
 
 class GuestDonorInfo(BaseModel):
+    """A guest donor: no account (UC-D2 preconditions). F-09: checked with
+    the same rules as a registration, and the guest must agree to the
+    processing of this data (RA 10173). The API refuses it otherwise, so the
+    app's checkbox is never the only check."""
     full_name: str
     contact_number: str
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
+    consent: bool        # required: name, contact number and pickup address
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, v):
+        return clean_person_name(v, "Full name", 2, 100)
+
+    @field_validator("contact_number")
+    @classmethod
+    def _phone(cls, v):
+        return normalize_ph_mobile(v)   # both endpoints now, not only /donations/batch
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _blank_email(cls, v):
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v):
+        return None if v is None else clean_email(str(v))
+
+    @field_validator("consent")
+    @classmethod
+    def _consent(cls, v):
+        if v is not True:
+            raise ValueError("You must agree to the processing of your personal data (RA 10173)")
+        return v
 
 
 class _ItemFields(BaseModel):
