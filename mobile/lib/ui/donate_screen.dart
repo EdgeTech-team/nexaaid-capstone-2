@@ -3,13 +3,17 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
+import 'form_draft.dart';
 import 'input_formatters.dart';
 import 'location_picker.dart';
 import 'pickup_days.dart';
 import 'qr_save.dart';
+import 'quantity_units.dart';
+import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 
 // Fallback drop-off details, shown only when GET /donations/drop-off-info
@@ -344,10 +348,128 @@ class _DonateScreenState extends State<DonateScreen> {
         ((n['pledged'] as num?) ?? 0).toInt(),
   );
 
+  // Testing fix (UI, Wooind): what was typed survives a refresh or a closed
+  // app. One draft per report; not used when changing an existing donation.
+  late final FormDraft? _draft = _editing
+      ? null
+      : FormDraft('donate:${widget.report['id']}');
+
+  Map<String, dynamic> _snapshot() => {
+    'lines': [
+      for (final l in lines)
+        {
+          'item_id': l.itemId,
+          'size_id': l.sizeId,
+          'size_unit': l.sizeUnit,
+          'size_amount': l.sizeAmount.text,
+          'per_pack': l.perPack,
+          'per_pack_other': l.perPackOther.text,
+          'packs': l.packs.text,
+          'value': l.value.text,
+          'other_name': l.otherName.text,
+          'other_unit': l.otherUnit.text,
+        },
+    ],
+    'handover': handover,
+    'landmark': pickupLandmark.text,
+    'address': pickupAddress.text,
+    'notes': pickupNotes.text,
+    'days': pickupDays.toList(),
+    'guest_name': guestName.text,
+    'guest_phone': guestPhone.text,
+  };
+
+  void _saveDraft() => _draft?.save(_snapshot);
+
+  void _restoreDraft(Map<String, dynamic> d) {
+    final restored = <_Line>[];
+    for (final m in d.maps('lines')) {
+      final l = _Line()..itemId = m.strOrNull('item_id');
+      l.otherName.text = m.str('other_name');
+      l.otherUnit.text = m.str('other_unit');
+      final info = _infoOf(l);
+      // Items or sizes that are no longer in the list are left empty, so
+      // every dropdown and chip gets a valid value.
+      if (info == null && l.itemId != _otherItem) l.itemId = null;
+      final size = m.strOrNull('size_id');
+      if (size == _customSize ||
+          (info?.sizes.any((z) => '${z['id']}' == size) ?? false)) {
+        l.sizeId = size;
+      }
+      l
+        ..sizeUnit = m.strOrNull('size_unit')
+        ..perPack = m['per_pack'] is int ? m['per_pack'] as int : null;
+      l.sizeAmount.text = m.str('size_amount');
+      l.perPackOther.text = m.str('per_pack_other');
+      l.packs.text = m.str('packs');
+      l.value.text = m.str('value');
+      restored.add(l);
+    }
+    final old = List<_Line>.of(lines);
+    setState(() {
+      if (restored.isNotEmpty) {
+        lines
+          ..clear()
+          ..addAll(restored);
+      }
+      handover = d.str('handover') == 'Door to Door'
+          ? 'Door to Door'
+          : 'Drop Off';
+      pickupLandmark.text = d.str('landmark');
+      pickupAddress.text = d.str('address');
+      pickupNotes.text = d.str('notes');
+      pickupDays = {
+        for (final x in (d['days'] is List ? d['days'] as List : const []))
+          if (x is int) x,
+      };
+      guestName.text = d.str('guest_name');
+      guestPhone.text = d.str('guest_phone');
+    });
+    // The old fields are gone after this frame; then free their controllers.
+    if (restored.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        for (final l in old) {
+          l.dispose();
+        }
+      });
+    }
+    AppToast.info(
+      context,
+      'We kept what you typed last time.',
+      action: ToastAction('Start over', _startOver),
+    );
+  }
+
+  /// "Start over": an empty form and no draft.
+  void _startOver() {
+    _draft?.clear();
+    final old = List<_Line>.of(lines);
+    setState(() {
+      lines
+        ..clear()
+        ..add(_Line());
+      handover = 'Drop Off';
+      pickupLandmark.clear();
+      pickupAddress.clear();
+      pickupNotes.clear();
+      pickupDays = {};
+      guestName.clear();
+      guestPhone.clear();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final l in old) {
+        l.dispose();
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     if (_editing) _fillFromEntry(widget.edit!);
+    _draft?.load().then((d) {
+      if (d != null && mounted) _restoreDraft(d);
+    });
     PickupRules.load().then((rules) {
       if (mounted) setState(() => pickupRules = rules);
     });
@@ -366,6 +488,7 @@ class _DonateScreenState extends State<DonateScreen> {
 
   @override
   void dispose() {
+    _draft?.flush(_snapshot);
     for (final l in lines) {
       l.dispose();
     }
@@ -480,6 +603,7 @@ class _DonateScreenState extends State<DonateScreen> {
       Navigator.of(context).pop(true);
       return;
     }
+    _draft?.clear(); // submitted: the draft is no longer needed
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => DonationReceipt(
@@ -535,22 +659,18 @@ class _DonateScreenState extends State<DonateScreen> {
                     'Still needed',
                     style: t.labelMedium?.copyWith(color: cs.onSurfaceVariant),
                   ),
-                  for (final n in _reportNeeds)
-                    Text(
+                  Gaps.v4,
+                  // Highlighted like the needs on the report cards.
+                  NeedChips([
+                    for (final n in _reportNeeds)
                       _stillNeeded(n) > 0
                           ? '${n['item_name']}: ${_stillNeeded(n)} of '
                                 '${n['needed']} ${n['unit'] ?? ''}'
                           : '${n['item_name']}: fully pledged',
-                      style: t.bodyMedium?.copyWith(
-                        color: _stillNeeded(n) > 0 ? null : cs.onSurfaceVariant,
-                      ),
-                    ),
+                  ]),
                 ] else if (needs.isNotEmpty) ...[
-                  Gaps.v4,
-                  Text(
-                    'Needs: $needs',
-                    style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                  ),
+                  Gaps.v8,
+                  NeedChips(NeedChips.split(needs)),
                 ],
                 if (r['priority_level'] != null) ...[
                   Gaps.v8,
@@ -584,7 +704,10 @@ class _DonateScreenState extends State<DonateScreen> {
                 Expanded(child: Text('Item ${i + 1}', style: t.titleMedium)),
                 if (lines.length > 1)
                   TextButton.icon(
-                    onPressed: () => setState(() => lines.removeAt(i)),
+                    onPressed: () {
+                      setState(() => lines.removeAt(i));
+                      _saveDraft();
+                    },
                     icon: Icon(Icons.delete_outline, color: cs.error),
                     label: Text('Remove', style: TextStyle(color: cs.error)),
                   ),
@@ -637,14 +760,11 @@ class _DonateScreenState extends State<DonateScreen> {
                   Gaps.h12,
                   Expanded(
                     flex: 2,
-                    child: TextFormField(
+                    // Testing fix 4.1 (Wooind): a unit from the list, so
+                    // "sack" can't be a unit.
+                    child: QuantityUnitField(
                       controller: l.otherUnit,
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Counted in',
-                        hintText: 'pcs, kg, L',
-                      ),
-                      validator: _req,
+                      onChanged: () => setState(() {}),
                     ),
                   ),
                 ],
@@ -756,6 +876,7 @@ class _DonateScreenState extends State<DonateScreen> {
       builder: (field) {
         void pick(String id) {
           setState(() => l.sizeId = id);
+          _saveDraft();
           field.didChange(id);
         }
 
@@ -865,12 +986,18 @@ class _DonateScreenState extends State<DonateScreen> {
               ChoiceChip(
                 label: Text(n == 1 ? 'Single' : '$n'),
                 selected: l.perPack == n,
-                onSelected: (_) => setState(() => l.perPack = n),
+                onSelected: (_) {
+                  setState(() => l.perPack = n);
+                  _saveDraft();
+                },
               ),
             ChoiceChip(
               label: const Text('Other'),
               selected: l.perPack == null,
-              onSelected: (_) => setState(() => l.perPack = null),
+              onSelected: (_) {
+                setState(() => l.perPack = null);
+                _saveDraft();
+              },
             ),
           ],
         ),
@@ -1209,6 +1336,7 @@ class _DonateScreenState extends State<DonateScreen> {
       bottomNavigationBar: _submitBar(),
       body: Form(
         key: _form,
+        onChanged: _saveDraft,
         child: Scrollbar(
           controller: _scroll,
           thumbVisibility: true,
@@ -1250,7 +1378,10 @@ class _DonateScreenState extends State<DonateScreen> {
                   title: 'Drop Off',
                   subtitle: 'Bring the goods to the CSWS office yourself.',
                   selected: !door,
-                  onTap: () => setState(() => handover = 'Drop Off'),
+                  onTap: () {
+                    setState(() => handover = 'Drop Off');
+                    _saveDraft();
+                  },
                 ),
                 Gaps.v8,
                 _ChoiceTile(
@@ -1258,7 +1389,10 @@ class _DonateScreenState extends State<DonateScreen> {
                   title: 'Door to Door',
                   subtitle: 'CSWS picks up the goods from your address.',
                   selected: door,
-                  onTap: () => setState(() => handover = 'Door to Door'),
+                  onTap: () {
+                    setState(() => handover = 'Door to Door');
+                    _saveDraft();
+                  },
                 ),
                 Gaps.v12,
                 AnimatedSwitcher(
@@ -1437,41 +1571,22 @@ class DonationReceipt extends StatefulWidget {
 class _DonationReceiptState extends State<DonationReceipt> {
   final _scroll = ScrollController();
 
-  /// 4.2 (testing feedback): a guest has no account to find this QR code
-  /// again, so leaving before saving it asks first.
+  // Testing fix 4.2: a guest has no account, so this screen is the only
+  // place their QR code lives. They are warned, and cannot leave (Done,
+  // back button, back gesture) until the QR image is saved. If the page is
+  // refreshed or the app closed first, the landing page opens this receipt
+  // again (see reopenUnsavedGuestReceipt).
+  late final bool _guest = !api.loggedIn;
   bool _saved = false;
-  bool get _mustSave => !api.loggedIn && !_saved;
+  bool _saveFailed = false; // then "I took a screenshot" is offered
 
-  Future<void> _leave() async {
-    if (!_mustSave) {
-      Navigator.pop(context);
-      return;
-    }
-    final leave = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        icon: const Icon(Icons.qr_code_2),
-        title: const Text('Save your QR code first'),
-        content: const Text(
-          'You are donating as a guest, so you cannot open this QR code '
-          'again in the app. CSWS needs it to receive your donation. Save '
-          'the image, or take a screenshot, before you leave.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('I took a screenshot'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Go back and save it'),
-          ),
-        ],
-      ),
-    );
-    if (leave == true && mounted) {
-      setState(() => _saved = true); // lets the pop through
-      Navigator.pop(context);
+  bool get _mayLeave => !_guest || _saved;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_guest) {
+      _rememberGuestReceipt(widget.batch, widget.reportTitle);
     }
   }
 
@@ -1479,6 +1594,108 @@ class _DonationReceiptState extends State<DonationReceipt> {
   void dispose() {
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _onSaveResult(bool? result) {
+    if (result == true) {
+      setState(() => _saved = true);
+      _forgetGuestReceipt();
+    } else if (result == null) {
+      setState(() => _saveFailed = true);
+    }
+  }
+
+  Future<void> _leave() async {
+    if (_mayLeave) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final dropOff = widget.batch['handover_method'] == 'Drop Off';
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.qr_code_2, size: 32),
+        title: const Text('Save your QR code first'),
+        content: Text(
+          'You donated as a guest, so this QR code is not kept in any '
+          'account. CSWS needs it to '
+          '${dropOff ? 'receive your goods at the office' : 'pick up your goods'}'
+          '. Save the image before you leave this page.',
+        ),
+        actions: [
+          if (_saveFailed)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'screenshot'),
+              child: const Text('I took a screenshot'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Stay'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, 'save'),
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('Save QR image'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'screenshot') {
+      _forgetGuestReceipt();
+      setState(() => _saved = true);
+      Navigator.of(context).pop();
+      return;
+    }
+    final qr = widget.batch['qr_image_base64'] as String?;
+    if (qr == null) return;
+    final result = await saveQrImage(
+      context,
+      qrBase64: qr,
+      reference: '${widget.batch['batch_reference']}',
+      handover: '${widget.batch['handover_method']}',
+      forReport: widget.reportTitle,
+    );
+    if (!mounted) return;
+    _onSaveResult(result);
+    if (result == true) Navigator.of(context).pop();
+  }
+
+  /// Shown at the top of a guest's receipt until the QR is saved.
+  Widget _guestWarning() {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: Space.md),
+      padding: const EdgeInsets.all(Space.md),
+      decoration: BoxDecoration(
+        color: _saved ? cs.secondaryContainer : cs.errorContainer,
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            _saved ? Icons.check_circle_outline : Icons.warning_amber_rounded,
+            color: _saved ? cs.onSecondaryContainer : cs.onErrorContainer,
+          ),
+          Gaps.h12,
+          Expanded(
+            child: Text(
+              _saved
+                  ? 'QR image saved. You can leave this page.'
+                  : 'Save your QR code now. You donated as a guest, so it is '
+                        'not kept in any account, and you will need it to hand '
+                        'over your goods.',
+              style: t.bodyMedium?.copyWith(
+                color: _saved ? cs.onSecondaryContainer : cs.onErrorContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -1496,7 +1713,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
     final pickupDays = pickupDaysOf(batch['pickup_days']);
 
     return PopScope(
-      canPop: !_mustSave,
+      canPop: _mayLeave,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _leave();
       },
@@ -1509,7 +1726,11 @@ class _DonationReceiptState extends State<DonationReceipt> {
             top: false,
             child: Padding(
               padding: EdgeInsets.fromLTRB(side, Space.sm, side, Space.sm),
-              child: AppButton('Done', expand: true, onPressed: _leave),
+              child: AppButton(
+                _mayLeave ? 'Done' : 'Save QR to finish',
+                expand: true,
+                onPressed: _leave,
+              ),
             ),
           ),
         ),
@@ -1520,6 +1741,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
             controller: _scroll,
             padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
             children: [
+              if (_guest) _guestWarning(),
               const Icon(
                 Icons.check_circle,
                 color: AppColors.success,
@@ -1567,7 +1789,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
                       reference: '${batch['batch_reference']}',
                       handover: '${batch['handover_method']}',
                       forReport: widget.reportTitle,
-                      onSaved: () => setState(() => _saved = true),
+                      onResult: _onSaveResult,
                     ),
                     Gaps.v8,
                     Wrap(
@@ -1693,4 +1915,50 @@ class _DonationReceiptState extends State<DonationReceipt> {
       ),
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Testing fix 4.2: a guest's unsaved QR survives a refresh or a closed app.
+// The receipt is kept on this device until the guest saves the QR image;
+// the landing page opens it again.
+// ---------------------------------------------------------------------------
+const _kGuestReceipt = 'guest_unsaved_receipt';
+
+Future<void> _rememberGuestReceipt(Map batch, String reportTitle) async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _kGuestReceipt,
+      jsonEncode({'batch': batch, 'report_title': reportTitle}),
+    );
+  } catch (_) {}
+}
+
+Future<void> _forgetGuestReceipt() async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    await p.remove(_kGuestReceipt);
+  } catch (_) {}
+}
+
+/// Call from the landing page: if a guest left (refresh, closed app) before
+/// saving their QR code, show that receipt again.
+Future<void> reopenUnsavedGuestReceipt(BuildContext context) async {
+  if (api.loggedIn) return;
+  Map? saved;
+  try {
+    final p = await SharedPreferences.getInstance();
+    final s = p.getString(_kGuestReceipt);
+    if (s != null && s.isNotEmpty) saved = jsonDecode(s) as Map?;
+  } catch (_) {
+    saved = null;
+  }
+  if (saved == null || saved['batch'] is! Map || !context.mounted) return;
+  final batch = Map<String, dynamic>.from(saved['batch'] as Map);
+  final title = '${saved['report_title'] ?? 'your donation'}';
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => DonationReceipt(batch: batch, reportTitle: title),
+    ),
+  );
 }

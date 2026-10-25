@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../design/design.dart';
 
@@ -122,15 +123,88 @@ Future<Uint8List> buildQrPass({
   return data!.buffer.asUint8List();
 }
 
+/// Saves the QR pass. true = saved, false = the person cancelled,
+/// null = it failed (they should take a screenshot instead).
+/// Shows the result as a message, like the button always did.
+Future<bool?> saveQrImage(
+  BuildContext context, {
+  required String qrBase64,
+  required String reference,
+  String? handover,
+  String? forReport,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  bool? saved;
+  String message;
+  try {
+    final bytes = await buildQrPass(
+      qrBase64: qrBase64,
+      reference: reference,
+      handover: handover,
+      forReport: forReport,
+    );
+    final where = await FilePicker.saveFile(
+      dialogTitle: 'Save your donation QR',
+      fileName: 'NexaAid-QR-$reference.png',
+      bytes: bytes,
+      mimeType: 'image/png',
+      type: FileType.image,
+    );
+    // On the web the browser downloads the file itself and the picker
+    // returns nothing, so null there still means it was saved.
+    saved = where != null || kIsWeb;
+    message = saved
+        ? 'Saved. You can show this QR even without internet.'
+        : 'Not saved.';
+  } catch (_) {
+    saved = null;
+    message = 'Could not save the QR image. Take a screenshot instead.';
+  }
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
+  return saved;
+}
+
+/// Testing feedback (Oct 21): donors (guest, individual, organization) can
+/// save the barangay's GCash / bank QR image to pay later from their own
+/// app. Downloads it from [url] and opens the phone's "Save to" screen.
+Future<void> saveImageFromUrl(
+  BuildContext context, {
+  required String url,
+  required String fileName,
+}) async {
+  final messenger = ScaffoldMessenger.of(context);
+  String message;
+  try {
+    final r = await http.get(Uri.parse(url));
+    if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
+    final where = await FilePicker.saveFile(
+      dialogTitle: 'Save the QR image',
+      fileName: fileName,
+      bytes: r.bodyBytes,
+      mimeType: 'image/png',
+      type: FileType.image,
+    );
+    // On the web the browser downloads the file itself (see saveQrImage).
+    message = where != null || kIsWeb ? 'QR image saved.' : 'Not saved.';
+  } catch (_) {
+    message = 'Could not save the QR image. Take a screenshot instead.';
+  }
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(message)));
+}
+
 /// "Save QR image" button. Shows a message when it is saved (or why not).
+/// [onResult] gets what [saveQrImage] returned (testing fix 4.2: the guest
+/// receipt waits for a saved QR before letting the guest leave).
 class SaveQrButton extends StatefulWidget {
   final String? qrBase64;
   final String reference;
   final String? handover;
   final String? forReport;
-
-  /// Called after the image was saved (the guest receipt uses it, 4.2).
-  final VoidCallback? onSaved;
+  final ValueChanged<bool?>? onResult;
 
   const SaveQrButton({
     super.key,
@@ -138,7 +212,7 @@ class SaveQrButton extends StatefulWidget {
     required this.reference,
     this.handover,
     this.forReport,
-    this.onSaved,
+    this.onResult,
   });
 
   @override
@@ -151,39 +225,17 @@ class _SaveQrButtonState extends State<SaveQrButton> {
   Future<void> _save() async {
     final b64 = widget.qrBase64;
     if (b64 == null) return;
-    final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
-    String message;
-    var saved = false;
-    try {
-      final bytes = await buildQrPass(
-        qrBase64: b64,
-        reference: widget.reference,
-        handover: widget.handover,
-        forReport: widget.forReport,
-      );
-      final where = await FilePicker.saveFile(
-        dialogTitle: 'Save your donation QR',
-        fileName: 'NexaAid-QR-${widget.reference}.png',
-        bytes: bytes,
-        mimeType: 'image/png',
-        type: FileType.image,
-      );
-      // On the web the browser downloads the file itself and the picker
-      // returns nothing, so null there still means it was saved.
-      saved = where != null || kIsWeb;
-      message = saved
-          ? 'Saved. You can show this QR even without internet.'
-          : 'Not saved.';
-    } catch (_) {
-      message = 'Could not save the QR image. Take a screenshot instead.';
-    }
+    final result = await saveQrImage(
+      context,
+      qrBase64: b64,
+      reference: widget.reference,
+      handover: widget.handover,
+      forReport: widget.forReport,
+    );
     if (!mounted) return;
     setState(() => _busy = false);
-    if (saved) widget.onSaved?.call();
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    widget.onResult?.call(result);
   }
 
   @override

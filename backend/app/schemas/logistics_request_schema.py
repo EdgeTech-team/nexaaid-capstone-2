@@ -64,7 +64,8 @@ class SubmitPickupLogisticsRequest(_Needs):
 
 
 class AcceptLogisticsRequest(BaseModel):
-    """DRRMO just accepts. No schedule (I4)."""
+    """DRRMO just accepts. No schedule (I4; testing fix 7.4: CSWS Main
+    Office sets the date, as the delivery date or the pickup day)."""
     notes: Optional[str] = Field(default=None, max_length=1000)
 
 

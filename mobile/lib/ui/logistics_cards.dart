@@ -294,9 +294,39 @@ class LogisticsRequestCard extends StatelessWidget {
                 ),
               ),
           ],
-          if (r['scheduled_date'] != null) ...[
+          // Testing fix 7.4: CSWS Main Office sets the date (the delivery
+          // date; a pickup run shows its pickup day above instead).
+          if (!_pickup && r['scheduled_date'] != null) ...[
             Gaps.v4,
-            Text('Scheduled: ${niceDate(r['scheduled_date'])}'),
+            Row(
+              children: [
+                Icon(Icons.event_outlined, size: 16, color: cs.primary),
+                Gaps.h4,
+                Expanded(
+                  child: Text(
+                    'Scheduled by ${r['scheduled_by'] ?? 'CSWS Main Office'}: '
+                    '${niceDate(r['scheduled_date'])}',
+                  ),
+                ),
+              ],
+            ),
+          ],
+          // Testing fix 7.5: why DRRMO cannot mark it completed yet.
+          if (r['complete_blocker'] != null) ...[
+            Gaps.v4,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.lock_clock_outlined, size: 16, color: cs.error),
+                Gaps.h4,
+                Expanded(
+                  child: Text(
+                    '${r['complete_blocker']}',
+                    style: t.bodySmall?.copyWith(color: cs.error),
+                  ),
+                ),
+              ],
+            ),
           ],
           if (other.isNotEmpty) ...[
             Gaps.v8,

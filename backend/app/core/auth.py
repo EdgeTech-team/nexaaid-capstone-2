@@ -133,7 +133,13 @@ def get_current_user_optional(
     except JWTError:
         return None
     user = db.query(User).filter(User.email == email).first()
-    return user if user is not None and _uid_matches(payload, user) else None
+    if user is None or not _uid_matches(payload, user):
+        return None
+    # Mariquit (#85): deactivated accounts can't use existing tokens here
+    # either, same as get_current_user.
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
+    return user
 
 def _norm_role(name) -> str:
     """'CSWS Main Office' / 'csws_main_office' -> 'csws_main_office'"""

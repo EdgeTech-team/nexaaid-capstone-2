@@ -484,18 +484,20 @@ class _NotificationBellState extends State<NotificationBell> {
     setState(() => unread = n);
     if (isNew) {
       final note = top!;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text('${note['title'] ?? 'New notification'}'),
-          duration: const Duration(seconds: 6),
-          action: SnackBarAction(
-            label: 'View',
-            onPressed: () async {
-              await openNotification(context, note);
-              _refresh();
-            },
-          ),
-        ),
+      // Testing fix (UI notifications): this was a SnackBar with "View",
+      // which Flutter keeps open until tapped, so "Report validated" never
+      // went away and covered the form. Now a toast at the top with an X
+      // that also closes by itself; "View" still opens it.
+      final message = '${note['message'] ?? ''}'.trim();
+      AppToast.show(
+        context,
+        message.isEmpty ? 'Tap View to open it.' : message,
+        title: '${note['title'] ?? 'New notification'}',
+        kind: ToastKind.info,
+        action: ToastAction('View', () async {
+          await openNotification(context, note);
+          _refresh();
+        }),
       );
     }
   }

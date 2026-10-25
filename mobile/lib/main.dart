@@ -43,7 +43,19 @@ class NexaAidApp extends StatefulWidget {
 
 class _NexaAidAppState extends State<NexaAidApp> {
   final _nav = GlobalKey<NavigatorState>();
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
   late String _session;
+
+  /// Testing fix (UI notifications): when someone taps into a text field,
+  /// messages get out of the way so they never cover what is being typed.
+  /// Errors stay (they say what to fix) but can be closed with their X.
+  void _onFocus() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return;
+    if (ctx.findAncestorStateOfType<EditableTextState>() == null) return;
+    _messenger.currentState?.hideCurrentSnackBar();
+    AppToast.dismissWhere((kind) => kind != ToastKind.error);
+  }
 
   static String _sessionKey() {
     final a = Api.instance;
@@ -66,11 +78,13 @@ class _NexaAidAppState extends State<NexaAidApp> {
     super.initState();
     _session = _sessionKey();
     Api.instance.addListener(_onSession);
+    FocusManager.instance.addListener(_onFocus);
   }
 
   @override
   void dispose() {
     Api.instance.removeListener(_onSession);
+    FocusManager.instance.removeListener(_onFocus);
     super.dispose();
   }
 
@@ -80,6 +94,7 @@ class _NexaAidAppState extends State<NexaAidApp> {
       valueListenable: AppTheme.mode,
       builder: (context, mode, _) => MaterialApp(
         navigatorKey: _nav,
+        scaffoldMessengerKey: _messenger,
         title: 'NexaAid',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
