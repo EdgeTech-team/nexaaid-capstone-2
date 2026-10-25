@@ -90,3 +90,36 @@ class ContactButtons extends StatelessWidget {
     );
   }
 }
+
+/// Google Maps directions through a whole pickup run, in the planner's order:
+/// from [origin] (the CSWS office) one way to the last stop. Google Maps
+/// takes at most 9 stops in between, so a longer run opens in legs of 10
+/// stops, each leg starting where the last one ended.
+const routeLegStops = 10;
+
+Future<void> openRouteNavigation(
+  BuildContext context, {
+  required (double, double)? origin,
+  required List<(double, double)> stops,
+  int leg = 0,
+}) {
+  String at((double, double) p) => '${p.$1},${p.$2}';
+  final first = leg * routeLegStops;
+  final part = stops.sublist(
+    first,
+    (first + routeLegStops).clamp(0, stops.length),
+  );
+  final from = leg == 0 ? origin : stops[first - 1];
+  return _launch(
+    context,
+    Uri.https('www.google.com', '/maps/dir/', {
+      'api': '1',
+      if (from != null) 'origin': at(from),
+      'destination': at(part.last),
+      if (part.length > 1)
+        'waypoints': part.sublist(0, part.length - 1).map(at).join('|'),
+      'travelmode': 'driving',
+    }),
+    'Could not open a maps app',
+  );
+}

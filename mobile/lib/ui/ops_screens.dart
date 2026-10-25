@@ -15,7 +15,18 @@ const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 /// Preparing -> In Transit -> Delivered -> Confirmed, as a dot stepper.
 class DeliveryStepper extends StatelessWidget {
   final String status;
-  const DeliveryStepper(this.status, {super.key});
+
+  /// When each step was reached (`status_times` from the delivery list,
+  /// Oct 2026), shown under the step.
+  final Map? times;
+  const DeliveryStepper(this.status, {super.key, this.times});
+
+  /// "Oct 23" over "2:15 PM", narrow enough for four steps on a phone.
+  static String _short(dynamic iso) {
+    final full = niceWhen(iso); // "Fri, Oct 23 · 2:15 PM"
+    final cut = full.indexOf(', ');
+    return (cut < 0 ? full : full.substring(cut + 2)).replaceAll(' · ', '\n');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +58,15 @@ class DeliveryStepper extends StatelessWidget {
                   fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
                 ),
               ),
+              if (times?[_deliverySteps[i]] != null)
+                Text(
+                  _short(times![_deliverySteps[i]]),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
             ],
           ),
           if (i < _deliverySteps.length - 1)
@@ -697,7 +717,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
               )
             else ...[
               const SizedBox(height: 12),
-              DeliveryStepper(status),
+              DeliveryStepper(status, times: d['status_times'] as Map?),
             ],
             const SizedBox(height: 8),
             Wrap(
@@ -719,8 +739,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                   TextButton.icon(
                     onPressed: () =>
                         showDeliveryProblems(context, d, request: request),
-                    icon: const Icon(Icons.report_problem_outlined),
-                    label: const Text('Something went wrong?'),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit'),
                   ),
                 // Testing feedback (Oct 20): transport is asked for before
                 // the truck leaves, so only while Preparing.
@@ -736,7 +756,21 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     icon: const Icon(Icons.fire_truck_outlined),
                     label: const Text('Request transport'),
                   ),
-                if (!barangay && !readOnly && next != null)
+                // Advisor (Oct 24): with a DRRMO request open, DRRMO marks it
+                // In Transit when they pick up the goods (DRRMO screen).
+                if (!barangay &&
+                    !readOnly &&
+                    status == 'Preparing' &&
+                    (reqStage == 'Pending' || reqStage == 'Accepted'))
+                  Chip(
+                    avatar: const Icon(Icons.fire_truck_outlined, size: 18),
+                    label: Text(
+                      reqStage == 'Pending'
+                          ? 'Waiting for DRRMO to accept'
+                          : 'DRRMO marks it In Transit on pickup',
+                    ),
+                  )
+                else if (!barangay && !readOnly && next != null)
                   FilledButton.icon(
                     onPressed: () => act(
                       context,
@@ -1743,6 +1777,23 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                       TextButton(
                         onPressed: () => _withdraw(r),
                         child: const Text('Can no longer do this'),
+                      ),
+
+                    // Advisor (Oct 24): DRRMO picked the goods up from CSWS.
+                    if (r['stage'] == 'Accepted' &&
+                        r['request_type'] != 'Pickup' &&
+                        r['delivery_status'] == 'Preparing')
+                      FilledButton.icon(
+                        onPressed: () => act(
+                          context,
+                          () => api.post(
+                            '/drrmo/requests/${r['request_id']}/picked-up',
+                          ),
+                          success:
+                              'Delivery #${r['delivery_id']} is now In Transit',
+                        ),
+                        icon: const Icon(Icons.local_shipping),
+                        label: const Text('Picked up · mark In Transit'),
                       ),
                     // Testing fix 7.5: only after the date, In Transit (8.1)
                     // and the barangay's receipt (8.2). The card shows why.

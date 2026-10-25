@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from core.audit import log_action
 from core.auth import has_role, require_role
 from core.database import get_db
-from core.notifications import notify_event, notify_event_many, user_ids_with_role
+from core.notifications import logistics_team_ids, notify_event_many, user_ids_with_role
 from services.delivery_notices import tell_donors
 from models.delivery import Delivery, DeliveryTrip
 from models.inventory_model import Inventory
@@ -313,8 +313,9 @@ def cancel_logistics_request(
                  else f"Cancelled by {who}: {payload.reason}")
     log_action(db, current_user, "CANCEL LOGISTICS REQUEST", "logistics_requests", req.request_id,
                old={"status": old}, new={"status": "Cancelled", "reason": payload.reason})
-    notify_event_many(db, user_ids_with_role(db, [DRRMO]), "logistics_cancelled",
-                      "logistics_request", req.request_id,
+    notify_event_many(db, logistics_team_ids(db, req.requested_by_user_id,
+                                             exclude_user_id=current_user.user_id),
+                      "logistics_cancelled", "logistics_request", req.request_id,
                       title=req.title, reason=payload.reason)
     db.commit()
     return {"request_id": req.request_id, "status": req.status}
@@ -343,7 +344,9 @@ def withdraw_logistics_request(
     req.notes = f"{req.notes}\nWithdrawn by DRRMO: {payload.reason}" if req.notes else f"Withdrawn by DRRMO: {payload.reason}"
     log_action(db, current_user, "WITHDRAW LOGISTICS SUPPORT", "logistics_requests", req.request_id,
                old={"status": "Accepted"}, new={"status": "Declined", "reason": payload.reason})
-    notify_event(db, req.requested_by_user_id, "logistics_withdrawn", "logistics_request",
-                 req.request_id, title=req.title, reason=payload.reason)
+    notify_event_many(db, logistics_team_ids(db, req.requested_by_user_id,
+                                             exclude_user_id=current_user.user_id),
+                      "logistics_withdrawn", "logistics_request", req.request_id,
+                      title=req.title, reason=payload.reason)
     db.commit()
     return {"request_id": req.request_id, "status": req.status}
