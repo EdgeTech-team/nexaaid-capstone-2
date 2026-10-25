@@ -14,12 +14,12 @@ We reviewed the NexaAid backend and app for security and privacy problems, one f
 
 **Findings by severity (24 total):**
 
-| Severity | Count | Finding numbers |
-|---|---|---|
-| High | 1 | F-02 |
-| Medium | 10 | F-01, F-03, F-04, F-06, F-07, F-08, F-09, F-10, F-11, F-13 |
-| Low | 11 | F-05, F-12, F-14, F-15, F-16, F-17, F-18, F-19, F-21, F-23, F-24 |
-| Informational | 2 | F-20, F-22 |
+| Severity      | Count | Finding numbers                                                  |
+| ------------- | ----- | ---------------------------------------------------------------- |
+| High          | 1     | F-02                                                             |
+| Medium        | 10    | F-01, F-03, F-04, F-06, F-07, F-08, F-09, F-10, F-11, F-13       |
+| Low           | 11    | F-05, F-12, F-14, F-15, F-16, F-17, F-18, F-19, F-21, F-23, F-24 |
+| Informational | 2     | F-20, F-22                                                       |
 
 **What was fixed (code written, tested, awaiting deployment):** 19 findings fully, and 2 more in part. In plain terms, we closed the one high-severity issue (no limit on sign-in attempts, which let passwords and reset codes be guessed), stopped internal records and other people's data from leaking to the wrong users, made sign-in tokens stop working after a password change, encrypted the login token on phones, stopped guests from quietly changing the public data, tightened file uploads, added a server-wide limit on the public address search, locked down the public web settings and added a Content-Security-Policy, fixed how the server records who did what and from where, kept personal data out of the logs, updated and pinned all third-party software (removing 38 known vulnerabilities), and stopped staff email addresses from showing to barangay representatives.
 
@@ -37,32 +37,32 @@ We reviewed the NexaAid backend and app for security and privacy problems, one f
 
 ## 2. All 24 findings
 
-| # | Finding (plain English) | Severity | Status | Decision made |
-|---|---|---|---|---|
-| F-01 | The public reference list exposed internal records (donations, deliveries, requests). | Medium | **Fixed** | Internal lists now go only to the staff role that uses them. |
-| F-02 | No limit on sign-in or password-reset attempts, so passwords and reset codes could be guessed. | **High** | **Fixed** | 5 failed attempts, then a 15-minute wait, counted the same for unknown accounts. |
-| F-03 | The "forgot password" page revealed whether an email had an account. | Medium | **Fixed** | Same answer whether or not the account exists. |
-| F-04 | Any Disaster Unit member could replace the e-wallet payment details on any report. | Medium | **Fixed** | Restricted to the right role/owner. |
-| F-05 | Barangay representatives could read other barangays' unvalidated reports. | Low | **Fixed** | A rep sees only their own barangay's. |
-| F-06 | Inventory counts could go wrong when two updates happened at once. | Medium | **Fixed** | Updates are now safe under concurrency. |
-| F-07 | A report-edit endpoint accepted any status change and kept no audit trail. | Medium | **Fixed** | Status is changed only by validate/reject/withdraw; every edit is logged. |
-| F-08 | Deleting an account left some of the person's data behind. | Medium | **Fixed** | Deletion now anonymizes the person and removes ID photos; relief records stay under "Deleted User". Cleanup of older deleted accounts is a team decision. |
-| F-09 | Guest donor data was taken without consent, validation or a retention rule. | Medium | **Fixed** | Consent is recorded (RA 10173); wording and retention period are for the team. |
-| F-10 | Sign-in tokens stayed valid after a password change; the temporary-password rule was only enforced in the app. | Medium | **Fixed** | A password change ends every old session; the rule is enforced on the server. |
-| F-11 | Every donor must upload a government ID, even though accounts are approved automatically. | Medium | **Deferred** | Adviser: ID stays mandatory (declared in the manuscript). Verified ID photos are Administrator-only and not publicly linkable. |
-| F-12 | The login token was stored unencrypted on the device. | Low | **Fixed** | Stored in the Android Keystore / iOS Keychain. |
-| F-13 | Release builds allowed insecure (non-HTTPS) connections and exposed developer settings. | Medium | **Fixed (A, B)** / **Deferred (C)** | Insecure connections and dev settings are blocked in release builds. The release signing key and final app ID are pending the team. |
-| F-14 | Anyone could upload files without logging in, and orphan files were cleared only by hand. | Low | **Fixed** | Automatic cleanup after 25 hours (the 24-hour claim window plus 1 hour), and a 200 MB cap. A one-time review of production orphan files must happen before deploy. |
-| F-15 | Guests could add new items to the public item list. | Low | **Fixed** | New items wait for CSWS Main Office / Administrator review. |
-| F-16 | The old single-donation endpoint accepted any report, not just validated ones. | Low | **Fixed** | It now follows the same validated-only rule as the newer endpoints. |
-| F-17 | Smaller sign-in weaknesses: donation references could be listed, guest cancellation could be probed, the cron token was compared unsafely. | Low | **Fixed** | QR-by-id is owner/staff only; one uniform answer plus a limit on guest cancel attempts; constant-time token check. |
-| F-18 | Public report descriptions could expose names or household details of affected people. | Low | **Deferred — Mandaue** | Needs Mandaue's validation process; see the questions list. |
-| F-19 | The public address-search proxy had no login and no limit, risking the free map provider blocking us. | Low | **Fixed** | A shared limit of 60 calls per minute; cached results don't count. |
-| F-20 | API documentation and loose web settings were enabled in production; the web app had no content-security policy. | Info | **Fixed** | Docs hidden in production; credentials disabled in CORS; a tested Content-Security-Policy for the web app. |
-| F-21 | Error messages and recorded visitor IP addresses depended on deployment settings we couldn't see. | Low | **Fixed** | Errors are generic in production; the real visitor IP is recorded safely behind the proxy. One check to run after deploy. |
-| F-22 | Personal data could reach the logs, and third-party software wasn't pinned or up to date. | Info | **Fixed** | Email addresses masked in logs; search terms kept out of the access log; all packages pinned to one list; 38 known vulnerabilities removed. |
-| F-23 | Delivery records had a few loose rules. | Low | **Fixed (c)** / **Mandaue (a, b)** | Staff emails no longer shown to barangay reps. Destination flexibility (a) and Administrator confirming for a barangay (b) are Mandaue questions. |
-| F-24 | Users can't view, correct, export or delete their own data in the app. | Low | **Documentation** | Record a data-privacy (DPO) process; a "request deletion" button is a possible future enhancement. The deletion mechanism itself already exists and is tested. |
+| #    | Finding (plain English)                                                                                                                    | Severity | Status                              | Decision made                                                                                                                                                      |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| F-01 | The public reference list exposed internal records (donations, deliveries, requests).                                                      | Medium   | **Fixed**                           | Internal lists now go only to the staff role that uses them.                                                                                                       |
+| F-02 | No limit on sign-in or password-reset attempts, so passwords and reset codes could be guessed.                                             | **High** | **Fixed**                           | 5 failed attempts, then a 15-minute wait, counted the same for unknown accounts.                                                                                   |
+| F-03 | The "forgot password" page revealed whether an email had an account.                                                                       | Medium   | **Fixed**                           | Same answer whether or not the account exists.                                                                                                                     |
+| F-04 | Any Disaster Unit member could replace the e-wallet payment details on any report.                                                         | Medium   | **Fixed**                           | Restricted to the right role/owner.                                                                                                                                |
+| F-05 | Barangay representatives could read other barangays' unvalidated reports.                                                                  | Low      | **Fixed**                           | A rep sees only their own barangay's.                                                                                                                              |
+| F-06 | Inventory counts could go wrong when two updates happened at once.                                                                         | Medium   | **Fixed**                           | Updates are now safe under concurrency.                                                                                                                            |
+| F-07 | A report-edit endpoint accepted any status change and kept no audit trail.                                                                 | Medium   | **Fixed**                           | Status is changed only by validate/reject/withdraw; every edit is logged.                                                                                          |
+| F-08 | Deleting an account left some of the person's data behind.                                                                                 | Medium   | **Fixed**                           | Deletion now anonymizes the person and removes ID photos; relief records stay under "Deleted User". Cleanup of older deleted accounts is a team decision.          |
+| F-09 | Guest donor data was taken without consent, validation or a retention rule.                                                                | Medium   | **Fixed**                           | Consent is recorded (RA 10173); wording and retention period are for the team.                                                                                     |
+| F-10 | Sign-in tokens stayed valid after a password change; the temporary-password rule was only enforced in the app.                             | Medium   | **Fixed**                           | A password change ends every old session; the rule is enforced on the server.                                                                                      |
+| F-11 | Every donor must upload a government ID, even though accounts are approved automatically.                                                  | Medium   | **Deferred**                        | Adviser: ID stays mandatory (declared in the manuscript). Verified ID photos are Administrator-only and not publicly linkable.                                     |
+| F-12 | The login token was stored unencrypted on the device.                                                                                      | Low      | **Fixed**                           | Stored in the Android Keystore / iOS Keychain.                                                                                                                     |
+| F-13 | Release builds allowed insecure (non-HTTPS) connections and exposed developer settings.                                                    | Medium   | **Fixed (A, B)** / **Deferred (C)** | Insecure connections and dev settings are blocked in release builds. The release signing key and final app ID are pending the team.                                |
+| F-14 | Anyone could upload files without logging in, and orphan files were cleared only by hand.                                                  | Low      | **Fixed**                           | Automatic cleanup after 25 hours (the 24-hour claim window plus 1 hour), and a 200 MB cap. A one-time review of production orphan files must happen before deploy. |
+| F-15 | Guests could add new items to the public item list.                                                                                        | Low      | **Fixed**                           | New items wait for CSWS Main Office / Administrator review.                                                                                                        |
+| F-16 | The old single-donation endpoint accepted any report, not just validated ones.                                                             | Low      | **Fixed**                           | It now follows the same validated-only rule as the newer endpoints.                                                                                                |
+| F-17 | Smaller sign-in weaknesses: donation references could be listed, guest cancellation could be probed, the cron token was compared unsafely. | Low      | **Fixed**                           | QR-by-id is owner/staff only; one uniform answer plus a limit on guest cancel attempts; constant-time token check.                                                 |
+| F-18 | Public report descriptions could expose names or household details of affected people.                                                     | Low      | **Deferred — Mandaue**              | Needs Mandaue's validation process; see the questions list.                                                                                                        |
+| F-19 | The public address-search proxy had no login and no limit, risking the free map provider blocking us.                                      | Low      | **Fixed**                           | A shared limit of 60 calls per minute; cached results don't count.                                                                                                 |
+| F-20 | API documentation and loose web settings were enabled in production; the web app had no content-security policy.                           | Info     | **Fixed**                           | Docs hidden in production; credentials disabled in CORS; a tested Content-Security-Policy for the web app.                                                         |
+| F-21 | Error messages and recorded visitor IP addresses depended on deployment settings we couldn't see.                                          | Low      | **Fixed**                           | Errors are generic in production; the real visitor IP is recorded safely behind the proxy. One check to run after deploy.                                          |
+| F-22 | Personal data could reach the logs, and third-party software wasn't pinned or up to date.                                                  | Info     | **Fixed**                           | Email addresses masked in logs; search terms kept out of the access log; all packages pinned to one list; 38 known vulnerabilities removed.                        |
+| F-23 | Delivery records had a few loose rules.                                                                                                    | Low      | **Fixed (c)** / **Mandaue (a, b)**  | Staff emails no longer shown to barangay reps. Destination flexibility (a) and Administrator confirming for a barangay (b) are Mandaue questions.                  |
+| F-24 | Users can't view, correct, export or delete their own data in the app.                                                                     | Low      | **Documentation**                   | Record a data-privacy (DPO) process; a "request deletion" button is a possible future enhancement. The deletion mechanism itself already exists and is tested.     |
 
 ---
 
@@ -171,3 +171,25 @@ See the consolidated lists in sections 5 and 6.
 - **Known test-date quirk:** K-5 (a pickup test) fails only when run on a Wednesday, Manila time.
 
 All fixes were verified by running these suites after each change. Nothing in this audit was staged, committed or deployed; that is the next step, following the checklist in section 4.
+
+---
+
+## 8. Notes from local testing (25 October 2026)
+
+PR #92 was tested locally in Chrome against a fresh Postgres 16 database (`nexaaid_dev`, Podman), built from the baseline plus all migrations up to `c8e2f4a6b913`.
+
+**Confirmed working:**
+
+- **Migrations:** `7f4d2b9e6a31 → a1f09c3e5d72 → c8e2f4a6b913` ran without errors, the same steps Neon will run.
+- **F-09:** submitting a guest donation without ticking the consent box is blocked with "Please agree to the processing of your personal data (RA 10173)". With consent ticked, the donation is recorded.
+- **F-13:** the debug build shows the developer tools and server setting; the release build shows none, even after tapping About five times. The current production site still shows them, which is what F-13 fixes.
+- **F-15:** a new item typed by a guest appears in the "New items to review" card for CSWS Main Office. Approving it empties the list and adds it to the item list.
+- **F-22:** the server access log shows `?[hidden]` instead of query strings.
+
+**UI notes for review (not security issues):**
+
+1. **Consent checkbox position:** it sits between "Full name" and "Contact number". It would read more naturally after all the details, just before Submit.
+2. **Consent wording for Drop Off:** the text mentions "pickup address", but a Drop Off donation collects no address.
+3. **Dark mode contrast:** on the drop-off card, the text "Bring the goods and show your QR code at the CSWS office…" is hard to read in dark mode.
+
+**Future note:** the map uses the public OpenStreetMap tile servers, which have a usage policy and are not meant for heavy use. Like the address search (F-19), a larger deployment would need its own tile provider.
