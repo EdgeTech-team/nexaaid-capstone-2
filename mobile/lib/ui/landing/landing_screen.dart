@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../design/design.dart';
+import '../donate_screen.dart' show reopenUnsavedGuestReceipt;
 import '../donor_screens.dart' show DonateScreen;
 import '../login_screen.dart';
 import '../blur_popup.dart';
@@ -36,6 +37,16 @@ class _LandingScreenState extends State<LandingScreen> {
 
   /// The section in view, highlighted in the header links.
   LandingSection? _current;
+
+  @override
+  void initState() {
+    super.initState();
+    // Testing fix 4.2: a guest who refreshed or closed the app before saving
+    // their donation QR gets that receipt back.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) reopenUnsavedGuestReceipt(context);
+    });
+  }
 
   @override
   void dispose() {

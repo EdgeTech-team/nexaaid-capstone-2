@@ -159,6 +159,14 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     assert (dash["scheduled"], dash["in_transit"]) == (0, 1)
     assert client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                         json={"summary": ""}).status_code == 422   # alt 6a: summary required
+    # Testing fix 7.5: not while the goods are still on the road ...
+    r = client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
+                     json={"summary": "Delivered by truck 2"})
+    assert r.status_code == 409 and "confirm receipt" in r.json()["detail"]
+    # ... only after the barangay representative confirms receipt (8.2).
+    ok(client.post(f"/deliveries/{delivery['delivery_id']}/advance", headers=t["csws"]))
+    ok(client.post(f"/deliveries/{delivery['delivery_id']}/confirm-receipt",
+                   headers=t["brgy"], json={}), 201)
     done = ok(client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                            json={"summary": "Delivered by truck 2"}))
     assert done["status"] == "Completed" and "30 kg Rice" in done["notes"]

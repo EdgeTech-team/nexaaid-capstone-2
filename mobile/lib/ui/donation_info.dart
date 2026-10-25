@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../api.dart';
 import 'input_formatters.dart';
+import 'qr_save.dart' show saveImageFromUrl;
 import 'upload_field.dart';
 import 'widgets.dart';
 
@@ -67,6 +68,19 @@ class DonationInfoCard extends StatelessWidget {
                     errorBuilder: (_, _, _) =>
                         const Text('QR image unavailable'),
                   ),
+                ),
+              ),
+              Gaps.v8,
+              Center(
+                child: OutlinedButton.icon(
+                  onPressed: () => saveImageFromUrl(
+                    context,
+                    url: '${api.baseUrl}${i['qr_url']}',
+                    fileName:
+                        'NexaAid-${providerLabel(i).replaceAll(RegExp(r'[^A-Za-z0-9]+'), '-')}-QR.png',
+                  ),
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('Save QR image'),
                 ),
               ),
               Gaps.v12,

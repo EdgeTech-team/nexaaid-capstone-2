@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/donate_screen.dart';
+import 'package:mobile/ui/donation_info.dart' show DonationInfoCard;
 import 'package:mobile/ui/needs_progress.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
@@ -70,20 +71,20 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Done'));
+    // Until the QR is saved, the button says so.
+    expect(find.text('Done'), findsNothing);
+    await tester.tap(find.text('Save QR to finish'));
     await tester.pumpAndSettle();
     expect(find.text('Save your QR code first'), findsOneWidget);
-    await tester.tap(find.text('Go back and save it'));
+    await tester.tap(find.text('Stay'));
     await tester.pumpAndSettle();
     expect(find.text('Donation recorded'), findsOneWidget); // still here
 
-    // The back arrow asks too.
+    // The back arrow asks too (Wooind's 4.2 receipt).
     await tester.tap(find.byType(BackButton));
     await tester.pumpAndSettle();
     expect(find.text('Save your QR code first'), findsOneWidget);
-    await tester.tap(find.text('I took a screenshot'));
-    await tester.pumpAndSettle();
-    expect(find.text('Report list'), findsOneWidget);
+    expect(find.text('Save QR image'), findsWidgets);
   });
 
   test('Cards say what each need still lacks, never a mixed total', () {
@@ -122,6 +123,29 @@ void main() {
       }),
       isNull,
     );
+  });
+
+  testWidgets('Every donor can save the barangay\'s GCash QR image', (
+    tester,
+  ) async {
+    await http.runWithClient(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: const Scaffold(
+            body: DonationInfoCard(
+              info: {
+                'provider': 'GCash',
+                'qr_url': '/uploads/qr.png',
+                'account_number': '09171234567',
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('Save QR image'), findsOneWidget);
+    }, () => _offline);
   });
 
   testWidgets('Fulfillment bar shows the %, not "X of Y items"', (
