@@ -167,6 +167,11 @@ class Api extends ChangeNotifier {
     return 'https://nexaaid-1.onrender.com';
   }
 
+  void setBase(String v) {
+    baseUrl = v.trim().replaceAll(RegExp(r'/+$'), '');
+    refreshLookups();
+  }
+
   Future<ApiResult> send(
     String method,
     String path, {
