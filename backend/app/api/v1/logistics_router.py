@@ -15,7 +15,7 @@ from schemas.logistics_request_schema import (
 from schemas.physical_donation_schema import (
     MANILA, decode_pickup_days, pickup_days_label, pickup_rules,
 )
-from core.notifications import notify_event_many, user_ids_with_role
+from core.notifications import logistics_team_ids, notify_event_many
 
 router = APIRouter(prefix="/logistics", tags=["logistics"])
 
@@ -67,7 +67,7 @@ def submit_logistics_request(
     log_action(db, current_user, "REQUEST LOGISTICS SUPPORT", "logistics_requests",
                logistics_request.request_id,
                new={"delivery_id": delivery.delivery_id, "needs": logistics_request.notes})
-    notify_event_many(db, user_ids_with_role(db, ["DRRMO Logistics Support"]),
+    notify_event_many(db, logistics_team_ids(db, exclude_user_id=current_user.user_id),
                       "logistics_requested", "logistics_request",
                       logistics_request.request_id, title=f"delivery #{delivery.delivery_id}")
 
@@ -149,7 +149,7 @@ def submit_pickup_request(
     log_action(db, current_user, "REQUEST PICKUP LOGISTICS SUPPORT", "logistics_requests",
                req.request_id,
                new={"pickup_date": day.isoformat(), "stops": payload.batch_references, "needs": needs})
-    notify_event_many(db, user_ids_with_role(db, ["DRRMO Logistics Support"]),
+    notify_event_many(db, logistics_team_ids(db, exclude_user_id=current_user.user_id),
                       "logistics_requested", "logistics_request", req.request_id, title=req.title)
     db.commit()
     db.refresh(req)
