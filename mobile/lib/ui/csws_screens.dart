@@ -11,6 +11,8 @@ import 'inventory_view.dart';
 import 'input_formatters.dart' show pesos;
 import 'donation_entries_view.dart' show DonationEntryCard;
 import 'receive_filters.dart';
+import 'ops_screens.dart' show showDeliveryHistory;
+import 'scheduled_deliveries.dart';
 export 'batch_sheet.dart' show openDonationByQr, BatchSheet;
 
 /// Camera QR scanner. Returns the scanned text (e.g. DON-1A2B3C...).
@@ -606,9 +608,14 @@ class CswsMainDashboard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Loader(
-      load: [() => api.get('/dashboard/csws-main')],
+      load: [
+        () => api.get('/dashboard/csws-main'),
+        // Testing #19: deliveries that have not arrived yet.
+        () => api.get('/deliveries/', query: scheduledDeliveriesQuery),
+      ],
       builder: (context, data) {
         final m = data[0] as Map;
+        final scheduled = (data[1] as List).cast<Map>();
         final inv = (m['inventory_summary'] as List).cast<Map>();
         final entries = (m['donation_entries'] as List).cast<Map>();
         final logs = (m['recent_activity'] as List).cast<Map>();
@@ -659,6 +666,13 @@ class CswsMainDashboard extends StatelessWidget {
                 color: const Color(0xFF2E7D32),
               ),
             ]),
+            ScheduledDeliveriesCard(
+              deliveries: scheduled,
+              onOpen: (d) =>
+                  showDeliveryHistory(context, d['delivery_id'] as int),
+              onSeeAll: () =>
+                  HomeNav.go(context, const HomeTarget('Deliveries')),
+            ),
             const SectionTitle('Inventory summary'),
             if (inv.isEmpty) const EmptyState('Inventory is empty.'),
             Card(
