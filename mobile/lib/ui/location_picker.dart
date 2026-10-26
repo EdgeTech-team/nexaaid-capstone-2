@@ -576,11 +576,13 @@ class _DropOffCardState extends State<DropOffCard> {
         final lat = (j['lat'] as num?)?.toDouble();
         final lng = (j['lng'] as num?)?.toDouble();
         final pos = lat != null && lng != null ? LatLng(lat, lng) : null;
+        final cs = Theme.of(context).colorScheme;
+        final t = Theme.of(context).textTheme;
 
         return Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Brand.pinkSoft.withValues(alpha: 0.5),
+           color: cs.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
@@ -663,9 +665,9 @@ class _DropOffCardState extends State<DropOffCard> {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(
+               Text(
                 note,
-                style: const TextStyle(fontSize: 12, color: Brand.muted),
+                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
               if (pos != null) ...[
                 const SizedBox(height: 10),
