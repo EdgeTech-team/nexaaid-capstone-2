@@ -267,7 +267,7 @@ class StatusChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => _Pill(
-    label ?? status ?? 'Unknown',
+    label ?? StatusColors.label(status),
     StatusColors.of(status, Theme.of(context).brightness),
     showIcon,
     'Status',

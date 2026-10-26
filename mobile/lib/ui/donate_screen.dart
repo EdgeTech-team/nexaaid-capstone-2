@@ -1228,6 +1228,12 @@ class _DonateScreenState extends State<DonateScreen> {
             'CSWS will come to this address on one of the dates you are home.',
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
+          // Geofence (Oct 2026): where Door to Door is offered.
+          if (pickupRules.cities.isNotEmpty)
+            Text(
+              'Door to Door is only in ${pickupRules.cities.join(', ')}.',
+              style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
           Gaps.v12,
           ServiceAreaCard(pickupRules.serviceAreas),
           Gaps.v12,

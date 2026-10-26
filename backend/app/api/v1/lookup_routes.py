@@ -5,6 +5,7 @@ Public: it holds no personal data (no donor names or contacts), and guest
 donors need it too.
 """
 from services.fulfillment import progress_for_reports
+from services.need_templates import need_templates
 from services.units import dimension, units_for
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session, joinedload
@@ -116,4 +117,6 @@ def get_lookups(db: Session = Depends(get_db)):
             {"id": r.request_id, "name": f"#{r.request_id} for {r.title}"}
             for r in requests
         ],
+        # Module 3 (Oct 2026): suggested needs per disaster type, per family.
+        "need_templates": need_templates(db),
     }

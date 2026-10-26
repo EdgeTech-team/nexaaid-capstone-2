@@ -158,11 +158,12 @@ class Api extends ChangeNotifier {
   }
 
   /// Use the deployed backend on Android, Chrome, and other platforms.
-  /// To test against a backend on this laptop instead:
-  ///   flutter run -d chrome --dart-define=API_BASE=http://localhost:8000
+    /// The deployed Render backend, unless the build names another one:
+  ///   flutter run --dart-define=API_BASE=http://localhost:8000
+  /// (Android emulator: http://10.0.2.2:8000; phone on Wi-Fi: the laptop's IP).
   static String _defaultBase() {
-    const local = String.fromEnvironment('API_BASE');
-    if (local.isNotEmpty) return local.replaceAll(RegExp(r'/+$'), '');
+    const fromBuild = String.fromEnvironment('API_BASE');
+    if (fromBuild.isNotEmpty) return fromBuild.replaceAll(RegExp(r'/+$'), '');
     return 'https://nexaaid-1.onrender.com';
   }
 
