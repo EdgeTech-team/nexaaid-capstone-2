@@ -2,8 +2,8 @@
 
 1. The donor picks specific dates on a calendar instead of weekdays. The
    pickup map and planner only use those dates (not every matching weekday).
-2. Door to Door is only for the service areas: Mandaue City, northern Cebu
-   City (Banilad, Talamban, ...), Consolacion and Lapu-Lapu City.
+2. Door to Door is only for the service areas: Mandaue City, Cebu City
+   (whole city, team decision Oct 26), Consolacion and Lapu-Lapu City.
 """
 from datetime import date, datetime, timedelta
 
@@ -30,7 +30,8 @@ def test_service_areas():
     assert in_service_area("Poblacion Oriental, Consolacion, Cebu")
     assert in_service_area("Marigondon, Lapu-Lapu City")
     assert in_service_area("Mactan Newtown, Lapulapu")
-    assert not in_service_area("Colon St, Cebu City")          # southern Cebu City
+    assert in_service_area("Colon St, Cebu City")              # whole Cebu City
+    assert in_service_area("Pusok, Opon, Cebu")                # old name of Lapu-Lapu
     assert not in_service_area("Poblacion, Talisay City")
     assert not in_service_area("1 Test St")
 
@@ -66,6 +67,9 @@ def _fake_map(monkeypatch, city=None, down=False):
         return {"features": [{"properties": props}]}
 
     monkeypatch.setattr(routes, "_geocoder", fake)
+    # The pin lookup goes through _reverse_props (conftest makes it offline).
+    monkeypatch.setattr(routes, "_reverse_props", lambda lat, lng: (
+        fake("/reverse", {})["features"][0]["properties"]))
 
 
 def test_door_to_door_outside_the_service_area_is_refused(api, monkeypatch):
@@ -113,3 +117,26 @@ def test_planner_uses_only_the_chosen_dates():
     stop = out["stops"][0]
     assert stop["planned_date"] == "2026-11-02"                  # not Oct 26 / 28
     assert stop["dates"] == ["2026-11-02"] and stop["days"] == [1]
+
+
+def test_map_city_cebu_means_cebu_city(monkeypatch):
+    """Team decision (Oct 26): all of Cebu City. The map often names it just
+    "Cebu" (Plaza Independencia, SM Seaside); Talisay keeps "Cebu" only as
+    its province and stays outside."""
+    import api.v1.donation_routes as routes
+
+    def fake(path, params):
+        places = [
+            {"name": "Plaza Independencia", "locality": "San Roque", "district": "Carreta",
+             "city": "Cebu", "state": "Central Visayas"},
+            {"name": "Talisay City Hall", "district": "Lawaan II", "city": "Talisay",
+             "state": "Cebu"},
+        ]
+        return {"features": [{"geometry": {"coordinates": [123.9, 10.29 - i]}, "properties": p}
+                             for i, p in enumerate(places)]}
+
+    monkeypatch.setattr(routes, "_geocoder", fake)
+    plaza, talisay = routes.location_autocomplete(q="plaza test")
+    assert plaza["address"].endswith("Carreta, Cebu City, Central Visayas")
+    assert plaza["in_pickup_area"] is True and plaza["city"] == "Cebu City"
+    assert talisay["in_pickup_area"] is False

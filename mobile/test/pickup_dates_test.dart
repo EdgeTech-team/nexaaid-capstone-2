@@ -1,5 +1,5 @@
 // Oct 23: Door to Door donors tap specific dates on a calendar, and pickup
-// is only offered in the service areas (Mandaue, northern Cebu City,
+// is only offered in the service areas (Mandaue, Cebu City,
 // Consolacion, Lapu-Lapu). Same rules as the backend.
 import 'dart:convert';
 
@@ -51,7 +51,8 @@ void main() {
     expect(rules.inServiceArea('Poblacion, Consolacion, Cebu'), isTrue);
     expect(rules.inServiceArea('Marigondon, Lapu-Lapu City'), isTrue);
     expect(rules.inServiceArea('Mactan Newtown, Lapulapu'), isTrue);
-    expect(rules.inServiceArea('Colon St, Cebu City'), isFalse);
+    expect(rules.inServiceArea('Colon St, Cebu City'), isTrue); // whole city
+    expect(rules.inServiceArea('Pusok, Opon, Cebu'), isTrue);
     expect(rules.inServiceArea('Poblacion, Talisay City'), isFalse);
   });
 
@@ -205,8 +206,8 @@ void main() {
     }, () => server);
     final dates = [pickupDateIso(tue), pickupDateIso(wed)]..sort();
     expect(sent?['pickup_dates'], dates);
-    expect(sent?['pickup_days'], [
-      for (final d in [tue, wed]..sort()) d.weekday,
-    ]);
+    // Weekdays are sent sorted (Tuesday 2, Wednesday 3), whichever date
+    // comes first.
+    expect(sent?['pickup_days'], [DateTime.tuesday, DateTime.wednesday]);
   });
 }

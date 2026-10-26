@@ -45,19 +45,22 @@ def test_the_list_comes_from_env(monkeypatch):
 
 
 def test_donation_outside_the_area_is_refused(monkeypatch):
-    """Through the API: a Door to Door pin in Minglanilla is refused with
-    the message, before anything is saved."""
+    """Through the API helper: one Door to Door rule (the service areas in
+    schemas/physical_donation_schema.py). A pin in Minglanilla is refused
+    with the message, before anything is saved."""
     import api.v1.donation_routes as routes
     from fastapi import HTTPException
     from types import SimpleNamespace
 
-    monkeypatch.setattr(routes, "_reverse_city", lambda lat, lng: "Minglanilla")
-    payload = SimpleNamespace(handover_method="Door to Door", pickup_lat=10.26, pickup_lng=123.80)
+    def door(landmark, lat=None, lng=None):
+        return SimpleNamespace(handover_method="Door to Door", pickup_landmark=landmark,
+                               pickup_address="12 Rizal St.", pickup_lat=lat, pickup_lng=lng)
+
+    monkeypatch.setattr(routes, "_reverse_props",
+                        lambda lat, lng: {"name": "Plaza", "city": "Minglanilla"})
     with pytest.raises(HTTPException) as e:
-        routes._check_service_area(payload)
+        routes._check_service_area(door("Town plaza", 10.26, 123.80))
     assert e.value.status_code == 422 and "Minglanilla" in e.value.detail
 
-    monkeypatch.setattr(routes, "_reverse_city", lambda lat, lng: "Lapu-Lapu")
-    routes._check_service_area(payload)          # accepted
-    routes._check_service_area(SimpleNamespace(handover_method="Drop Off", pickup_lat=None,
-                                               pickup_lng=None))
+    routes._check_service_area(door("Marigondon, Lapu-Lapu City"))      # accepted
+    routes._check_service_area(SimpleNamespace(handover_method="Drop Off"))
