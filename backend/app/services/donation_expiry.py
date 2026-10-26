@@ -42,7 +42,8 @@ from sqlalchemy.orm import Session
 
 from core.notifications import notify_event
 from models.physical_donation_model import PhysicalDonation
-from schemas.physical_donation_schema import MANILA
+from services.donation_additions import is_removed
+from schemas.physical_donation_schema import MANILA, decode_pickup_dates, pickup_rules
 from core.uploads import purge_unclaimed
 
 OPEN = "Pending"
@@ -97,22 +98,36 @@ def nice_date(value: Optional[datetime]) -> str:
 
 
 def deadline_for(handover_method: str, preferred_pickup_at: Optional[datetime],
-                 start: Optional[datetime] = None) -> datetime:
+                 start: Optional[datetime] = None, pickup_dates=None) -> datetime:
     """When a Pending donation expires. start = when it was submitted
-    (or reinstated); defaults to now."""
+    (or reinstated); defaults to now. pickup_dates: the specific dates the
+    donor chose (calendar picker); the donation never expires before the
+    last of them plus the grace days."""
     rules = expiry_rules()
     start = utc(start) or now_utc()
     if handover_method == "Door to Door":
         if preferred_pickup_at is not None:  # entries from before pickup days
             return utc(preferred_pickup_at) + timedelta(days=rules["pickup_grace_days"])
-        return start + timedelta(days=rules["pickup_window_days"])
+        window = start + timedelta(days=rules["pickup_window_days"])
+        dates = decode_pickup_dates(pickup_dates)
+        if dates:
+            last = datetime(dates[-1].year, dates[-1].month, dates[-1].day,
+                            pickup_rules()["end_hour"], tzinfo=MANILA)
+            return max(window, last.astimezone(timezone.utc)
+                       + timedelta(days=rules["pickup_grace_days"]))
+        return window
     return start + timedelta(days=rules["drop_off_days"])
+
+
+def row_deadline(r: PhysicalDonation, start: Optional[datetime] = None) -> datetime:
+    return deadline_for(r.handover_method, r.preferred_pickup_at, start,
+                        getattr(r, "pickup_dates", None))
 
 
 def set_deadline(rows: Iterable[PhysicalDonation], start: Optional[datetime] = None) -> None:
     """Give newly created (or reinstated) Pending rows their deadline."""
     for r in rows:
-        r.expires_at = deadline_for(r.handover_method, r.preferred_pickup_at, start)
+        r.expires_at = row_deadline(r, start)
         r.reminder_sent_at = None
 
 
@@ -122,7 +137,7 @@ def effective_deadline(row: PhysicalDonation) -> Optional[datetime]:
         return None
     if row.expires_at is not None:
         return utc(row.expires_at)
-    return deadline_for(row.handover_method, row.preferred_pickup_at, row.created_at)
+    return row_deadline(row, row.created_at)
 
 
 def close_rows(rows: Iterable[PhysicalDonation], status: str, reason: str,
@@ -161,7 +176,7 @@ def reopen_rows(rows: Iterable[PhysicalDonation], preferred_pickup_at: Optional[
     # A Door to Door donation reinstated without a new pickup time gets the
     # Drop Off window from today, never a deadline that has already passed.
     for r in changed:
-        deadline = deadline_for(r.handover_method, r.preferred_pickup_at, when)
+        deadline = row_deadline(r, when)
         if deadline <= when:
             deadline = deadline_for("Drop Off", None, when)
         r.expires_at = deadline
@@ -187,7 +202,7 @@ def expire_overdue(db: Session, now: Optional[datetime] = None) -> dict:
     for r in db.query(PhysicalDonation).filter(
         PhysicalDonation.status == OPEN, PhysicalDonation.expires_at.is_(None)
     ).all():
-        r.expires_at = deadline_for(r.handover_method, r.preferred_pickup_at, r.created_at)
+        r.expires_at = row_deadline(r, r.created_at)
     db.flush()
 
     # skip_locked: if two screens load at the same moment, the second one
@@ -249,7 +264,8 @@ def entry_status(statuses: Iterable[str]) -> str:
 def entry_expiry_info(rows: list) -> dict:
     """Deadline and closing details for one entry, for the screens."""
     pending = [r for r in rows if r.status == OPEN]
-    closed = [r for r in rows if r.status in CLOSED]
+    # Items the donor removed are listed apart (removed_notes), not as closed.
+    closed = [r for r in rows if r.status in CLOSED and not is_removed(r)]
     deadline = min((effective_deadline(r) for r in pending), default=None)
     last = max(closed, key=lambda r: utc(r.closed_at) or datetime.min.replace(tzinfo=timezone.utc)) if closed else None
     days_left = None

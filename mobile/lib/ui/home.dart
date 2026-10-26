@@ -11,6 +11,7 @@ import 'donor_screens.dart';
 import 'my_giving.dart';
 import 'notifications_screen.dart';
 import 'ops_screens.dart';
+import 'cmo_screens.dart';
 import 'pickup_map.dart';
 import 'profile_screen.dart';
 import 'records_screens.dart';
@@ -106,6 +107,9 @@ List<_Tab> _tabsFor(String? role) {
           Icons.verified_outlined,
           CmoScreen(),
         ), // Module 6, 9.5 (Oct 11: "Acknowledge", not "Confirm")
+        // Oct 23 redesign: past acknowledgements and the summary per
+        // report (7.4) live here, so the Acknowledge tab is today's work.
+        _Tab('History', Icons.history, CmoHistoryScreen()),
         reports, // 2.4
       ];
     case Roles.drrmo:
