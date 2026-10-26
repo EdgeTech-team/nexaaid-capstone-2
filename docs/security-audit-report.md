@@ -1,6 +1,6 @@
 # NexaAid — Security and Privacy Audit Report
 
-**Date:** 24 October 2026 (F-25, F-26 and K-7 added 26 October 2026)
+**Date:** 24 October 2026 (F-25, F-26 and K-7 to K-9 added 26 October 2026)
 **System:** NexaAid (disaster relief coordination for Mandaue City) — FastAPI backend, Flutter app (web + Android), hosted on Render (backend), Neon (database) and Netlify (web app).
 **Scope:** 26 findings (F-01 to F-26) covering security, privacy, data integrity and legal/compliance.
 
@@ -94,9 +94,9 @@ Nothing the app does today breaks these rules. We checked every status the code 
 
 ---
 
-## 3. Known pre-existing issues (K-1 to K-7)
+## 3. Known pre-existing issues (K-1 to K-9)
 
-These are separate from the audit findings. K-1 to K-5 were already present before the audit; K-6 was discovered during the F-20 web test; K-7 came in with PR #93 after the audit. None blocks the security fixes.
+These are separate from the audit findings. K-1 to K-5 were already present before the audit; K-6 was discovered during the F-20 web test; K-7 to K-9 came in on `copy-develop` with PRs #93 and #95 after the audit, were confirmed on `copy-develop` alone, and have since been fixed there. None blocks the security fixes.
 
 - **K-1:** A Flutter test, "Organization form: document upload and type dropdown," fails. Pre-existing UI test.
 - **K-2:** A Flutter test, "account numbers follow provider standards," fails. Pre-existing.
@@ -104,7 +104,9 @@ These are separate from the audit findings. K-1 to K-5 were already present befo
 - **K-4:** A Flutter test, "Edit fields: Bank number stops at 16 digits," fails. Pre-existing.
 - **K-5:** A backend test about a not-home pickup stop fails only when run on a Wednesday (Manila time); a test-date quirk, not a real bug.
 - **K-6:** On the **web app**, the camera stays on after leaving the QR scanner until the page is reloaded. The cause is in the third-party scanner library's web code; the Android/iOS apps are not affected. For now: on the web, reload after scanning, or scan with the Android app. Not reported to the library's maintainers (that is the team's call). To be raised with Mandaue (below).
-- **K-7:** Three backend tests fail on `copy-develop` since PR #93 (`test_runthrough_gaps::test_main_office_hears_when_drrmo_completes_the_support`, `test_testing_fixes_oct19::test_7_5_drrmo_completes_only_after_in_transit_and_barangay_receipt`, `test_shared_logistics_notifications::test_both_teams_hear_every_logistics_step`). They still use the old flow where CSWS marks a DRRMO delivery In Transit, which PR #93's new rule blocks. Confirmed on `copy-develop` alone (at `41b0f66`), without the audit. Reported to the PR's author; not changed in the audit branch to avoid conflicts.
+- **K-7 (fixed):** Three backend tests failed on `copy-develop` after PR #93 because they still used the old flow where CSWS marks a DRRMO delivery In Transit, which PR #93's new rule blocks. Fixed by the PR's author on `copy-develop` (commit `c4ee8c7`, 26 October 2026).
+- **K-8 (fixed):** The backend test `test_pickup_geofence::test_donation_outside_the_area_is_refused` failed on `copy-develop` after PR #95 because the PR #93 test's fake donation had no `pickup_landmark`, which PR #95's code reads. Fixed by PR #96 (26 October 2026).
+- **K-9 (fixed):** The Flutter app on `copy-develop` didn't compile after PR #95's merge (`location_picker.dart`, the field `cities` was not set), so 28 Flutter test files failed to load and any web or Android build would have failed. Fixed by PR #96, which also merged two duplicate service-area checks into one (26 October 2026). We confirmed the single check still sends every map lookup through the rate-limited path (F-19).
 
 ---
 
@@ -127,13 +129,13 @@ Do these in order. The migrations must be applied to the database **before** the
 
 ### B. Local checks (never against production)
 
-5. In a throwaway local Postgres, run the "models match migrations" and "inventory concurrency" checks.
-6. Both full test suites green, apart from the known issues (K-1 to K-5 and K-7).
+5. In a throwaway local Postgres, run the "models match migrations" and "inventory concurrency" checks. Done 26 Oct 2026, together with a rehearsal of the full migration chain (section 7).
+6. Both full test suites green, apart from the known issues (K-1 to K-5).
 7. **Content-Security-Policy local test (F-20):** build the web app and serve it with the security headers; browse (don't submit) every screen in Chrome and Firefox, with the browser console clean. Done 24 Oct 2026; repeat after any change to the headers, the scanner library, or Flutter.
 
 ### C. Apply migrations, then deploy
 
-8. Apply the two database migrations in order — first the guest-consent column (F-09), then the item-review column (F-15) — to Neon, and confirm the new version. PR #95 must be merged first, so its migration files exist; Neon is already at `a1d4e7c9b2f5`, so upgrading to head runs exactly these two.
+8. Apply the two database migrations in order — first the guest-consent column (F-09), then the item-review column (F-15) — to Neon, and confirm the new version. PR #95 is merged (26 Oct 2026), so its migration files are in the branch; Neon is already at `a1d4e7c9b2f5`, so upgrading to head runs exactly these two and ends at `c8e2f4a6b913`.
 9. Deploy the backend only after the migrations.
 10. On Render (at or before the deploy):
     - leave the secret key unchanged;
@@ -196,13 +198,19 @@ See the consolidated lists in sections 5 and 6 (F-25 and F-26: section 6, items 
 
 ---
 
-## 7. Test results at the end of the audit
+## 7. Test results
 
-- **Backend:** 308 passed, 4 skipped. (The 4 skipped are environment-dependent tests that run only against a local Postgres container.)
-- **Flutter (app):** 168 passed, 4 failed. The 4 failures are the pre-existing known issues K-1 to K-4.
-- **Dependency vulnerability scan (pip-audit):** No known vulnerabilities found, after updating Pillow (image handling) and certifi (HTTPS trust) and removing unused packages. Before the update, the scan reported 38 known vulnerabilities across those two packages.
-- **Known test-date quirk:** K-5 (a pickup test) fails only when run on a Wednesday, Manila time.
-- **After merging `copy-develop` with PR #93 (26 October 2026):** backend 328 passed, 3 failed, 4 skipped. The 3 failures are K-7 and also fail on `copy-develop` alone. Flutter unchanged: 168 passed, 4 failed (K-1 to K-4). These numbers will be updated after PR #95 is merged in and the migrations are re-chained.
+- **At the end of the audit (24 October 2026):**
+  - **Backend:** 308 passed, 4 skipped. (The 4 skipped are environment-dependent tests that run only against a local Postgres container.)
+  - **Flutter (app):** 168 passed, 4 failed. The 4 failures are the pre-existing known issues K-1 to K-4.
+  - **Dependency vulnerability scan (pip-audit):** No known vulnerabilities found, after updating Pillow (image handling) and certifi (HTTPS trust) and removing unused packages. Before the update, the scan reported 38 known vulnerabilities across those two packages.
+  - **Known test-date quirk:** K-5 (a pickup test) fails only when run on a Wednesday, Manila time.
+- **After merging `copy-develop` with PR #93 (26 October 2026):** backend 328 passed, 3 failed (K-7, which also failed on `copy-develop` alone), 4 skipped. Flutter 168 passed, 4 failed (K-1 to K-4).
+- **After merging PRs #95 and #96 and the K-7 fix, and re-chaining the migrations (26 October 2026):**
+  - **Backend:** 346 passed, 4 skipped, 0 failed.
+  - **Flutter:** 186 passed, 4 failed (K-1 to K-4).
+  - **Postgres checks** (models match migrations, inventory concurrency): 4 passed, building the full chain `7f4d2b9e6a31 → f2a9c4e7b1d3 → a1d4e7c9b2f5 → a1f09c3e5d72 → c8e2f4a6b913`.
+  - **Migration rehearsal on a local Postgres:** up to `a1d4e7c9b2f5`, the schema matches Neon for PR #95's changes; the audit migrations then upgrade to `c8e2f4a6b913`, downgrade, and upgrade again cleanly.
 
 All fixes were verified by running these suites after each change. The audit work is committed on the branch `audit/security-fixes` (pull request #92) and has not been deployed; deployment follows the checklist in section 4.
 
@@ -214,7 +222,7 @@ PR #92 was tested locally in Chrome against a fresh Postgres 16 database (`nexaa
 
 **Confirmed working:**
 
-- **Migrations:** `7f4d2b9e6a31 → a1f09c3e5d72 → c8e2f4a6b913` ran without errors. (This was before PR #95. After #95, the chain becomes `7f4d2b9e6a31 → f2a9c4e7b1d3 → a1d4e7c9b2f5 → a1f09c3e5d72 → c8e2f4a6b913`, and will be rehearsed again before deploy.)
+- **Migrations:** `7f4d2b9e6a31 → a1f09c3e5d72 → c8e2f4a6b913` ran without errors. (This was before PR #95. After #95, the chain is `7f4d2b9e6a31 → f2a9c4e7b1d3 → a1d4e7c9b2f5 → a1f09c3e5d72 → c8e2f4a6b913`, rehearsed again on 26 October; see section 7.)
 - **F-09:** submitting a guest donation without ticking the consent box is blocked with "Please agree to the processing of your personal data (RA 10173)". With consent ticked, the donation is recorded.
 - **F-13:** the debug build shows the developer tools and server setting; the release build shows none, even after tapping About five times. The current production site still shows them, which is what F-13 fixes.
 - **F-15:** a new item typed by a guest appears in the "New items to review" card for CSWS Main Office. Approving it empties the list and adds it to the item list.
