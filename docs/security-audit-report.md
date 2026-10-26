@@ -1,8 +1,8 @@
 # NexaAid — Security and Privacy Audit Report
 
-**Date:** 24 October 2026
+**Date:** 24 October 2026 (F-25 and F-26 added 26 October 2026)
 **System:** NexaAid (disaster relief coordination for Mandaue City) — FastAPI backend, Flutter app (web + Android), hosted on Render (backend), Neon (database) and Netlify (web app).
-**Scope:** 24 findings (F-01 to F-24) covering security, privacy, data integrity and legal/compliance.
+**Scope:** 26 findings (F-01 to F-26) covering security, privacy, data integrity and legal/compliance.
 
 ---
 
@@ -12,14 +12,14 @@ We reviewed the NexaAid backend and app for security and privacy problems, one f
 
 **What was audited:** account sign-in and tokens, who can see and change which records, how donations and reports move through the system, file uploads and ID photos, guest-donor data, the public web pages, the server's settings, its logs, its third-party software, delivery records, and the privacy rights of the people whose data we hold.
 
-**Findings by severity (24 total):**
+**Findings by severity (26 total):**
 
-| Severity      | Count | Finding numbers                                                  |
-| ------------- | ----- | ---------------------------------------------------------------- |
-| High          | 1     | F-02                                                             |
-| Medium        | 10    | F-01, F-03, F-04, F-06, F-07, F-08, F-09, F-10, F-11, F-13       |
-| Low           | 11    | F-05, F-12, F-14, F-15, F-16, F-17, F-18, F-19, F-21, F-23, F-24 |
-| Informational | 2     | F-20, F-22                                                       |
+| Severity      | Count | Finding numbers                                                              |
+| ------------- | ----- | ---------------------------------------------------------------------------- |
+| High          | 1     | F-02                                                                         |
+| Medium        | 10    | F-01, F-03, F-04, F-06, F-07, F-08, F-09, F-10, F-11, F-13                   |
+| Low           | 13    | F-05, F-12, F-14, F-15, F-16, F-17, F-18, F-19, F-21, F-23, F-24, F-25, F-26 |
+| Informational | 2     | F-20, F-22                                                                   |
 
 **What was fixed (code written, tested, awaiting deployment):** 19 findings fully, and 2 more in part. In plain terms, we closed the one high-severity issue (no limit on sign-in attempts, which let passwords and reset codes be guessed), stopped internal records and other people's data from leaking to the wrong users, made sign-in tokens stop working after a password change, encrypted the login token on phones, stopped guests from quietly changing the public data, tightened file uploads, added a server-wide limit on the public address search, locked down the public web settings and added a Content-Security-Policy, fixed how the server records who did what and from where, kept personal data out of the logs, updated and pinned all third-party software (removing 38 known vulnerabilities), and stopped staff email addresses from showing to barangay representatives.
 
@@ -30,12 +30,13 @@ We reviewed the NexaAid backend and app for security and privacy problems, one f
 - **F-13 Part C (release signing key and final app ID):** pending the team's own build decisions. The insecure-connection risk itself is already fixed.
 - **F-23 parts (a) and (b):** delivery destination flexibility and whether an Administrator may confirm receipt on a barangay's behalf — both are process questions for Mandaue.
 - **F-24 (self-service data rights):** mostly a documentation task — a written data-privacy process — not a code problem. Recorded for the team and adviser.
+- **F-25 and F-26 (found 26 October 2026, after the main audit):** database migrations applied to production before their pull request was reviewed, and older differences between the production database and our migrations. Neither affects the app today; both need team decisions (section 6, items 13–16).
 
 **Overall:** NexaAid is in good shape. The security fixes are complete and tested; what remains is a planned deployment (with one data-cleanup review that must happen first), a short list of process questions for the Mandaue visit, and a few documentation and policy decisions for the team and adviser.
 
 ---
 
-## 2. All 24 findings
+## 2. All 26 findings
 
 | #    | Finding (plain English)                                                                                                                    | Severity | Status                              | Decision made                                                                                                                                                      |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -63,6 +64,33 @@ We reviewed the NexaAid backend and app for security and privacy problems, one f
 | F-22 | Personal data could reach the logs, and third-party software wasn't pinned or up to date.                                                  | Info     | **Fixed**                           | Email addresses masked in logs; search terms kept out of the access log; all packages pinned to one list; 38 known vulnerabilities removed.                        |
 | F-23 | Delivery records had a few loose rules.                                                                                                    | Low      | **Fixed (c)** / **Mandaue (a, b)**  | Staff emails no longer shown to barangay reps. Destination flexibility (a) and Administrator confirming for a barangay (b) are Mandaue questions.                  |
 | F-24 | Users can't view, correct, export or delete their own data in the app.                                                                     | Low      | **Documentation**                   | Record a data-privacy (DPO) process; a "request deletion" button is a possible future enhancement. The deletion mechanism itself already exists and is tested.     |
+| F-25 | Two database changes were applied to the production database before their pull request was reviewed or merged, by someone other than the person who applies migrations. | Low      | **Process (team rule)**             | The changes (PR #95) are harmless and their author is known. New rule: one person applies migrations to Neon, and only after their pull request is merged. |
+| F-26 | The production database has rules (checks, indexes, column sizes, delete rules) that our migrations don't create, so the tests can't catch code that breaks them. | Low      | **Planned (after deploy)**          | No effect on the app today. A follow-up migration will add the missing rules so every test database matches production; the team decides the notification-type length. |
+
+### F-25 and F-26 (added 26 October 2026)
+
+**F-25: Migrations applied to production before review (Low).** While preparing the deploy, we found the production database (Neon) at migration version `a1d4e7c9b2f5`, which was in no merged branch. Comparing Neon with a local copy at the last merged version (`7f4d2b9e6a31`) showed two added columns on donations (`pickup_dates`, `addition_no`) and one index. A team member then confirmed they come from two migrations in their open pull request #95 (`f2a9c4e7b1d3`, then `a1d4e7c9b2f5`). The migrations were applied to Neon while the pull request was still under review, and not by the person who normally applies migrations.
+
+The changes only add columns and an index, and the live app is unaffected. The risk is the process:
+
+- **Production can run ahead of reviewed code.** A mistake in an unreviewed migration (a dropped column, a wrong default) reaches real data before anyone has looked at it. If the pull request changes during review, production is left at a version no branch describes.
+- **Nobody else could tell what production contained.** Until the author came forward, the version on Neon was unexplained. The audit nearly recorded a rebuilt file under the same version number, which would have broken migrations for everyone once #95 was merged.
+- **Other work is blocked.** The audit migrations must run after `a1d4e7c9b2f5`, so they cannot be finalized until #95 is merged.
+
+We rate it Low because the changes are additive, their author is known, and no one outside the team was involved. It would rate higher if a migration applied this way had removed or rewritten data.
+
+*Recommendation:* a team rule for production migrations, and a review of who holds database access (section 6, items 13–14).
+
+**F-26: Production database rules our migrations don't reproduce (Low).** Neon was created by hand, before the team used migrations, and that original SQL was never saved. The tests' copy of that starting point (`backend/app/tests/sql/baseline_e837b545b195.sql`) was rebuilt on 3 October 2026 from the code, so it misses rules that existed only in the hand-made database. Comparing the two on 26 October 2026 found, on Neon only:
+
+- extra checks on reports (allowed priority values, a rejection needs a reason, a validated or rejected report needs the staff member who decided, an extra "On Hold" status), on CMO decisions, and on DRRMO request statuses;
+- 12 extra indexes (audit log, deliveries, CMO decisions, inventory, DRRMO requests, notifications);
+- different column sizes: notification type 50 characters (the code says 100), notification title 255 (code: 200), CMO notes unlimited (code: 200);
+- different delete rules on five links (audit log, CMO decisions ×2, notifications, delivery receipts).
+
+Nothing the app does today breaks these rules. We checked every status the code writes and every delete it performs. The risk is that no test can see them: the tests build their database from the code, so a change that breaks a production-only rule passes every test and fails only after deploy. This has already happened once: withdrawing a report failed in production because of a status check no migration knew about (fixed by migration `a7c3e5f19b42`).
+
+*Recommendation:* after the audit deploy, add one reconciliation migration that creates the missing checks and indexes only where they don't already exist. It changes nothing on Neon and makes every local and test database match production. Settle the column sizes in the same migration (section 6, item 16). Don't edit the frozen baseline file. Before each later deploy, repeat the same comparison: Neon's structure against a freshly migrated local copy.
 
 ---
 
@@ -88,7 +116,7 @@ Do these in order. The migrations must be applied to the database **before** the
 0. **Render deploys automatically on every push to the `copy-develop` branch.** Do not push the audit work to `copy-develop` until the database migrations (step 8) are done — a push would put the new backend against the old database and requests would fail. Commit the audit work on its own branch and keep it off `copy-develop` until then. (Optionally, turn Auto-Deploy off during the change and deploy manually.)
 1. Commit the work, keeping the `.claude/` folder out of the commit, and agree on the branch.
 2. Make a Neon backup or branch.
-3. Confirm the database is at the expected pre-audit version (`7f4d2b9e6a31`).
+3. Confirm the database is at the expected pre-audit version, `a1d4e7c9b2f5` (PR #95's two migrations, on top of `7f4d2b9e6a31`; see F-25).
 4. Run the read-only checks (queries the team runs themselves):
    - orphan upload files and storage used (F-14);
    - items in the "Other" category awaiting review (F-15);
@@ -104,7 +132,7 @@ Do these in order. The migrations must be applied to the database **before** the
 
 ### C. Apply migrations, then deploy
 
-8. Apply the two database migrations in order — first the guest-consent column (F-09), then the item-review column (F-15) — to Neon, and confirm the new version.
+8. Apply the two database migrations in order — first the guest-consent column (F-09), then the item-review column (F-15) — to Neon, and confirm the new version. PR #95 must be merged first, so its migration files exist; Neon is already at `a1d4e7c9b2f5`, so upgrading to head runs exactly these two.
 9. Deploy the backend only after the migrations.
 10. On Render (at or before the deploy):
     - leave the secret key unchanged;
@@ -129,7 +157,7 @@ Do these in order. The migrations must be applied to the database **before** the
 
 ### E. Decisions for the team and adviser (not code)
 
-See the consolidated lists in sections 5 and 6.
+See the consolidated lists in sections 5 and 6 (F-25 and F-26: section 6, items 13–16).
 
 ---
 
@@ -160,6 +188,10 @@ See the consolidated lists in sections 5 and 6.
 10. **Test data.** Cancel the test donation `DON-344913204065`, created during the web-app test.
 11. **Note for the record.** On 20 October 2026, a few audited actions came from a backend run on a developer's own computer connected to the production database (the recorded IP was `127.0.0.1`). From now on, local backends use a local database only, and production corrections are made through the live API with an Administrator token.
 12. **F-21 — visitor IPs before the deploy.** IPs recorded before the deploy are the hosting proxy addresses and cannot be corrected. If the audit log is presented, say IPs are reliable only from the deploy date, once the post-deploy check passes.
+13. **F-25 — rule for production migrations.** One person (Mark) applies migrations to Neon, and only after the pull request that contains them has been reviewed and merged into `copy-develop`, in the deploy order of section 4 (migrations first, then the backend). To try a migration on real data, use a Neon branch (a copy of production), never production itself. If a migration is ever urgent, the team agrees first and the pull request is merged the same day. Before each deploy, the person applying migrations confirms that Neon's version matches the newest migration in `copy-develop`.
+14. **F-25 — who holds Neon access.** List every person and place that can reach or manage the production database: members of the Neon project (web console); anyone signed in to Neon's command-line tool or holding a Neon API key (copy-develop's `.gitignore` lists `.neon/`, so someone uses Neon's tools from their own copy of the repository); the connection settings on Render (`DATABASE_URL`, `DIRECT_URL`); and every developer's `backend/app/.env`. Only Render and Mark's migration setup should keep the production connection; everyone else uses a local database or a Neon branch (as agreed in item 11). Changing the database password is not needed for F-25 now that the change is claimed, but do it if this list is narrowed, because anyone removed still knows the current password. Optionally drop the `playing_with_neon` sample table (harmless).
+15. **F-26 — reconciliation migration.** Agree to add, after the audit deploy, one migration that creates Neon's missing checks and indexes where they don't exist (no change on Neon; local and test databases then match production), and to compare Neon's structure with a freshly migrated copy before each deploy. Decide who writes it and when.
+16. **F-26 — notification type length (50 vs 100).** Production allows 50 characters for a notification type; the code says 100. Today's longest type is 29 characters, so nothing fails, but a longer one would pass every test and fail in production. Recommended: widen production to 100 in the reconciliation migration (widening never loses data). For the notification title (255 vs 200) and CMO notes (unlimited vs 200), production is already the larger one: keep it and change the code to match.
 
 ---
 
