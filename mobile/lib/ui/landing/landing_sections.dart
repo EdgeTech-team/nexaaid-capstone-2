@@ -817,21 +817,9 @@ class LandingImpactSection extends StatelessWidget {
 
     // Reloads with the rest of the page (pull to refresh).
     final recent = _RecentDeliveriesCard(key: ValueKey(asOf));
-    final cards = wide
-        ? IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(flex: 3, child: recent),
-                Gaps.h16,
-                const Expanded(flex: 2, child: _WhyTrustCard()),
-              ],
-            ),
-          )
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [recent, Gaps.v16, const _WhyTrustCard()],
-          );
+     // Oct 26 redesign: "Why donors trust it" moved to the four trust cards
+    // (LandingTrustCards in landing_v2.dart), so only recent deliveries here.
+    final cards = recent;
 
     return Material(
       color: cs.surfaceContainerLowest,
@@ -1113,7 +1101,8 @@ class _RecentDeliveriesCardState extends State<_RecentDeliveriesCard> {
     );
   }
 }
-
+// Oct 26 redesign: replaced by LandingTrustCards; kept for now.
+// ignore: unused_element
 class _WhyTrustCard extends StatelessWidget {
   const _WhyTrustCard();
 
