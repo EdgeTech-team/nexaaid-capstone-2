@@ -18,7 +18,8 @@ from models.user_rbac_model import User
 from tests.reg_helpers import STRONG_PASSWORD, org_payload
 from tests.test_role_flows import ACCOUNTS, api, ok  # noqa: F401  (fixture)
 
-PUBLIC = ("disaster_types", "barangays", "sitios", "items", "validated_reports")
+PUBLIC = ("disaster_types", "barangays", "sitios", "items", "validated_reports",
+          "need_templates")
 INTERNAL = ("reports", "pending_donations", "received_donations",
             "open_deliveries", "delivered_deliveries", "pending_requests")
 
