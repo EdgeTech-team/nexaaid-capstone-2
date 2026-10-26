@@ -1,7 +1,7 @@
 """Oct 17 run-through of Appendix H (1.1 ... 9.7): the gaps it found.
 
-Each hand-off now reaches the next person, staff cannot donate, and the
-CMO cannot undo an acknowledgement whose goods are already on a delivery.
+Each hand-off now reaches the next person, staff cannot donate, and a CMO
+acknowledgement is final (task #10, Oct 23: no undo at all).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -37,27 +37,30 @@ def test_staff_accounts_cannot_submit_donations(api):
         "full_name": "Gina Guest", "contact_number": "09179999999"}}).status_code == 201
 
 
-def test_the_cmo_cannot_undo_once_the_goods_are_on_a_delivery(api):
+def test_a_cmo_acknowledgement_is_final(api):
+    """Task #10 (Oct 23): no undo, before or after a delivery. The old
+    revert endpoints are gone from the API, not just the button."""
     client, t = api
     _activate_everyone()
     rid = _report(client, t)
     a, b = _give(client, t, rid, 10), _give(client, t, rid, 5)
 
-    # Not on a delivery yet: undo works, and the donor and Main Office hear it.
-    ok(client.post(f"/cmo/entries/{b['batch_reference']}/revert", headers=t["cmo"]))
-    assert "donation_unacknowledged" in _types(client, t["donor"])
-    assert "donation_unacknowledged_staff" in _types(client, t["csws"])
-    ok(client.post(f"/cmo/entries/{b['batch_reference']}/decide", headers=t["cmo"],
-                   json={"status": "Acknowledged"}))
+    # Not on a delivery yet: still no undo, and nobody is told otherwise.
+    assert client.post(f"/cmo/entries/{b['batch_reference']}/revert",
+                       headers=t["cmo"]).status_code in (404, 405)
+    one = b["items"][0]["donation_id"]
+    assert client.post(f"/cmo/donations/{one}/revert", headers=t["cmo"]).status_code in (404, 405)
+    assert "donation_unacknowledged" not in _types(client, t["donor"])
+    pending = ok(client.get("/cmo/entries/pending", headers=t["cmo"]))
+    assert b["batch_reference"] not in [e["batch_reference"] for e in pending]
 
+    # On a delivery, cancelled or not, it stays acknowledged.
     did = _deliver(client, t, rid, [a["batch_reference"]])
-    r = client.post(f"/cmo/entries/{a['batch_reference']}/revert", headers=t["cmo"])
-    assert r.status_code == 409 and f"delivery #{did}" in r.json()["detail"]
-    one = a["items"][0]["donation_id"]
-    assert client.post(f"/cmo/donations/{one}/revert", headers=t["cmo"]).status_code == 409
-    # Once that delivery is cancelled, the acknowledgement can be undone again.
     ok(client.post(f"/deliveries/{did}/cancel", headers=t["csws"], json={"reason": "Wrong report"}))
-    ok(client.post(f"/cmo/entries/{a['batch_reference']}/revert", headers=t["cmo"]))
+    assert client.post(f"/cmo/entries/{a['batch_reference']}/revert",
+                       headers=t["cmo"]).status_code in (404, 405)
+    acked = ok(client.get("/cmo/entries/acknowledged", headers=t["cmo"]))
+    assert {a["batch_reference"], b["batch_reference"]} <= {e["batch_reference"] for e in acked}
 
 
 def test_donors_and_the_barangay_follow_the_delivery(api, monkeypatch):

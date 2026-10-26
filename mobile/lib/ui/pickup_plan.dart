@@ -67,6 +67,13 @@ bool sameDay(DateTime? a, DateTime? b) =>
     a.month == b.month &&
     a.day == b.day;
 
+/// Specific dates win; weekdays only for entries made before the calendar.
+bool _availableOn(Set<int> days, Set<DateTime> dates, DateTime? d) {
+  if (d == null) return false;
+  if (dates.isNotEmpty) return dates.any((x) => sameDay(x, d));
+  return days.contains(d.weekday);
+}
+
 /// Grey for pickups outside the distance limit.
 const farGrey = Color(0xFF6B7280);
 
@@ -101,6 +108,7 @@ class PlanDonation {
   final String ref;
   final List<PlanItem> items;
   final Set<int> days;
+  final Set<DateTime> dates; // specific dates (calendar); empty = weekdays
   final List<String> flags;
 
   PlanDonation.fromJson(Map<String, dynamic> j)
@@ -111,7 +119,12 @@ class PlanDonation {
           PlanItem.fromJson(e as Map),
       ],
       days = pickupDaysOf(j['pickup_days']),
+      dates = pickupDatesOf(j['pickup_dates']),
       flags = _strings(j['flags']);
+
+  /// The donor is home on [d]: one of their dates, or (older entries) one
+  /// of their weekdays.
+  bool availableOn(DateTime? d) => _availableOn(days, dates, d);
 
   String get donor => '${raw['donor'] ?? 'Donor'}';
   String get contact => '${raw['donor_contact'] ?? ''}'.trim();
@@ -136,6 +149,7 @@ class PlanStop {
   final String address;
   final String? barangay; // read from the address text; null: not found
   final Set<int> days; // the days every donor here allows
+  final Set<DateTime> dates; // the dates every donor here allows (calendar)
   final List<PlanDonation> donations;
   final bool heavy;
   final int? daysLeft;
@@ -157,6 +171,7 @@ class PlanStop {
       address = '${j['address'] ?? ''}'.trim(),
       barangay = j['barangay'] as String?,
       days = pickupDaysOf(j['days']),
+      dates = pickupDatesOf(j['dates']),
       donations = [
         for (final e in (j['donations'] as List? ?? const []))
           PlanDonation.fromJson(Map<String, dynamic>.from(e as Map)),
@@ -173,6 +188,9 @@ class PlanStop {
       optionsLeft = _int(j['options_left']),
       lastChance = j['last_chance'] == true,
       nextDate = _date(j['next_date']);
+
+  /// A donor here is home on [d] (see [PlanDonation.availableOn]).
+  bool availableOn(DateTime? d) => _availableOn(days, dates, d);
 
   bool get planned => status == 'planned';
   bool get far => status == 'far';
@@ -306,12 +324,38 @@ class DayChips extends StatelessWidget {
   final Set<int> days;
   final int? highlight;
   final bool dense;
-  const DayChips(this.days, {super.key, this.highlight, this.dense = false});
+
+  /// Specific dates (calendar): shown instead of [days] when not empty, with
+  /// [highlightDate] (the planned date) filled.
+  final Set<DateTime> dates;
+  final DateTime? highlightDate;
+
+  const DayChips(
+    this.days, {
+    super.key,
+    this.highlight,
+    this.dense = false,
+    this.dates = const {},
+    this.highlightDate,
+  });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
+    if (dates.isNotEmpty) {
+      return PickupDateChips(
+        sortedDates(dates),
+        dense: dense,
+        highlight: highlightDate == null
+            ? null
+            : DateTime(
+                highlightDate!.year,
+                highlightDate!.month,
+                highlightDate!.day,
+              ),
+      );
+    }
     final sorted = days.toList()..sort();
     if (sorted.isEmpty) {
       return Text(

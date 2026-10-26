@@ -200,6 +200,16 @@ Future<List<String>> _cancelReasons() async {
   return _reasons!;
 }
 
+/// Confirm button for cancelling or removing: amber, not red. The adviser
+/// reads red as a system error (Oct 25).
+ButtonStyle cautionButtonStyle(BuildContext context) {
+  final b = Theme.of(context).brightness;
+  return FilledButton.styleFrom(
+    backgroundColor: StatusColors.of('On Hold', b).fg,
+    foregroundColor: b == Brightness.dark ? AppColors.ink : Colors.white,
+  );
+}
+
 /// Ask why, confirm, then cancel the waiting items of a donation.
 /// [staff]: CSWS cancelling for a donor who called or messaged.
 /// [askPhone]: a guest donor proves it is theirs with their phone number.
@@ -224,6 +234,11 @@ Future<bool> cancelDonation(
             (reasonText ?? '').isNotEmpty &&
             (!askPhone || phone.text.trim().length >= 10);
         return AlertDialog(
+          icon: Icon(
+            Icons.event_busy_outlined,
+            size: 36,
+            color: StatusColors.of('On Hold', Theme.of(ctx).brightness).fg,
+          ),
           title: Text(
             staff ? 'Cancel for the donor?' : 'Cancel this donation?',
           ),
@@ -258,7 +273,7 @@ Future<bool> cancelDonation(
                         ),
                       const RadioListTile<String>(
                         value: '__other',
-                        title: Text('Another reason'),
+                        title: Text('Others'),
                         dense: true,
                         contentPadding: EdgeInsets.zero,
                       ),
@@ -268,9 +283,10 @@ Future<bool> cancelDonation(
                 if (picked == '__other')
                   TextField(
                     controller: other,
+                    autofocus: true,
                     maxLength: 300,
                     decoration: const InputDecoration(
-                      labelText: 'Type the reason',
+                      labelText: 'Please specify why',
                     ),
                     onChanged: (_) => setLocal(() {}),
                   ),
@@ -295,7 +311,7 @@ Future<bool> cancelDonation(
               child: const Text('Keep donation'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+              style: cautionButtonStyle(ctx),
               onPressed: canConfirm ? () => Navigator.pop(ctx, true) : null,
               child: const Text('Yes, cancel it'),
             ),
