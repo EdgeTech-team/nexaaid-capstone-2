@@ -35,6 +35,7 @@ from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
 from models.delivery import Delivery
 from services.delivery_allocation import add_delivery_progress
+from services.pickup_geofence import check_pin, city_allowed, pickup_cities
 from schemas.physical_donation_schema import (
     DonationBatchCreate,
     DonationEntryEdit,
@@ -285,6 +286,27 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
     return view
 
 
+def _reverse_city(lat: float, lng: float) -> Optional[str]:
+    """OSM city of a pin (raises when the geocoder is unavailable)."""
+    data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
+    features = data.get("features") or []
+    return (features[0].get("properties") or {}).get("city") if features else None
+
+
+def _pin_check(lat: float, lng: float) -> dict:
+    return check_pin(lat, lng, _reverse_city, km_from_office, pickup_area()["max_km"])
+
+
+def _check_service_area(payload) -> None:
+    """Door to Door only inside the accepted cities (services/pickup_geofence.py).
+    A typed address without a pin is left to CSWS (flagged on the planner)."""
+    if payload.handover_method != "Door to Door" or payload.pickup_lat is None:
+        return
+    result = _pin_check(payload.pickup_lat, payload.pickup_lng)
+    if not result["allowed"]:
+        raise HTTPException(status_code=422, detail=result["message"])
+
+
 # ---------------------------------------------------------------------------
 # UC-D2 step 6: create a donation
 # ---------------------------------------------------------------------------
@@ -297,6 +319,7 @@ def create_donation_batch(
     """One donation with one or more items, one QR reference. All items are
     saved together or none are (alt 3a: no QR for an incomplete entry)."""
     _get_report(db, payload.report_id, require_validated=True)
+    _check_service_area(payload)
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
 
     batch_reference = _new_reference()
@@ -352,6 +375,8 @@ def create_donation(
     # F-16: same rule as /donations/batch (UC-D2 alt 2a): only validated
     # reports can receive donations.
     _get_report(db, payload.report_id, require_validated=True)
+    _check_service_area(payload)
+
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
     reference = _new_reference()
 
@@ -448,6 +473,11 @@ def edit_my_entry(
         "items": [(r.item_id, r.quantity, r.packaging) for r in rows],
         "statuses": sorted({r.status for r in rows}),
     }
+    # Only a new pin (or switching to Door to Door) is checked, so an
+    # older entry can still be edited if the area changes later.
+    if (before["handover_method"] != payload.handover_method
+            or before["pickup_lat"] != payload.pickup_lat or before["pickup_lng"] != payload.pickup_lng):
+        _check_service_area(payload)
     reopened = any(r.status == "Cancelled" for r in rows)
     days = encode_pickup_days(payload.pickup_days)
 
@@ -718,6 +748,8 @@ def get_pickup_rules():
         "name": area["name"], "bbox": area["bbox"],
         "office_lat": area["office"][0], "office_lng": area["office"][1],
         "max_km": area["max_km"],
+        # Geofence (Oct 2026): Door to Door only in these cities.
+        "cities": pickup_cities(),
     }}
 
 
@@ -823,6 +855,10 @@ def location_autocomplete(q: str = Query(min_length=2, max_length=200)):
             "address": full,
             "lat": coords[1],
             "lng": coords[0],
+            # Geofence (Oct 2026): the app greys out places outside the
+            # Door to Door cities (the server checks again on submit).
+            "city": props.get("city"),
+            "in_pickup_area": city_allowed(props.get("city")),
         })
     return out
 
@@ -836,7 +872,11 @@ def location_reverse(
     data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
     features = data.get("features") or []
     address = _describe(features[0].get("properties") or {})[2] if features else None
-    return {"address": address or f"{lat:.5f}, {lng:.5f}", "lat": lat, "lng": lng}
+    # Geofence (Oct 2026): tell the donor right away if the pin is outside.
+    area = _pin_check(lat, lng)
+    return {"address": address or f"{lat:.5f}, {lng:.5f}", "lat": lat, "lng": lng,
+            "city": area["city"], "in_pickup_area": area["allowed"],
+            "area_message": area["message"]}
 
 
 # ---------------------------------------------------------------------------

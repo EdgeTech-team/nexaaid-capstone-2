@@ -277,7 +277,9 @@ def test_full_relief_chain_across_all_roles(api):
 
     # --- 3.10 CSWS advances, Barangay confirms receipt -------------------
     assert client.post(f"/deliveries/{did}/advance", headers=t["brgy"]).status_code == 403
-    assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "In Transit"
+    # Advisor (Oct 24): DRRMO accepted, so DRRMO marks it In Transit on pickup.
+    assert client.post(f"/deliveries/{did}/advance", headers=t["csws"]).status_code == 409
+    ok(client.post(f"/drrmo/requests/{lr2['request_id']}/picked-up", headers=t["drrmo"]))
     assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "Delivered"
     # public feed (Item 8): nothing is listed until the barangay confirms
     assert ok(client.get("/public/recent-deliveries")) == []

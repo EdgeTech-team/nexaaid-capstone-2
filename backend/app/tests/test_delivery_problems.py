@@ -64,12 +64,14 @@ def test_truck_came_back_then_cancel_returns_stock(api):
     rid = _stocked(client, t, qty=100)
     d = ok(_deliver(client, t, rid, [{"item_id": 1, "quantity": 40}]), 201)["delivery_id"]
     assert _stock(1, rid) == 60
-    ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": d, "trucks": 1, "drivers": 1, "volunteers": 0}), 201)
+    lr = ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": d, "trucks": 1, "drivers": 1, "volunteers": 0}), 201)["request_id"]
 
     # Not on the road yet: nothing to bring back.
     assert client.post(f"/deliveries/{d}/return-to-office", headers=t["csws"],
                        json={"reason": "Truck broke down"}).status_code == 409
-    ok(client.post(f"/deliveries/{d}/advance", headers=t["csws"]))
+    # Advisor (Oct 24): DRRMO's truck, so DRRMO marks it In Transit.
+    ok(client.patch(f"/drrmo/requests/{lr}/accept", headers=t["drrmo"], json={}))
+    ok(client.post(f"/drrmo/requests/{lr}/picked-up", headers=t["drrmo"]))
     # On the road: cannot cancel until it is back.
     r = client.post(f"/deliveries/{d}/cancel", headers=t["csws"], json={"reason": "Road closed"})
     assert r.status_code == 409 and "Truck came back" in r.json()["detail"]

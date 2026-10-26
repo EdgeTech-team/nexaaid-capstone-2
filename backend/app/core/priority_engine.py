@@ -38,20 +38,25 @@ DISASTER_SEVERITY = {
     "Disease Outbreak": 65,
 }
 
+# (at least this many families, score), highest first. 1-9 families = 10.
+FAMILY_TIERS = ((100, 100), (50, 75), (20, 50), (10, 25), (1, 10))
+
+# (score at least, level), most urgent first. Below 35 = Low.
+LEVEL_THRESHOLDS = ((80, "Critical"), (60, "High"), (35, "Medium"))
+
+
+# A disaster type with no entry above (or none at all).
+UNKNOWN_DISASTER_SEVERITY = 50
+
+
 def score_affected_families(affected_families):
 
     if not affected_families or affected_families <= 0:
         return 0
-    if affected_families >=100:
-        return 100
-    elif affected_families >= 50:
-        return 75
-    elif affected_families >= 20:
-        return 50
-    elif affected_families >= 10:
-        return 25
-    else :
-        return 10
+    for at_least, score in FAMILY_TIERS:
+        if affected_families >= at_least:
+            return score
+    return 0
 
 def score_fulfillment(verification_status):
 
@@ -98,11 +103,11 @@ def score_estimated_quantity(estimated_quantity):
 def score_disaster_type(report):
 
     if not report.disaster_type:
-       return 50
+       return UNKNOWN_DISASTER_SEVERITY
 
     disaster_type_name = report.disaster_type.type_name
    
-    return DISASTER_SEVERITY.get(disaster_type_name, 50)
+    return DISASTER_SEVERITY.get(disaster_type_name, UNKNOWN_DISASTER_SEVERITY)
 
 
 def compute_priority(report):
@@ -128,14 +133,8 @@ def compute_priority(report):
             "recommendation": "Computed score was out of expected range.",
         }
 
-    if score >= 80:
-        priority_level = "Critical"
-    elif score >= 60:
-        priority_level = "High"
-    elif score >= 35:
-        priority_level = "Medium"
-    else :
-        priority_level ="Low"
+    priority_level = next(
+        (level for at_least, level in LEVEL_THRESHOLDS if score >= at_least), "Low")
 
     recommendation = (
         f"Severity {severity:.0f} x {missing * 100:.0f}% of needs still missing."
