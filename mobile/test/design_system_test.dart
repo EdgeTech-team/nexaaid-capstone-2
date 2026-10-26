@@ -112,13 +112,13 @@ void main() {
           body: StatusTimeline(
             steps: donationLifecycle,
             labels: donationLifecycleLabels,
-            current: 'Confirmed',
+            current: 'Received',
           ),
         ),
       ),
     );
     expect(
-      find.bySemanticsLabel('Status: Acknowledged by CMO, step 3 of 6'),
+      find.bySemanticsLabel('Status: Received by CSWS, step 2 of 5'),
       findsOneWidget,
     );
     semantics.dispose();

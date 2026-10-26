@@ -15,26 +15,26 @@ import 'widgets.dart';
 // tab is about their own giving (UC-D3 / UC-R3, section 7.3):
 //   1. four cards, each opens its list,
 //   2. donation status, the whole journey on each donation (Pledged ->
-//      Received by CSWS -> Acknowledged by CMO -> In transit -> Delivered ->
-//      Barangay confirmed), with "Show QR" while it still waits.
+//      Received by CSWS -> In transit -> Delivered -> Barangay confirmed),
+//      with "Show QR" while it still waits. Oct 25: no "Acknowledged by
+//      CMO" step for donors; an acknowledged donation reads as received.
 // Oct 13: there is no separate delivery list any more. Each delivery
 // records whose goods it took (first received, first sent), so the
 // donation's own timeline moves (GET /donations/mine "lifecycle_status",
 // "delivery_note").
 // ---------------------------------------------------------------------------
 
-const _donationSteps = ['Pending', 'Received', 'Confirmed'];
-const _donationLabels = ['Pledged', 'Received by CSWS', 'Acknowledged by CMO'];
+const _donationSteps = ['Pending', 'Received'];
+const _donationLabels = ['Pledged', 'Received by CSWS'];
 
 /// Oct 12 (team): each donation entry shows its full journey again, as on
-/// develop: Pledged -> Received by CSWS -> Acknowledged by CMO -> In
-/// transit -> Delivered -> Barangay confirmed (design/status.dart), and
-/// "Show QR" while it still waits for drop-off or pickup.
-/// donationLifecycleLabels with line breaks, so six steps fit a phone.
+/// develop: Pledged -> Received by CSWS -> In transit -> Delivered ->
+/// Barangay confirmed (design/status.dart), and "Show QR" while it still
+/// waits for drop-off or pickup.
+/// donationLifecycleLabels with line breaks, so the steps fit a phone.
 const _journeyLabels = [
   'Pledged',
   'Received\nby CSWS',
-  'Acknowledged\nby CMO',
   'In transit',
   'Delivered',
   'Barangay\nconfirmed',
@@ -87,7 +87,7 @@ String donationStatusLabel(Object? status) => switch ('$status') {
   'Pending' => 'Waiting',
   'Partly Received' => 'Partly received',
   'Received' => 'Received by CSWS',
-  'Confirmed' => 'Acknowledged by CMO',
+  'Confirmed' => 'Received by CSWS', // the CMO step is not shown to donors
   final s => s,
 };
 
@@ -209,6 +209,7 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
               // 9.4 (testing): more room between donations.
               DonationEntriesView(
                 entries: entries,
+                donor: true,
                 gap: Space.lg,
                 footer: (e) => entryJourney(context, e),
                 onTap: (e) => _push(DonationDetailScreen(entry: e)),
@@ -419,6 +420,7 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
             children: [
               DonationEntriesView(
                 entries: entries,
+                donor: true,
                 emptyTitle: widget.waitingOnly
                     ? 'Nothing is waiting'
                     : widget.onTheWayOnly

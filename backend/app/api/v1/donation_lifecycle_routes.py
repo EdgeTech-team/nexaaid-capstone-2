@@ -31,6 +31,7 @@ from schemas.physical_donation_schema import check_preferred_pickup, normalize_p
 from services.donation_expiry import (
     CLOSED, OPEN, close_rows, expire_overdue, expiry_rules, nice_date, reopen_rows,
 )
+from services.donation_additions import is_removed
 
 router = APIRouter(prefix="/donations", tags=["Donation expiry and cancellation"])
 
@@ -176,10 +177,12 @@ def reinstate_entry(
     with the QR (UC-CM1 alt 2a). It goes back to Pending with a new deadline
     and can then be received as usual."""
     rows = _entry_rows(db, reference)
-    if not any(r.status in CLOSED for r in rows):
+    # Items the donor removed stay removed.
+    reopenable = [r for r in rows if not is_removed(r)]
+    if not any(r.status in CLOSED for r in reopenable):
         raise HTTPException(status_code=409, detail="This donation is not expired or cancelled.")
     before = {r.donation_id: r.status for r in rows}
-    changed = reopen_rows(rows, preferred_pickup_at=payload.preferred_pickup_at)
+    changed = reopen_rows(reopenable, preferred_pickup_at=payload.preferred_pickup_at)
     first = rows[0]
     log_action(db, current_user, "REINSTATE DONATION", "physical_donations", changed[0].donation_id,
                old={"statuses": {str(r.donation_id): before[r.donation_id] for r in changed}},

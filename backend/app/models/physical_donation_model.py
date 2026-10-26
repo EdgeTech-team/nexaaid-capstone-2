@@ -44,6 +44,7 @@ class PhysicalDonation(Base):
             name="chk_pickup_coords_pair",
         ),
         Index("idx_physical_donations_batch", "batch_reference"),
+        Index("idx_physical_donations_batch_addition", "batch_reference", "addition_no"),
         # The expiry check looks up Pending rows past their deadline.
         Index("idx_physical_donations_status_expires", "status", "expires_at"),
     )
@@ -77,6 +78,10 @@ class PhysicalDonation(Base):
     # numbers "1,3,5" (1 = Monday). Pickups happen within the CSWS pickup
     # hours (schemas/physical_donation_schema.pickup_rules).
     pickup_days = Column(String(20), nullable=True)
+    # Door to Door: the specific dates the donor is home, "2026-10-26,2026-10-28"
+    # (calendar picker). When set, pickup_days holds their weekdays so older
+    # screens and checks still read something sensible. NULL = weekday entry.
+    pickup_dates = Column(String(400), nullable=True)
     # Door to Door: the date CSWS came but nobody was home ("Not home" on
     # the pickup map, Oct 12 pickup logic v2). The planner moves the stop to
     # the donor's next allowed day after this date. NULL = never missed.
@@ -86,7 +91,12 @@ class PhysicalDonation(Base):
     qr_reference = Column(String(100), nullable=False, unique=True)
     # Shared by every item of one donation; this is what the QR encodes.
     batch_reference = Column(String(100), nullable=False)
-    status = Column(String(50), nullable=False, server_default="Pending")
+    # Which part of the donation this item came with (Oct 23): 1 = the
+    # original pledge, 2+ = items the donor added later to the SAME donation
+    # (same batch_reference, same QR). Shown as "Batch 1", "Batch 2". The
+    # item's own created_at is when it was added. Migration a1d4e7c9b2f5.
+    addition_no = Column(Integer, nullable=False, server_default="1", default=1)
+    status =Column(String(50), nullable=False, server_default="Pending")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     # Termination of donations that never arrive (services/donation_expiry.py).

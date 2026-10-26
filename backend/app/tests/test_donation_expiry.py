@@ -85,7 +85,7 @@ def test_new_donations_get_a_deadline(api):
 
     slot = _pickup_slot()
     door = _entry(client, t["donor"], rid, handover_method="Door to Door",
-                  pickup_address="1 Test St", preferred_pickup_at=slot.isoformat())
+                  pickup_address="1 Test St, Mandaue City", preferred_pickup_at=slot.isoformat())
     assert utc(_rows(door["batch_reference"])[0].expires_at) == slot.astimezone(UTC) + timedelta(days=7)
 
     rules = ok(client.get("/donations/expiry-rules"))
@@ -156,7 +156,7 @@ def test_door_to_door_expires_after_the_pickup_window(api):
     client, t = api
     rid = _report(client, t)
     e = _entry(client, t["donor"], rid, handover_method="Door to Door",
-               pickup_address="1 Test St", preferred_pickup_at=_pickup_slot().isoformat())
+               pickup_address="1 Test St, Mandaue City", preferred_pickup_at=_pickup_slot().isoformat())
     assert ok(client.get("/donations/pickups", headers=t["csws"]))[0]["expires_label"]
     db = database.SessionLocal()
     try:

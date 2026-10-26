@@ -18,6 +18,9 @@ from models.item_model import Item
 from models.received_goods_model import ReceivedGoods
 from models.report import Barangay, DisasterReport, DisasterType
 from models.user_rbac_model import User
+from services.donation_additions import (
+    is_removed, removed_notes, removed_reason, summary as additions_summary, summary_text,
+)
 from services.donation_expiry import entry_expiry_info, entry_status as _entry_status
 
 
@@ -130,10 +133,31 @@ def build_entries(
                     "actual_quantity_received": received.get(l.donation_id),
                     # e.g. "Not brought to CSWS" (Oct 13) for a closed item.
                     "close_reason": l.close_reason,
+                    # Oct 23: which batch it came with (1 = original pledge)
+                    # and, if the donor removed it, why.
+                    "addition_no": l.addition_no or 1,
+                    "added_at": l.created_at,
+                    "added_later": (l.addition_no or 1) > 1,
+                    "removed_by_donor": is_removed(l),
+                    "removed_reason": removed_reason(l),
                 }
                 for l in lines
             ],
         }
+        # Oct 23: what CSWS sees without scanning (added batches, items the
+        # donor removed and why), and "2 received · 1 pending" per item.
+        counts = additions_summary(lines)
+        names = {i["donation_id"]: i["item_name"] for i in entry["items"]}
+        entry.update({
+            "batches": counts["batches"],
+            "added_later_items": sum(1 for l in lines if (l.addition_no or 1) > 1),
+            "removed_items": counts["removed"],
+            "removed_notes": [
+                {**n, "item_name": names.get(n["donation_id"], "Item")}
+                for n in removed_notes(lines)
+            ],
+            "item_summary": summary_text(counts),
+        })
         if include_cmo:
             for item in entry["items"]:
                 dec = decisions.get(item["donation_id"])

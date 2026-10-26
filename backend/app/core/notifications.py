@@ -35,11 +35,12 @@ EVENTS: dict[str, tuple[str, str]] = {
     "donation_received": ("Donation received", "Donation #{batch_no} was received at the CSWS office."),
     "donation_confirmed": ("Donation acknowledged", "Donation #{batch_no} was acknowledged by the CMO."),
     "donation_held": ("Donation on hold", "Donation #{batch_no} is on hold. {reason}"),
-    "donation_unacknowledged": ("Acknowledgement undone", "The CMO undid the acknowledgement of donation #{batch_no}. It is waiting for the CMO again."),
     # CSWS Main Office (Oct 17): the CMO's decision on a donation entry.
     "donation_ready_for_delivery": ("Donation acknowledged", "The CMO acknowledged donation #{batch_no} for {report}. It can now go on a delivery."),
+    # Oct 23: the donor changed a pledged donation (same QR).
+    "donation_items_added": ("Items added to a donation", "The donor added {count} item(s) to donation #{batch_no} (Batch {addition_no}). Collect them together with the rest of the donation."),
+    "donation_item_removed": ("Item removed from a donation", "The donor removed {item} from donation #{batch_no}. Reason: {reason}"),
     "donation_held_staff": ("Donation on hold", "The CMO put donation #{batch_no} for {report} on hold. {reason}"),
-    "donation_unacknowledged_staff": ("Acknowledgement undone", "The CMO undid the acknowledgement of donation #{batch_no} for {report}. It cannot go on a delivery until it is acknowledged again."),
     # Donors follow their donation's delivery (Oct 17, services/delivery_notices.py)
     "donation_in_transit": ("Your donation is on the way", "Donation #{batch_no} left the CSWS office for {barangay} (delivery #{delivery_id})."),
     "donation_delivered": ("Your donation arrived", "Donation #{batch_no} was delivered to {barangay}. The barangay will confirm receipt."),

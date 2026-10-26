@@ -66,8 +66,13 @@ class _PickupListViewState extends State<PickupListView> {
   late int? _homeOn = widget.initialHomeOn; // weekday filter, null = any
   String _query = '';
 
+  /// The next date (today counts) with this weekday, like the map: the day
+  /// filter means that date, so donors who chose dates show only on them.
+  DateTime? _dateOf(int weekday) =>
+      widget.plan.dates.where((d) => d.weekday == weekday).firstOrNull;
+
   bool _matches(PlanStop s) {
-    if (_homeOn != null && !s.days.contains(_homeOn)) return false;
+    if (_homeOn != null && !s.availableOn(_dateOf(_homeOn!))) return false;
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
     final text = [
@@ -80,7 +85,7 @@ class _PickupListViewState extends State<PickupListView> {
   }
 
   bool _matchesFollowUp(PlanDonation d) {
-    if (_homeOn != null && !d.days.contains(_homeOn)) return false;
+    if (_homeOn != null && !d.availableOn(_dateOf(_homeOn!))) return false;
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
     return [
@@ -111,28 +116,33 @@ class _PickupListViewState extends State<PickupListView> {
         final out = <(String, String?, List<PlanStop>)>[];
         for (final wd in days) {
           if (_homeOn != null && wd != _homeOn) continue;
-          final list = stops.where((s) => s.days.contains(wd)).toList()
-            // Stops planned on this weekday first, in route order.
+          final date = _dateOf(wd);
+          final list = stops.where((s) => s.availableOn(date)).toList()
+            // Stops planned on this date first, in route order.
             ..sort((a, b) {
-              final pa = a.plannedDate?.weekday == wd ? 0 : 1;
-              final pb = b.plannedDate?.weekday == wd ? 0 : 1;
+              final pa = sameDay(a.plannedDate, date) ? 0 : 1;
+              final pb = sameDay(b.plannedDate, date) ? 0 : 1;
               return pa != pb ? pa.compareTo(pb) : _byPlan(a, b);
             });
           if (list.isEmpty) continue;
           out.add((
-            pickupDayNames[wd - 1],
-            '${list.where((s) => s.plannedDate?.weekday == wd).length} '
-                'planned on the next ${pickupDayNames[wd - 1]}',
+            date == null
+                ? pickupDayNames[wd - 1]
+                : '${sameDay(date, widget.plan.today) ? 'Today · ' : ''}'
+                      '${planDateLabel(date)}',
+            '${list.where((s) => sameDay(s.plannedDate, date)).length} '
+                'planned on this date',
             list,
           ));
         }
-        final none = stops
-            .where((s) => s.days.intersection(widget.rules.days).isEmpty)
-            .toList();
+        // Home on none of the dates above: other days, or chosen dates
+        // later than this week.
+        final shown = [for (final wd in days) _dateOf(wd)];
+        final none = stops.where((s) => !shown.any(s.availableOn)).toList();
         if (none.isNotEmpty && _homeOn == null) {
           out.add((
-            'No CSWS pickup day',
-            'Donors home only on other days',
+            'Later or other days',
+            'Donors home only on other days or later dates',
             none,
           ));
         }
@@ -211,7 +221,7 @@ class _PickupListViewState extends State<PickupListView> {
                     todayWeekday: p.today.weekday,
                     pickupDays: days,
                     countOn: (wd) =>
-                        p.stops.where((s) => s.days.contains(wd)).length,
+                        p.stops.where((s) => s.availableOn(_dateOf(wd))).length,
                     allCount: p.stops.length,
                   );
                   if (v != null)
@@ -571,6 +581,8 @@ class StopRow extends StatelessWidget {
                         child: DayChips(
                           s.days,
                           highlight: s.plannedDate?.weekday,
+                          dates: s.dates,
+                          highlightDate: s.plannedDate,
                           dense: true,
                         ),
                       ),
@@ -655,7 +667,7 @@ class FollowUpRow extends StatelessWidget {
           Gaps.v4,
           Row(
             children: [
-              Expanded(child: DayChips(d.days, dense: true)),
+              Expanded(child: DayChips(d.days, dates: d.dates, dense: true)),
               if (d.address.isNotEmpty)
                 IconButton(
                   tooltip: 'Navigate by address',

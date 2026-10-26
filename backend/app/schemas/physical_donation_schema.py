@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Literal, Optional
 
@@ -54,6 +54,18 @@ def pickup_rules() -> dict:
         # the note shown under the day buttons.
         "hours_label": f"{_hour_label(start)} to {_hour_label(end)}",
         "day_names": _DAY_SHORT,
+    }
+
+
+def pickup_rules_view() -> dict:
+    """pickup_rules() plus the service areas, for GET /donations/pickup-rules."""
+    return {
+        **pickup_rules(),
+        "service_areas": [
+            {"name": a["name"], "aliases": a["aliases"], "barangays": a["barangays"]}
+            for a in pickup_service_areas()
+        ],
+        "service_areas_label": service_areas_label(),
     }
 
 
@@ -155,6 +167,126 @@ def pickup_days_label(raw) -> Optional[str]:
     if len(days) > 2 and days == list(range(days[0], days[-1] + 1)):
         return f"{_DAY_SHORT[days[0] - 1]} to {_DAY_SHORT[days[-1] - 1]}"
     return ", ".join(_DAY_SHORT[d - 1] for d in days)
+
+
+def check_pickup_dates(values) -> List[date]:
+    """The specific dates a donor is home for a Door to Door pickup (calendar
+    picker). Raises ValueError (shown to the donor) if none is chosen, a date
+    is in the past, too far ahead, or not a CSWS pickup day."""
+    rules = pickup_rules()
+    today = datetime.now(MANILA).date()
+    dates = sorted(set(values or []))
+    if not dates:
+        raise ValueError("Choose at least one date CSWS can pick up your donation")
+    if dates[0] < today:
+        raise ValueError("Pickup dates must be today or later")
+    if dates[-1] > today + timedelta(days=rules["max_days_ahead"]):
+        raise ValueError(f"Choose pickup dates within {rules['max_days_ahead']} days")
+    off = [d for d in dates if d.isoweekday() not in rules["days"]]
+    if off:
+        names = ", ".join(_date_short(d) for d in off)
+        raise ValueError(f"CSWS does not pick up on {names}. Pickups: {rules['label']}")
+    return dates
+
+
+def _date_short(d: date) -> str:
+    """date(2026, 10, 26) -> "Mon, Oct 26"."""
+    return f"{_DAY_SHORT[d.isoweekday() - 1]}, {d.strftime('%b')} {d.day}"
+
+
+def encode_pickup_dates(dates) -> Optional[str]:
+    """[date(2026, 10, 26), ...] -> "2026-10-26,..." (physical_donations.pickup_dates)."""
+    return ",".join(d.isoformat() for d in sorted(set(dates))) if dates else None
+
+
+def decode_pickup_dates(raw) -> List[date]:
+    """"2026-10-26,2026-10-28" -> [date, date]. Also accepts a list. Bad parts are skipped."""
+    if not raw:
+        return []
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    out = set()
+    for p in parts:
+        if isinstance(p, date):
+            out.add(p)
+            continue
+        try:
+            out.add(date.fromisoformat(str(p).strip()))
+        except ValueError:
+            continue
+    return sorted(out)
+
+
+def pickup_dates_label(raw) -> Optional[str]:
+    """"2026-10-26,2026-10-28" -> "Mon, Oct 26 · Wed, Oct 28"."""
+    dates = decode_pickup_dates(raw)
+    return " · ".join(_date_short(d) for d in dates) if dates else None
+
+
+# Door to Door service areas (CSWS, Oct 2026). A pickup address or landmark
+# must name one of these places. Cebu City is only its northern barangays near
+# Mandaue. Override in .env without code, e.g.
+#   PICKUP_SERVICE_AREAS="Mandaue;Consolacion;Lapu-Lapu|Lapulapu|Mactan;Cebu City:Banilad,Talamban"
+# (";" between areas, "|" between other names of the same place,
+#  ":" then the allowed barangays when only some of the city is served).
+_DEFAULT_SERVICE_AREAS = (
+    "Mandaue;"
+    "Cebu City:Banilad,Talamban,Bacayan,Pit-os,Apas,Kasambagan,Lahug,Mabolo;"
+    "Consolacion;"
+    "Lapu-Lapu|Lapulapu|Mactan"
+)
+
+
+def _squash(text: str) -> str:
+    """Lowercase letters and digits only: "Lapu-Lapu City" -> "lapulapucity"."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def pickup_service_areas() -> List[dict]:
+    """[{"name": "Mandaue", "aliases": [...], "barangays": [] = all}, ...]."""
+    raw = os.getenv("PICKUP_SERVICE_AREAS") or _DEFAULT_SERVICE_AREAS
+    areas = []
+    for part in raw.split(";"):
+        names, _, brgys = part.partition(":")
+        aliases = [n.strip() for n in names.split("|") if n.strip()]
+        if not aliases:
+            continue
+        areas.append({
+            "name": aliases[0],
+            "aliases": aliases,
+            "barangays": [b.strip() for b in brgys.split(",") if b.strip()],
+        })
+    return areas
+
+
+def in_service_area(*texts: Optional[str]) -> bool:
+    """True when the address / landmark text names a served place (and, for
+    a partly served city, one of its served barangays)."""
+    text = _squash(" ".join(t for t in texts if t))
+    if not text:
+        return False
+    for area in pickup_service_areas():
+        if not any(_squash(a) in text for a in area["aliases"]):
+            continue
+        if not area["barangays"] or any(_squash(b) in text for b in area["barangays"]):
+            return True
+    return False
+
+
+def place_in(text: Optional[str]) -> Optional[str]:
+    """Best guess of the town in an OpenStreetMap address, for messages:
+    "Carcar Diversion Road, Dapdap, Carcar, Cebu" -> "Carcar"."""
+    parts = [p.strip() for p in (text or "").split(",") if p.strip()]
+    while len(parts) >= 2 and _squash(parts[-1]) in ("cebu", "philippines", "centralvisayas"):
+        parts = parts[:-1]
+    return parts[-1] if parts else None
+
+
+def service_areas_label() -> str:
+    """"Mandaue, Cebu City (Banilad, Talamban, ...), Consolacion, Lapu-Lapu"."""
+    parts = []
+    for a in pickup_service_areas():
+        parts.append(f"{a['name']} ({', '.join(a['barangays'])})" if a["barangays"] else a["name"])
+    return ", ".join(parts)
 
 
 def check_preferred_pickup(value: datetime) -> datetime:
@@ -314,6 +446,9 @@ class _PickupFields(BaseModel):
     # Replaces preferred_pickup_at in the app; older clients may still send a
     # single date and time instead.
     pickup_days: Optional[List[int]] = Field(default=None, max_length=7)
+    # The app now sends specific dates (calendar picker); pickup_days is then
+    # filled with their weekdays. Older clients may still send pickup_days.
+    pickup_dates: Optional[List[date]] = Field(default=None, max_length=10)
     preferred_pickup_at: Optional[datetime] = None
 
     @model_validator(mode="after")
@@ -328,6 +463,12 @@ class _PickupFields(BaseModel):
                     f"Door to Door pickups are only within {pickup_area()['name']}. "
                     "Choose a landmark there, or choose Drop Off."
                 )
+            # Service areas (Mandaue, northern Cebu City, ...) are checked in
+            # the routes (donation_routes._check_service_area): that needs the
+            # map lookup of the pin, which a validator should not do.
+            if self.pickup_dates:
+                self.pickup_dates = check_pickup_dates(self.pickup_dates)
+                self.pickup_days = sorted({d.isoweekday() for d in self.pickup_dates})
             self.pickup_address = self.pickup_address.strip()
             if self.pickup_landmark is not None:
                 self.pickup_landmark = self.pickup_landmark.strip() or None
@@ -345,6 +486,7 @@ class _PickupFields(BaseModel):
             self.pickup_landmark = None
             self.pickup_notes = None
             self.pickup_days = None
+            self.pickup_dates = None
             self.preferred_pickup_at = None
         return self
 
@@ -400,6 +542,28 @@ class DonationEntryEdit(_PickupFields):
         return self
 
 
+class DonationItemsAdd(BaseModel):
+    """More items for a donation the donor already pledged (Oct 23): they
+    join the same donation and QR as a new batch, with the same handover
+    and pickup details (POST /donations/entries/{ref}/items)."""
+
+    items: List[DonationLine] = Field(min_length=1, max_length=30)
+
+
+class DonationItemRemove(BaseModel):
+    """Why the donor removes an item (shown to CSWS and kept in the audit)."""
+
+    reason: str = Field(min_length=3, max_length=200)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_text(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError("Say briefly why you are removing this item")
+        return v
+
+
 class PhysicalDonationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -422,6 +586,7 @@ class PhysicalDonationResponse(BaseModel):
     pickup_landmark: Optional[str] = None
     pickup_notes: Optional[str] = None
     pickup_days: List[int] = []
+    pickup_dates: List[date] = []
     preferred_pickup_at: Optional[datetime] = None
     qr_reference: str
     batch_reference: Optional[str] = None
@@ -432,3 +597,9 @@ class PhysicalDonationResponse(BaseModel):
     def _days(cls, v):
         # Stored as "1,3,5" in physical_donations.pickup_days.
         return decode_pickup_days(v)
+
+    @field_validator("pickup_dates", mode="before")
+    @classmethod
+    def _dates(cls, v):
+        # Stored as "2026-10-26,2026-10-28" in physical_donations.pickup_dates.
+        return decode_pickup_dates(v)

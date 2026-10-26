@@ -579,17 +579,23 @@ const _emptyHints = {
 
 /// A donation's status in the words the app uses (Oct 11 notes): the CMO
 /// "acknowledges" a donation, so the stored status "Confirmed" reads
-/// "Acknowledged". Deliveries keep their own words.
-String donationStatusText(String? status) =>
-    status == 'Confirmed' ? 'Acknowledged' : (status ?? '-');
+/// "Acknowledged". Deliveries keep their own words. Oct 25: donors do not
+/// see the CMO step ([donor]), so for them it still reads "Received".
+String donationStatusText(String? status, {bool donor = false}) =>
+    status == 'Confirmed'
+    ? (donor ? 'Received' : 'Acknowledged')
+    : (status ?? '-');
 
 class DonationStatusChip extends StatelessWidget {
   final String? status;
-  const DonationStatusChip(this.status, {super.key});
+  final bool donor;
+  const DonationStatusChip(this.status, {super.key, this.donor = false});
 
   @override
-  Widget build(BuildContext context) =>
-      StatusChip(status, label: donationStatusText(status));
+  Widget build(BuildContext context) => StatusChip(
+    donor && status == 'Confirmed' ? 'Received' : status,
+    label: donationStatusText(status, donor: donor),
+  );
 }
 
 /// The app's detail pop-out: centered, scrollable, with an X at the top
