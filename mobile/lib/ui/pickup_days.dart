@@ -784,9 +784,12 @@ class ServiceAreaCard extends StatelessWidget {
   final List<ServiceArea> areas;
   const ServiceAreaCard(this.areas, {super.key});
 
-  /// "Mandaue" -> "Mandaue City", "Cebu City" -> "Northern Cebu City".
+  /// "Mandaue" -> "Mandaue City"; a partly served Cebu City (barangays
+  /// set in the backend .env) -> "Northern Cebu City".
   static String title(ServiceArea a) {
-    if (a.name == 'Cebu City') return 'Northern Cebu City';
+    if (a.name == 'Cebu City' && a.barangays.isNotEmpty) {
+      return 'Northern Cebu City';
+    }
     if (a.name == 'Consolacion' || a.name.endsWith('City')) return a.name;
     return '${a.name} City';
   }
@@ -903,7 +906,7 @@ class ServiceAreaCard extends StatelessWidget {
   }
 }
 
-/// "Mandaue City, Northern Cebu City, Consolacion and Lapu-Lapu City".
+/// "Mandaue City, Cebu City, Consolacion and Lapu-Lapu City".
 String serviceAreasSentence(List<ServiceArea> areas) {
   final names = areas.map(ServiceAreaCard.title).toList();
   if (names.length < 2) return names.join();
