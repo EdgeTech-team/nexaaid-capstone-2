@@ -92,7 +92,8 @@ def completion_blocker(req: LogisticsRequest, delivery: Optional[Delivery], now=
     if delivery.status == "Cancelled":
         return "CSWS Main Office cancelled this delivery."
     if delivery.status not in _LEFT_THE_OFFICE:
-        return "CSWS Main Office has not marked the delivery In Transit yet."
+        # Advisor (Oct 24): DRRMO marks it In Transit when it picks up the goods.
+        return "Pick up the goods first (Picked up · mark In Transit)."
     if delivery.status not in _BARANGAY_RECEIVED:
         return "Wait for the barangay representative to confirm receipt."
     return None

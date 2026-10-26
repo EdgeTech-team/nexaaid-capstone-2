@@ -117,7 +117,8 @@ def test_main_office_hears_when_drrmo_completes_the_support(api):
     req = ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": did, "trucks": 1}), 201)
     ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json={}))
     # Testing fix 7.5: In Transit (8.1), then the barangay's receipt (8.2).
-    ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
+    # Advisor (Oct 24): DRRMO marks it In Transit when it picks up the goods.
+    ok(client.post(f"/drrmo/requests/{req['request_id']}/picked-up", headers=t["drrmo"]))
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
     ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
     ok(client.patch(f"/drrmo/requests/{req['request_id']}/complete", headers=t["drrmo"],
