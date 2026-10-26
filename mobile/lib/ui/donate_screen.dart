@@ -214,11 +214,17 @@ class DonateScreen extends StatefulWidget {
   /// Oct 11: the donor changes a donation still waiting (or declined). The
   /// form opens filled in; saving keeps the same QR reference.
   final Map? edit;
+
+  /// Oct 23: more items for a donation already pledged. Only the items
+  /// section shows; they join the same donation, QR code and handover as a
+  /// new batch (POST /donations/entries/{ref}/items).
+  final Map? addTo;
   const DonateScreen({
     super.key,
     required this.report,
     required this.names,
     this.edit,
+    this.addTo,
   });
 
   @override
@@ -233,21 +239,29 @@ class _DonateScreenState extends State<DonateScreen> {
   bool useSavedAddress = true;
   String? savedAddress; // organization address, if the account has one
   // Door to Door pickup details:
-  //   landmark  -> box with map suggestions (also gives the pin for CSWS)
   //   address   -> typed by the donor, no suggestions
-  //   days      -> pickupDays: the days the donor is home (M / T / W ...)
+  //   landmark  -> box with map suggestions (also gives the pin for CSWS)
+  //   dates     -> pickupDates: the dates the donor is home (calendar)
   //   notes     -> free text for the pickup team
   final pickupLandmark = TextEditingController();
   final pickupAddress = TextEditingController();
   final pickupNotes = TextEditingController();
   PickedAddress? picked; // set when the donor taps a landmark suggestion
-  Set<int> pickupDays = {}; // Door to Door: days the donor is home
+  Set<DateTime> pickupDates = {}; // Door to Door: dates the donor is home
+  // Map check of the picked landmark (GET /donations/location/coverage):
+  // null = not checked yet. False locks the rest of the pickup details and
+  // offers Drop Off instead.
+  bool? _covered;
+  String? _coveragePlace;
+  bool _checkingCoverage = false;
+  int _coverageSeq = 0; // ignores answers for a landmark that was replaced
   PickupRules pickupRules = const PickupRules();
   final guestName = TextEditingController();
   final guestPhone = TextEditingController();
   bool busy = false;
 
   bool get _editing => widget.edit != null;
+  bool get _adding => widget.addTo != null;
 
   /// Fill the form from the donation being changed.
   void _fillFromEntry(Map e) {
@@ -269,7 +283,8 @@ class _DonateScreenState extends State<DonateScreen> {
     pickupLandmark.text = '${e['pickup_landmark'] ?? ''}';
     pickupAddress.text = '${e['pickup_address'] ?? ''}';
     pickupNotes.text = '${e['pickup_notes'] ?? ''}';
-    pickupDays = pickupDaysOf(e['pickup_days']);
+    // Older entries only have weekdays: the donor picks dates again.
+    pickupDates = pickupDatesOf(e['pickup_dates']);
     final lat = (e['pickup_lat'] as num?)?.toDouble();
     final lng = (e['pickup_lng'] as num?)?.toDouble();
     picked = lat != null && lng != null
@@ -350,7 +365,7 @@ class _DonateScreenState extends State<DonateScreen> {
 
   // Testing fix (UI, Wooind): what was typed survives a refresh or a closed
   // app. One draft per report; not used when changing an existing donation.
-  late final FormDraft? _draft = _editing
+  late final FormDraft? _draft = _editing || _adding
       ? null
       : FormDraft('donate:${widget.report['id']}');
 
@@ -374,7 +389,7 @@ class _DonateScreenState extends State<DonateScreen> {
     'landmark': pickupLandmark.text,
     'address': pickupAddress.text,
     'notes': pickupNotes.text,
-    'days': pickupDays.toList(),
+    'dates': [for (final d in sortedDates(pickupDates)) pickupDateIso(d)],
     'guest_name': guestName.text,
     'guest_phone': guestPhone.text,
   };
@@ -418,10 +433,8 @@ class _DonateScreenState extends State<DonateScreen> {
       pickupLandmark.text = d.str('landmark');
       pickupAddress.text = d.str('address');
       pickupNotes.text = d.str('notes');
-      pickupDays = {
-        for (final x in (d['days'] is List ? d['days'] as List : const []))
-          if (x is int) x,
-      };
+      // Dates that have passed are dropped when the calendar opens.
+      pickupDates = pickupDatesOf(d['dates']);
       guestName.text = d.str('guest_name');
       guestPhone.text = d.str('guest_phone');
     });
@@ -452,7 +465,7 @@ class _DonateScreenState extends State<DonateScreen> {
       pickupLandmark.clear();
       pickupAddress.clear();
       pickupNotes.clear();
-      pickupDays = {};
+      pickupDates = {};
       guestName.clear();
       guestPhone.clear();
     });
@@ -466,7 +479,20 @@ class _DonateScreenState extends State<DonateScreen> {
   @override
   void initState() {
     super.initState();
-    if (_editing) _fillFromEntry(widget.edit!);
+    if (_adding) {
+      // The new items keep the donation's handover and pickup.
+      handover = '${widget.addTo!['handover_method'] ?? 'Drop Off'}';
+    }
+    if (_editing) {
+      _fillFromEntry(widget.edit!);
+      // A Door to Door entry being changed: check its landmark's area too.
+      final p = picked;
+      if (p != null && handover == 'Door to Door') {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _checkCoverage(p);
+        });
+      }
+    }
     _draft?.load().then((d) {
       if (d != null && mounted) _restoreDraft(d);
     });
@@ -523,16 +549,98 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  Future<void> _choosePickupDays(FormFieldState<Set<int>> field) async {
-    final chosen = await pickPickupDays(
+  Future<void> _choosePickupDates(FormFieldState<Set<DateTime>> field) async {
+    final chosen = await pickPickupDates(
       context,
       pickupRules,
-      current: pickupDays,
+      current: pickupDates,
     );
     if (chosen == null || !mounted) return;
-    setState(() => pickupDays = chosen);
+    setState(() => pickupDates = chosen);
     field.didChange(chosen);
   }
+
+  /// The landmark is inside a Door to Door service area: the map check when
+  /// it answered, otherwise the landmark text (same rule as the server).
+  bool get _inServiceArea =>
+      _covered ?? pickupRules.inServiceArea(pickupLandmark.text);
+
+  /// The map found the landmark outside the service areas.
+  bool get _outsideArea =>
+      handover == 'Door to Door' && picked != null && _covered == false;
+
+  /// Asks the map where the landmark's pin is, right after it is picked.
+  Future<void> _checkCoverage(PickedAddress p) async {
+    final seq = ++_coverageSeq;
+    setState(() {
+      _checkingCoverage = true;
+      _covered = null;
+    });
+    final q = {
+      'text': p.address,
+      if (p.lat != null) 'lat': '${p.lat}',
+      if (p.lng != null) 'lng': '${p.lng}',
+    };
+    final r = await api.get(
+      '/donations/location/coverage?${Uri(queryParameters: q).query}',
+    );
+    if (!mounted || seq != _coverageSeq) return;
+    setState(() {
+      _checkingCoverage = false;
+      if (r.ok && r.json is Map) {
+        _covered = r.json['covered'] == true;
+        _coveragePlace = r.json['place'] as String?;
+      } else {
+        // No answer from the server: the landmark text decides; the
+        // server checks again on submit.
+        _covered = pickupRules.inServiceArea(p.address);
+        _coveragePlace = placeIn(p.address);
+      }
+    });
+  }
+
+  void _onLandmarkChanged(PickedAddress p) {
+    final pinned = p.lat != null;
+    picked = pinned ? p : null;
+    if (pinned) {
+      _checkCoverage(p);
+    } else if (_covered != null || _checkingCoverage) {
+      _coverageSeq++; // a check still running no longer applies
+      setState(() {
+        _covered = null;
+        _checkingCoverage = false;
+      });
+    }
+  }
+
+  void _switchToDropOff() {
+    setState(() => handover = 'Drop Off');
+    _saveDraft();
+    AppToast.info(
+      context,
+      'Switched to Drop Off. Thank you for understanding!',
+    );
+  }
+
+  void _chooseAnotherLandmark() {
+    _coverageSeq++;
+    setState(() {
+      pickupLandmark.clear();
+      picked = null;
+      _covered = null;
+      _checkingCoverage = false;
+    });
+  }
+
+  /// Faded and not tappable while the landmark is outside the areas.
+  Widget _lockedWhenOutside(Widget child) => IgnorePointer(
+    ignoring: _outsideArea,
+    child: AnimatedOpacity(
+      duration: Motion.fast,
+      opacity: _outsideArea ? 0.4 : 1,
+      child: child,
+    ),
+  );
 
   void _addItem() {
     setState(() => lines.add(_Line()));
@@ -547,11 +655,35 @@ class _DonateScreenState extends State<DonateScreen> {
     });
   }
 
+  /// Oct 23: send only the new items; they join the same donation and QR.
+  Future<void> _submitAdditions() async {
+    final ref = '${widget.addTo!['batch_reference']}';
+    setState(() => busy = true);
+    final r = await api.post(
+      '/donations/entries/${Uri.encodeComponent(ref)}/items',
+      body: {
+        'items': [for (final l in lines) l.toJson(_infoOf(l)!)],
+      },
+    );
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (!r.ok) {
+      _snack(
+        r.status == 0 ? 'Cannot reach the server' : r.errorText,
+        error: true,
+      );
+      return;
+    }
+    _snack('Items added to $ref. Your QR code stays the same.');
+    Navigator.of(context).pop(true);
+  }
+
   Future<void> _submit() async {
     if (!_form.currentState!.validate()) {
       _snack('Please complete the fields marked in red.', error: true);
       return;
     }
+    if (_adding) return _submitAdditions();
     final door = handover == 'Door to Door';
     final useSaved = door && useSavedAddress && savedAddress != null;
     final typedAddress = pickupAddress.text.trim();
@@ -572,7 +704,14 @@ class _DonateScreenState extends State<DonateScreen> {
           'pickup_lat': landmark.lat,
           'pickup_lng': landmark.lng,
         },
-        'pickup_days': (pickupDays.toList()..sort()),
+        'pickup_dates': [
+          for (final d in sortedDates(pickupDates)) pickupDateIso(d),
+        ],
+        // Servers not yet updated read only weekdays (1 = Monday) and ignore
+        // pickup_dates; updated ones work the weekdays out from the dates.
+        // Sending both keeps Door to Door working on either.
+        'pickup_days': {for (final d in pickupDates) d.weekday}.toList()
+          ..sort(),
         if (pickupNotes.text.trim().isNotEmpty)
           'pickup_notes': pickupNotes.text.trim(),
       },
@@ -1074,8 +1213,8 @@ class _DonateScreenState extends State<DonateScreen> {
   }
 
   /// UC-D2 alt 7c: Door to Door pickup details.
-  /// Order: Landmark (with suggestions), Address (typed), the days the donor
-  /// is home (pop-out with day buttons), notes for the pickup team.
+  /// Order: Address (typed), Landmark (with suggestions), the dates the donor
+  /// is home (calendar pop-out), notes for the pickup team.
   Widget _doorToDoorCard() {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
@@ -1086,9 +1225,11 @@ class _DonateScreenState extends State<DonateScreen> {
           Text('Pickup details', style: t.titleMedium),
           Gaps.v4,
           Text(
-            'CSWS will come to this address on one of the days you are home.',
+            'CSWS will come to this address on one of the dates you are home.',
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
+          Gaps.v12,
+          ServiceAreaCard(pickupRules.serviceAreas),
           Gaps.v12,
           if (savedAddress != null) ...[
             RadioGroup<bool>(
@@ -1112,30 +1253,7 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v8,
           ],
-          // 1. Landmark: suggestions appear as the donor types. Picking one
-          //    also saves the map pin so CSWS can navigate.
-          // Required, and picked from the suggestions (Oct 11): that gives
-          // the pin on the CSWS pickup map, and suggestions only come from
-          // the pickup area (Cebu province).
-          AddressAutocompleteField(
-            controller: pickupLandmark,
-            label: 'Landmark',
-            hint: 'Start typing a nearby landmark, e.g. church, school, store',
-            icon: Icons.place_outlined,
-            onChanged: (p) => picked = p.lat == null ? null : p,
-            validator: (v) {
-              if (handover != 'Door to Door') return null;
-              final text = (v ?? '').trim();
-              if (text.isEmpty) return 'Enter a landmark near your address';
-              if (picked == null || picked!.address != text) {
-                return 'Choose your landmark from the suggestions, so CSWS '
-                    'can find you on the map';
-              }
-              return null;
-            },
-          ),
-          Gaps.v16,
-          // 2. Address: plain typed text, no suggestions.
+          // 1. Address: plain typed text, no suggestions.
           if (savedAddress == null || !useSavedAddress) ...[
             TextFormField(
               controller: pickupAddress,
@@ -1160,67 +1278,99 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v16,
           ],
-          // 3. Pickup days: a pop-out with M / T / W / Th / F buttons.
-          FormField<Set<int>>(
-            validator: (_) => handover == 'Door to Door' && pickupDays.isEmpty
-                ? 'Choose at least one day you are home'
-                : null,
-            builder: (field) => InkWell(
-              borderRadius: BorderRadius.circular(Radii.md),
-              onTap: () => _choosePickupDays(field),
-              child: InputDecorator(
-                decoration: InputDecoration(
-                  labelText: 'Available pickup days',
-                  prefixIcon: const Icon(Icons.event_available_outlined),
-                  suffixIcon: const Icon(Icons.edit_calendar_outlined),
-                  errorText: field.errorText,
-                  helperText:
-                      'Pickup hours are ${pickupHoursLabel(pickupRules)}',
+          // 2. Landmark: suggestions appear as the donor types. Picking one
+          //    also saves the map pin so CSWS can navigate.
+          // Required, and picked from the suggestions (Oct 11): that gives
+          // the pin on the CSWS pickup map, and suggestions only come from
+          // the pickup area (Cebu province). Address + landmark must name a
+          // Door to Door service area (Mandaue, northern Cebu City,
+          // Consolacion, Lapu-Lapu); the server checks it again.
+          AddressAutocompleteField(
+            controller: pickupLandmark,
+            label: 'Landmark',
+            hint: 'Start typing a nearby landmark, e.g. church, school, store',
+            icon: Icons.place_outlined,
+            onChanged: _onLandmarkChanged,
+            validator: (v) {
+              if (handover != 'Door to Door') return null;
+              final text = (v ?? '').trim();
+              if (text.isEmpty) return 'Enter a landmark near your address';
+              if (picked == null || picked!.address != text) {
+                return 'Choose your landmark from the suggestions, so CSWS '
+                    'can find you on the map';
+              }
+              if (!_inServiceArea) {
+                return 'Outside the door-to-door coverage. Please choose '
+                    'Drop Off.';
+              }
+              return null;
+            },
+          ),
+          // The map check: a sorry and Drop Off when outside the areas.
+          if (picked != null && (_checkingCoverage || _covered == true)) ...[
+            Gaps.v8,
+            CoverageStatusLine(checking: _checkingCoverage),
+          ],
+          if (_outsideArea) ...[
+            Gaps.v12,
+            OutOfAreaNotice(
+              place: _coveragePlace,
+              areas: pickupRules.serviceAreas,
+              onDropOff: _switchToDropOff,
+              onChangeLandmark: _chooseAnotherLandmark,
+            ),
+          ],
+          Gaps.v16,
+          // 3. Pickup dates: a calendar pop-out; tap one or more dates.
+          // Locked (with notes) while the landmark is outside the areas.
+          _lockedWhenOutside(
+            FormField<Set<DateTime>>(
+              validator: (_) {
+                if (handover != 'Door to Door' || _outsideArea) return null;
+                final ok = pickupDates.where(pickupRules.isPickupDate);
+                if (ok.isEmpty) return 'Choose at least one date you are home';
+                if (ok.length != pickupDates.length) {
+                  return 'Some dates have passed. Tap to choose again.';
+                }
+                return null;
+              },
+              builder: (field) => InkWell(
+                borderRadius: BorderRadius.circular(Radii.md),
+                onTap: () => _choosePickupDates(field),
+                child: InputDecorator(
+                  decoration: InputDecoration(
+                    labelText: 'Available pickup dates',
+                    prefixIcon: const Icon(Icons.event_available_outlined),
+                    suffixIcon: const Icon(Icons.edit_calendar_outlined),
+                    errorText: field.errorText,
+                    helperText:
+                        'Pickup hours are ${pickupHoursLabel(pickupRules)}',
+                  ),
+                  child: pickupDates.isEmpty
+                      ? Text(
+                          'Tap to choose the dates you are home',
+                          style: t.bodyLarge?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        )
+                      : PickupDateChips(sortedDates(pickupDates)),
                 ),
-                child: pickupDays.isEmpty
-                    ? Text(
-                        'Tap to choose the days you are home',
-                        style: t.bodyLarge?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
-                      )
-                    : Wrap(
-                        spacing: Space.xxs,
-                        runSpacing: Space.xxs,
-                        children: [
-                          for (final d in (pickupDays.toList()..sort()))
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: Space.xs + 2,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: cs.primary,
-                                borderRadius: BorderRadius.circular(Radii.pill),
-                              ),
-                              child: Text(
-                                pickupDayShort[d - 1],
-                                style: t.labelLarge?.copyWith(
-                                  color: cs.onPrimary,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
               ),
             ),
           ),
           Gaps.v16,
           // 4. Notes for the pickup team.
-          TextFormField(
-            controller: pickupNotes,
-            maxLength: 300,
-            minLines: 1,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Notes for the pickup team (optional)',
-              hintText: 'e.g. Blue gate beside the sari-sari store. Call when outside.',
-              prefixIcon: Icon(Icons.sticky_note_2_outlined),
+          _lockedWhenOutside(
+            TextFormField(
+              controller: pickupNotes,
+              maxLength: 300,
+              minLines: 1,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Notes for the pickup team (optional)',
+                hintText: 'e.g. Blue gate beside the sari-sari store. Call when outside.',
+                prefixIcon: Icon(Icons.sticky_note_2_outlined),
+              ),
             ),
           ),
           Gaps.v4,
@@ -1307,8 +1457,16 @@ class _DonateScreenState extends State<DonateScreen> {
               ),
               Gaps.h12,
               AppButton(
-                _editing ? 'Save changes' : 'Submit & get QR code',
-                icon: _editing ? Icons.check : Icons.qr_code_2,
+                _adding
+                    ? 'Add to donation'
+                    : _editing
+                    ? 'Save changes'
+                    : 'Submit & get QR code',
+                icon: _adding
+                    ? Icons.add
+                    : _editing
+                    ? Icons.check
+                    : Icons.qr_code_2,
                 variant: AppButtonVariant.donate,
                 loading: busy,
                 onPressed: busy ? null : _submit,
@@ -1325,7 +1483,15 @@ class _DonateScreenState extends State<DonateScreen> {
     final side = _sidePadding(context);
     final door = handover == 'Door to Door';
     return Scaffold(
-      appBar: AppBar(title: Text(_editing ? 'Edit donation' : 'Donate goods')),
+      appBar: AppBar(
+        title: Text(
+          _adding
+              ? 'Add items'
+              : _editing
+              ? 'Edit donation'
+              : 'Donate goods',
+        ),
+      ),
       bottomNavigationBar: _submitBar(),
       body: Form(
         key: _form,
@@ -1344,10 +1510,15 @@ class _DonateScreenState extends State<DonateScreen> {
               children: [
                 _reportSummary(),
 
-                const _StepHeader(
+                if (_adding) _addingNote(),
+                _StepHeader(
                   number: 1,
-                  title: 'What are you donating?',
-                  subtitle: 'Add every item you are giving. They all share one QR code.',
+                  title: _adding
+                      ? 'What are you adding?'
+                      : 'What are you donating?',
+                  subtitle: _adding
+                      ? 'These items join your donation as a new batch.'
+                      : 'Add every item you are giving. They all share one QR code.',
                 ),
                 for (var i = 0; i < lines.length; i++) _lineCard(i),
                 AppButton(
@@ -1358,59 +1529,9 @@ class _DonateScreenState extends State<DonateScreen> {
                   onPressed: _addItem,
                 ),
 
-                // 4.1: the items come first; the monetary donation info is
-                // shown below them (adviser item 7 / UC-D2, display only).
-                ReportDonationInfo(reportId: widget.report['id'] as int),
-
-                const _StepHeader(
-                  number: 2,
-                  title: 'How will you hand it over?',
-                ),
-                _ChoiceTile(
-                  icon: Icons.store_mall_directory_outlined,
-                  title: 'Drop Off',
-                  subtitle: 'Bring the goods to the CSWS office yourself.',
-                  selected: !door,
-                  onTap: () {
-                    setState(() => handover = 'Drop Off');
-                    _saveDraft();
-                  },
-                ),
-                Gaps.v8,
-                _ChoiceTile(
-                  icon: Icons.local_shipping_outlined,
-                  title: 'Door to Door',
-                  subtitle: 'CSWS picks up the goods from your address.',
-                  selected: door,
-                  onTap: () {
-                    setState(() => handover = 'Door to Door');
-                    _saveDraft();
-                  },
-                ),
-                Gaps.v12,
-                AnimatedSwitcher(
-                  duration: Motion.normal,
-                  child: door
-                      ? KeyedSubtree(
-                          key: const ValueKey('door'),
-                          child: _doorToDoorCard(),
-                        )
-                      : const DropOffCard(
-                          key: ValueKey('drop'),
-                          fallbackAddress: storageAddress,
-                          fallbackHours: storageHours,
-                        ),
-                ),
-
-                if (!api.loggedIn) ...[
-                  const _StepHeader(
-                    number: 3,
-                    title: 'Your details',
-                    subtitle:
-                        'So CSWS can call or text you about this donation.',
-                  ),
-                  _guestCard(),
-                ],
+                // Adding to a donation: only the items. Handover, pickup
+                // and donor details stay as they are.
+                if (!_adding) ..._handoverSections(door),
               ],
             ),
           ),
@@ -1418,6 +1539,144 @@ class _DonateScreenState extends State<DonateScreen> {
       ),
     );
   }
+
+  /// "These items join DON-… · same QR code · same pickup".
+  Widget _addingNote() {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final e = widget.addTo!;
+    final door = e['handover_method'] == 'Door to Door';
+    final when = e['pickup_days_label'];
+    final caution = StatusColors.of('On Hold', Theme.of(context).brightness);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(bottom: Space.xs),
+          padding: const EdgeInsets.all(Space.md),
+          decoration: BoxDecoration(
+            color: cs.primaryContainer.withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(Radii.md),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.qr_code_2, color: cs.primary),
+              Gaps.h12,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Adding to ${e['batch_reference']}',
+                      style: t.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    Gaps.v4,
+                    Text(
+                      door
+                          ? 'Same QR code. CSWS picks these up together with the '
+                                'rest of your donation'
+                                '${when == null ? '' : ' ($when)'}.'
+                          : 'Same QR code. Bring these together with the rest '
+                                'of your donation to the CSWS office.',
+                      style: t.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Oct 25: said before the donor starts, in amber (a caution, not
+        // an error).
+        Container(
+          margin: const EdgeInsets.only(bottom: Space.sm),
+          padding: const EdgeInsets.all(Space.sm),
+          decoration: BoxDecoration(
+            color: caution.bg,
+            borderRadius: BorderRadius.circular(Radii.md),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, size: 20, color: caution.fg),
+              Gaps.h8,
+              Expanded(
+                child: Text.rich(
+                  TextSpan(
+                    style: t.bodyMedium,
+                    children: const [
+                      TextSpan(
+                        text: 'Keep at least one item in your donation. ',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      TextSpan(
+                        text:
+                            'You can remove items later, but not all of '
+                            'them. To stop the whole donation, cancel it '
+                            'instead.',
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<Widget> _handoverSections(bool door) => [
+    // 4.1: the items come first; the monetary donation info is
+    // shown below them (adviser item 7 / UC-D2, display only).
+    ReportDonationInfo(reportId: widget.report['id'] as int),
+
+    const _StepHeader(number: 2, title: 'How will you hand it over?'),
+    _ChoiceTile(
+      icon: Icons.store_mall_directory_outlined,
+      title: 'Drop Off',
+      subtitle: 'Bring the goods to the CSWS office yourself.',
+      selected: !door,
+      onTap: () {
+        setState(() => handover = 'Drop Off');
+        _saveDraft();
+      },
+    ),
+    Gaps.v8,
+    _ChoiceTile(
+      icon: Icons.local_shipping_outlined,
+      title: 'Door to Door',
+      subtitle: 'CSWS picks up the goods from your address.',
+      selected: door,
+      onTap: () {
+        setState(() => handover = 'Door to Door');
+        _saveDraft();
+      },
+    ),
+    Gaps.v12,
+    AnimatedSwitcher(
+      duration: Motion.normal,
+      child: door
+          ? KeyedSubtree(key: const ValueKey('door'), child: _doorToDoorCard())
+          : const DropOffCard(
+              key: ValueKey('drop'),
+              fallbackAddress: storageAddress,
+              fallbackHours: storageHours,
+            ),
+    ),
+
+    if (!api.loggedIn) ...[
+      const _StepHeader(
+        number: 3,
+        title: 'Your details',
+        subtitle: 'So CSWS can call or text you about this donation.',
+      ),
+      _guestCard(),
+    ],
+  ];
 }
 
 /// "① What are you donating?" numbered section title.
@@ -1704,6 +1963,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
     final qr = batch['qr_image_base64'] as String?;
     final pickupTime = formatPickupIso(batch['preferred_pickup_at']);
     final pickupDays = pickupDaysOf(batch['pickup_days']);
+    final pickupDates = pickupDatesOf(batch['pickup_dates']);
 
     return PopScope(
       canPop: _mayLeave,
@@ -1863,9 +2123,14 @@ class _DonationReceiptState extends State<DonationReceipt> {
                             Icons.event_available_outlined,
                             color: cs.primary,
                           ),
-                          title: const Text('Available pickup days'),
+                          title: Text(
+                            pickupDates.isEmpty
+                                ? 'Available pickup days'
+                                : 'Available pickup dates',
+                          ),
                           subtitle: Text(
-                            '${pickupDaysLabel(pickupDays)} · pickup hours '
+                            '${pickupDates.isEmpty ? pickupDaysLabel(pickupDays) : sortedDates(pickupDates).map(pickupDateShort).join(' · ')}'
+                            ' · pickup hours '
                             '${batch['pickup_hours'] ?? pickupHoursLabel(const PickupRules())}',
                           ),
                         ),

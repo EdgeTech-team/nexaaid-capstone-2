@@ -111,10 +111,11 @@ abstract final class PriorityColors {
 }
 
 /// Donation status timeline for donor and org dashboards (adviser item 10).
+/// Oct 25: no "Acknowledged by CMO" step. That is an internal check the
+/// donor cannot act on; for them an acknowledged donation is received.
 const donationLifecycle = [
   'Pending',
   'Received',
-  'Confirmed',
   'In Transit',
   'Delivered',
   'Acknowledged',
@@ -123,7 +124,6 @@ const donationLifecycle = [
 const donationLifecycleLabels = [
   'Pledged',
   'Received by CSWS',
-  'Acknowledged by CMO',
   'In transit',
   'Delivered',
   'Barangay confirmed',

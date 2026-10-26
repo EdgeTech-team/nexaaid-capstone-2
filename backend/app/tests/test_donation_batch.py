@@ -160,7 +160,7 @@ def test_pickup_board_lists_waiting_door_to_door_donations(api):
                       "guest_donor": {"full_name": "Ana Guest", "contact_number": "09181234567"}},
                      headers={}), 201)
     ok(post({"report_id": rid, "handover_method": "Drop Off", "items": [LINE]}), 201)  # not a pickup
-    done = ok(post({**door, "pickup_address": "Done St", "items": [LINE],
+    done = ok(post({**door, "pickup_address": "Done St, Mandaue City", "items": [LINE],
                     "preferred_pickup_at": _pickup_slot(hour=11).isoformat()}), 201)
     ok(client.post("/donations/receive", headers=t["csws"],
                    json={"donation_id": done["items"][0]["donation_id"], "actual_quantity": 2}))

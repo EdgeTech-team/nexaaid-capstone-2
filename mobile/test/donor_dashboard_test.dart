@@ -372,8 +372,9 @@ void main() {
         expect(find.textContaining('BATCH-ANA-1'), findsWidgets);
         expect(find.textContaining('BATCH-ANA-2'), findsWidgets);
         expect(find.text('by CSWS'), findsWidgets);
-        expect(find.text('confirmed'), findsWidgets); // full journey, 6 steps
-        expect(find.text('by CMO'), findsWidgets);
+        expect(find.text('confirmed'), findsWidgets); // full journey
+        // Oct 25: the CMO's acknowledgement is not a donor step.
+        expect(find.text('by CMO'), findsNothing);
         expect(find.text('Show QR'), findsOneWidget); // only BATCH-ANA-2
         // Oct 13: no separate Delivery status list; the donation's own
         // timeline shows it, with a note while only part of it left.

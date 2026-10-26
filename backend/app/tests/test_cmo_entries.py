@@ -49,9 +49,12 @@ def test_cmo_acknowledges_a_whole_entry(api):
     notes = ok(client.get("/notifications/", headers=t["donor"]))["items"]
     assert len([n for n in notes if n["type"] == "donation_confirmed"]) == 1
 
-    # Undo for the whole entry
-    ok(client.post(f"/cmo/entries/{ref}/revert", headers=t["cmo"]))
-    assert ref in [x["batch_reference"] for x in ok(client.get("/cmo/entries/pending", headers=t["cmo"]))]
+    # Task #10: acknowledging is final. There is no undo in the API, and an
+    # acknowledged entry cannot be put on hold or acknowledged again.
+    assert client.post(f"/cmo/entries/{ref}/revert", headers=t["cmo"]).status_code in (404, 405)
+    assert client.post(f"/cmo/entries/{ref}/decide", headers=t["cmo"],
+                       json={"status": "On Hold", "notes": "Changed my mind"}).status_code == 409
+    assert ref not in [x["batch_reference"] for x in ok(client.get("/cmo/entries/pending", headers=t["cmo"]))]
     assert client.post(f"/cmo/entries/{ref}/decide", headers=t["donor"],
                        json={"status": "Acknowledged"}).status_code == 403
 
@@ -123,3 +126,35 @@ def test_main_office_hears_when_the_cmo_acknowledges_or_holds_an_entry(api):
     # Only Main Office: the CMO itself is not told.
     assert not [n for n in ok(client.get("/notifications/", headers=t["cmo"]))["items"]
                 if n["type"] == "donation_ready_for_delivery"]
+
+
+def test_cmo_cards_and_todays_count(api):
+    """Oct 23 CMO redesign: each entry says the disaster, barangay, donor
+    name (never the phone) and when it was received / acknowledged; the
+    home shows what was acknowledged today, not an all-time total."""
+    client, t = api
+    rid = _report(client, t)
+    ref = ok(client.post("/donations/batch", headers=t["donor"], json={
+        "report_id": rid, "handover_method": "Drop Off",
+        "items": [{"item_id": 1, "packaging": "Sack", "quantity": 3}]}), 201)["batch_reference"]
+    for line in ok(client.get(f"/donations/by-batch/{ref}", headers=t["csws"]))["items"]:
+        ok(client.post("/donations/receive", headers=t["csws"],
+                       json={"donation_id": line["donation_id"], "actual_quantity": 3}))
+
+    dash = ok(client.get("/cmo/dashboard", headers=t["cmo"]))
+    assert dash["needs_review_entries"] >= 1 and dash["acknowledged_today_entries"] == 0
+    e = next(x for x in ok(client.get("/cmo/entries/pending", headers=t["cmo"]))
+             if x["batch_reference"] == ref)
+    assert e["disaster_type"] and e["barangay"] and e["donor"]
+    assert e["received_at"] and e["acknowledged_at"] is None
+    assert "donor_contact" not in e
+
+    ok(client.post(f"/cmo/entries/{ref}/decide", headers=t["cmo"], json={"status": "Acknowledged"}))
+    dash = ok(client.get("/cmo/dashboard", headers=t["cmo"]))
+    assert dash["acknowledged_today_entries"] == 1
+    done = next(x for x in ok(client.get("/cmo/entries/acknowledged", headers=t["cmo"]))
+                if x["batch_reference"] == ref)
+    assert done["acknowledged_at"]
+    # Acknowledging twice is refused (no double acknowledgement).
+    assert client.post(f"/cmo/entries/{ref}/decide", headers=t["cmo"],
+                       json={"status": "Acknowledged"}).status_code == 409
