@@ -49,6 +49,10 @@ def test_both_teams_hear_every_logistics_step(api):
     assert "logistics_accepted" in _events(client, drrmo2)
     assert "logistics_accepted" not in _events(client, t["drrmo"])
 
+    # 7.5: completed only after the trip and the barangay's receipt.
+    ok(client.post(f"/drrmo/requests/{req['request_id']}/picked-up", headers=t["drrmo"]))
+    ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
     ok(client.patch(f"/drrmo/requests/{req['request_id']}/complete", headers=drrmo2,
                     json={"summary": "Truck 2, one trip"}))
     assert "logistics_completed" in _events(client, csws2)
