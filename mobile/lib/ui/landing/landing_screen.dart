@@ -11,6 +11,7 @@ import '../report_summary_card.dart';
 import '../widgets.dart' show api, formDialog, DialogField, Names;
 import 'landing_extras.dart' show CredentialsCard;
 import 'landing_sections.dart';
+import 'landing_v2.dart';
 import 'public_data.dart';
 
 /// First screen for anyone not signed in (adviser item 8): what NexaAid
@@ -218,11 +219,22 @@ class _LandingScreenState extends State<LandingScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          LandingHero(
+                           // Oct 26 redesign: teal hero with the most urgent
+                          // reports, About with photos, four trust cards.
+                          LandingHeroBanner(
+                            reports: data?.reports ?? const [],
+                            loading: data == null && !snap.hasError,
                             onLogIn: _logIn,
                             onCreateAccount: _createAccount,
                             onDonateAsGuest: api.continueAsGuest,
+                            onDonate: _donate,
+                            onOpen: _openReport,
                           ),
+                          LandingAboutCollage(
+                            stats: data?.stats,
+                            onHowItWorks: () => _jump(LandingSection.how),
+                          ),
+                          const LandingTrustCards(),
                           KeyedSubtree(
                             key: _sections[LandingSection.impact],
                             child: snap.hasError && data == null
