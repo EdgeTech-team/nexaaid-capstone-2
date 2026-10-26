@@ -267,11 +267,12 @@ def sent_emails(request, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_geocoder(monkeypatch):
-    """The Door to Door geofence reverse geocodes pins with Photon. Tests run
-    offline, so it uses its distance fallback unless a test says otherwise."""
+    """The Door to Door area check reverse geocodes pins with Photon. Tests
+    run offline, so only the landmark / address text decides unless a test
+    says otherwise."""
     import api.v1.donation_routes as routes
 
     def offline(lat, lng):
         raise ConnectionError("no network in tests")
 
-    monkeypatch.setattr(routes, "_reverse_city", offline)
+    monkeypatch.setattr(routes, "_reverse_props", offline)
