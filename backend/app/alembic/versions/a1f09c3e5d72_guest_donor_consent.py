@@ -5,13 +5,13 @@ Additive and nullable: guest donors saved before this have NULL (no consent
 was asked then). Every existing query is unaffected. Safe to re-run.
 
 Revision ID: a1f09c3e5d72
-Revises: 7f4d2b9e6a31
+Revises: a1d4e7c9b2f5
 """
 from alembic import op
 
 
 revision = "a1f09c3e5d72"
-down_revision = "7f4d2b9e6a31"
+down_revision = "a1d4e7c9b2f5"
 branch_labels = None
 depends_on = None
 
