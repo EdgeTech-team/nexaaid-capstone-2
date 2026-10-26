@@ -10,6 +10,8 @@ import 'ui/landing/landing_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Debug run with `uvicorn` going on this laptop: use that backend.
+  await Api.instance.useLocalBackendIfRunning();
   // Restore the saved login so closing the app or refreshing the page does
   // not sign the user out.
   await Api.instance.restoreSession();

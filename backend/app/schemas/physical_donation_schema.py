@@ -223,16 +223,17 @@ def pickup_dates_label(raw) -> Optional[str]:
 
 
 # Door to Door service areas (CSWS, Oct 2026). A pickup address or landmark
-# must name one of these places. Cebu City is only its northern barangays near
-# Mandaue. Override in .env without code, e.g.
-#   PICKUP_SERVICE_AREAS="Mandaue;Consolacion;Lapu-Lapu|Lapulapu|Mactan;Cebu City:Banilad,Talamban"
+# must name one of these places. Team decision (Oct 26): the whole of Cebu
+# City, Mandaue, Consolacion and Lapu-Lapu; this is the only list (the
+# separate PICKUP_CITIES geofence list is retired). Override in .env, e.g.
+#   PICKUP_SERVICE_AREAS="Mandaue;Cebu City:Banilad,Talamban;Consolacion"
 # (";" between areas, "|" between other names of the same place,
 #  ":" then the allowed barangays when only some of the city is served).
 _DEFAULT_SERVICE_AREAS = (
     "Mandaue;"
-    "Cebu City:Banilad,Talamban,Bacayan,Pit-os,Apas,Kasambagan,Lahug,Mabolo;"
+    "Cebu City;"
     "Consolacion;"
-    "Lapu-Lapu|Lapulapu|Mactan"
+    "Lapu-Lapu|Lapulapu|Mactan|Opon"
 )
 
 
@@ -282,7 +283,8 @@ def place_in(text: Optional[str]) -> Optional[str]:
 
 
 def service_areas_label() -> str:
-    """"Mandaue, Cebu City (Banilad, Talamban, ...), Consolacion, Lapu-Lapu"."""
+    """"Mandaue, Cebu City, Consolacion, Lapu-Lapu" (a partly served city
+    lists its barangays: "Cebu City (Banilad, Talamban)")."""
     parts = []
     for a in pickup_service_areas():
         parts.append(f"{a['name']} ({', '.join(a['barangays'])})" if a["barangays"] else a["name"])
@@ -463,7 +465,7 @@ class _PickupFields(BaseModel):
                     f"Door to Door pickups are only within {pickup_area()['name']}. "
                     "Choose a landmark there, or choose Drop Off."
                 )
-            # Service areas (Mandaue, northern Cebu City, ...) are checked in
+            # Service areas (Mandaue, Cebu City, ...) are checked in
             # the routes (donation_routes._check_service_area): that needs the
             # map lookup of the pin, which a validator should not do.
             if self.pickup_dates:
