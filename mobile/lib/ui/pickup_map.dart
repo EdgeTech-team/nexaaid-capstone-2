@@ -7,7 +7,8 @@ import '../api.dart';
 import 'batch_sheet.dart' show openDonationByQr;
 import 'home_nav.dart';
 import 'location_picker.dart' show PickupRules;
-import 'pickup_actions.dart' show openNavigation;
+import 'pickup_actions.dart'
+    show openNavigation, openRouteNavigation, routeLegStops;
 import 'pickup_days.dart';
 import 'pickup_list.dart';
 import 'pickup_plan.dart';
@@ -879,6 +880,35 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
               ),
             ),
           if (day != null && shown.isNotEmpty) _DaySummary(stops: shown),
+          // Turn-by-turn through the whole run in this order (Oct 2026,
+          // route planning): one way from CSWS, in legs of 10 stops.
+          if (day != null && shown.isNotEmpty)
+            Wrap(
+              spacing: Space.xs,
+              children: [
+                for (var leg = 0; leg * routeLegStops < shown.length; leg++)
+                  FilledButton.tonalIcon(
+                    onPressed: () => openRouteNavigation(
+                      context,
+                      origin: p.office == null
+                          ? null
+                          : (p.office!.latitude, p.office!.longitude),
+                      stops: [
+                        for (final s in shown)
+                          (s.point.latitude, s.point.longitude),
+                      ],
+                      leg: leg,
+                    ),
+                    icon: const Icon(Icons.navigation_outlined),
+                    label: Text(
+                      shown.length <= routeLegStops
+                          ? 'Navigate this route'
+                          : 'Navigate stops ${leg * routeLegStops + 1}-'
+                                '${((leg + 1) * routeLegStops).clamp(0, shown.length)}',
+                    ),
+                  ),
+              ],
+            ),
           Gaps.v8,
           if (p.stops.isEmpty)
             const Padding(

@@ -14,7 +14,18 @@ const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 /// Preparing -> In Transit -> Delivered -> Confirmed, as a dot stepper.
 class DeliveryStepper extends StatelessWidget {
   final String status;
-  const DeliveryStepper(this.status, {super.key});
+
+  /// When each step was reached (`status_times` from the delivery list,
+  /// Oct 2026), shown under the step.
+  final Map? times;
+  const DeliveryStepper(this.status, {super.key, this.times});
+
+  /// "Oct 23" over "2:15 PM", narrow enough for four steps on a phone.
+  static String _short(dynamic iso) {
+    final full = niceWhen(iso); // "Fri, Oct 23 · 2:15 PM"
+    final cut = full.indexOf(', ');
+    return (cut < 0 ? full : full.substring(cut + 2)).replaceAll(' · ', '\n');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,12 +51,21 @@ class DeliveryStepper extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                _deliverySteps[i],
+                StatusColors.label(_deliverySteps[i]),
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
                 ),
               ),
+              if (times?[_deliverySteps[i]] != null)
+                Text(
+                  _short(times![_deliverySteps[i]]),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
             ],
           ),
           if (i < _deliverySteps.length - 1)
@@ -238,14 +258,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Confirm that delivery #${d['delivery_id']} arrived. This is also '
           'your barangay\'s acknowledgement of the aid. If it is '
           'incomplete you can wait until it is resolved (UC-B1 4a).',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+            fields: const [],
       confirm: 'Confirm receipt',
     );
     if (v == null || !context.mounted) return;
@@ -253,7 +266,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       () => api.post(
         '/deliveries/${d['delivery_id']}/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+        body: const {},
       ),
       success: 'Receipt confirmed and aid acknowledged. Fulfillment updated.',
     );
@@ -268,14 +281,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Trip #$tripId brought $n deliveries to your barangay. Confirm only '
           'if everything arrived. If something is missing, confirm the '
           'deliveries one by one instead.',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+        fields: const [],
       confirm: 'Confirm all',
     );
     if (v == null || !context.mounted) return;
@@ -283,7 +289,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       () => api.post(
         '/trips/$tripId/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+        body: const {},
       ),
       success: '$n deliveries confirmed and acknowledged. Fulfillment updated.',
     );
@@ -353,8 +359,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
 
   Widget _filters(BuildContext context, Map counts) {
     final t = Theme.of(context).textTheme;
-    String chip(String? s) =>
-        s == null ? 'All (${counts['total'] ?? 0})' : '$s (${counts[s] ?? 0})';
+    String chip(String? s) => s == null
+        ? 'All (${counts['total'] ?? 0})'
+        : '${StatusColors.label(s)} (${counts[s] ?? 0})';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -628,7 +635,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
             const SizedBox(height: 4),
             Text(items.isEmpty ? 'No items' : items),
             Text(
-              '${d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report #${d['report_id']}')}'
+              '${reportName(d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report'))}'
               ' · ${niceDate(d['delivery_date'])}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -696,7 +703,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
               )
             else ...[
               const SizedBox(height: 12),
-              DeliveryStepper(status),
+              DeliveryStepper(status, times: d['status_times'] as Map?),
             ],
             const SizedBox(height: 8),
             Wrap(
@@ -718,8 +725,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                   TextButton.icon(
                     onPressed: () =>
                         showDeliveryProblems(context, d, request: request),
-                    icon: const Icon(Icons.report_problem_outlined),
-                    label: const Text('Something went wrong?'),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit'),
                   ),
                 // Testing feedback (Oct 20): transport is asked for before
                 // the truck leaves, so only while Preparing.
@@ -735,7 +742,21 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     icon: const Icon(Icons.fire_truck_outlined),
                     label: const Text('Request transport'),
                   ),
-                if (!barangay && !readOnly && next != null)
+                // Advisor (Oct 24): with a DRRMO request open, DRRMO marks it
+                // In Transit when they pick up the goods (DRRMO screen).
+                if (!barangay &&
+                    !readOnly &&
+                    status == 'Preparing' &&
+                    (reqStage == 'Pending' || reqStage == 'Accepted'))
+                  Chip(
+                    avatar: const Icon(Icons.fire_truck_outlined, size: 18),
+                    label: Text(
+                      reqStage == 'Pending'
+                          ? 'Waiting for DRRMO to accept'
+                          : 'DRRMO marks it In Transit on pickup',
+                    ),
+                  )
+                else if (!barangay && !readOnly && next != null)
                   FilledButton.icon(
                     onPressed: () => act(
                       context,
@@ -1397,6 +1418,23 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                       TextButton(
                         onPressed: () => _withdraw(r),
                         child: const Text('Can no longer do this'),
+                      ),
+
+                    // Advisor (Oct 24): DRRMO picked the goods up from CSWS.
+                    if (r['stage'] == 'Accepted' &&
+                        r['request_type'] != 'Pickup' &&
+                        r['delivery_status'] == 'Preparing')
+                      FilledButton.icon(
+                        onPressed: () => act(
+                          context,
+                          () => api.post(
+                            '/drrmo/requests/${r['request_id']}/picked-up',
+                          ),
+                          success:
+                              'Delivery #${r['delivery_id']} is now In Transit',
+                        ),
+                        icon: const Icon(Icons.local_shipping),
+                        label: const Text('Picked up · mark In Transit'),
                       ),
                     // Testing fix 7.5: only after the date, In Transit (8.1)
                     // and the barangay's receipt (8.2). The card shows why.

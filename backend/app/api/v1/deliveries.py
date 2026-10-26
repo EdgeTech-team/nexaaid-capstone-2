@@ -21,9 +21,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from core.database import get_db
-from core.notifications import notify_event_many, user_ids_with_role
+from core.notifications import logistics_team_ids, notify_event_many, user_ids_with_role
 from models.report import DisasterReport
-from core.auth import get_current_user, require_role, barangay_scope
+from core.auth import get_current_user, has_role, require_role, barangay_scope
 from core.audit import log_action
 from core.priority_engine import apply_priority
 from services.fulfillment import recalculate as recalculate_fulfillment
@@ -32,6 +32,7 @@ from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
+from models.logistics_request_model import LogisticsRequest
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
 from services.donation_expiry import MANILA, nice_date, now_utc, utc
@@ -259,6 +260,23 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
 
     current_index = _STATUS_SEQUENCE.index(delivery.status)
 
+    # Advisor (Oct 24): once CSWS asked DRRMO for transport, DRRMO marks the
+    # delivery In Transit when it picks the goods up (drrmo_router
+    # picked_up). CSWS waits, or cancels the request to send it themselves.
+    if delivery.status == "Preparing" and not has_role(current_user, DRRMO):
+        open_request = (db.query(LogisticsRequest)
+                        .filter(LogisticsRequest.delivery_id == delivery.delivery_id,
+                                LogisticsRequest.status.in_(("Pending", "Accepted")))
+                        .first())
+        if open_request is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Delivery #{delivery.delivery_id} goes with DRRMO "
+                        f"(request #{open_request.request_id}, {open_request.status}). "
+                        "DRRMO marks it In Transit when they pick up the goods. "
+                        "To send it yourself, cancel the DRRMO request first."),
+            )
+
     # Testing feedback (Oct 20): the truck can't leave before the day it is
     # scheduled for (trips start through here too, so "Arrived" can't come
     # first either). Leaving earlier means changing the date first.
@@ -281,10 +299,9 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
     recipients = set(user_ids_with_role(
         db, ["Barangay Receiving Representative"],
         barangay_id=delivery.destination_barangay_id))
-    # 7.5: DRRMO is notified whenever a delivery is advanced
-    recipients |= set(user_ids_with_role(
-        db, ["DRRMO Logistics Support"],
-        exclude_user_id=current_user.user_id))
+    # 7.5: DRRMO is notified whenever a delivery is advanced, and CSWS Main
+    # Office too (shared logistics notifications, e.g. DRRMO picked it up).
+    recipients |= logistics_team_ids(db, exclude_user_id=current_user.user_id)
     if report and report.user_id != current_user.user_id:
         recipients.add(report.user_id)
     notify_event_many(db, recipients, "delivery_status_changed", "delivery",

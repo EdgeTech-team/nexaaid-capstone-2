@@ -165,3 +165,20 @@ def user_ids_with_role(
     if barangay_id is not None:
         q = q.filter(User.assigned_barangay_id == barangay_id)
     return [uid for (uid,) in q.all() if uid != exclude_user_id]
+
+
+# Testing (Oct 23): DRRMO and CSWS Main Office share logistics notifications.
+# Everyone on both teams hears what the other office did (asked, accepted,
+# declined, completed, cancelled, withdrawn), not only the requester, so a
+# request isn't missed when that one person is away.
+LOGISTICS_TEAM_ROLES = ("CSWS Main Office", "DRRMO Logistics Support")
+
+
+def logistics_team_ids(db: Session, *also: Optional[int],
+                       exclude_user_id: Optional[int] = None) -> set[int]:
+    """Both logistics teams, plus [also] (e.g. a Disaster Unit requester),
+    minus whoever did the action."""
+    ids = set(user_ids_with_role(db, LOGISTICS_TEAM_ROLES)) | {u for u in also if u}
+    ids.discard(exclude_user_id)
+    return ids
+
