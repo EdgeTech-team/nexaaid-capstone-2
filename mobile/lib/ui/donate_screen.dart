@@ -1228,13 +1228,8 @@ class _DonateScreenState extends State<DonateScreen> {
             'CSWS will come to this address on one of the dates you are home.',
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
-          // Geofence (Oct 2026): where Door to Door is offered.
-          if (pickupRules.cities.isNotEmpty)
-            Text(
-              'Door to Door is only in ${pickupRules.cities.join(', ')}.',
-              style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-            ),
           Gaps.v12,
+          // Where Door to Door is offered (one list with the server's check).
           ServiceAreaCard(pickupRules.serviceAreas),
           Gaps.v12,
           if (savedAddress != null) ...[
@@ -1289,13 +1284,15 @@ class _DonateScreenState extends State<DonateScreen> {
           // Required, and picked from the suggestions (Oct 11): that gives
           // the pin on the CSWS pickup map, and suggestions only come from
           // the pickup area (Cebu province). Address + landmark must name a
-          // Door to Door service area (Mandaue, northern Cebu City,
+          // Door to Door service area (Mandaue, Cebu City,
           // Consolacion, Lapu-Lapu); the server checks it again.
           AddressAutocompleteField(
             controller: pickupLandmark,
             label: 'Landmark',
             hint: 'Start typing a nearby landmark, e.g. church, school, store',
             icon: Icons.place_outlined,
+            // Suggestions outside the service areas are greyed out.
+            pickupAreaOnly: true,
             onChanged: _onLandmarkChanged,
             validator: (v) {
               if (handover != 'Door to Door') return null;

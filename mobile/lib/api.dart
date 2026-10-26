@@ -158,13 +158,33 @@ class Api extends ChangeNotifier {
   }
 
   /// Use the deployed backend on Android, Chrome, and other platforms.
-    /// The deployed Render backend, unless the build names another one:
+  /// The deployed Render backend, unless the build names another one:
   ///   flutter run --dart-define=API_BASE=http://localhost:8000
   /// (Android emulator: http://10.0.2.2:8000; phone on Wi-Fi: the laptop's IP).
   static String _defaultBase() {
     const fromBuild = String.fromEnvironment('API_BASE');
     if (fromBuild.isNotEmpty) return fromBuild.replaceAll(RegExp(r'/+$'), '');
     return 'https://nexaaid-1.onrender.com';
+  }
+
+  /// Team workflow (Oct 26): `uvicorn main:app --reload` in backend/app and
+  /// `flutter run -d chrome` in mobile. A debug run on this laptop uses the
+  /// local backend when it answers, so the plain command tests the code on
+  /// disk; otherwise (no backend running, a phone, a release build) it keeps
+  /// the deployed one. API_BASE still wins when given.
+  Future<void> useLocalBackendIfRunning() async {
+    if (!kDebugMode || const String.fromEnvironment('API_BASE').isNotEmpty) {
+      return;
+    }
+    const local = 'http://localhost:8000';
+    try {
+      final r = await http
+          .get(Uri.parse('$local/health'))
+          .timeout(const Duration(milliseconds: 1500));
+      if (r.statusCode == 200) baseUrl = local;
+    } catch (_) {
+      // Not running here: stay on the deployed backend.
+    }
   }
 
   void setBase(String v) {

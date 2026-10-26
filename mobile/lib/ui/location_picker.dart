@@ -349,24 +349,11 @@ String? placeIn(String text) {
 /// list in /donations/pickup-rules; this one is used until it loads.
 const defaultServiceAreas = [
   ServiceArea('Mandaue', note: 'All barangays'),
-  ServiceArea(
-    'Cebu City',
-    barangays: [
-      'Banilad',
-      'Talamban',
-      'Bacayan',
-      'Pit-os',
-      'Apas',
-      'Kasambagan',
-      'Lahug',
-      'Mabolo',
-    ],
-    note: 'Selected barangays, including Banilad and Talamban',
-  ),
+  ServiceArea('Cebu City', note: 'All barangays'),
   ServiceArea('Consolacion', note: 'Approved service areas only'),
   ServiceArea(
     'Lapu-Lapu',
-    aliases: ['Lapulapu', 'Mactan'],
+    aliases: ['Lapulapu', 'Mactan', 'Opon'],
     note: 'All barangays',
   ),
 ];
@@ -381,9 +368,6 @@ class PickupRules {
   final int maxDaysAhead;
   final String label;
   final List<ServiceArea> serviceAreas;
-
-  /// Door to Door geofence (Oct 2026): the cities CSWS picks up in.
-  final List<String> cities;
 
   const PickupRules({
     this.days = const {1, 2, 3, 4, 5},
