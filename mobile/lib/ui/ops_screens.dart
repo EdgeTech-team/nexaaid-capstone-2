@@ -8,6 +8,7 @@ import 'trip_screens.dart';
 import 'widgets.dart';
 import 'logistics_cards.dart';
 import 'home_nav.dart';
+import 'scheduled_deliveries.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 
@@ -258,7 +259,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Confirm that delivery #${d['delivery_id']} arrived. This is also '
           'your barangay\'s acknowledgement of the aid. If it is '
           'incomplete you can wait until it is resolved (UC-B1 4a).',
-            fields: const [],
+      fields: const [],
       confirm: 'Confirm receipt',
     );
     if (v == null || !context.mounted) return;
@@ -281,16 +282,13 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Trip #$tripId brought $n deliveries to your barangay. Confirm only '
           'if everything arrived. If something is missing, confirm the '
           'deliveries one by one instead.',
-        fields: const [],
+      fields: const [],
       confirm: 'Confirm all',
     );
     if (v == null || !context.mounted) return;
     await act(
       context,
-      () => api.post(
-        '/trips/$tripId/confirm-receipt',
-        body: const {},
-      ),
+      () => api.post('/trips/$tripId/confirm-receipt', body: const {}),
       success: '$n deliveries confirmed and acknowledged. Fulfillment updated.',
     );
   }
@@ -1329,10 +1327,13 @@ class _DrrmoScreenState extends State<DrrmoScreen>
       load: [
         () => api.get('/drrmo/dashboard'),
         () => api.get('/drrmo/requests'),
+        // Testing #19: deliveries that have not arrived yet.
+        () => api.get('/deliveries/', query: scheduledDeliveriesQuery),
       ],
       builder: (context, data) {
         final dash = data[0] as Map;
         final all = (data[1] as List).cast<Map>();
+        final scheduled = (data[2] as List).cast<Map>();
         final rows = all.where((r) => r['stage'] == stage).toList();
         const stages = {
           'Pending': 'New',
@@ -1376,7 +1377,12 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                 onTap: () => setState(() => stage = 'Completed'),
               ),
             ]),
-            const SizedBox(height: 12),
+            ScheduledDeliveriesCard(
+              deliveries: scheduled,
+              onOpen: (d) =>
+                  showDeliveryHistory(context, d['delivery_id'] as int),
+            ),
+            const SectionTitle('Logistics requests'),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
