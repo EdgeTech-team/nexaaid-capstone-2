@@ -37,6 +37,7 @@ from models.physical_donation_model import PhysicalDonation
 from models.user_rbac_model import User
 from schemas.physical_donation_schema import (
     MANILA,
+    decode_pickup_dates,
     decode_pickup_days,
     pickup_area,
     pickup_rules,
@@ -111,19 +112,23 @@ def _waiting(db: Session) -> list:
     for ref, lines in by_ref.items():
         first = lines[0]
         pending = [l for l in lines if l.status == "Pending"]
+        # Oct 23 (approved by Daniel): pickup details come from the items
+        # still waiting, so a removed first item never hides the pickup.
+        spot = pending[0] if pending else first
         if first.report_id not in labels:
             labels[first.report_id] = _report_label(db, first.report_id)
-        days = decode_pickup_days(first.pickup_days)
-        if not days and first.preferred_pickup_at is not None:
-            days = [first.preferred_pickup_at.astimezone(MANILA).isoweekday()]
+        days = decode_pickup_days(spot.pickup_days)
+        if not days and spot.preferred_pickup_at is not None:
+            days = [spot.preferred_pickup_at.astimezone(MANILA).isoweekday()]
         req = runs.get(ref)
         expiry = entry_expiry_info(lines)
-        distance = _distance_view(first)
+        distance = _distance_view(spot)
         out.append(Donation(
             ref=ref,
-            lat=_num(first.pickup_lat),
-            lng=_num(first.pickup_lng),
+            lat=_num(spot.pickup_lat),
+            lng=_num(spot.pickup_lng),
             days=days,
+            dates=decode_pickup_dates(spot.pickup_dates),
             # Only what is still waiting is collected.
             items=[
                 {
@@ -141,10 +146,10 @@ def _waiting(db: Session) -> list:
             too_far=distance["too_far"],
             days_left=expiry["days_left"],
             view={
-                "barangay": find_barangay(first.pickup_address, first.pickup_landmark),
-                "pickup_address": first.pickup_address,
-                "pickup_landmark": first.pickup_landmark,
-                "pickup_notes": first.pickup_notes,
+                "barangay": find_barangay(spot.pickup_address, spot.pickup_landmark),
+                "pickup_address": spot.pickup_address,
+                "pickup_landmark": spot.pickup_landmark,
+                "pickup_notes": spot.pickup_notes,
                 "report_id": first.report_id,
                 "report_label": labels[first.report_id],
                 "created_at": _iso(first.created_at),
@@ -230,8 +235,8 @@ def mark_not_home(
                 db, first.user_id, "pickup_not_home",
                 "We missed you",
                 f"CSWS came for donation {ref} on {label}, but nobody was home. "
-                "We will come on your next pickup day. You can change your "
-                "days in My giving.",
+                "We will come on your next pickup date. You can change your "
+                "dates in My giving.",
                 "donation", first.donation_id,
             )
     db.commit()

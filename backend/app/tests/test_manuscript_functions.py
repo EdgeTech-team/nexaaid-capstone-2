@@ -139,9 +139,11 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     assert ok(client.get("/cmo/dashboard", headers=t["cmo"]))["on_hold"] == 1
     ok(client.post(f"/cmo/donations/{did_}/confirm", headers=t["cmo"], json={"status": "Confirmed"}), 201)
     assert ok(client.get("/cmo/donations/confirmed", headers=t["cmo"]))[0]["officially_recognized"]
-    # Alt 4a: reverse the confirmation
-    ok(client.post(f"/cmo/donations/{did_}/revert", headers=t["cmo"]))
-    assert ok(client.get("/cmo/donations/pending", headers=t["cmo"]))[0]["status"] == "Received"
+    # Task #10: the confirmation is final (manuscript alt 4a "reverse" removed)
+    assert client.post(f"/cmo/donations/{did_}/revert", headers=t["cmo"]).status_code in (404, 405)
+    assert client.post(f"/cmo/donations/{did_}/confirm", headers=t["cmo"],
+                       json={"status": "On Hold", "notes": "again"}).status_code == 400
+    assert ok(client.get("/cmo/donations/pending", headers=t["cmo"])) == []
 
        # DRRMO: accept -> in transit -> completed with a summary
     delivery = ok(client.post("/deliveries/", headers=t["csws"], json={

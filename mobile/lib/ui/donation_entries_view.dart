@@ -38,8 +38,12 @@ const attentionStatuses = <(String, String)>[
 ];
 
 /// [status] matches the entry's status, or 'On Hold' = has an item on hold.
-bool entryHasStatus(Map e, String status) => status == 'On Hold'
+/// [donor]: "Received" also covers what the CMO acknowledged (Oct 25).
+bool entryHasStatus(Map e, String status, {bool donor = false}) =>
+    status == 'On Hold'
     ? (e['on_hold_items'] as num? ?? 0) > 0
+    : donor && status == 'Received'
+    ? e['status'] == 'Received' || e['status'] == 'Confirmed'
     : e['status'] == status;
 
 enum EntrySort {
@@ -74,10 +78,11 @@ List<Map> filterEntries(
   int? reportId,
   String? handover,
   EntrySort sort = EntrySort.newest,
+  bool donor = false,
 }) {
   final q = search.trim().toLowerCase();
   final shown = entries
-      .where((e) => status == null || entryHasStatus(e, status))
+      .where((e) => status == null || entryHasStatus(e, status, donor: donor))
       .where((e) => reportId == null || e['report_id'] == reportId)
       .where((e) => handover == null || e['handover_method'] == handover)
       .where(
@@ -131,6 +136,10 @@ class DonationEntriesView extends StatefulWidget {
   /// Space between two entry cards (9.4: the donor's list needs more).
   final double gap;
 
+  /// Oct 25: the donor's own list. The CMO's acknowledgement is not shown;
+  /// an acknowledged donation reads (and filters) as received.
+  final bool donor;
+
   const DonationEntriesView({
     super.key,
     required this.entries,
@@ -140,6 +149,7 @@ class DonationEntriesView extends StatefulWidget {
     this.emptyMessage = 'Donation entries will show here once submitted.',
     this.reportFilter = true,
     this.gap = Space.sm,
+    this.donor = false,
   });
 
   @override
@@ -174,8 +184,9 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
     for (final e in widget.entries) {
       reports.putIfAbsent(e['report_id'] as int, () => entryReportLabel(e));
     }
-    int countOf(String s) =>
-        widget.entries.where((e) => entryHasStatus(e, s)).length;
+    int countOf(String s) => widget.entries
+        .where((e) => entryHasStatus(e, s, donor: widget.donor))
+        .length;
     final shown = filterEntries(
       widget.entries,
       search: search,
@@ -183,6 +194,7 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
       reportId: reportId,
       handover: handover,
       sort: sort,
+      donor: widget.donor,
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -198,14 +210,16 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
           child: Row(
             children: [
               for (final s in <String?>[null, ...entryStatuses])
-                if (s != 'Partly Received' || countOf(s!) > 0)
+                if ((s != 'Partly Received' || countOf(s!) > 0) &&
+                    !(widget.donor && s == 'Confirmed'))
                   Padding(
                     padding: const EdgeInsets.only(right: Space.xs),
                     child: ChoiceChip(
                       label: Text(
                         s == null
                             ? 'All (${widget.entries.length})'
-                            : '${donationStatusText(s)} (${countOf(s)})',
+                            : '${donationStatusText(s, donor: widget.donor)} '
+                                  '(${countOf(s)})',
                       ),
                       selected: status == s,
                       onSelected: (_) => setState(() => status = s),
@@ -287,6 +301,7 @@ class _DonationEntriesViewState extends State<DonationEntriesView> {
             padding: EdgeInsets.only(bottom: widget.gap),
             child: DonationEntryCard(
               entry: e,
+              donor: widget.donor,
               footer: widget.footer?.call(e),
               onTap: widget.onTap == null ? null : () => widget.onTap!(e),
             ),
@@ -466,11 +481,20 @@ class DonationEntryCard extends StatelessWidget {
   final Map entry;
   final Widget? footer;
   final VoidCallback? onTap;
+
+  /// Oct 23: a trailing action per item (the donor's Remove button), or
+  /// null for none.
+  final Widget? Function(Map item)? itemAction;
+
+  /// Oct 25: shown to the donor, who does not see the CMO's step.
+  final bool donor;
   const DonationEntryCard({
     super.key,
     required this.entry,
     this.footer,
     this.onTap,
+    this.itemAction,
+    this.donor = false,
   });
 
   @override
@@ -480,7 +504,12 @@ class DonationEntryCard extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final muted = t.bodySmall?.copyWith(color: cs.onSurfaceVariant);
     final items = (e['items'] as List).cast<Map>();
-    final mixed = items.map((i) => i['status']).toSet().length > 1;
+    final mixed =
+        items
+            .map((i) => donationStatusText('${i['status']}', donor: donor))
+            .toSet()
+            .length >
+        1;
     return AppCard(
       onTap: onTap,
       child: Column(
@@ -511,7 +540,7 @@ class DonationEntryCard extends StatelessWidget {
                   'Confirmed',
                   label: 'Barangay confirmed',
                 ),
-                _ => DonationStatusChip('${e['status']}'),
+                _ => DonationStatusChip('${e['status']}', donor: donor),
               },
             ],
           ),
@@ -538,54 +567,198 @@ class DonationEntryCard extends StatelessWidget {
             Gaps.v8,
             const StatusChip('On Hold'),
           ],
+          // Oct 23: seen without scanning: the donor removed items (why).
+          if ((e['removed_items'] as num? ?? 0) > 0) ...[
+            Gaps.v8,
+            RemovedItemsNote(e),
+          ],
           const Divider(height: Space.lg),
-          for (final i in items)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: Space.xxs),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.inventory_2_outlined,
-                    size: 18,
-                    color: cs.onSurfaceVariant,
+          for (final (i, header) in withBatchHeaders(items)) ...[
+            if (header != null) BatchHeader(header, items: items),
+            _itemRow(context, i, mixed, muted),
+          ],
+          if (footer != null) ...[Gaps.v16, footer!],
+        ],
+      ),
+    );
+  }
+
+  Widget _itemRow(BuildContext context, Map i, bool mixed, TextStyle? muted) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final removed = i['removed_by_donor'] == true;
+    final action = itemAction?.call(i);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Space.xxs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.inventory_2_outlined,
+            size: 18,
+            color: cs.onSurfaceVariant,
+          ),
+          Gaps.h8,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
+                      .replaceAll(RegExp(r'\s+'), ' '),
+                  style: t.bodyMedium?.copyWith(
+                    decoration: removed ? TextDecoration.lineThrough : null,
+                    color: removed ? cs.onSurfaceVariant : null,
                   ),
-                  Gaps.h8,
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
-                              .replaceAll(RegExp(r'\s+'), ' '),
-                          style: t.bodyMedium,
-                        ),
-                        Text(
-                          [
-                            if (i['packaging'] != null) '${i['packaging']}',
-                            if (i['actual_quantity_received'] != null)
-                              '${i['actual_quantity_received']} received',
-                          ].join(' · '),
-                          style: muted,
-                        ),
-                        if (i['hold_reason'] != null)
-                          Text('On hold: ${i['hold_reason']}', style: muted),
-                      ],
-                    ),
+                ),
+                Text(
+                  [
+                    if (i['packaging'] != null) '${i['packaging']}',
+                    if (i['actual_quantity_received'] != null)
+                      '${i['actual_quantity_received']} received',
+                  ].join(' · '),
+                  style: muted,
+                ),
+                if (i['hold_reason'] != null)
+                  Text('On hold: ${i['hold_reason']}', style: muted),
+                if (removed)
+                  Text(
+                    'Removed by donor: ${i['removed_reason'] ?? ''}',
+                    style: muted?.copyWith(fontStyle: FontStyle.italic),
                   ),
-                  if (mixed || i['hold_reason'] != null) ...[
-                    Gaps.h8,
-                    if (isNotBrought(i))
-                      const StatusChip('Cancelled', label: 'Not brought')
-                    else
-                      DonationStatusChip(
-                        i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
-                      ),
-                  ],
-                ],
+              ],
+            ),
+          ),
+          if (mixed || i['hold_reason'] != null || removed) ...[
+            Gaps.h8,
+            if (removed)
+              const StatusChip('Cancelled', label: 'Removed')
+            else if (isNotBrought(i))
+              const StatusChip('Cancelled', label: 'Not brought')
+            else
+              DonationStatusChip(
+                i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
+                donor: donor,
+              ),
+          ],
+          if (action != null) ...[Gaps.h4, action],
+        ],
+      ),
+    );
+  }
+}
+
+/// Oct 23: items in order, each with the batch header to show above it
+/// (only when the donation has more than one batch; old donations keep
+/// their plain list).
+List<(T, int?)> withBatchHeaders<T extends Map>(List<T> items) {
+  int no(Map i) => (i['addition_no'] as num?)?.toInt() ?? 1;
+  final sorted = [...items]..sort((a, b) => no(a).compareTo(no(b)));
+  final many = sorted.map(no).toSet().length > 1;
+  int? last;
+  return [
+    for (final i in sorted) (i, many && no(i) != last ? (last = no(i)) : null),
+  ];
+}
+
+/// "Batch 2 · Added later · Oct 23" above a batch's items.
+class BatchHeader extends StatelessWidget {
+  final int number;
+  final List<Map> items;
+  const BatchHeader(this.number, {super.key, required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    // where/firstOrNull, not firstWhere(orElse:), so a List<Map<String,
+    // dynamic>> works too.
+    final first = items
+        .where((i) => ((i['addition_no'] as num?)?.toInt() ?? 1) == number)
+        .firstOrNull;
+    final addedAt = first?['added_at'];
+    final later = number > 1;
+    // A Wrap, so on a narrow phone the date and state move to a second line
+    // instead of overflowing.
+    return Padding(
+      padding: const EdgeInsets.only(top: Space.xs, bottom: Space.xxs),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text(
+            'Batch $number',
+            style: t.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: later ? cs.tertiaryContainer : cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(Radii.pill),
+            ),
+            child: Text(
+              later ? 'Added later' : 'Original pledge',
+              style: t.labelSmall?.copyWith(
+                color: later ? cs.onTertiaryContainer : cs.onSurfaceVariant,
+                fontWeight: FontWeight.w700,
               ),
             ),
-          if (footer != null) ...[Gaps.v16, footer!],
+          ),
+          if (later && addedAt != null)
+            Text(
+              niceDate(addedAt),
+              style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "1 item removed by donor: Bottled water (Expired stock)". Shown on the
+/// entry in staff lists, so CSWS knows before scanning.
+class RemovedItemsNote extends StatelessWidget {
+  final Map entry;
+  const RemovedItemsNote(this.entry, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final notes = ((entry['removed_notes'] as List?) ?? const []).cast<Map>();
+    final n = (entry['removed_items'] as num?)?.toInt() ?? notes.length;
+    return Container(
+      padding: const EdgeInsets.all(Space.sm),
+      decoration: BoxDecoration(
+        color: cs.secondaryContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.remove_circle_outline,
+            size: 18,
+            color: cs.onSecondaryContainer,
+          ),
+          Gaps.h8,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$n item${n == 1 ? '' : 's'} removed by the donor',
+                  style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                for (final r in notes)
+                  Text(
+                    '${r['item_name'] ?? 'Item'}: ${r['reason'] ?? ''}',
+                    style: t.bodySmall,
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );

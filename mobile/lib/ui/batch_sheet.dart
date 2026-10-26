@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import 'csws_screens.dart' show ActivityList;
+import 'donation_entries_view.dart'
+    show BatchHeader, RemovedItemsNote, withBatchHeaders;
 import 'expiry_widgets.dart';
 import 'input_formatters.dart' show pesos;
 import 'location_picker.dart' show formatPickupIso;
@@ -265,8 +268,11 @@ class _BatchSheetState extends State<BatchSheet> {
                 const SizedBox(height: 10),
                 ExpiryNote(b, forStaff: true),
               ],
+              // Items the donor removed stay removed, so they do not count.
               if (_items.any(
-                (i) => i['status'] == 'Expired' || i['status'] == 'Cancelled',
+                (i) =>
+                    (i['status'] == 'Expired' || i['status'] == 'Cancelled') &&
+                    i['removed_by_donor'] != true,
               ))
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
@@ -348,6 +354,16 @@ class _BatchSheetState extends State<BatchSheet> {
                 'Items (${items.length}) · $pending waiting to be received',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
+              // Oct 23: "1 received · 2 pending · 1 removed".
+              if (b['summary_text'] != null)
+                Text(
+                  '${b['summary_text']}',
+                  style: const TextStyle(fontSize: 12, color: Brand.muted),
+                ),
+              if (((b['removed_notes'] as List?) ?? const []).isNotEmpty) ...[
+                const SizedBox(height: 8),
+                RemovedItemsNote(b),
+              ],
               if (pending > 0)
                 const Padding(
                   padding: EdgeInsets.only(top: 2),
@@ -358,7 +374,12 @@ class _BatchSheetState extends State<BatchSheet> {
                   ),
                 ),
               const SizedBox(height: 8),
-              for (final line in items) _itemCard(line),
+              // Batch 1 = the original pledge, Batch 2+ = added later. Old
+              // donations have one batch and show a plain list.
+              for (final (line, header) in withBatchHeaders(items)) ...[
+                if (header != null) BatchHeader(header, items: items),
+                _itemCard(line),
+              ],
               if (pending > 0) ...[
                 // problema_napud 4.2: no notes for a guest donation.
                 if (b['donor_type'] != 'Guest') ...[
@@ -395,6 +416,21 @@ class _BatchSheetState extends State<BatchSheet> {
                   ),
                 ),
               ],
+              // Oct 23: who added, removed or received what, and when.
+              if (((b['history'] as List?) ?? const []).isNotEmpty)
+                Theme(
+                  data: Theme.of(context)
+                      .copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.history),
+                    title: Text('History (${(b['history'] as List).length})'),
+                    children: [
+                      ActivityList((b['history'] as List).cast<Map>()),
+                    ],
+                  ),
+                ),
             ],
           ),
         ),
@@ -411,6 +447,7 @@ class _BatchSheetState extends State<BatchSheet> {
         ? '${line['amount_text']}'
         : '${line['quantity']} ${line['unit']} · ${line['packaging']}';
     final unit = '${(relabel ?? line)['unit'] ?? ''}';
+    final removed = line['removed_by_donor'] == true;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
@@ -423,12 +460,26 @@ class _BatchSheetState extends State<BatchSheet> {
                 Expanded(
                   child: Text(
                     '${line['item_name']}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      decoration: removed ? TextDecoration.lineThrough : null,
+                    ),
                   ),
                 ),
-                DonationStatusChip('${line['status']}'),
+                if (removed)
+                  const StatusChip('Cancelled', label: 'Removed')
+                else
+                  DonationStatusChip('${line['status']}'),
               ],
             ),
+            if (removed)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Removed by the donor: ${line['removed_reason'] ?? ''}',
+                  style: const TextStyle(fontStyle: FontStyle.italic),
+                ),
+              ),
             const SizedBox(height: 4),
             Text(
               'Declared: $declared'

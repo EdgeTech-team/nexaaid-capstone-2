@@ -1,5 +1,8 @@
 # routers/cmo_router.py
 # Manuscript UC-C1 / UC-C2 and the City Confirmation Module.
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from core.database import get_db
@@ -9,6 +12,8 @@ from models.user_rbac_model import User
 from models.item_model import Item
 from models.physical_donation_model import PhysicalDonation
 from models.donation_confirmation_model import DonationConfirmation
+from models.guest_donor_model import GuestDonor
+from models.received_goods_model import ReceivedGoods
 from models.report import DisasterReport, DisasterType, Barangay
 from schemas.donation_confirmation_schema import ConfirmDonationRequest, DonationConfirmationResponse
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
@@ -137,40 +142,20 @@ def _tell_main_office(db: Session, donation: PhysicalDonation, decision: str, no
                       donation.donation_id, batch_no=ref, report=report, reason=notes or "")
 
 
-def _not_on_a_delivery(db: Session, rows) -> None:
-    """Oct 17 run-through: once acknowledged goods are on a delivery (not
-    cancelled), the acknowledgement cannot be undone; cancel the delivery
-    first. Otherwise the entry would wait for the CMO again while its goods
-    are already on the road, or delivered."""
-    from models.delivery import Delivery, DeliveryAllocation, DeliveryItem
-    hit = (
-        db.query(Delivery.delivery_id)
-        .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.delivery_id)
-        .join(DeliveryAllocation, DeliveryAllocation.delivery_item_id == DeliveryItem.delivery_item_id)
-        .filter(DeliveryAllocation.donation_id.in_([r.donation_id for r in rows]),
-                Delivery.status != "Cancelled")
-        .first()
-    )
-    if hit:
-        raise HTTPException(
-            status_code=409,
-            detail=f"This donation is already on delivery #{hit[0]}, so its acknowledgement cannot "
-                   "be undone. Main Office can cancel that delivery first.",
-        )
-
-
-def _tell_undone(db: Session, donation: PhysicalDonation) -> None:
-    """The donor and CSWS Main Office were told it was acknowledged; tell
-    them it is not any more."""
-    ref = donation.batch_reference or donation.qr_reference
-    if donation.user_id:
-        notify_event(db, donation.user_id, "donation_unacknowledged", "donation",
-                     donation.donation_id, batch_no=ref)
-    report = _report_labels(db, [donation.report_id]).get(donation.report_id, "")
-    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]), "donation_unacknowledged_staff",
-                      "donation", donation.donation_id, batch_no=ref, report=report)
-
-
+# ---------------------------------------------------------------------------
+# Task #10 (M6, Oct 23): a CMO acknowledgement is FINAL. There is no undo,
+# in the app or the API (the old POST /cmo/entries/{ref}/revert and
+# /cmo/donations/{id}/revert are removed). Reason: acknowledged goods move on
+# to Main Office's deliveries and the dashboards; a silent rollback would
+# break the audit trail and could leave a delivery holding goods that are no
+# longer acknowledged. Before acknowledging, the CMO can still put an entry
+# On Hold or keep it for Review, each with a logged reason.
+#
+# Task #11: "Confirm" and "Acknowledge" are one action. Both words are
+# stored as the single status "Confirmed" (physical_donations.status) with
+# one timestamp (donation_confirmations.confirmed_at). There is no separate
+# acknowledged status, so nothing can sit "confirmed but not acknowledged".
+# ---------------------------------------------------------------------------
 @router.post("/donations/{donation_id}/confirm", response_model=DonationConfirmationResponse, status_code=status.HTTP_201_CREATED)
 def confirm_donation(
     donation_id: int,
@@ -179,7 +164,7 @@ def confirm_donation(
     current_user: User = Depends(require_role(CMO)),
 ):
     """One item. The app now acknowledges whole entries (below); this stays
-    for older clients and tests."""
+    for older clients and tests. Acknowledging is final (task #10)."""
     donation = db.query(PhysicalDonation).filter(PhysicalDonation.donation_id == donation_id).first()
     if donation is None:
         raise HTTPException(status_code=404, detail="Donation not found")
@@ -215,9 +200,64 @@ def _entry(db: Session, reference: str) -> list:
             .order_by(PhysicalDonation.donation_id).all())
 
 
+def _iso(v: Optional[datetime]) -> Optional[str]:
+    if v is None:
+        return None
+    return (v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v).isoformat()
+
+
+def _entry_context(db: Session, donations) -> dict:
+    """What the CMO cards show besides the items (Oct 23 CMO redesign):
+    disaster type and barangay of the report, the donor's name (no phone:
+    donors are told only CSWS staff see it), when CSWS received the goods
+    and when the CMO acknowledged them."""
+    ids = [d.donation_id for d in donations]
+    if not ids:
+        return {"reports": {}, "received": {}, "acknowledged": {}, "donors": {}}
+    types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
+    brgys = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
+    reports = {
+        r.report_id: (types.get(r.disaster_type_id), brgys.get(r.barangay_id))
+        for r in db.query(DisasterReport)
+        .filter(DisasterReport.report_id.in_({d.report_id for d in donations})).all()
+    }
+    received = {
+        g.donation_id: g.received_at
+        for g in db.query(ReceivedGoods).filter(ReceivedGoods.donation_id.in_(ids)).all()
+    }
+    acknowledged: dict = {}
+    for c in (db.query(DonationConfirmation)
+              .filter(DonationConfirmation.donation_id.in_(ids),
+                      DonationConfirmation.status == "Confirmed")
+              .order_by(DonationConfirmation.confirmation_id).all()):
+        acknowledged[c.donation_id] = c.confirmed_at
+    donors: dict = {}
+    users = {u.user_id: u for u in db.query(User).filter(
+        User.user_id.in_({d.user_id for d in donations if d.user_id})).all()}
+    guests = {g.guest_donor_id: g for g in db.query(GuestDonor).filter(
+        GuestDonor.guest_donor_id.in_({d.guest_donor_id for d in donations
+                                       if d.guest_donor_id})).all()}
+    for d in donations:
+        if d.user_id and d.user_id in users:
+            u = users[d.user_id]
+            donors[d.donation_id] = f"{u.first_name} {u.last_name}".strip() or "Donor"
+        elif d.guest_donor_id and d.guest_donor_id in guests:
+            donors[d.donation_id] = f"{guests[d.guest_donor_id].full_name} (guest)"
+        else:
+            donors[d.donation_id] = "Donor"
+    return {"reports": reports, "received": received,
+            "acknowledged": acknowledged, "donors": donors}
+
+
+def _latest(values) -> Optional[datetime]:
+    vals = [v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v for v in values if v]
+    return max(vals) if vals else None
+
+
 def _entry_rows(db: Session, donations) -> list:
     """Items grouped into entries (one per QR) for the CMO screen."""
     items = _rows(db, donations)
+    ctx = _entry_context(db, donations)
     by_ref: dict = {}
     for d, row in zip(donations, items):
         by_ref.setdefault(d.batch_reference or d.qr_reference, (d, []))[1].append(row)
@@ -225,10 +265,17 @@ def _entry_rows(db: Session, donations) -> list:
     for ref, (first, rows) in by_ref.items():
         decisions = {r["cmo_decision"] for r in rows if r["status"] == "Received"}
         holds = [r["hold_reason"] for r in rows if r["hold_reason"]]
+        disaster, barangay = ctx["reports"].get(first.report_id, (None, None))
+        ids = [r["donation_id"] for r in rows]
         out.append({
             "batch_reference": ref,
             "report_id": first.report_id,
             "report_label": rows[0]["report_label"],
+            "disaster_type": disaster,
+            "barangay": barangay,
+            "donor": ctx["donors"].get(first.donation_id, "Donor"),
+            "received_at": _iso(_latest(ctx["received"].get(i) for i in ids)),
+            "acknowledged_at": _iso(_latest(ctx["acknowledged"].get(i) for i in ids)),
             "handover_method": first.handover_method,
             "total_items": len(rows),
             "total_quantity": sum(r["quantity"] for r in rows),
@@ -298,7 +345,8 @@ def decide_entry(
     current_user: User = Depends(require_role(CMO)),
 ):
     """Acknowledge (or put on hold / keep for review) every received item of
-    one donation entry. The donor's status follows by itself."""
+    one donation entry. The donor's status follows by itself. Acknowledging
+    is final: an acknowledged entry is never waiting again (task #10)."""
     rows = _entry(db, reference)
     received = [r for r in rows if r.status == "Received"]
     if not received:
@@ -318,48 +366,6 @@ def decide_entry(
         "items": len(received),
         "acknowledged": all(r.status == "Confirmed" for r in rows),
     }
-
-
-@router.post("/entries/{reference}/revert")
-def revert_entry(
-    reference: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(CMO)),
-):
-    """Undo an acknowledgement for the whole entry (alt flow 4a)."""
-    rows = [r for r in _entry(db, reference) if r.status == "Confirmed"]
-    if not rows:
-        raise HTTPException(status_code=409, detail="This donation entry is not acknowledged.")
-    _not_on_a_delivery(db, rows)
-    for r in rows:
-        r.status = "Received"
-        log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", r.donation_id,
-                   old={"status": "Confirmed"}, new={"status": "Received"})
-    _tell_undone(db, rows[0])
-    db.commit()
-    return {"batch_reference": rows[0].batch_reference, "items": len(rows)}
-
-
-@router.post("/donations/{donation_id}/revert")
-def revert_confirmation(
-    donation_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(CMO)),
-):
-    """City Confirmation Module alt flow 4a: reversing a confirmation removes
-    the official recognition tag and returns the record to pending."""
-    donation = db.get(PhysicalDonation, donation_id)
-    if donation is None:
-        raise HTTPException(status_code=404, detail="Donation not found")
-    if donation.status != "Confirmed":
-        raise HTTPException(status_code=400, detail="Only acknowledged donations can be reverted")
-    _not_on_a_delivery(db, [donation])
-    donation.status = "Received"
-    log_action(db, current_user, "CMO REVERT CONFIRMATION", "physical_donations", donation_id,
-               old={"status": "Confirmed"}, new={"status": "Received"})
-    _tell_undone(db, donation)
-    db.commit()
-    return {"donation_id": donation_id, "status": donation.status}
 
 
 @router.get("/donations/pending")
@@ -425,7 +431,25 @@ def cmo_dashboard(
                 if decision is None or (decisions.get(d.donation_id) and
                                         decisions[d.donation_id].status == decision)}
         return len(refs)
+    # Oct 23 redesign: the CMO's home shows today's work, not an all-time
+    # total. Entries whose acknowledgement happened today (Philippine time).
+    manila = timezone(timedelta(hours=8))
+    start = datetime.now(manila).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_ids = {
+        c.donation_id
+        for c in db.query(DonationConfirmation).filter(
+            DonationConfirmation.status == "Confirmed",
+            DonationConfirmation.donation_id.in_([d.donation_id for d in confirmed] or [0]),
+        ).all()
+        # SQLite (tests) hands back naive UTC, Postgres aware: compare in Python.
+        if c.confirmed_at and _latest([c.confirmed_at]) >= start
+    }
     return {
+        "acknowledged_today_entries": len({d.batch_reference for d in confirmed
+                                           if d.donation_id in today_ids}),
+        "needs_review_entries": len({d.batch_reference for d in pending
+                                     if not (decisions.get(d.donation_id) and
+                                             decisions[d.donation_id].status == "On Hold")}),
         "pending_entries": entries(pending),
         "on_hold_entries": entries(pending, "On Hold"),
         "review_entries": entries(pending, "Pending Review"),
