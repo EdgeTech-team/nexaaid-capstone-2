@@ -35,7 +35,6 @@ from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
 from models.delivery import Delivery
 from services.delivery_allocation import add_delivery_progress
-from services.pickup_geofence import check_pin, city_allowed, pickup_cities
 from schemas.physical_donation_schema import (
     DonationBatchCreate,
     DonationEntryEdit,
@@ -54,6 +53,7 @@ from schemas.physical_donation_schema import (
     decode_pickup_dates,
     pickup_dates_label,
     in_service_area,
+    pickup_service_areas,
     place_in,
     service_areas_label,
 )
@@ -365,25 +365,12 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
     return view
 
 
-def _reverse_city(lat: float, lng: float) -> Optional[str]:
-    """OSM city of a pin (raises when the geocoder is unavailable)."""
+def _reverse_props(lat: float, lng: float) -> dict:
+    """OpenStreetMap address parts of a pin (raises when the geocoder is
+    unavailable). Tests replace this so they stay offline."""
     data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
     features = data.get("features") or []
-    return (features[0].get("properties") or {}).get("city") if features else None
-
-
-def _pin_check(lat: float, lng: float) -> dict:
-    return check_pin(lat, lng, _reverse_city, km_from_office, pickup_area()["max_km"])
-
-
-def _check_service_area(payload) -> None:
-    """Door to Door only inside the accepted cities (services/pickup_geofence.py).
-    A typed address without a pin is left to CSWS (flagged on the planner)."""
-    if payload.handover_method != "Door to Door" or payload.pickup_lat is None:
-        return
-    result = _pin_check(payload.pickup_lat, payload.pickup_lng)
-    if not result["allowed"]:
-        raise HTTPException(status_code=422, detail=result["message"])
+    return (features[0].get("properties") or {}) if features else {}
 
 
 # ---------------------------------------------------------------------------
@@ -668,7 +655,6 @@ def edit_my_entry(
             detail="Items were added to or removed from this donation, so it can no longer "
                    "be edited as a whole. Use Add items or remove single items instead.",
         )
-    _check_service_area(payload)
     first = rows[0]
     ref = first.batch_reference
     before = {
@@ -957,8 +943,8 @@ def get_pickup_rules():
         "name": area["name"], "bbox": area["bbox"],
         "office_lat": area["office"][0], "office_lng": area["office"][1],
         "max_km": area["max_km"],
-        # Geofence (Oct 2026): Door to Door only in these cities.
-        "cities": pickup_cities(),
+        # Door to Door only in these places (one list: PICKUP_SERVICE_AREAS).
+        "cities": [a["name"] for a in pickup_service_areas()],
     }}
 
 
@@ -1017,8 +1003,17 @@ def _geocoder(path: str, params: dict) -> dict:
     return data
 
 
+def _city(props: dict) -> Optional[str]:
+    """The city of a Photon place. OpenStreetMap often tags Cebu City as just
+    "Cebu" (the province is in "state", e.g. Talisay: city "Talisay", state
+    "Cebu"), so a city of "Cebu" is Cebu City."""
+    city = (props.get("city") or "").strip()
+    return "Cebu City" if city.lower() == "cebu" else (city or None)
+
+
 def _describe(props: dict) -> tuple:
     """(main, secondary, full address) from a Photon feature's properties."""
+    props = {**props, "city": _city(props)}
     street = " ".join(p for p in (props.get("housenumber"), props.get("street")) if p)
     name = props.get("name")
     main = name or street or props.get("district") or props.get("city") or "Unnamed place"
@@ -1064,10 +1059,10 @@ def location_autocomplete(q: str = Query(min_length=2, max_length=200)):
             "address": full,
             "lat": coords[1],
             "lng": coords[0],
-            # Geofence (Oct 2026): the app greys out places outside the
-            # Door to Door cities (the server checks again on submit).
-            "city": props.get("city"),
-            "in_pickup_area": city_allowed(props.get("city")),
+            # The app greys out places outside the Door to Door service
+            # areas (the server checks again on submit).
+            "city": _city(props),
+            "in_pickup_area": in_service_area(full),
         })
     return out
 
@@ -1083,14 +1078,12 @@ def pin_coverage(text: Optional[str], lat: Optional[float], lng: Optional[float]
         return {"covered": True, "place": place}
     if lat is not None and lng is not None:
         try:
-            data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
-        except HTTPException:
-            data = {}
-        features = data.get("features") or []
-        if features:
-            props = features[0].get("properties") or {}
+            props = _reverse_props(lat, lng)
+        except Exception:  # map lookup down: the text answer stands
+            props = {}
+        if props:
             full = _describe(props)[2]
-            place = props.get("city") or props.get("county") or place_in(full) or place
+            place = _city(props) or props.get("county") or place_in(full) or place
             if in_service_area(full):
                 return {"covered": True, "place": place}
     return {"covered": False, "place": place}
@@ -1104,8 +1097,8 @@ def _out_of_area_message(place: Optional[str]) -> str:
 
 
 def _check_service_area(payload) -> None:
-    """Door to Door only inside the service areas (Mandaue City, northern
-    Cebu City, Consolacion, Lapu-Lapu City). The landmark decides when given
+    """Door to Door only inside the service areas (Mandaue City, Cebu City,
+    Consolacion, Lapu-Lapu City). The landmark decides when given
     (it carries the map pin); otherwise the typed address."""
     if payload.handover_method != "Door to Door":
         return
@@ -1140,11 +1133,11 @@ def location_reverse(
     data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
     features = data.get("features") or []
     address = _describe(features[0].get("properties") or {})[2] if features else None
-    # Geofence (Oct 2026): tell the donor right away if the pin is outside.
-    area = _pin_check(lat, lng)
+    # Tell the donor right away if the pin is outside the service areas.
+    area = pin_coverage(address, lat, lng)
     return {"address": address or f"{lat:.5f}, {lng:.5f}", "lat": lat, "lng": lng,
-            "city": area["city"], "in_pickup_area": area["allowed"],
-            "area_message": area["message"]}
+            "city": area["place"], "in_pickup_area": area["covered"],
+            "area_message": None if area["covered"] else _out_of_area_message(area["place"])}
 
 
 # ---------------------------------------------------------------------------
