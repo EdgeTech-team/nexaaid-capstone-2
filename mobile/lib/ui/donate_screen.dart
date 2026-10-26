@@ -1417,7 +1417,10 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  Widget _guestCard() {
+   Widget _guestCard() {
+    // UI review (F-09): the consent box comes after all the details, just
+    // before Submit, and only names the address when there is one.
+    final door = handover == 'Door to Door';
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1432,20 +1435,6 @@ class _DonateScreenState extends State<DonateScreen> {
             validator: _req,
           ),
           Gaps.v12,
-          CheckboxListTile(
-            key: const ValueKey('guest-consent'),
-            value: guestConsent,
-            onChanged: (x) => setState(() => guestConsent = x ?? false),
-            controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: EdgeInsets.zero,
-            title: const Text(
-              'I agree that NexaAid may collect and process my name, contact '
-              'number and pickup address to coordinate this donation, under '
-              'the Data Privacy Act of 2012 (RA 10173).',
-            ),
-          ),
-
-          Gaps.v12,
           TextFormField(
             controller: guestPhone,
             keyboardType: TextInputType.phone,
@@ -1457,6 +1446,19 @@ class _DonateScreenState extends State<DonateScreen> {
               prefixIcon: Icon(Icons.phone_outlined),
             ),
             validator: _phone,
+          ),
+          Gaps.v12,
+          CheckboxListTile(
+            key: const ValueKey('guest-consent'),
+            value: guestConsent,
+            onChanged: (x) => setState(() => guestConsent = x ?? false),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            title: Text(
+              'I agree that NexaAid may collect and process my name, contact '
+              'number${door ? ' and pickup address' : ''} to coordinate this '
+              'donation, under the Data Privacy Act of 2012 (RA 10173).',
+            ),
           ),
         ],
       ),
