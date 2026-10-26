@@ -45,5 +45,5 @@ backend/app/var/
 .neon/
 .neon
 .env.*
-
+.claude/
 .claude/settings.local.json

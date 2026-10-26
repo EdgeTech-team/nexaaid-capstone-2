@@ -258,6 +258,8 @@ class _DonateScreenState extends State<DonateScreen> {
   PickupRules pickupRules = const PickupRules();
   final guestName = TextEditingController();
   final guestPhone = TextEditingController();
+  bool guestConsent = false; // F-09: RA 10173 consent for guests
+
   bool busy = false;
 
   bool get _editing => widget.edit != null;
@@ -298,9 +300,18 @@ class _DonateScreenState extends State<DonateScreen> {
   /// in the base unit, which opens as that many single items of 1 kg / 1 L.
   _Line _lineFromEntryItem(Map i) {
     final l = _Line()..itemId = '${i['item_id']}';
-    final info = _infoOf(l);
+    var info = _infoOf(l);
     final packs = i['pack_count'] ?? i['quantity'];
     l.packs.text = packs == null ? '' : '$packs';
+    if (info == null && i['item_pending'] == true) {
+      // F-15: an item still waiting for CSWS review is in no dropdown:
+      // open it as "Something else" with its name and unit filled in.
+      l
+        ..itemId = _otherItem
+        ..otherName.text = '${i['item_name'] ?? ''}'
+        ..otherUnit.text = '${i['unit'] ?? ''}';
+      info = _infoOf(l);
+    }
     if (info == null) {
       // A retired item (e.g. "Rice (sacks, old)"): choose the current one.
       l.itemId = null;
@@ -683,7 +694,16 @@ class _DonateScreenState extends State<DonateScreen> {
       _snack('Please complete the fields marked in red.', error: true);
       return;
     }
+    // Adding items needs a login and sends no personal data (no F-09 consent).
     if (_adding) return _submitAdditions();
+    if (!api.loggedIn && !_editing && !guestConsent) {
+      _snack(
+        'Please agree to the processing of your personal data (RA 10173).',
+        error: true,
+      );
+      return;
+    }
+
     final door = handover == 'Door to Door';
     final useSaved = door && useSavedAddress && savedAddress != null;
     final typedAddress = pickupAddress.text.trim();
@@ -720,6 +740,7 @@ class _DonateScreenState extends State<DonateScreen> {
         'guest_donor': {
           'full_name': guestName.text.trim(),
           'contact_number': guestPhone.text.trim(),
+          'consent': guestConsent,
         },
     };
     final r = _editing
@@ -1410,6 +1431,20 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             validator: _req,
           ),
+          Gaps.v12,
+          CheckboxListTile(
+            key: const ValueKey('guest-consent'),
+            value: guestConsent,
+            onChanged: (x) => setState(() => guestConsent = x ?? false),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: EdgeInsets.zero,
+            title: const Text(
+              'I agree that NexaAid may collect and process my name, contact '
+              'number and pickup address to coordinate this donation, under '
+              'the Data Privacy Act of 2012 (RA 10173).',
+            ),
+          ),
+
           Gaps.v12,
           TextFormField(
             controller: guestPhone,

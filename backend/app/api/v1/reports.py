@@ -54,7 +54,7 @@ from services.fulfillment import progress as needs_progress, recalculate as reca
 from services.items import resolve_item_id
 
 from core.database import get_db
-from core.auth import get_current_user, get_current_user_optional, require_role, has_role, barangay_scope
+from core.auth import get_current_user, get_current_user_optional, require_role, has_role, barangay_scope, can_view_unvalidated_report
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from models.sitio_model import Sitio
@@ -466,9 +466,13 @@ def get_report(
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    # Reporters can see their own report; staff can see any; every logged-in
-    # role can open a validated report (same rule as GET /reports/validated),
-    # so donors, the CMO and others can open it from their notification.
+      # Every logged-in role can open a validated report (same rule as GET
+    # /reports/validated), so donors, the CMO and others can open it from
+    # their notification. Any other status: core.auth.can_view_unvalidated_report
+    # (F-05: a barangay rep only in its own barangay).
+    if report.status != "Validated" and not can_view_unvalidated_report(current_user, report):
+        raise HTTPException(status_code=403, detail="Not authorized to view this report")
+
     is_owner = report.user_id == current_user.user_id
     is_staff = has_role(current_user, "csws_staff", "admin", "barangay_official")
     is_validated = report.status == "Validated"
@@ -492,33 +496,34 @@ def report_needs_progress(
     current_user=Depends(get_current_user_optional),
 ):
     report = _get_live_report(db, report_id)
-    if report.status != "Validated":
-        allowed = current_user is not None and (
-            report.user_id == current_user.user_id
-            or has_role(current_user, "csws_staff", "admin", "barangay_official")
-        )
-        if not allowed:
-            raise HTTPException(status_code=404, detail="Report not found")
+    if report.status != "Validated" and not can_view_unvalidated_report(current_user, report):
+        raise HTTPException(status_code=404, detail="Report not found")   # F-05
+
     return needs_progress(db, report)
 
 
 # ---------------------------------------------------------------------------
-# Update — staff only (status, priority, AI fields, corrections)
+# Corrections — Administrator only (description, families, needs, ...).
+# F-07: the status is not changed here (validate / reject / withdraw /
+# delete do that, with their own checks, records and notices), and every
+# correction is written to the audit log.
 # ---------------------------------------------------------------------------
 @router.patch("/{report_id}", response_model=DisasterReportResponse)
 def update_report(
     report_id: int,
     payload: DisasterReportUpdate,
     db: Session = Depends(get_db),
-    # Administrator only (Oct 17 run-through): it can set status and
-    # priority, so CSWS staff could otherwise validate their own reports
-    # (Appendix H 2.3). Reporters correct reports with PUT /{id}/mine.
+    # Administrator only (Oct 17 run-through). Reporters correct reports
+    # with PUT /{id}/mine.
     current_user=Depends(require_role("admin")),
 ):
     report = _get_live_report(db, report_id)
 
     updates = payload.model_dump(exclude_unset=True)
     needs = updates.pop("needs", None)
+    old = {k: getattr(report, k) for k in updates}     # F-07: for the audit log
+    old_needs = _needs_log(report)
+    old_priority = report.priority_level
     for field, value in updates.items():
         setattr(report, field, value)
 
@@ -542,6 +547,19 @@ def update_report(
             recalculate_fulfillment(db, report.report_id, None)
             db.refresh(report)
         apply_priority(report)
+
+    # F-07: who changed what, and what it was before.
+    if updates or needs_changed:
+        def plain(v):
+            return str(v) if v is not None else None
+        old_log = {k: plain(v) for k, v in old.items()}
+        new_log = {k: plain(v) for k, v in updates.items()}
+        if needs_changed:
+            old_log["needs"], new_log["needs"] = old_needs, _needs_log(report)
+        if report.priority_level != old_priority:
+            old_log["priority_level"], new_log["priority_level"] = old_priority, report.priority_level
+        log_action(db, current_user, "UPDATE REPORT", "disaster_reports", report.report_id,
+                   old=old_log, new=new_log)
 
     db.flush()
     db.refresh(report)

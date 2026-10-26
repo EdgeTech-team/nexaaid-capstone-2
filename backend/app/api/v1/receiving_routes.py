@@ -184,7 +184,7 @@ def receive_donation(
 ):
     donation = db.query(PhysicalDonation).filter(
         PhysicalDonation.donation_id == payload.donation_id
-    ).first()
+    ).with_for_update().populate_existing().first()     # F-06: a second scan waits, then sees "Received"
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found")
 
@@ -237,7 +237,9 @@ def receive_entry(
     ref = batch_reference.strip().upper()
     rows = {
         d.donation_id: d
-        for d in db.query(PhysicalDonation).filter(PhysicalDonation.batch_reference == ref).all()
+        for d in db.query(PhysicalDonation).filter(PhysicalDonation.batch_reference == ref)
+        .order_by(PhysicalDonation.donation_id)
+        .with_for_update().populate_existing().all()     # F-06: one receive of this entry at a time
     }
     if not rows:
         raise HTTPException(status_code=404, detail=f"No donation entry {batch_reference}")
@@ -254,7 +256,8 @@ def receive_entry(
         if rows[donation_id].status != "Pending":
             raise HTTPException(status_code=409, detail=f"Donation #{donation_id} is no longer waiting, so it cannot be marked not brought.")
 
-    for line in payload.items:
+    # F-06: stock rows are locked in item order, like deliveries do.
+    for line in sorted(payload.items, key=lambda l: l.item_id or rows[l.donation_id].item_id):
         _receive_line(db, current_user, rows[line.donation_id], line.actual_quantity, payload.notes,
                       line.item_id)
     closed = close_rows([rows[i] for i in payload.not_brought], "Cancelled", NOT_BROUGHT,

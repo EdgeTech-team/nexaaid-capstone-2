@@ -9,8 +9,9 @@ team's working assumptions (rice follows the 6 kg of a DSWD family food
 pack); adjust them here. Fractions are for items given per group of
 families, e.g. 0.1 Medicine Kit = one box per 10 families.
 
-Items are matched by name to the active catalog (database/seeds); a name
-that is missing or retired is skipped.
+Items are matched by name to the active, reviewed catalog (database/seeds);
+a name that is missing, retired or still waiting for review (F-15) is skipped.
+
 """
 from sqlalchemy.orm import Session
 
@@ -41,7 +42,7 @@ def need_templates(db: Session) -> list:
     for the disaster types that have a template, as /lookups sends it."""
     items = {
         i.item_name.lower(): i
-        for i in db.query(Item).filter(Item.active.is_(True)).all()
+        for i in db.query(Item).filter(Item.active.is_(True), Item.pending_review.is_(False)).all()
     }
     out = []
     for t in db.query(DisasterType).order_by(DisasterType.disaster_type_id).all():

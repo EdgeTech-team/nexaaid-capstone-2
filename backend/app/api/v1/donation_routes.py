@@ -8,6 +8,8 @@ confirmation, inventory and deliveries keep working per item.
 import base64
 import io
 import os
+import threading
+from collections import deque
 import time
 import uuid
 from datetime import datetime, timezone
@@ -83,6 +85,13 @@ SEARCH_BBOX = ",".join(str(x) for x in pickup_area()["bbox"])
 _GEO_CACHE: dict = {}
 _GEO_CACHE_TTL = 24 * 3600                      # seconds
 _GEO_CACHE_MAX = 1000
+# F-19: calls to the free public Photon server per minute, across all users.
+# Cached answers are not counted. Above it, the app shows its "type the full
+# address yourself" hint until the minute is over.
+_GEO_CALLS_PER_MINUTE = 60
+_geo_calls: deque = deque()
+_geo_lock = threading.Lock()
+_geo_clock = time.monotonic
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +151,9 @@ def _donor_ids(db: Session, current_user: Optional[User], guest_info) -> tuple:
         full_name=guest_info.full_name,
         contact_number=guest_info.contact_number,
         email=guest_info.email,
+        consent_at=datetime.now(timezone.utc),   # F-09: the schema refuses it without consent
     )
+
     db.add(guest)
     db.flush()  # assigns guest.guest_donor_id without committing yet
     return None, guest.guest_donor_id
@@ -150,7 +161,9 @@ def _donor_ids(db: Session, current_user: Optional[User], guest_info) -> tuple:
 
 def _resolve_item_id(db: Session, item_id, other_name, other_unit) -> int:
     # Moved to services/items.py (reports use it for their needs too).
-    return resolve_item_id(db, item_id, other_name, other_unit)
+    # F-15: an item typed in on a donation waits for CSWS review.
+    return resolve_item_id(db, item_id, other_name, other_unit, review=True)
+
 
 
 def _report_label(db: Session, report_id: int) -> Optional[str]:
@@ -306,6 +319,9 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
                 "donation_id": r.donation_id,
                 "qr_reference": r.qr_reference,
                 "item_id": r.item_id,
+                # F-15: still waiting for CSWS review (the app's edit form
+                # then opens it as "Something else").
+                "item_pending": bool(items[r.item_id].pending_review) if r.item_id in items else False,
                 "item_name": items[r.item_id].item_name if r.item_id in items else "Item",
                 "unit": items[r.item_id].unit_of_measure if r.item_id in items else "",
                 "quantity": r.quantity,
@@ -423,8 +439,11 @@ def create_donation(
     current_user: User | None = Depends(get_current_user_optional),
 ):
     """Single-item donation, kept for older clients. Same as a batch of one."""
-    _get_report(db, payload.report_id, require_validated=False)
+    # F-16: same rule as /donations/batch (UC-D2 alt 2a): only validated
+    # reports can receive donations.
+    _get_report(db, payload.report_id, require_validated=True)
     _check_service_area(payload)
+
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
     reference = _new_reference()
 
@@ -743,18 +762,30 @@ def delete_my_entry(
 # ---------------------------------------------------------------------------
 @router.get("/batch/{reference}/qr")
 def get_batch_qr(reference: str, db: Session = Depends(get_db)):
-    """Re-show a donation's QR. Public like /{id}/qr: it returns only the
+    """Re-show a donation's QR by its reference. Public: it returns only the
     reference and the QR image, no donor or address details."""
+
     rows = _batch_rows(db, reference)
     ref = rows[0].batch_reference
     return {"batch_reference": ref, "qr_image_base64": _qr_b64(ref)}
 
 
 @router.get("/{donation_id}/qr")
-def get_donation_qr(donation_id: int, db: Session = Depends(get_db)):
+def get_donation_qr(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    """F-17: donation ids count up, so this is only for the donor who made it
+    and CSWS Main Office / the Administrator. Anyone else gets the same 404
+    as a missing id. Guests re-show theirs by reference (/batch/{ref}/qr)."""
     donation = db.query(PhysicalDonation).filter(PhysicalDonation.donation_id == donation_id).first()
-    if not donation:
+    allowed = current_user is not None and donation is not None and (
+        has_role(current_user, *CSWS_ROLES) or donation.user_id == current_user.user_id
+    )
+    if not allowed:
         raise HTTPException(status_code=404, detail="Donation not found")
+
     # The QR always holds the donation's shared reference.
     ref = donation.batch_reference or donation.qr_reference
     return {
@@ -923,6 +954,24 @@ def get_pickup_rules():
 # cached (fair use of the free public server) and the provider can be
 # swapped by changing GEOCODER_URL only. Public because guests donate too.
 # ---------------------------------------------------------------------------
+
+def _count_geocoder_call() -> None:
+    """F-19: one more call to Photon, or 503 when this minute's cap is used."""
+    now = _geo_clock()
+    with _geo_lock:
+        while _geo_calls and now - _geo_calls[0] >= 60:
+            _geo_calls.popleft()
+        if len(_geo_calls) >= _GEO_CALLS_PER_MINUTE:
+            wait = int(60 - (now - _geo_calls[0])) + 1
+            raise HTTPException(
+                status_code=503,
+                detail="Address suggestions are unavailable right now. Type the full address yourself.",
+                headers={"Retry-After": str(wait)},
+            )
+        _geo_calls.append(now)
+
+
+
 def _geocoder(path: str, params: dict) -> dict:
     base = os.getenv("GEOCODER_URL", "https://photon.komoot.io").rstrip("/")
     agent = os.getenv("GEOCODER_USER_AGENT", "NexaAid/1.0 (Mandaue City disaster relief system)")
@@ -931,6 +980,7 @@ def _geocoder(path: str, params: dict) -> dict:
     hit = _GEO_CACHE.get(key)
     if hit and now - hit[0] < _GEO_CACHE_TTL:
         return hit[1]
+    _count_geocoder_call()                  # F-19: cache hits never reach here
     try:
         r = httpx.request(
             "GET", f"{base}{path}", params=params,

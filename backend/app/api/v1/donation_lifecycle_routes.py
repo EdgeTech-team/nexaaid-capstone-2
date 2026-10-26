@@ -8,6 +8,7 @@ an addition to manuscript 3.2 "Pending donation records").
     POST /donations/entries/{ref}/reinstate      CSWS / Admin: back to Pending
     POST /donations/expiry/run                   CSWS / Admin, or a cron with a token
 """
+import hmac
 import os
 from datetime import datetime
 from typing import Optional
@@ -17,7 +18,10 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from core.audit import log_action
-from core.auth import get_current_user_optional, has_role, require_role
+from core.auth import (
+    check_guest_cancel_attempts, get_current_user_optional, has_role,
+    record_guest_cancel_failure, require_role,
+)
 from core.database import get_db
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 from models.guest_donor_model import GuestDonor
@@ -38,8 +42,13 @@ CANCEL_REASONS = [
     "I changed my mind",
     "The items are no longer available",
     "I gave the items another way",
-    "I cannot bring them in time",
+    "I cannot bring them in time",   
 ]
+
+# F-17: every failed guest attempt (wrong, missing or invalid phone number,
+# or a donation made from an account) gets this same answer.
+GUEST_CANCEL_FAILED = "Log in, or enter the phone number you used when donating."
+
 
 
 class CancelRequest(BaseModel):
@@ -87,6 +96,15 @@ def _summary(rows: list, changed: list) -> dict:
     }
 
 
+
+def _phone_or_none(value: Optional[str]) -> Optional[str]:
+    try:
+        return normalize_ph_mobile(value or "")
+    except ValueError:
+        return None
+
+
+
 @router.get("/expiry-rules")
 def get_expiry_rules():
     """How long donors have to hand over a donation, in plain words, plus the
@@ -109,21 +127,16 @@ def cancel_entry(
     owner = current_user is not None and first.user_id == current_user.user_id
 
     if not staff and not owner:
-        if current_user is None and first.guest_donor_id and payload.contact_number:
-            guest = db.get(GuestDonor, first.guest_donor_id)
-            try:
-                given = normalize_ph_mobile(payload.contact_number)
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-            if guest is None or normalize_ph_mobile(guest.contact_number or "") != given:
-                raise HTTPException(status_code=403, detail="That phone number does not match this donation.")
-        elif current_user is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Log in, or enter the phone number you used when donating.",
-            )
-        else:
+        if current_user is not None:
             raise HTTPException(status_code=403, detail="You can only cancel your own donations.")
+        # A guest proves it is theirs with the phone number they gave
+        # (F-17: one answer for every failure, and a limit on wrong tries).
+        check_guest_cancel_attempts(first.batch_reference)
+        guest = db.get(GuestDonor, first.guest_donor_id) if first.guest_donor_id else None
+        given = _phone_or_none(payload.contact_number)
+        if guest is None or given is None or given != _phone_or_none(guest.contact_number):
+            record_guest_cancel_failure(first.batch_reference)
+            raise HTTPException(status_code=403, detail=GUEST_CANCEL_FAILED)
 
     if not any(r.status == OPEN for r in rows):
         raise HTTPException(
@@ -193,8 +206,10 @@ def run_expiry(
     """Expire overdue donations and send due-soon reminders now. The screens
     already do this when they load; this is for a "Check now" button or a
     daily cron (send header X-Cron-Token = DONATION_CRON_TOKEN from .env)."""
-    token = os.getenv("DONATION_CRON_TOKEN")
-    by_cron = bool(token) and x_cron_token == token
+    token = os.getenv("DONATION_CRON_TOKEN") or ""
+    # F-17: constant-time comparison, on bytes so an unusual header can't error.
+    by_cron = bool(token) and hmac.compare_digest((x_cron_token or "").encode(), token.encode())
+
     if not by_cron and not (current_user is not None and has_role(current_user, *STAFF)):
         raise HTTPException(status_code=403, detail="You do not have permission to access this resource")
     result = expire_overdue(db)

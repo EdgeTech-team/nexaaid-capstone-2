@@ -84,3 +84,69 @@ def test_send_email_brevo_failure_returns_false(monkeypatch):
 
     monkeypatch.setattr(mail.httpx, "post", boom)
     assert mail.send_email("x@y.com", "S", "B") is False
+
+
+
+# F-22: failure logs never hold the recipient's full address.
+ADDRESS = "Juan.DelaCruz@Example.com"
+
+
+def _capture_log(monkeypatch):
+    lines = []
+
+    class FakeLog:
+        def error(self, msg, *args):
+            lines.append(msg % args)
+        warning = exception = error
+
+    monkeypatch.setattr(mail, "log", FakeLog())
+    return lines
+
+
+def _no_address(lines):
+    assert lines
+    for line in lines:
+        assert "juan.delacruz@example.com" not in line.lower()
+        assert "J***@Example.com" in line
+
+
+def test_smtp_failure_log_masks_the_address(monkeypatch):
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
+    monkeypatch.setenv("SMTP_USER", "u@gmail.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "pw")
+    lines = _capture_log(monkeypatch)
+
+    class RefusingSMTP:
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self): pass
+        def login(self, u, p): pass
+        def send_message(self, m):
+            raise mail.smtplib.SMTPRecipientsRefused({ADDRESS.lower(): (550, b"no such user")})
+
+    monkeypatch.setattr(mail.smtplib, "SMTP", RefusingSMTP)
+    assert mail.send_email(ADDRESS, "S", "B") is False
+    _no_address(lines)
+    assert "SMTPRecipientsRefused" in lines[0]
+
+
+def test_brevo_failure_logs_mask_the_address(monkeypatch):
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-test")
+    monkeypatch.setenv("EMAIL_FROM", "team@example.com")
+    lines = _capture_log(monkeypatch)
+
+    def rejected(url, json=None, headers=None, timeout=None):
+        return mail.httpx.Response(400, text=f'{{"message": "{ADDRESS} is not valid"}}',
+                                   request=mail.httpx.Request("POST", url))
+
+    monkeypatch.setattr(mail.httpx, "post", rejected)
+    assert mail.send_email(ADDRESS, "S", "B") is False
+
+    def down(*a, **k):
+        raise OSError(f"cannot deliver to {ADDRESS}")
+
+    monkeypatch.setattr(mail.httpx, "post", down)
+    assert mail.send_email(ADDRESS, "S", "B") is False
+    assert len(lines) == 2 and "400" in lines[0] and "OSError" in lines[1]
+    _no_address(lines)
