@@ -319,6 +319,53 @@ class _NewReportScreenState extends State<NewReportScreen> {
     _fills++;
   }
 
+  /// Module 3 (Oct 2026): suggested needs for a disaster type, from
+  /// /lookups `need_templates` (backend services/need_templates.py).
+  Map<String, dynamic>? _templateFor(Names names) {
+    for (final t in names.rows('need_templates')) {
+      if ('${t['id']}' == typeId) return t;
+    }
+    return null;
+  }
+
+  /// The needs as last filled from a template, to tell whether the reporter
+  /// changed them since. Untouched suggestions follow the disaster type and
+  /// the number of families; edited ones are left alone.
+  String? _templateSnapshot;
+
+  String get _needsSnapshot =>
+      needs.map((n) => '${n.itemId}:${n.qty.text.trim()}').join(',');
+
+  bool get _needsBlank => needs.every(
+    (n) =>
+        n.itemId == null &&
+        n.qty.text.trim().isEmpty &&
+        n.otherName.text.trim().isEmpty,
+  );
+
+  bool get _needsUntouched =>
+      _needsBlank || _needsSnapshot == _templateSnapshot;
+
+  /// Fills the needs list with the template of the chosen disaster type,
+  /// each amount per family x affected families, rounded up. Without a
+  /// family count the amounts are left for the reporter to type.
+  void _applyTemplate(Names names) {
+    final t = _templateFor(names);
+    if (t == null) return;
+    final fams = int.tryParse(families.text.trim()) ?? 0;
+    needs
+      ..clear()
+      ..addAll([
+        for (final line in (t['items'] as List).cast<Map>())
+          _Need()
+            ..itemId = '${line['item_id']}'
+            ..qty.text = fams > 0
+                ? '${((line['per_family'] as num) * fams).ceil().clamp(1, maxEstimatedQuantity)}'
+                : '',
+      ]);
+    _templateSnapshot = _needsSnapshot;
+  }
+
   /// Bumped after "Fill from SMS" so the dropdowns rebuild with the new values.
   int _fills = 0;
 
@@ -699,7 +746,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                     ? 'Edit Report #${widget.edit!['report_id']}'
                     : sms
                     ? 'Encode SMS Report'
-                    : 'Submit Post-Disaster Report',
+                    : 'Submit Disaster Report',
                 subtitle: editing
                     ? (widget.edit!['status'] == 'Rejected'
                           ? 'Rejected: ${widget.edit!['rejection_reason'] ?? ''}\n'
@@ -789,7 +836,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 label: 'Disaster type',
                 value: typeId,
                 names: names,
-                onChanged: (v) => setState(() => typeId = v),
+                onChanged: (v) => setState(() {
+                  final untouched = _needsUntouched;
+                  typeId = v;
+                  if (untouched) _applyTemplate(names);
+                }),
               ),
               const SizedBox(height: 12),
               LookupDropdown(
@@ -839,6 +890,12 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
                 ),
                 validator: _wholeNumber(maxAffectedFamilies),
+                onChanged: (_) {
+                  if (_templateSnapshot != null &&
+                      _needsSnapshot == _templateSnapshot) {
+                    setState(() => _applyTemplate(names));
+                  }
+                },
               ),
               SectionTitle(
                 'Assistance needed',
@@ -851,6 +908,27 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   label: const Text('Add need'),
                 ),
               ),
+              if (_templateFor(names) case final t?)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.auto_awesome_outlined, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Suggested basic needs for ${t['name']}, '
+                          'per affected family. Change them as needed.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => setState(() => _applyTemplate(names)),
+                        child: const Text('Use suggested'),
+                      ),
+                    ],
+                  ),
+                ),
               for (var i = 0; i < needs.length; i++) _needRow(i, names),
               const SizedBox(height: 16),
               FilledButton.icon(

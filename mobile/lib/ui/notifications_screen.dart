@@ -75,10 +75,19 @@ final Map<String, EntityOpener> notificationDestinations = {
   'logistics_request': (c, id, event) async {
     switch (api.role) {
       case Roles.drrmo:
+        // Shared notifications (Oct 23): DRRMO also hears what a teammate
+        // did, so open the stage the request is in now.
         _go(
           c,
           'Logistics',
-          view: event == 'logistics_requested' ? 'Pending' : null,
+          view: switch (event) {
+            'logistics_requested' => 'Pending',
+            'logistics_accepted' => 'Accepted',
+            'logistics_completed' => 'Completed',
+            'logistics_declined' || 'logistics_withdrawn' => 'Declined',
+            'logistics_cancelled' => 'Cancelled',
+            _ => null,
+          },
         );
       case Roles.cswsMain:
         final r = await api.get('/logistics/requests');

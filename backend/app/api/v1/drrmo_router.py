@@ -16,6 +16,7 @@ from models.item_model import Item
 from models.report import DisasterReport, DisasterType, Barangay
 from models.physical_donation_model import PhysicalDonation
 from services.donation_expiry import entry_status
+from core.notifications import logistics_team_ids, notify_event_many
 from schemas.physical_donation_schema import MANILA
 from core.notifications import notify_event
 from schemas.logistics_request_schema import (
@@ -265,9 +266,9 @@ def accept_request(
         req.notes = f"{req.notes}\nDRRMO: {payload.notes}" if req.notes else f"DRRMO: {payload.notes}"
     log_action(db, current_user, "ACCEPT LOGISTICS REQUEST", "logistics_requests", request_id,
                old={"status": "Pending"}, new={"status": "Accepted"})
-    notify_event(db, req.requested_by_user_id, "logistics_accepted",
-                 "logistics_request", request_id,
-                 title=req.title)
+    notify_event_many(db, logistics_team_ids(db, req.requested_by_user_id,
+                                             exclude_user_id=current_user.user_id),
+                      "logistics_accepted", "logistics_request", request_id, title=req.title)
 
     db.commit()
     db.refresh(req)
@@ -292,12 +293,40 @@ def decline_request(
     req.notes = payload.notes
     log_action(db, current_user, "DECLINE LOGISTICS REQUEST", "logistics_requests", request_id,
                old={"status": "Pending"}, new={"status": "Declined", "reason": payload.notes})
-    notify_event(db, req.requested_by_user_id, "logistics_declined",
-                 "logistics_request", request_id, reason=payload.notes or "")
+    notify_event_many(db, logistics_team_ids(db, req.requested_by_user_id,
+                                             exclude_user_id=current_user.user_id),
+                      "logistics_declined", "logistics_request", request_id,
+                      reason=payload.notes or "")
 
     db.commit()
     db.refresh(req)
     return req
+
+
+@router.post("/requests/{request_id}/picked-up")
+def picked_up(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(DRRMO)),
+):
+    """Advisor (Oct 24): DRRMO picked up the prepared goods from CSWS, so the
+    delivery goes In Transit (same history and notifications as CSWS
+    advancing it). Only DRRMO can do this while its request is open."""
+    from api.v1.deliveries import move_to_next_status  # deliveries imports this module
+
+    req = db.get(LogisticsRequest, request_id)
+    if req is None:
+        raise HTTPException(status_code=404, detail="Logistics request not found")
+    if req.status != "Accepted":
+        raise HTTPException(status_code=409, detail="Accept the request first.")
+    d = db.get(Delivery, req.delivery_id) if req.delivery_id else None
+    if d is None:
+        raise HTTPException(status_code=409, detail="This request has no delivery to pick up.")
+    if d.status != "Preparing":
+        raise HTTPException(status_code=409, detail=f"Delivery #{d.delivery_id} is already {d.status}.")
+    move_to_next_status(db, d, current_user)
+    db.commit()
+    return request_rows(db, [req])[0]
 
 
 class CompleteLogisticsRequest(BaseModel):
@@ -334,8 +363,10 @@ def complete_request(
                old={"status": "Accepted"}, new={"status": "Completed", "summary": summary})
     # Oct 17 run-through: CSWS hears that the support is done, as it does
     # when DRRMO accepts or declines.
-    notify_event(db, req.requested_by_user_id, "logistics_completed", "logistics_request",
-                 request_id, title=req.title, summary=payload.summary)
+    notify_event_many(db, logistics_team_ids(db, req.requested_by_user_id,
+                                             exclude_user_id=current_user.user_id),
+                      "logistics_completed", "logistics_request", request_id,
+                      title=req.title, summary=payload.summary)
     db.flush()
     return request_rows(db, [req])[0]
 

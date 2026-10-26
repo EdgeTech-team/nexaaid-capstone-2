@@ -25,6 +25,7 @@ from models.delivery import Delivery
 from models.logistics_request_model import LogisticsRequest
 from models.user_rbac_model import User
 from services.fulfillment import progress_for_reports
+from services.need_templates import need_templates
 from services.units import dimension, units_for
 
 router = APIRouter(prefix="/lookups", tags=["lookups"])
@@ -197,4 +198,9 @@ def get_lookups(
             for r in requests
         ]
 
+    # Module 3 (Oct 2026): suggested needs per disaster type, per family.
+    # Public like the other reference lists: item names and amounts only.
+    out["need_templates"] = need_templates(db)
+
     return out
+
