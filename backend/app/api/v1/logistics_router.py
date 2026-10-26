@@ -13,7 +13,8 @@ from schemas.logistics_request_schema import (
     SubmitLogisticsRequest, SubmitPickupLogisticsRequest, LogisticsRequestResponse,
 )
 from schemas.physical_donation_schema import (
-    MANILA, decode_pickup_days, pickup_days_label, pickup_rules,
+    MANILA, decode_pickup_dates, decode_pickup_days, pickup_dates_label,
+    pickup_days_label, pickup_rules,
 )
 from core.notifications import notify_event_many, user_ids_with_role
 
@@ -111,14 +112,23 @@ def submit_pickup_request(
         lines = by_ref.get(ref)
         if not lines:
             raise HTTPException(status_code=404, detail=f"No donation with reference {ref}.")
-        first = lines[0]
+        # Oct 23 (approved by Daniel): the pickup details of the items still
+        # waiting, not of the first item (which the donor may have removed).
+        first = next((l for l in lines if l.status == "Pending"), lines[0])
         where = f" (near {first.pickup_landmark})" if first.pickup_landmark else ""
         if first.handover_method != "Door to Door":
             raise HTTPException(status_code=409, detail=f"{ref} is a Drop Off donation, not a pickup.")
         if not any(l.status == "Pending" for l in lines):
             raise HTTPException(status_code=409, detail=f"{ref}{where} has nothing left to collect.")
+        dates = decode_pickup_dates(first.pickup_dates)
+        if dates and day not in dates:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{ref}{where} is not available on {weekday}, {day.strftime('%b')} {day.day}. "
+                       f"The donor chose {pickup_dates_label(first.pickup_dates)}.",
+            )
         days = decode_pickup_days(first.pickup_days)
-        if days and day.isoweekday() not in days:
+        if not dates and days and day.isoweekday() not in days:
             raise HTTPException(
                 status_code=409,
                 detail=f"{ref}{where} is not available on {weekday}. "

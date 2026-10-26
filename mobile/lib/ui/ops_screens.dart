@@ -1,12 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult, Roles;
-import 'records_screens.dart' show DonationRecordsScreen, SupportRecordsScreen;
+import 'records_screens.dart' show SupportRecordsScreen;
 import 'delivery_widgets.dart';
 import 'input_formatters.dart' show pesos;
 import 'trip_screens.dart';
 import 'widgets.dart';
-import 'entry_report_views.dart' show EntrySummaryList;
 import 'logistics_cards.dart';
 import 'home_nav.dart';
 
@@ -1045,6 +1044,7 @@ Future<void> showCmoEntryPopout(BuildContext context, int donationId) async {
   }
   final e = Map<String, dynamic>.from(r.json as Map);
   final done = e['acknowledged'] == true;
+  var busy = false; // set while Acknowledge is being sent
   await showDetailPopout<void>(
     context,
     title: 'Donation entry',
@@ -1059,28 +1059,38 @@ Future<void> showCmoEntryPopout(BuildContext context, int donationId) async {
         ),
       ),
       if (!done)
-        Builder(
-          builder: (ctx) => AppButton(
-            'Acknowledge',
-            icon: Icons.verified,
-            expand: true,
-            onPressed: () async {
-              final res = await act(
-                ctx,
-                () => api.post(
-                  '/cmo/entries/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
-                  body: {'status': 'Acknowledged', 'notes': null},
-                ),
-                success: '${e['batch_reference']} acknowledged',
-              );
-              if (!res.ok || !ctx.mounted) return;
-              Navigator.of(ctx).pop();
-              HomeNav.go(
-                context,
-                const HomeTarget('Acknowledge', view: 'pending'),
-              );
-            },
-          ),
+        // Disabled while it is sent, so a double tap never acknowledges twice.
+        StatefulBuilder(
+          builder: (ctx, setBusy) {
+            return AppButton(
+              'Acknowledge',
+              icon: Icons.verified,
+              expand: true,
+              loading: busy,
+              onPressed: () async {
+                if (busy) return;
+                setBusy(() => busy = true);
+                final res = await act(
+                  ctx,
+                  () => api.post(
+                    '/cmo/entries/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
+                    body: {'status': 'Acknowledged', 'notes': null},
+                  ),
+                  success: '${e['batch_reference']} acknowledged',
+                );
+                if (!ctx.mounted) return;
+                if (!res.ok) {
+                  setBusy(() => busy = false);
+                  return;
+                }
+                Navigator.of(ctx).pop();
+                HomeNav.go(
+                  context,
+                  const HomeTarget('Acknowledge', view: 'pending'),
+                );
+              },
+            );
+          },
         ),
     ],
   );
@@ -1124,7 +1134,10 @@ class CmoEntryDetails extends StatelessWidget {
           ],
         ),
         Gaps.v8,
-        Text('For ${e['report_label'] ?? 'report #${e['report_id']}'}'),
+        // The report by disaster and barangay, without its number (Oct 23).
+        Text(
+          'For ${'${e['report_label'] ?? 'report'}'.replaceFirst(RegExp(r'^#\d+\s*'), '').replaceAll(' - ', ' · ')}',
+        ),
         Text(
           'Handover: ${e['handover_method'] ?? '-'} · Received by CSWS',
           style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
@@ -1168,365 +1181,6 @@ class CmoEntryDetails extends StatelessWidget {
           Text('Already acknowledged.', style: t.bodySmall),
         ],
       ],
-    );
-  }
-}
-
-class CmoScreen extends StatefulWidget {
-  const CmoScreen({super.key});
-
-  @override
-  State<CmoScreen> createState() => _CmoScreenState();
-}
-
-class _CmoScreenState extends State<CmoScreen>
-    with HomeTargetListener<CmoScreen> {
-  String view = 'pending';
-  int _loads = 0;
-
-  /// 5.1: null = all waiting; 'On Hold' / 'Pending Review' = only those.
-  String? decision;
-  final _listKey = GlobalKey();
-
-  @override
-  String get homeTab => 'Acknowledge';
-
-  @override
-  void applyHomeTarget(HomeTarget target) {
-    view = target.view ?? 'pending';
-    decision = null;
-    _loads++; // e.g. an entry was just acknowledged from a notification
-  }
-
-  /// 5.1: a tile was tapped. Filter the list and scroll down to it.
-  void _show(String v, [String? d]) {
-    setState(() {
-      view = v;
-      decision = d;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final c = _listKey.currentContext;
-      if (c != null) {
-        Scrollable.ensureVisible(
-          c,
-          duration: const Duration(milliseconds: 300),
-        );
-      }
-    });
-  }
-
-  String get _base => '/cmo/entries';
-
-  Future<void> _decide(Map e, String decision) async {
-    String? notes;
-    if (decision != 'Acknowledged') {
-      final v = await formDialog(
-        context,
-        title: decision == 'On Hold'
-            ? 'Put ${e['batch_reference']} on hold'
-            : 'Keep ${e['batch_reference']} for review',
-        message: 'Applies to all ${e['total_items']} item(s) of this donation.',
-        fields: const [DialogField('notes', 'Reason', multiline: true)],
-      );
-      if (v == null) return;
-      notes = v['notes'];
-    }
-    if (!mounted) return;
-    final r = await act(
-      context,
-      () => api.post(
-        '$_base/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
-        body: {'status': decision, 'notes': notes},
-      ),
-      success: decision == 'Acknowledged'
-          ? '${e['batch_reference']} acknowledged'
-          : '${e['batch_reference']} marked $decision',
-    );
-    if (r.ok && mounted) setState(() => _loads++);
-  }
-
-  Future<void> _revert(Map e) async {
-    final r = await act(
-      context,
-      () => api.post(
-        '$_base/${Uri.encodeComponent('${e['batch_reference']}')}/revert',
-      ),
-      success: 'Acknowledgement undone',
-    );
-    if (r.ok && mounted) setState(() => _loads++);
-  }
-
-  Widget _entryCard(Map e) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final done = e['acknowledged'] == true;
-    final items = (e['items'] as List).cast<Map>();
-    final value = (e['estimated_value'] as num?) ?? 0;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: Space.sm),
-      child: AppCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.qr_code_2, color: cs.primary),
-                Gaps.h8,
-                Expanded(
-                  child: Text(
-                    '${e['batch_reference']}',
-                    style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
-                  ),
-                ),
-                if (done)
-                  const StatusChip('Confirmed', label: 'Acknowledged')
-                else
-                  StatusChip(
-                    e['cmo_decision'] as String? ?? 'Received',
-                    label: e['cmo_decision'] == null
-                        ? 'Waiting'
-                        : '${e['cmo_decision']}',
-                  ),
-              ],
-            ),
-            Gaps.v4,
-            Text(
-              'For ${e['report_label'] ?? 'report'} · ${e['handover_method']}',
-              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            Gaps.v8,
-            for (final i in items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.inventory_2_outlined,
-                      size: 16,
-                      color: cs.onSurfaceVariant,
-                    ),
-                    Gaps.h8,
-                    Expanded(
-                      child: Text(
-                        '${i['quantity']} ${i['unit']} ${i['item_name']} '
-                        '(${i['packaging']})',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            if (value > 0)
-              Text('Estimated value ${pesos(value)}', style: t.bodySmall),
-            if (e['hold_reason'] != null && !done) ...[
-              Gaps.v8,
-              Text(
-                'On hold: ${e['hold_reason']}',
-                style: t.bodyMedium?.copyWith(color: AppColors.danger),
-              ),
-            ],
-            Gaps.v12,
-            if (done)
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  onPressed: () => _revert(e),
-                  icon: const Icon(Icons.undo),
-                  label: const Text('Undo'),
-                ),
-              )
-            else ...[
-              // One tap acknowledges the whole entry (every item in it).
-              AppButton(
-                'Acknowledge',
-                icon: Icons.verified,
-                expand: true,
-                onPressed: () => _decide(e, 'Acknowledged'),
-              ),
-              Gaps.v8,
-              Row(
-                children: [
-                  Expanded(
-                    child: AppButton(
-                      'Hold',
-                      icon: Icons.pause_circle_outline,
-                      variant: AppButtonVariant.secondary,
-                      expand: true,
-                      onPressed: () => _decide(e, 'On Hold'),
-                    ),
-                  ),
-                  Gaps.h8,
-                  Expanded(
-                    child: AppButton(
-                      'Review',
-                      icon: Icons.rate_review_outlined,
-                      variant: AppButtonVariant.text,
-                      expand: true,
-                      onPressed: () => _decide(e, 'Pending Review'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Loader(
-      key: ValueKey(_loads),
-      load: [
-        () => api.get('/cmo/dashboard'),
-        () => api.get('$_base/pending'),
-        () => api.get('$_base/acknowledged'),
-        () => api.get('/donations/entries'),
-      ],
-      builder: (context, data) {
-        final dash = data[0] as Map;
-        final pending = (data[1] as List).cast<Map>();
-        final acknowledged = (data[2] as List).cast<Map>();
-        final perReport = (dash['per_report'] as List).cast<Map>();
-        final rows = view == 'pending'
-            ? pending
-                  .where(
-                    (e) => decision == null || e['cmo_decision'] == decision,
-                  )
-                  .toList()
-            : acknowledged;
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            PageHeader(
-              'Acknowledge Donations',
-              subtitle:
-                  'Donation entries CSWS received, one QR at a time • '
-                  '${roleLine()}',
-            ),
-            // Appendix H 4.4 / 4.5: the CMO also views donation records.
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: const Text('Donation records')),
-                      body: const DonationRecordsScreen(header: false),
-                    ),
-                  ),
-                ),
-                icon: const Icon(Icons.folder_open_outlined),
-                label: const Text('All donation records'),
-              ),
-            ),
-            StatGrid([
-              StatTile(
-                'Waiting for acknowledgement',
-                '${dash['pending_entries'] ?? pending.length}',
-                Icons.hourglass_top,
-                color: const Color(0xFFEF6C00),
-                onTap: () => _show('pending'),
-              ),
-              StatTile(
-                'On hold',
-                '${dash['on_hold_entries'] ?? 0}',
-                Icons.pause_circle_outline,
-                onTap: () => _show('pending', 'On Hold'),
-              ),
-              StatTile(
-                'Pending review',
-                '${dash['review_entries'] ?? 0}',
-                Icons.rate_review_outlined,
-                onTap: () => _show('pending', 'Pending Review'),
-              ),
-              StatTile(
-                'Acknowledged',
-                '${dash['acknowledged_entries'] ?? acknowledged.length}',
-                Icons.verified,
-                color: const Color(0xFF2E7D32),
-                onTap: () => _show('acknowledged'),
-              ),
-            ]),
-            const SizedBox(height: 14),
-            SegmentedButton<String>(
-              key: _listKey,
-              segments: [
-                ButtonSegment(
-                  value: 'pending',
-                  label: Text('Waiting (${pending.length})'),
-                ),
-                ButtonSegment(
-                  value: 'acknowledged',
-                  label: Text('Acknowledged (${acknowledged.length})'),
-                ),
-              ],
-              selected: {view == 'pending' ? 'pending' : 'acknowledged'},
-              onSelectionChanged: (s) => setState(() {
-                view = s.first;
-                decision = null;
-              }),
-            ),
-            if (view == 'pending' && decision != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: InputChip(
-                    label: Text('Only: $decision'),
-                    onDeleted: () => setState(() => decision = null),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty)
-              EmptyState(
-                view == 'pending'
-                    ? 'No donations waiting for acknowledgement.'
-                    : 'No acknowledged donations yet.',
-              ),
-            for (final e in rows) _entryCard(e),
-            const SectionTitle('Donation entries per report'),
-            EntrySummaryList(data[3] as Map),
-            const SectionTitle('Acknowledged per report'),
-            if (perReport.isEmpty) const EmptyState('No donations yet.'),
-            for (final r in perReport)
-              Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${r['report_label']}',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      if (r['priority_level'] != null)
-                        Text(
-                          'Priority: ${r['priority_level']}',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${r['confirmed_count']} item(s) acknowledged '
-                        '(${r['confirmed_quantity']} units'
-                        '${(r['confirmed_value'] as num) > 0 ? ', PHP ${(r['confirmed_value'] as num).toStringAsFixed(0)}' : ''}'
-                        ') · ${r['pending_count']} waiting',
-                      ),
-                      const SizedBox(height: 8),
-                      Progress(
-                        delivered: 0,
-                        needed: 0,
-                        percent: r['fulfillment_percentage'] as num,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
     );
   }
 }

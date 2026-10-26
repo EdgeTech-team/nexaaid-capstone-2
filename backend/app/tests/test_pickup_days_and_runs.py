@@ -17,7 +17,7 @@ from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
 def _door(rid, days, landmark="Mandaue City Hall", lat=10.3236, lng=123.9430, **extra):
     return {
         "report_id": rid, "handover_method": "Door to Door",
-        "pickup_address": "12 A. Del Rosario St., Centro",
+        "pickup_address": "12 A. Del Rosario St., Centro, Mandaue City",
         "pickup_landmark": landmark, "pickup_lat": lat, "pickup_lng": lng,
         "pickup_days": days, "items": [LINE], **extra,
     }
@@ -91,7 +91,7 @@ def test_disaster_unit_sees_the_pickup_map_and_requests_drrmo_support(api):
     mon_wed = ok(client.post("/donations/batch", headers=t["donor"],
                              json=_door(rid, [1, 3], landmark="Mandaue City Hall")), 201)
     fri = ok(client.post("/donations/batch", headers=t["donor"],
-                         json=_door(rid, [5], landmark="Parkmall", lat=10.3270, lng=123.9330)), 201)
+                         json=_door(rid, [5], landmark="Parkmall, Mandaue City", lat=10.3270, lng=123.9330)), 201)
     a, b = mon_wed["batch_reference"], fri["batch_reference"]
 
     # CSWS Main Office sees the waiting pickups; donors and the Disaster Unit don't
@@ -167,15 +167,25 @@ def test_pickups_stay_in_cebu_and_far_ones_can_be_declined(api, monkeypatch):
     r = post(_door(rid, [1], landmark="Rizal Park", lat=14.5826, lng=120.9787))
     assert r.status_code == 422 and "Cebu province" in r.text
 
+    # Inside Cebu but outside the Door to Door service areas (Oct 23): refused.
+    # The map lookup is replaced so the test stays offline.
+    import api.v1.donation_routes as routes
+    monkeypatch.setattr(routes, "_geocoder", lambda path, params: {
+        "features": [{"properties": {"name": "Bogo City Hall", "city": "Bogo City"}}]})
+    r = post(_door(rid, [1], landmark="Bogo City Hall, Bogo City, Cebu", lat=11.0517, lng=124.0055))
+    assert r.status_code == 422 and "Sorry" in r.text and "Bogo City" in r.text
+
+    # A served area can still be farther than the distance limit (5 km here)
+    monkeypatch.setenv("PICKUP_MAX_KM", "5")
     near = ok(post(_door(rid, [1])), 201)                                   # Mandaue City Hall
-    far = ok(post(_door(rid, [1], landmark="Bogo City Hall", lat=11.0517, lng=124.0055)), 201)
+    far = ok(post(_door(rid, [1], landmark="Marigondon, Lapu-Lapu City", lat=10.2720, lng=124.0010)), 201)
     board = {p["batch_reference"]: p for p in ok(client.get("/donations/pickups", headers=t["csws"]))}
     assert board[near["batch_reference"]]["too_far"] is False
     assert board[far["batch_reference"]]["too_far"] is True
-    assert board[far["batch_reference"]]["distance_km"] > 70
+    assert board[far["batch_reference"]]["distance_km"] > 5
 
     rules = ok(client.get("/donations/pickup-rules"))
-    assert rules["area"]["name"] == "Cebu province" and rules["area"]["max_km"] == 20
+    assert rules["area"]["name"] == "Cebu province" and rules["area"]["max_km"] == 5
 
     # Main Office declines the far one; the donor is told why
     ok(client.post(f"/donations/entries/{far['batch_reference']}/cancel", headers=t["csws"],
@@ -193,7 +203,7 @@ def test_donor_edits_or_deletes_a_waiting_donation(api):
     staff_before = len(ok(client.get("/notifications/", headers=t["csws"]))["items"])
 
     # Only the donor can change it
-    edit = {"handover_method": "Door to Door", "pickup_address": "12 A. Del Rosario St., Centro",
+    edit = {"handover_method": "Door to Door", "pickup_address": "12 A. Del Rosario St., Centro, Mandaue City",
             "pickup_landmark": "Mandaue City Hall", "pickup_lat": 10.3236, "pickup_lng": 123.9430,
             "pickup_days": [5],
             "items": [{"item_id": 1, "packaging": "Sack", "quantity": 9},

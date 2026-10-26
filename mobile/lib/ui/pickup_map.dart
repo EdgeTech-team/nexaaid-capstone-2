@@ -180,12 +180,15 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   ///   3. oldest donation first.
   /// Only when two stops are exactly as urgent does distance decide: the
   /// one nearest to the previous stop (or the CSWS office) goes first.
+  ///
+  /// The weekday filter means its next date (today counts), so "Today" is
+  /// exactly today: a donor who chose specific dates shows only on those.
   List<PlanStop> _homeOn(PickupPlan p, int weekday) {
+    final from = _dateOf(weekday, p);
     final left = [
       for (final s in p.stops)
-        if (!s.far && s.days.contains(weekday)) s,
+        if (!s.far && s.availableOn(from)) s,
     ];
-    final from = _dateOf(weekday, p);
     final key = {for (final s in left) s.id: _urgency(p, s, from)};
     final out = <PlanStop>[];
     var here = p.office;
@@ -213,7 +216,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     }
     final dates = p.dates.where(
       (d) =>
-          s.days.contains(d.weekday) &&
+          s.availableOn(d) &&
           (from == null || !d.isBefore(from)) &&
           (missed == null || d.isAfter(missed)),
     );
