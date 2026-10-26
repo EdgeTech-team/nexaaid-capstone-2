@@ -44,6 +44,7 @@ from core.notifications import notify_event
 from models.physical_donation_model import PhysicalDonation
 from services.donation_additions import is_removed
 from schemas.physical_donation_schema import MANILA, decode_pickup_dates, pickup_rules
+from core.uploads import purge_unclaimed
 
 OPEN = "Pending"
 CLOSED = ("Expired", "Cancelled")
@@ -238,7 +239,10 @@ def expire_overdue(db: Session, now: Optional[datetime] = None) -> dict:
         "expired_entries": len(expired_batches),
         "expired_items": len(overdue),
         "reminded_entries": len(reminded),
+        # F-14: the same job deletes registration uploads nobody claimed.
+        "purged_uploads": purge_unclaimed(db),
     }
+
 
 
 def entry_status(statuses: Iterable[str]) -> str:

@@ -12,7 +12,9 @@ Local fallback when BREVO_API_KEY is not set:
     SMTP_USER=team.nexaaid@gmail.com
     SMTP_PASSWORD=xxxx xxxx xxxx xxxx (Google app password; SMTP_APP_PASSWORD also works)
 
-Never raises and never logs the message body (it may hold a temporary password).
+Never raises and never logs the message body (it may hold a temporary password)
+or a full recipient address (F-22: masked as j***@domain).
+
 """
 import logging
 import os
@@ -20,6 +22,7 @@ import smtplib
 from email.message import EmailMessage
 
 import httpx
+from core.log_privacy import mask_email, without_email
 
 
 log = logging.getLogger("uvicorn.error")
@@ -67,10 +70,12 @@ def _send_via_brevo(to: str, subject: str, body: str) -> bool:
         return True
     except httpx.HTTPStatusError as e:
         # Brevo's reply explains the problem (bad key, sender not verified...).
-        # It never contains our message body.
-        log.error("Brevo rejected email to %s: %s %s", to, e.response.status_code, e.response.text)
-    except Exception:
-        log.exception("send_email (Brevo) failed for %s", to)
+        # It never contains our message body; the address is masked (F-22).
+        log.error("Brevo rejected email to %s: %s %s", mask_email(to),
+                  e.response.status_code, without_email(e.response.text, to)[:500])
+    except Exception as e:
+        log.error("send_email (Brevo) failed for %s: %s: %s", mask_email(to),
+                  type(e).__name__, without_email(e, to))
     return False
 
 
@@ -94,8 +99,9 @@ def _send_via_smtp(to: str, subject: str, body: str) -> bool:
             s.login(user, password.replace(" ", ""))
             s.send_message(msg)
         return True
-    except Exception:
-        log.exception("send_email failed for %s", to)
+    except Exception as e:
+        log.error("send_email failed for %s: %s: %s", mask_email(to),
+                  type(e).__name__, without_email(e, to))
         return False
 
 

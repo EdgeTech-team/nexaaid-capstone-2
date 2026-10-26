@@ -1,0 +1,15 @@
+# F-20: security headers for the Netlify web app. Flutter copies this file
+# into build/web, like _redirects.
+# Report-Only first: the browser only lists violations in the DevTools
+# console. Once a deploy shows none, rename the header to
+# Content-Security-Policy (enforce).
+# CDN sources are path-restricted on purpose: only CanvasKit on gstatic,
+# only fonts under fonts.gstatic.com/s/, and only the zxing-wasm version
+# mobile_scanner 7.4.2 pins (QR scanning on Firefox). When mobile_scanner
+# is upgraded, test/web_headers_test.dart says if the version must change.
+/*
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.gstatic.com/flutter-canvaskit/ https://cdn.jsdelivr.net/npm/zxing-wasm@3.1.3/; style-src 'self' 'unsafe-inline'; connect-src 'self' https://nexaaid-1.onrender.com https://www.gstatic.com/flutter-canvaskit/ https://fonts.gstatic.com/s/ https://tile.openstreetmap.org https://fastly.jsdelivr.net/npm/zxing-wasm@3.1.3/ blob: data:; img-src 'self' data: blob: https://nexaaid-1.onrender.com https://tile.openstreetmap.org; font-src 'self' data: https://fonts.gstatic.com/s/; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(), geolocation=()

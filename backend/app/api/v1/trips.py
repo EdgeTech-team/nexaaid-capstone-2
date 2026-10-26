@@ -38,6 +38,8 @@ from models.report import DisasterReport
 from schemas.delivery import ReceiptConfirm
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
+from services.inventory import add_to_stock
+
 from services.delivery_allocation import allocate_delivery, chosen_refs, ready_lines
 from services.delivery_notices import tell_barangay_prepared
 from services.delivery_views import delivery_views, report_labels
@@ -269,9 +271,10 @@ def create_trip(
             )
     checked = [
         check_stock(db, stop.report_id, lines_of[stop.report_id], report_name=f"report {labels.get(stop.report_id, stop.report_id)}")
-        for stop in payload.reports
+                for stop in sorted(payload.reports, key=lambda s: s.report_id)   # F-06: same lock order everywhere
     ]
     for c in checked:
+
         take_stock(c)
 
     trip = DeliveryTrip(
@@ -460,6 +463,10 @@ def undo_trip(
     """Made a mistake while preparing? Undo the whole trip: its deliveries
     are removed and every item goes back to its report's stock. Only while
     nothing has left the office. The history keeps a record of the undo."""
+    # F-06: lock this trip's deliveries first, so a second undo (or a start)
+    # waits, then sees what the first one did.
+    (db.query(Delivery).filter(Delivery.trip_id == trip_id)
+     .order_by(Delivery.delivery_id).with_for_update().populate_existing().all())
     trip = _get_trip(db, trip_id)
     if any(d.status != "Preparing" for d in trip.deliveries):
         raise HTTPException(status_code=409, detail="This trip has already left, so it can no longer be undone.")
@@ -469,13 +476,13 @@ def undo_trip(
             status_code=409,
             detail="A DRRMO transport request is linked to this trip. Ask DRRMO to decline it first.",
         )
-    from models.inventory_model import Inventory
+    # F-06: back to stock, rows locked in (report, item) order.
+    for report_id, item_id, qty in sorted((d.report_id, line.item_id, line.quantity)
+                                          for d in trip.deliveries for line in d.items):
+        add_to_stock(db, item_id, report_id, qty)
     returned = []
     for d in trip.deliveries:
         for line in d.items:
-            inv = (db.query(Inventory)
-                   .filter(Inventory.item_id == line.item_id, Inventory.report_id == d.report_id).first())
-            inv.quantity += line.quantity
             returned.append({"report_id": d.report_id, "item_id": line.item_id, "quantity": line.quantity})
         log_action(db, current_user, "UNDO DELIVERY", "deliveries", d.delivery_id,
                    old={"status": "Preparing", "trip_id": trip_id}, new={"removed": True})

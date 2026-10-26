@@ -136,14 +136,12 @@ class ReportWithdraw(BaseModel):
 
 
 class DisasterReportUpdate(BaseModel):
-    """Staff-only fields. All optional — PATCH semantics.
+    """Administrator corrections. All optional (PATCH semantics).
 
-    For approving/rejecting a report specifically, use the dedicated
-    /reports/{id}/validate and /reports/{id}/reject endpoints instead —
-    those also set validated_by / rejection_reason correctly. Use
-    `status` here only for other lifecycle transitions after validation
-    (e.g. 'Dispatched', 'Resolved')."""
-    status: Optional[str] = None
+    F-07: the status is NOT set here. Validate, Reject (Administrator) and
+    Withdraw (the reporter) change it, each with its own checks, records and
+    notices."""
+
     description: Optional[str] = None
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
@@ -164,6 +162,13 @@ class DisasterReportUpdate(BaseModel):
                     "Priority is computed by the system and cannot be set by hand "
                     f"({', '.join(sorted(sent))})."
                 )
+            
+            if "status" in data:
+                raise ValueError(
+                    "The report's status cannot be changed here. Use Validate or Reject "
+                    "(Administrator) or Withdraw (the reporter)."
+                )
+
         return data
 
 

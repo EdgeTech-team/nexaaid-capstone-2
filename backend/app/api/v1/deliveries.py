@@ -445,7 +445,7 @@ def delivery_history(
     if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
         raise HTTPException(status_code=404, detail="Delivery not found")
     rows = (
-        db.query(AuditLog, User.email)
+        db.query(AuditLog, User.first_name, User.last_name, User.email)
         .join(User, User.user_id == AuditLog.user_id)
         .filter(AuditLog.entity_type == "deliveries", AuditLog.entity_id == delivery_id)
         .order_by(AuditLog.log_id)
@@ -454,11 +454,13 @@ def delivery_history(
     return {
         "delivery_id": delivery_id,
         "status": delivery.status,
-        "acknowledged": any(l.action == "ACKNOWLEDGE AID" for l, _ in rows),
+        "acknowledged": any(l.action == "ACKNOWLEDGE AID" for l, *_ in rows),
         "history": [
+            # F-23(c): a staff display name, not their email, for barangay reps
+            # and DRRMO. "{first} {last}" or the email only if both are blank.
             {"action": l.action, "old": l.old_value, "new": l.new_value,
-             "by": email, "at": l.timestamp}
-            for l, email in rows
+             "by": f"{first or ''} {last or ''}".strip() or email, "at": l.timestamp}
+            for l, first, last, email in rows
         ],
     }
 

@@ -49,6 +49,7 @@ void main() {
   setUpAll(() => AppTheme.useGoogleFonts = false);
   setUp(() => ProfileScreen.devToolsShown.value = false);
   tearDown(() => Api.instance.token = null);
+  tearDown(() => Api.instance.devOptions = true);
 
   testWidgets('Logged in: settings list, then Manage account details', (
     tester,
@@ -103,6 +104,20 @@ void main() {
 
     await tester.tap(find.text('Hide developer tools'));
     await tester.pumpAndSettle();
+    expect(find.text('API console'), findsNothing);
+  });
+
+  testWidgets('Release build (F-13): five taps on About show nothing', (
+    tester,
+  ) async {
+    Api.instance.devOptions = false;
+    await _pump(tester);
+    final about = find.byKey(const ValueKey('about-nexaaid'));
+    for (var i = 0; i < 6; i++) {
+      await tester.tap(about);
+    }
+    await tester.pumpAndSettle();
+    expect(find.text('Developer tools'), findsNothing);
     expect(find.text('API console'), findsNothing);
   });
 }

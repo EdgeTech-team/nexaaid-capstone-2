@@ -74,7 +74,14 @@ def test_create_requires_employee_id_and_card_and_hands_card_over(api):
 
     # The staff member and Administrators can view the card; nobody else.
     _set_password("pedro@csws.gov.ph")
-    _, staff = _login(client, "pedro@csws.gov.ph", STRONG_PASSWORD)
+    _, temp = _login(client, "pedro@csws.gov.ph", STRONG_PASSWORD)
+    assert client.get(card_url, headers=temp).status_code == 404     # F-10: temporary password = guest
+    new = ok(client.post("/auth/change-password", headers=temp, json={
+        "current_password": STRONG_PASSWORD, "new_password": "Bagong#Pass2026",
+        "confirm_password": "Bagong#Pass2026"}))
+    staff = {"Authorization": f"Bearer {new['access_token']}"}
+    assert client.get(card_url, headers=staff).status_code == 200
+
     assert client.get(card_url, headers=staff).status_code == 200
     assert client.get(card_url, headers=t["admin"]).status_code == 200
     assert client.get(card_url, headers=t["csws"]).status_code == 404

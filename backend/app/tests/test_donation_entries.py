@@ -62,7 +62,8 @@ def test_donor_sees_only_own_entries_and_other_roles_blocked(api):
         "report_id": rid,
         "handover_method": "Drop Off",
         "items": [{"item_id": 1, "packaging": "Box", "quantity": 1}],
-        "guest_donor": {"full_name": "Guest", "contact_number": "0917 123 4567"},
+        "guest_donor": {"full_name": "Guest", "contact_number": "0917 123 4567", "consent": True},
+
     }), 201)
 
     mine = ok(client.get("/donations/entries", headers=t["donor"]))

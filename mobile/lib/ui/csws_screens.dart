@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'pending_items.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'home_nav.dart';
 import 'widgets.dart';
@@ -614,6 +615,7 @@ class CswsMainDashboard extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const PendingItemsCard(), // F-15
             PageHeader('CSWS Main Office Dashboard', subtitle: roleLine()),
             StatGrid([
               // Tiles open the tab that lists what they count.

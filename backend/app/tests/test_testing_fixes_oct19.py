@@ -110,7 +110,8 @@ def test_4_1_sack_is_not_a_quantity_unit(api):
     rid = _report(client, t)
     line = {"other_item_name": "Corn grits", "packaging": "Sack (25 kg)", "quantity": 2}
     body = {"report_id": rid, "handover_method": "Drop Off",
-            "guest_donor": {"full_name": "Juan Dela Cruz", "contact_number": "09171234567"}}
+    "guest_donor": {"full_name": "Juan Dela Cruz", "contact_number": "09171234567", "consent": True}}
+
     r = client.post("/donations/batch", json={**body, "items": [{**line, "other_item_unit": "sacks"}]})
     assert r.status_code == 422 and "packaging" in r.text
     r = client.post("/donations/batch", json={**body, "items": [{**line, "other_item_unit": "KG"}]})

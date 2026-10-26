@@ -1,8 +1,8 @@
 name: mobile
-description: "A new Flutter project."
+description: "NexaAid disaster relief coordination app."
 publish_to: "none"
 
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.13.2
@@ -22,6 +22,8 @@ dependencies:
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
   shared_preferences: ^2.5.6
+  # F-12: login token in the Android Keystore / iOS Keychain.
+  flutter_secure_storage: ^11.2.0
 
 dev_dependencies:
   flutter_test:

@@ -3,7 +3,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func, true
+from sqlalchemy.sql import false, func, true
 from core.database import Base
 
 class Item(Base):
@@ -21,6 +21,10 @@ class Item(Base):
     # False = kept for old records only, hidden from every dropdown
     # (e.g. the old "Drinking Water" in gallons). Migration 9b3f7c1d2e48.
     active = Column(Boolean, nullable=False, default=True, server_default=true())
+    # F-15: an item a donor or guest typed in ("Something else") waits for
+    # CSWS Main Office or the Administrator before it is in any dropdown.
+    # Migration c8e2f4a6b913.
+    pending_review = Column(Boolean, nullable=False, default=False, server_default=false())
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     sizes = relationship("ItemSize", order_by="ItemSize.sort_order", lazy="selectin")

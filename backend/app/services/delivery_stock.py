@@ -43,7 +43,8 @@ def check_stock(db: Session, report_id: int, lines, report_name: str = "this rep
         inv.item_id: inv
         for inv in db.query(Inventory).filter(
             Inventory.report_id == report_id, Inventory.item_id.in_(list(wanted))
-        ).all()
+        ).order_by(Inventory.item_id)                          # F-06: same lock order everywhere
+        .with_for_update().populate_existing().all()        # held until commit; take_stock uses it
     }
     for item_id, qty in wanted.items():
         available = rows[item_id].quantity if item_id in rows else 0
