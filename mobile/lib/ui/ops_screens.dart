@@ -52,7 +52,7 @@ class DeliveryStepper extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                _deliverySteps[i],
+                StatusColors.label(_deliverySteps[i]),
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
@@ -259,14 +259,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Confirm that delivery #${d['delivery_id']} arrived. This is also '
           'your barangay\'s acknowledgement of the aid. If it is '
           'incomplete you can wait until it is resolved (UC-B1 4a).',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+            fields: const [],
       confirm: 'Confirm receipt',
     );
     if (v == null || !context.mounted) return;
@@ -274,7 +267,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       () => api.post(
         '/deliveries/${d['delivery_id']}/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+        body: const {},
       ),
       success: 'Receipt confirmed and aid acknowledged. Fulfillment updated.',
     );
@@ -289,14 +282,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Trip #$tripId brought $n deliveries to your barangay. Confirm only '
           'if everything arrived. If something is missing, confirm the '
           'deliveries one by one instead.',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+        fields: const [],
       confirm: 'Confirm all',
     );
     if (v == null || !context.mounted) return;
@@ -304,7 +290,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       () => api.post(
         '/trips/$tripId/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+        body: const {},
       ),
       success: '$n deliveries confirmed and acknowledged. Fulfillment updated.',
     );
@@ -374,8 +360,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
 
   Widget _filters(BuildContext context, Map counts) {
     final t = Theme.of(context).textTheme;
-    String chip(String? s) =>
-        s == null ? 'All (${counts['total'] ?? 0})' : '$s (${counts[s] ?? 0})';
+    String chip(String? s) => s == null
+        ? 'All (${counts['total'] ?? 0})'
+        : '${StatusColors.label(s)} (${counts[s] ?? 0})';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -649,7 +636,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
             const SizedBox(height: 4),
             Text(items.isEmpty ? 'No items' : items),
             Text(
-              '${d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report #${d['report_id']}')}'
+              '${reportName(d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report'))}'
               ' · ${niceDate(d['delivery_date'])}',
               style: Theme.of(context).textTheme.bodySmall,
             ),

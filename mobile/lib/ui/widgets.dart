@@ -657,3 +657,8 @@ Future<T?> showDetailPopout<T>(
     },
   );
 }
+
+/// Report name without its "#12 " number (testing #16: no report IDs on
+/// the delivery view).
+String reportName(dynamic label) =>
+    '${label ?? ''}'.replaceFirst(RegExp(r'^#\d+\s*'), '');
