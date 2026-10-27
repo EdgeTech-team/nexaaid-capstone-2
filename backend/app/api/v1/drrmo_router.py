@@ -94,6 +94,8 @@ def completion_blocker(req: LogisticsRequest, delivery: Optional[Delivery], now=
     if delivery.status not in _LEFT_THE_OFFICE:
         # Advisor (Oct 24): DRRMO marks it In Transit when it picks up the goods.
         return "Pick up the goods first (Picked up · mark In Transit)."
+    if delivery.status == "In Transit":
+        return "Mark it Delivered when you reach the barangay."
     if delivery.status not in _BARANGAY_RECEIVED:
         return "Wait for the barangay representative to confirm receipt."
     return None
@@ -313,6 +315,22 @@ def picked_up(
     """Advisor (Oct 24): DRRMO picked up the prepared goods from CSWS, so the
     delivery goes In Transit (same history and notifications as CSWS
     advancing it). Only DRRMO can do this while its request is open."""
+    return _move_own_delivery(db, request_id, current_user, "Preparing")
+
+
+@router.post("/requests/{request_id}/delivered")
+def delivered(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(DRRMO)),
+):
+    """Testing (Oct 27): DRRMO, who carried the goods, marks the delivery
+    Delivered at the barangay. The barangay rep then confirms receipt."""
+    return _move_own_delivery(db, request_id, current_user, "In Transit")
+
+
+def _move_own_delivery(db: Session, request_id: int, current_user, from_status: str) -> dict:
+    """One step forward for the delivery of DRRMO's accepted request."""
     from api.v1.deliveries import move_to_next_status  # deliveries imports this module
 
     req = db.get(LogisticsRequest, request_id)
@@ -322,9 +340,9 @@ def picked_up(
         raise HTTPException(status_code=409, detail="Accept the request first.")
     d = db.get(Delivery, req.delivery_id) if req.delivery_id else None
     if d is None:
-        raise HTTPException(status_code=409, detail="This request has no delivery to pick up.")
-    if d.status != "Preparing":
-        raise HTTPException(status_code=409, detail=f"Delivery #{d.delivery_id} is already {d.status}.")
+        raise HTTPException(status_code=409, detail="This request has no delivery to move.")
+    if d.status != from_status:
+        raise HTTPException(status_code=409, detail=f"Delivery #{d.delivery_id} is {d.status}.")
     move_to_next_status(db, d, current_user)
     db.commit()
     return request_rows(db, [req])[0]

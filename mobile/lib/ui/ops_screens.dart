@@ -7,6 +7,7 @@ import 'input_formatters.dart' show pesos;
 import 'trip_screens.dart';
 import 'widgets.dart';
 import 'logistics_cards.dart';
+import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
 import 'scheduled_deliveries.dart';
 
@@ -188,6 +189,24 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       helpText: 'Show deliveries between',
     );
     if (picked != null) setState(() => dates = picked);
+  }
+
+  Future<void> _delete(BuildContext context, Map d) async {
+    final v = await formDialog(
+      context,
+      title: 'Delete delivery #${d['delivery_id']}?',
+      message:
+          'It is removed from this list. Its record, receipt and the '
+          'report\'s fulfillment stay as they are.',
+      fields: const [],
+      confirm: 'Delete',
+    );
+    if (v == null || !context.mounted) return;
+    await act(
+      context,
+      () => api.delete('/deliveries/${d['delivery_id']}'),
+      success: 'Delivery #${d['delivery_id']} deleted',
+    );
   }
 
   Future<void> _requestTransport(BuildContext context, Map d) async {
@@ -604,8 +623,15 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                       '${it['item_name'] ?? names.of('items', it['item_id'], fallback: 'item')}'
                   .replaceAll(RegExp(r'\s+'), ' '),
         )
-        .join(', ');
+        .toList();
     final reqStage = request?['stage'] as String?;
+    // Testing (Oct 27): with a DRRMO request open, DRRMO moves the delivery
+    // (In Transit on pickup, Delivered on arrival); CSWS waits.
+    final reqOpen =
+        request != null &&
+        (request['status'] == 'Pending' || request['status'] == 'Accepted') &&
+        (status == 'Preparing' || status == 'In Transit');
+    final drrmo = api.role == Roles.drrmo;
     final barangayName =
         d['destination_barangay_name'] ??
         names.of('barangays', d['destination_barangay_id']);
@@ -630,8 +656,10 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                 Badge2.status(status),
               ],
             ),
-            const SizedBox(height: 4),
-            Text(items.isEmpty ? 'No items' : items),
+            const SizedBox(height: 6),
+            // Testing (Oct 27): the goods stand out, like the donate form.
+            if (items.isEmpty) const Text('No items') else NeedChips(items),
+            const SizedBox(height: 6),
             Text(
               '${reportName(d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report'))}'
               ' · ${niceDate(d['delivery_date'])}',
@@ -715,6 +743,16 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                   icon: const Icon(Icons.history),
                   label: const Text('History'),
                 ),
+                // Testing (Oct 27): finished deliveries can be cleared from
+                // the list (kept on record, see DELETE /deliveries/{id}).
+                if (!barangay &&
+                    !readOnly &&
+                    (status == 'Cancelled' || status == 'Confirmed'))
+                  TextButton.icon(
+                    onPressed: () => _delete(context, d),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete'),
+                  ),
                 // Unexpected problems: new date, truck came back, cancel,
                 // or no longer need DRRMO (delivery_widgets.dart).
                 if (!barangay &&
@@ -740,18 +778,43 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     icon: const Icon(Icons.fire_truck_outlined),
                     label: const Text('Request transport'),
                   ),
-                // Advisor (Oct 24): with a DRRMO request open, DRRMO marks it
-                // In Transit when they pick up the goods (DRRMO screen).
-                if (!barangay &&
-                    !readOnly &&
-                    status == 'Preparing' &&
-                    (reqStage == 'Pending' || reqStage == 'Accepted'))
+                // Advisor (Oct 24) + testing (Oct 27): with a DRRMO request
+                // open, DRRMO moves it; CSWS sees who has it.
+                if (!barangay && !readOnly && reqOpen)
                   Chip(
                     avatar: const Icon(Icons.fire_truck_outlined, size: 18),
                     label: Text(
-                      reqStage == 'Pending'
+                      request['status'] == 'Pending'
                           ? 'Waiting for DRRMO to accept'
-                          : 'DRRMO marks it In Transit on pickup',
+                          : status == 'Preparing'
+                          ? 'DRRMO marks it In Transit on pickup'
+                          : 'DRRMO marks it Delivered on arrival',
+                    ),
+                  )
+                else if (drrmo && reqOpen && request['status'] == 'Pending')
+                  const Chip(
+                    avatar: Icon(Icons.info_outline, size: 18),
+                    label: Text('Accept the request in Logistics first'),
+                  )
+                else if (drrmo && reqOpen)
+                  FilledButton.icon(
+                    onPressed: () => act(
+                      context,
+                      () => api.post(
+                        '/drrmo/requests/${request['request_id']}/'
+                        '${status == 'Preparing' ? 'picked-up' : 'delivered'}',
+                      ),
+                      success: 'Delivery #${d['delivery_id']} is now $next',
+                    ),
+                    icon: Icon(
+                      status == 'Preparing'
+                          ? Icons.local_shipping
+                          : Icons.where_to_vote_outlined,
+                    ),
+                    label: Text(
+                      status == 'Preparing'
+                          ? 'Picked up · mark In Transit'
+                          : 'Mark Delivered',
                     ),
                   )
                 else if (!barangay && !readOnly && next != null)
@@ -1221,9 +1284,18 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   @override
   String get homeTab => 'Logistics';
 
+  /// The request a notification is about (testing, Oct 27): its list opens
+  /// at the stage it is in now, with that request first and outlined.
+  int? _focus;
+  bool _focusPlaced = false;
+  int _loads = 0; // a new notice reloads the list, so a new request is in it
+
   @override
   void applyHomeTarget(HomeTarget target) {
     if (target.view != null) stage = target.view!;
+    _focus = target.id;
+    _focusPlaced = false;
+    _loads++;
   }
 
   Future<void> _accept(Map r) async {
@@ -1324,6 +1396,7 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   @override
   Widget build(BuildContext context) {
     return Loader(
+      key: ValueKey('drrmo-$_loads'),
       load: [
         () => api.get('/drrmo/dashboard'),
         () => api.get('/drrmo/requests'),
@@ -1334,7 +1407,17 @@ class _DrrmoScreenState extends State<DrrmoScreen>
         final dash = data[0] as Map;
         final all = (data[1] as List).cast<Map>();
         final scheduled = (data[2] as List).cast<Map>();
-        final rows = all.where((r) => r['stage'] == stage).toList();
+        if (_focus != null && !_focusPlaced) {
+          // The request may have moved on since the notice (e.g. accepted).
+          final hit = all.where((r) => r['request_id'] == _focus);
+          if (hit.isNotEmpty) stage = '${hit.first['stage']}';
+          _focusPlaced = true;
+        }
+        final inStage = all.where((r) => r['stage'] == stage);
+        final rows = [
+          ...inStage.where((r) => r['request_id'] == _focus),
+          ...inStage.where((r) => r['request_id'] != _focus),
+        ];
         const stages = {
           'Pending': 'New',
           'Accepted': 'Accepted',
@@ -1404,8 +1487,17 @@ class _DrrmoScreenState extends State<DrrmoScreen>
             const SizedBox(height: 12),
             if (rows.isEmpty) const EmptyState('No requests here.'),
             for (final r in rows)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: r['request_id'] == _focus
+                    ? BoxDecoration(
+                        borderRadius: BorderRadius.circular(Radii.lg),
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 2,
+                        ),
+                      )
+                    : null,
                 child: LogisticsRequestCard(
                   r,
                   actions: [
@@ -1441,6 +1533,23 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                         ),
                         icon: const Icon(Icons.local_shipping),
                         label: const Text('Picked up · mark In Transit'),
+                      ),
+                    // Testing (Oct 27): DRRMO carried it, so DRRMO marks it
+                    // Delivered at the barangay.
+                    if (r['stage'] == 'In Transit' &&
+                        r['request_type'] != 'Pickup' &&
+                        r['delivery_status'] == 'In Transit')
+                      FilledButton.icon(
+                        onPressed: () => act(
+                          context,
+                          () => api.post(
+                            '/drrmo/requests/${r['request_id']}/delivered',
+                          ),
+                          success:
+                              'Delivery #${r['delivery_id']} is now Delivered',
+                        ),
+                        icon: const Icon(Icons.where_to_vote_outlined),
+                        label: const Text('Mark Delivered'),
                       ),
                     // Testing fix 7.5: only after the date, In Transit (8.1)
                     // and the barangay's receipt (8.2). The card shows why.

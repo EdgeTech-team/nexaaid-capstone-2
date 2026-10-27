@@ -53,10 +53,13 @@ def test_7_5_drrmo_completes_only_after_in_transit_and_barangay_receipt(api):
 
     # In Transit (DRRMO picked it up, advisor Oct 24), then Delivered:
     # still waiting for the barangay (8.2).
-    for step in (f"/drrmo/requests/{req}/picked-up", f"/deliveries/{did}/advance"):
-        ok(client.post(step, headers=t["drrmo" if "drrmo" in step else "csws"]))
-        r = _complete(client, t, req)
-        assert r.status_code == 409 and "confirm receipt" in r.json()["detail"]
+    # Testing (Oct 27): DRRMO marks both steps.
+    ok(client.post(f"/drrmo/requests/{req}/picked-up", headers=t["drrmo"]))
+    r = _complete(client, t, req)
+    assert r.status_code == 409 and "Mark it Delivered" in r.json()["detail"]
+    ok(client.post(f"/drrmo/requests/{req}/delivered", headers=t["drrmo"]))
+    r = _complete(client, t, req)
+    assert r.status_code == 409 and "confirm receipt" in r.json()["detail"]
 
     # The barangay confirms receipt: now DRRMO can complete.
     ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)

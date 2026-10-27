@@ -24,8 +24,13 @@ def test_drrmo_marks_in_transit_once_it_takes_the_request(api):
     assert row["delivery_status"] == "In Transit" and row["stage"] == "In Transit"
     assert client.post(f"/drrmo/requests/{rid}/picked-up", headers=t["drrmo"]).status_code == 409
 
-    # From here CSWS carries on as before (Delivered).
-    ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
+    # Testing (Oct 27): DRRMO also marks it Delivered; CSWS still waits.
+    r = client.post(f"/deliveries/{did}/advance", headers=t["csws"])
+    assert r.status_code == 409 and "DRRMO marks it Delivered" in r.text
+    assert client.post(f"/drrmo/requests/{rid}/delivered", headers=t["csws"]).status_code == 403
+    row = ok(client.post(f"/drrmo/requests/{rid}/delivered", headers=t["drrmo"]))
+    assert row["delivery_status"] == "Delivered"
+    assert client.post(f"/drrmo/requests/{rid}/delivered", headers=t["drrmo"]).status_code == 409
 
 
 def test_without_a_drrmo_request_csws_still_sends_it(api):
