@@ -495,7 +495,8 @@ class _PickupDatesSheetState extends State<_PickupDatesSheet> {
             PickupHoursNote(widget.rules),
             Gaps.v8,
             Text(
-              'Faded dates have no pickups.',
+              'Faded dates have no pickups. Choose dates within '
+              '${widget.rules.aheadLabel}.',
               style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
             Gaps.v16,
@@ -526,16 +527,24 @@ class _PickupDatesSheetState extends State<_PickupDatesSheet> {
 
 /// A month calendar (Mon to Sun) where several dates can be on at once.
 /// Only [PickupRules.isPickupDate] dates can be tapped.
+///
+/// CSWS uses the same calendar to filter Door to Door pickups (adviser,
+/// Oct 28): [single] picks one date, and [countOn] shows under each date
+/// how many stops have a donor home, so the dates donors chose stand out.
 class PickupCalendar extends StatefulWidget {
   final PickupRules rules;
   final Set<DateTime> selected;
   final ValueChanged<Set<DateTime>> onChanged;
+  final bool single;
+  final int Function(DateTime date)? countOn;
 
   const PickupCalendar({
     super.key,
     required this.rules,
     required this.selected,
     required this.onChanged,
+    this.single = false,
+    this.countOn,
   });
 
   @override
@@ -559,6 +568,7 @@ class _PickupCalendarState extends State<PickupCalendar> {
   }();
 
   void _toggle(DateTime d) {
+    if (widget.single) return widget.onChanged({d});
     final next = {...widget.selected};
     next.contains(d) ? next.remove(d) : next.add(d);
     widget.onChanged(next);
@@ -630,6 +640,14 @@ class _PickupCalendarState extends State<PickupCalendar> {
                   DateTime(_month.year, _month.month, day),
                 ),
                 today: DateTime(_month.year, _month.month, day) == _today,
+                count:
+                    widget.rules.isPickupDate(
+                      DateTime(_month.year, _month.month, day),
+                    )
+                    ? widget.countOn?.call(
+                        DateTime(_month.year, _month.month, day),
+                      )
+                    : null,
                 onTap: _toggle,
               ),
           ],
@@ -644,6 +662,7 @@ class _DateCell extends StatelessWidget {
   final bool on;
   final bool available;
   final bool today;
+  final int? count; // stops with a donor home (staff filter), else null
   final ValueChanged<DateTime> onTap;
 
   const _DateCell({
@@ -651,6 +670,7 @@ class _DateCell extends StatelessWidget {
     required this.on,
     required this.available,
     required this.today,
+    this.count,
     required this.onTap,
   });
 
@@ -658,10 +678,13 @@ class _DateCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
+    final busy = (count ?? 0) > 0; // a donor chose this date
     final fg = !available
         ? cs.onSurfaceVariant.withValues(alpha: 0.38)
         : on
         ? cs.onPrimary
+        : busy
+        ? cs.onPrimaryContainer
         : cs.onSurface;
     return Semantics(
       button: true,
@@ -670,14 +693,19 @@ class _DateCell extends StatelessWidget {
       label:
           '${pickupDayNames[date.weekday - 1]}, '
           '${_monthNames[date.month - 1]} ${date.day}'
-          '${available ? '' : ', no pickups'}',
+          '${available ? '' : ', no pickups'}'
+          '${count == null ? '' : ', $count stop${count == 1 ? '' : 's'}'}',
       excludeSemantics: true,
       onTap: available ? () => onTap(date) : null,
       child: AnimatedContainer(
         duration: Motion.fast,
         curve: Motion.curve,
         decoration: BoxDecoration(
-          color: on ? cs.primary : Colors.transparent,
+          color: on
+              ? cs.primary
+              : busy
+              ? cs.primaryContainer
+              : Colors.transparent,
           shape: BoxShape.circle,
           border: today && !on
               ? Border.all(color: cs.primary, width: 1.5)
@@ -690,12 +718,28 @@ class _DateCell extends StatelessWidget {
           child: InkWell(
             onTap: available ? () => onTap(date) : null,
             child: Center(
-              child: Text(
-                '${date.day}',
-                style: t.bodyMedium?.copyWith(
-                  color: fg,
-                  fontWeight: on || today ? FontWeight.w800 : FontWeight.w500,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${date.day}',
+                    style: t.bodyMedium?.copyWith(
+                      color: fg,
+                      fontWeight: on || today || busy
+                          ? FontWeight.w800
+                          : FontWeight.w500,
+                    ),
+                  ),
+                  if (busy)
+                    Text(
+                      '$count',
+                      style: t.labelSmall?.copyWith(
+                        color: fg,
+                        fontSize: 10,
+                        height: 1,
+                      ),
+                    ),
+                ],
               ),
             ),
           ),

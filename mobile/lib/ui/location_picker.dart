@@ -374,7 +374,7 @@ class PickupRules {
     this.startHour = 9,
     this.endHour = 17,
     this.minLeadHours = 1,
-    this.maxDaysAhead = 30,
+    this.maxDaysAhead = 13,
     this.label = 'Monday to Friday, 9:00 AM to 5:00 PM',
     this.serviceAreas = defaultServiceAreas,
   });
@@ -391,7 +391,7 @@ class PickupRules {
       startHour: (j['start_hour'] as num?)?.toInt() ?? 9,
       endHour: (j['end_hour'] as num?)?.toInt() ?? 17,
       minLeadHours: (j['min_lead_hours'] as num?)?.toInt() ?? 1,
-      maxDaysAhead: (j['max_days_ahead'] as num?)?.toInt() ?? 30,
+      maxDaysAhead: (j['max_days_ahead'] as num?)?.toInt() ?? 13,
       label: '${j['label'] ?? 'Monday to Friday, 9:00 AM to 5:00 PM'}',
       serviceAreas: areas.isEmpty ? defaultServiceAreas : areas,
     );
@@ -402,6 +402,14 @@ class PickupRules {
 
   /// Dates the donor can choose: CSWS pickup days from today (Philippine
   /// time) up to [maxDaysAhead] days ahead.
+  /// "the next 2 weeks" for 13 days ahead (today counts).
+  String get aheadLabel {
+    final span = maxDaysAhead + 1;
+    return span % 7 == 0
+        ? 'the next ${span ~/ 7} weeks'
+        : 'the next $span days';
+  }
+
   bool isPickupDate(DateTime d) {
     final now = phNow();
     final today = DateTime(now.year, now.month, now.day);
@@ -441,7 +449,7 @@ class PickupRules {
       return 'Choose a time at least $minLeadHours hour(s) from now.';
     }
     if (instant.isAfter(now.add(Duration(days: maxDaysAhead)))) {
-      return 'Choose a date within $maxDaysAhead days.';
+      return 'Choose a date within $aheadLabel.';
     }
     final ph = instant.toUtc().add(_phOffset);
     if (!days.contains(ph.weekday)) return 'CSWS does pickups only on: $label.';

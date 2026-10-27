@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'location_picker.dart' show PickupRules;
 import 'pickup_actions.dart' show ContactButtons, openNavigation;
-import 'pickup_days.dart';
+import 'pickup_days.dart' show PickupCalendar;
 import 'pickup_plan.dart';
 import 'widgets.dart';
 
@@ -39,8 +39,8 @@ class PickupListView extends StatefulWidget {
   /// Shown at the bottom (the requests sent to DRRMO).
   final Widget? footer;
 
-  /// "Home on" day when the list opens (the map passes today's weekday).
-  final int? initialHomeOn;
+  /// "Home on" date when the list opens (the map passes the date it shows).
+  final DateTime? initialHomeOn;
   final Future<void> Function() onRefresh;
   final void Function(PlanStop stop) onOpenStop;
   final void Function(PlanDonation d)? onOpenFollowUp;
@@ -63,16 +63,13 @@ class PickupListView extends StatefulWidget {
 
 class _PickupListViewState extends State<PickupListView> {
   PickupGroup _group = PickupGroup.day;
-  late int? _homeOn = widget.initialHomeOn; // weekday filter, null = any
+  // Date filter, null = any (adviser, Oct 27: donors pick specific dates,
+  // so staff pick a date too, not a weekday).
+  late DateTime? _homeOn = widget.initialHomeOn;
   String _query = '';
 
-  /// The next date (today counts) with this weekday, like the map: the day
-  /// filter means that date, so donors who chose dates show only on them.
-  DateTime? _dateOf(int weekday) =>
-      widget.plan.dates.where((d) => d.weekday == weekday).firstOrNull;
-
   bool _matches(PlanStop s) {
-    if (_homeOn != null && !s.availableOn(_dateOf(_homeOn!))) return false;
+    if (_homeOn != null && !s.availableOn(_homeOn)) return false;
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
     final text = [
@@ -85,7 +82,7 @@ class _PickupListViewState extends State<PickupListView> {
   }
 
   bool _matchesFollowUp(PlanDonation d) {
-    if (_homeOn != null && !d.availableOn(_dateOf(_homeOn!))) return false;
+    if (_homeOn != null && !d.availableOn(_homeOn)) return false;
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
     return [
@@ -112,11 +109,9 @@ class _PickupListViewState extends State<PickupListView> {
   List<(String, String?, List<PlanStop>)> _sections(List<PlanStop> stops) {
     switch (_group) {
       case PickupGroup.day:
-        final days = widget.rules.days.toList()..sort();
         final out = <(String, String?, List<PlanStop>)>[];
-        for (final wd in days) {
-          if (_homeOn != null && wd != _homeOn) continue;
-          final date = _dateOf(wd);
+        for (final date in widget.plan.dates) {
+          if (_homeOn != null && !sameDay(date, _homeOn)) continue;
           final list = stops.where((s) => s.availableOn(date)).toList()
             // Stops planned on this date first, in route order.
             ..sort((a, b) {
@@ -126,19 +121,18 @@ class _PickupListViewState extends State<PickupListView> {
             });
           if (list.isEmpty) continue;
           out.add((
-            date == null
-                ? pickupDayNames[wd - 1]
-                : '${sameDay(date, widget.plan.today) ? 'Today · ' : ''}'
-                      '${planDateLabel(date)}',
+            '${sameDay(date, widget.plan.today) ? 'Today · ' : ''}'
+                '${planDateLabel(date)}',
             '${list.where((s) => sameDay(s.plannedDate, date)).length} '
                 'planned on this date',
             list,
           ));
         }
         // Home on none of the dates above: other days, or chosen dates
-        // later than this week.
-        final shown = [for (final wd in days) _dateOf(wd)];
-        final none = stops.where((s) => !shown.any(s.availableOn)).toList();
+        // after the planning window.
+        final none = stops
+            .where((s) => !widget.plan.dates.any(s.availableOn))
+            .toList();
         if (none.isNotEmpty && _homeOn == null) {
           out.add((
             'Later or other days',
@@ -175,7 +169,6 @@ class _PickupListViewState extends State<PickupListView> {
     final stops = p.stops.where(_matches).toList();
     final followUp = p.followUp.where(_matchesFollowUp).toList();
     final sections = _sections(stops);
-    final days = widget.rules.days.toList()..sort();
 
     return RefreshIndicator(
       onRefresh: widget.onRefresh,
@@ -204,24 +197,23 @@ class _PickupListViewState extends State<PickupListView> {
                 child: Text(
                   _homeOn == null
                       ? 'Showing every waiting stop'
-                      : _homeOn == p.today.weekday
+                      : sameDay(_homeOn, p.today)
                       ? 'Showing who is home today'
-                      : 'Showing who is home on '
-                            '${pickupDayNames[_homeOn! - 1]}',
+                      : 'Showing who is home on ${planDateLabel(_homeOn!)}',
                   style: t.titleSmall,
                 ),
               ),
               DayFilterButton(
-                weekday: _homeOn,
-                todayWeekday: p.today.weekday,
+                date: _homeOn,
+                today: p.today,
                 onPressed: () async {
                   final v = await showDayFilter(
                     context,
                     current: _homeOn,
-                    todayWeekday: p.today.weekday,
-                    pickupDays: days,
-                    countOn: (wd) =>
-                        p.stops.where((s) => s.availableOn(_dateOf(wd))).length,
+                    today: p.today,
+                    rules: widget.rules,
+                    countOn: (d) =>
+                        p.stops.where((s) => s.availableOn(d)).length,
                     allCount: p.stops.length,
                   );
                   if (v != null)
@@ -316,31 +308,31 @@ class _PickupListViewState extends State<PickupListView> {
 // ---------------------------------------------------------------------------
 
 /// Returned by [showDayFilter] for "All days".
-const kAllDays = 0;
+final kAllDays = DateTime.utc(1);
 
-/// "Today", "Wed" or "All days" for the filter button.
-String dayFilterLabel(int? weekday, int todayWeekday) => weekday == null
+/// "Today", "Tue, Oct 28" or "All days" for the filter button.
+String dayFilterLabel(DateTime? date, DateTime today) => date == null
     ? 'All days'
-    : weekday == todayWeekday
+    : sameDay(date, today)
     ? 'Today'
-    : pickupDayShort[weekday - 1];
+    : planDateLabel(date);
 
-/// The "Filter" button: shows the day being shown, opens [showDayFilter].
+/// The "Filter" button: shows the date being shown, opens [showDayFilter].
 class DayFilterButton extends StatelessWidget {
-  final int? weekday; // null = all days
-  final int todayWeekday;
+  final DateTime? date; // null = all days
+  final DateTime today;
   final VoidCallback onPressed;
   const DayFilterButton({
     super.key,
-    required this.weekday,
-    required this.todayWeekday,
+    required this.date,
+    required this.today,
     required this.onPressed,
   });
 
   @override
   Widget build(BuildContext context) {
-    final filtered = weekday != todayWeekday;
-    final label = Text(dayFilterLabel(weekday, todayWeekday));
+    final filtered = !sameDay(date, today);
+    final label = Text(dayFilterLabel(date, today));
     const icon = Icon(Icons.filter_list, size: 18);
     return filtered
         ? FilledButton.icon(onPressed: onPressed, icon: icon, label: label)
@@ -348,72 +340,72 @@ class DayFilterButton extends StatelessWidget {
   }
 }
 
-/// Pop-up to pick the day: Today first, the other pickup days, All days.
-/// Each shows how many stops have a donor home. Returns the weekday,
-/// [kAllDays], or null if closed.
-Future<int?> showDayFilter(
+/// Pop-up to pick the date (adviser, Oct 28): the same calendar donors use
+/// for "When are you home?". Dates with a donor home are highlighted with
+/// the number of stops; faded dates have no pickups. Tapping a date shows
+/// it; "All days" shows every stop. Returns the date, [kAllDays], or null
+/// if closed.
+Future<DateTime?> showDayFilter(
   BuildContext context, {
-  required int? current,
-  required int todayWeekday,
-  required List<int> pickupDays,
-  required int Function(int weekday) countOn,
+  required DateTime? current,
+  required DateTime today,
+  required PickupRules rules,
+  required int Function(DateTime date) countOn,
   required int allCount,
 }) {
-  return showModalBottomSheet<int>(
+  return showModalBottomSheet<DateTime>(
     context: context,
     showDragHandle: true,
+    isScrollControlled: true,
     builder: (sheet) {
       final t = Theme.of(sheet).textTheme;
       final cs = Theme.of(sheet).colorScheme;
-      Widget option(int value, String title, int count, {bool today = false}) {
-        final selected = value == kAllDays ? current == null : current == value;
-        return ListTile(
-          leading: Icon(
-            selected ? Icons.radio_button_checked : Icons.radio_button_off,
-            color: selected ? cs.primary : cs.onSurfaceVariant,
-          ),
-          title: Text(
-            title,
-            style: today ? const TextStyle(fontWeight: FontWeight.w700) : null,
-          ),
-          trailing: Text(
-            '$count stop${count == 1 ? '' : 's'}',
-            style: t.labelLarge?.copyWith(
-              color: count == 0 ? cs.onSurfaceVariant : cs.primary,
-            ),
-          ),
-          onTap: () => Navigator.pop(sheet, value),
-        );
-      }
-
-      final days = [...pickupDays]..sort();
       return SafeArea(
         child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(Space.lg, 0, Space.lg, Space.lg),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  Space.lg,
-                  0,
-                  Space.lg,
-                  Space.xs,
-                ),
-                child: Text('Who is home on', style: t.titleMedium),
+              Text('Who is home on', style: t.titleLarge),
+              Gaps.v4,
+              Text(
+                'Highlighted dates have donors home, with the number of '
+                'stops. Tap a date to see its pickups.',
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
               ),
-              if (days.contains(todayWeekday))
-                option(
-                  todayWeekday,
-                  'Today (${pickupDayNames[todayWeekday - 1]})',
-                  countOn(todayWeekday),
-                  today: true,
-                ),
-              for (final wd in days)
-                if (wd != todayWeekday)
-                  option(wd, pickupDayNames[wd - 1], countOn(wd)),
-              const Divider(height: 1),
-              option(kAllDays, 'All days', allCount),
+              Gaps.v16,
+              PickupCalendar(
+                rules: rules,
+                single: true,
+                selected: {?current},
+                countOn: countOn,
+                onChanged: (d) => Navigator.pop(sheet, d.first),
+              ),
+              Gaps.v8,
+              Text(
+                'Faded dates have no pickups.',
+                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v16,
+              Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.pop(sheet, kAllDays),
+                    icon: const Icon(Icons.list),
+                    label: Text(
+                      'All days ($allCount stop${allCount == 1 ? '' : 's'})',
+                    ),
+                  ),
+                  const Spacer(),
+                  if (!sameDay(current, today) && rules.isPickupDate(today))
+                    FilledButton.icon(
+                      onPressed: () => Navigator.pop(sheet, today),
+                      icon: const Icon(Icons.today),
+                      label: const Text('Today'),
+                    ),
+                ],
+              ),
             ],
           ),
         ),
