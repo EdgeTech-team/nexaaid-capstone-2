@@ -158,7 +158,8 @@ def list_deliveries(
   current_user=Depends(require_role(*_LIST_ROLES)),
 
 ):
-    query = db.query(Delivery).options(joinedload(Delivery.items))
+    query = (db.query(Delivery).options(joinedload(Delivery.items))
+             .filter(Delivery.deleted_at.is_(None)))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
        query = query.filter(Delivery.destination_barangay_id == own_barangay)
@@ -177,7 +178,7 @@ def delivery_counts(
 ):
     """How many deliveries are in each status, for the filter chips
     ("In Transit (3)"). Same barangay scope as the list."""
-    query = db.query(Delivery)
+    query = db.query(Delivery).filter(Delivery.deleted_at.is_(None))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
        query = query.filter(Delivery.destination_barangay_id == own_barangay)
@@ -201,9 +202,39 @@ def get_delivery(
      .first()
   )
   own_barangay = barangay_scope(current_user)
-  if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
+  if (not delivery or delivery.deleted_at is not None
+          or (own_barangay is not None and delivery.destination_barangay_id != own_barangay)):
      raise HTTPException(status_code=404, detail="Delivery not found")
   return delivery
+
+
+# Delete (testing, Oct 27): CSWS clears finished deliveries from the list.
+# Only Cancelled (goods already back in stock) or Confirmed (the barangay
+# received them). A soft delete: the row, its receipt and its quantities
+# stay, so fulfillment, donor history and the audit log are unchanged.
+_DELETABLE = ("Cancelled", "Confirmed")
+
+
+@router.delete("/{delivery_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_delivery(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office", "admin")),
+):
+    delivery = db.get(Delivery, delivery_id)
+    if not delivery or delivery.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status not in _DELETABLE:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Delivery #{delivery.delivery_id} is {delivery.status}. Only cancelled "
+                    "or confirmed deliveries can be deleted."),
+        )
+    delivery.deleted_at = now_utc()
+    delivery.deleted_by_user_id = current_user.user_id
+    log_action(db, current_user, "DELETE DELIVERY", "deliveries", delivery.delivery_id,
+               old={"status": delivery.status}, new={"deleted": True})
+    db.commit()
 
 
 # Advance status — CSWS Main Office moves it one step forward, in order
@@ -260,20 +291,23 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
 
     current_index = _STATUS_SEQUENCE.index(delivery.status)
 
-    # Advisor (Oct 24): once CSWS asked DRRMO for transport, DRRMO marks the
-    # delivery In Transit when it picks the goods up (drrmo_router
-    # picked_up). CSWS waits, or cancels the request to send it themselves.
-    if delivery.status == "Preparing" and not has_role(current_user, DRRMO):
+    # Advisor (Oct 24) + testing (Oct 27): once CSWS asked DRRMO for
+    # transport, DRRMO moves the delivery (In Transit on pickup, Delivered on
+    # arrival; drrmo_router picked_up / delivered). CSWS waits, or cancels
+    # the request to send it themselves.
+    if delivery.status in ("Preparing", "In Transit") and not has_role(current_user, DRRMO):
         open_request = (db.query(LogisticsRequest)
                         .filter(LogisticsRequest.delivery_id == delivery.delivery_id,
                                 LogisticsRequest.status.in_(("Pending", "Accepted")))
                         .first())
         if open_request is not None:
+            step = ("In Transit when they pick up the goods" if delivery.status == "Preparing"
+                    else "Delivered when they reach the barangay")
             raise HTTPException(
                 status_code=409,
                 detail=(f"Delivery #{delivery.delivery_id} goes with DRRMO "
                         f"(request #{open_request.request_id}, {open_request.status}). "
-                        "DRRMO marks it In Transit when they pick up the goods. "
+                        f"DRRMO marks it {step}. "
                         "To send it yourself, cancel the DRRMO request first."),
             )
 

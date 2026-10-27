@@ -196,7 +196,9 @@ class _RoleHomeState extends State<RoleHome> {
   static const _kLastTab = 'last_tab';
 
   /// Remember which tab the user opened, so a page refresh or app restart
-  /// returns to it instead of the first tab.
+  /// returns to it instead of the first tab. Signing in, browsing as a
+  /// guest and Profile (where people sign out) start on the dashboard
+  /// instead (testing, Oct 27).
   Future<void> _rememberTab(int i) async {
     try {
       final p = await SharedPreferences.getInstance();
@@ -209,6 +211,7 @@ class _RoleHomeState extends State<RoleHome> {
       final p = await SharedPreferences.getInstance();
       final label = p.getString(_kLastTab);
       if (label == null || !mounted || api.mustChangePassword) return;
+      if (api.guest || label == 'Profile') return;
       final i = _allTabs.indexWhere((t) => t.label == label);
       if (i >= 0) setState(() => index = i);
     } catch (_) {}

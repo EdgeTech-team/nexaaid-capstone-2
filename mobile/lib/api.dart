@@ -87,6 +87,9 @@ class Api extends ChangeNotifier {
   static const _kEmail = 'session_email';
   static const _kRole = 'session_role';
   static const _kMustChange = 'session_must_change';
+  // The tab RoleHome reopens after a refresh (home.dart). A new sign-in
+  // starts on the first tab, the dashboard (testing, Oct 27).
+  static const _kLastTab = 'last_tab';
 
   // F-12: on Android and iOS the login token is kept in the Android
   // Keystore / iOS Keychain, never in plain shared_preferences. The web and
@@ -141,6 +144,7 @@ class Api extends ChangeNotifier {
       await p.remove(_kEmail);
       await p.remove(_kRole);
       await p.remove(_kMustChange);
+      await p.remove(_kLastTab);
       if (_onPhone) await _secure.delete(key: _kToken);
     } catch (_) {}
   }
@@ -403,6 +407,9 @@ class Api extends ChangeNotifier {
       }
 
       await _saveSession();
+      try {
+        (await SharedPreferences.getInstance()).remove(_kLastTab);
+      } catch (_) {}
       notifyListeners();
     }
 

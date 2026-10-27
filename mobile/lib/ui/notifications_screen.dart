@@ -76,10 +76,13 @@ final Map<String, EntityOpener> notificationDestinations = {
     switch (api.role) {
       case Roles.drrmo:
         // Shared notifications (Oct 23): DRRMO also hears what a teammate
-        // did, so open the stage the request is in now.
+        // did. The Logistics screen opens the stage the request is in now,
+        // with that request first and outlined (testing, Oct 27); the event
+        // only decides the stage if the request is gone.
         _go(
           c,
           'Logistics',
+          id: id,
           view: switch (event) {
             'logistics_requested' => 'Pending',
             'logistics_accepted' => 'Accepted',

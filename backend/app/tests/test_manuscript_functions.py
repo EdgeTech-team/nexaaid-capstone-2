@@ -164,9 +164,9 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     # Testing fix 7.5: not while the goods are still on the road ...
     r = client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                      json={"summary": "Delivered by truck 2"})
-    assert r.status_code == 409 and "confirm receipt" in r.json()["detail"]
+    assert r.status_code == 409 and "Mark it Delivered" in r.json()["detail"]
     # ... only after the barangay representative confirms receipt (8.2).
-    ok(client.post(f"/deliveries/{delivery['delivery_id']}/advance", headers=t["csws"]))
+    ok(client.post(f"/drrmo/requests/{rid_}/delivered", headers=t["drrmo"]))   # testing, Oct 27
     ok(client.post(f"/deliveries/{delivery['delivery_id']}/confirm-receipt",
                    headers=t["brgy"], json={}), 201)
     done = ok(client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],

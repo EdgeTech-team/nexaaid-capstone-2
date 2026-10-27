@@ -65,6 +65,16 @@ class Delivery(Base):
     cancelled_at = Column(TIMESTAMP(timezone=True), nullable=True)
     cancel_reason = Column(Text, nullable=True)
 
+    # Deleted from the delivery list (Cancelled or Confirmed only, testing
+    # Oct 27). The row stays for fulfillment and history; the lists and
+    # counts hide it. Migration b7d3e9f1a2c4.
+    deleted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    deleted_by_user_id = Column(
+        Integer,
+        ForeignKey("users.user_id", ondelete="SET NULL", name="fk_deliveries_deleted_by"),
+        nullable=True,
+    )
+
     __table_args__ = (
         CheckConstraint(
              "status IN ('Preparing','In Transit','Delivered', 'Confirmed', 'Cancelled')", 
