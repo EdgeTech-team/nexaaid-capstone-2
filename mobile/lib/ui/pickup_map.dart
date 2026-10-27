@@ -50,11 +50,11 @@ import 'widgets.dart';
 const _osmTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const _appId = 'nexaaid.mandauecity.app';
 
-/// Show the "Ask DRRMO for help" button. The manuscript has DRRMO help only
-/// after goods are prepared for release (Scope 5.2 / 5.3); the Oct 11 notes
-/// added it for pickups. Set to false if the team decides DRRMO does not
-/// help with pickups. Requests already sent stay listed either way.
-const kDrrmoPickupSupport = true;
+/// Show the "Ask DRRMO for help" button and the "Requests to DRRMO" list.
+/// The manuscript has DRRMO help only after goods are prepared for release
+/// (Scope 5.2 / 5.3); the Oct 11 notes added it for pickups, and testing
+/// (Oct 28) took it out again: CSWS collects Door to Door donations itself.
+const kDrrmoPickupSupport = false;
 
 /// How much of a phone screen the stop sheet covers when the map opens.
 const _sheetStart = 0.30;
@@ -86,7 +86,9 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   PickupRules _rules = const PickupRules();
   LatLngBounds _areaBounds = _cebu;
 
-  int? _day; // weekday shown on the map (1 = Mon); null = all days
+  // Date shown on the map; null = all days. A date, not a weekday
+  // (adviser, Oct 27): donors pick specific dates on the calendar.
+  DateTime? _day;
   bool _dayPicked = false; // the user chose a day (keep it on reload)
   String? _selected; // stop id of the tapped pin
   bool _listMode = false; // Map / List switch
@@ -108,7 +110,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     final results = await Future.wait([
       api.get('/donations/pickup-plan'),
       api.get('/donations/pickup-rules'),
-      if (api.role == Roles.cswsMain) api.get('/logistics/requests'),
+      if (_canRequest) api.get('/logistics/requests'),
     ]);
     if (!mounted) return;
     final res = results[0];
@@ -160,12 +162,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     _fitSoon();
   }
 
-  /// Today's weekday, or the next CSWS pickup day when today has none.
-  int? _defaultDay(PickupPlan plan, PickupRules rules) {
-    final today = plan.today.weekday;
-    if (rules.days.contains(today)) return today;
-    return plan.dates.firstOrNull?.weekday;
-  }
+  /// Today, or the next CSWS pickup date when today has none.
+  DateTime? _defaultDay(PickupPlan plan, PickupRules rules) =>
+      plan.dates.where((d) => !d.isBefore(plan.today)).firstOrNull ??
+      plan.dates.firstOrNull;
 
   /// Today is not a CSWS pickup day (e.g. a weekend).
   bool get _noPickupsToday =>
@@ -173,7 +173,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
 
   // ----- what is shown --------------------------------------------------------
 
-  /// Stops with a donor home on [weekday] (far pickups left out), in
+  /// Stops with a donor home on [date] (far pickups left out), in
   /// urgency order (Oct 12 notes), the same three rules as the planner:
   ///   1. fewest pickup dates left in the next two weeks (a donor home only
   ///      on Thursdays, with one Thursday left, goes first),
@@ -182,10 +182,9 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   /// Only when two stops are exactly as urgent does distance decide: the
   /// one nearest to the previous stop (or the CSWS office) goes first.
   ///
-  /// The weekday filter means its next date (today counts), so "Today" is
-  /// exactly today: a donor who chose specific dates shows only on those.
-  List<PlanStop> _homeOn(PickupPlan p, int weekday) {
-    final from = _dateOf(weekday, p);
+  /// A donor who chose specific dates shows only on those.
+  List<PlanStop> _homeOn(PickupPlan p, DateTime date) {
+    final from = date;
     final left = [
       for (final s in p.stops)
         if (!s.far && s.availableOn(from)) s,
@@ -250,27 +249,23 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     return {for (var i = 0; i < shown.length; i++) shown[i].id: i + 1};
   }
 
-  /// The next date (today counts) with this weekday.
-  DateTime? _dateOf(int weekday, [PickupPlan? plan]) =>
-      (plan ?? _plan)?.dates.where((d) => d.weekday == weekday).firstOrNull;
-
   Future<void> _openFilter() async {
     final p = _plan;
     if (p == null) return;
     final v = await showDayFilter(
       context,
       current: _day,
-      todayWeekday: p.today.weekday,
-      pickupDays: _rules.days.toList(),
-      countOn: (wd) => _homeOn(p, wd).length,
+      today: p.today,
+      rules: _rules,
+      countOn: (d) => _homeOn(p, d).length,
       allCount: p.stops.length,
     );
     if (v != null) _pickDay(v == kAllDays ? null : v);
   }
 
-  void _pickDay(int? weekday) {
+  void _pickDay(DateTime? date) {
     setState(() {
-      _day = weekday;
+      _day = date;
       _dayPicked = true;
       _selected = null;
     });
@@ -510,11 +505,11 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     if (r.ok && mounted) await _load();
   }
 
-  /// "Show on map" on a DRRMO request: its weekday on the map.
+  /// "Show on map" on a DRRMO request: its date on the map.
   void _showRun(Map<String, dynamic> run) {
     final d = DateTime.tryParse('${run['pickup_date'] ?? ''}');
     _setListMode(false);
-    _pickDay(d?.weekday);
+    _pickDay(d == null ? null : DateTime(d.year, d.month, d.day));
   }
 
   // ----- build ------------------------------------------------------------------
@@ -714,7 +709,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
           top: Space.sm,
           child: _TopBar(
             selected: _day,
-            todayWeekday: p.today.weekday,
+            today: p.today,
             onFilter: _openFilter,
             onFit: _fit,
             onList: () => _setListMode(true),
@@ -791,7 +786,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     final p = _plan!;
     final numbers = _numbers;
     final day = _day;
-    final date = day == null ? null : _dateOf(day);
+    final date = day;
     final km = day == null
         ? 0.0
         : pathKm([
@@ -828,9 +823,8 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                     Text(
                       day == null
                           ? 'All days'
-                          : '${sameDay(date, p.today) ? 'Today · ' : ''}'
-                                '${pickupDayNames[day - 1]}'
-                                '${date == null ? '' : ' · ${planDateLabel(date).split(', ').last}'}',
+                          : '${sameDay(day, p.today) ? 'Today · ' : ''}'
+                                '${planDateLabel(day)}',
                       style: t.titleLarge,
                     ),
                     Text(
@@ -870,11 +864,11 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                   'No pickups on ${pickupDayNames[p.today.weekday - 1]}s. '
                   'Showing the next pickup day, ${planDateLabel(date)}.',
             ),
-          if (day != p.today.weekday && !_noPickupsToday)
+          if (!sameDay(day, p.today) && !_noPickupsToday)
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: () => _pickDay(p.today.weekday),
+                onPressed: () => _pickDay(p.today),
                 icon: const Icon(Icons.today, size: 18),
                 label: const Text('Back to today'),
               ),
@@ -1094,15 +1088,15 @@ class _ViewSwitch extends StatelessWidget {
 /// The bar on top of the map: Map / List, the day filter, fit all pins.
 /// The map already shows TODAY; the filter is only for another day.
 class _TopBar extends StatelessWidget {
-  final int? selected;
-  final int todayWeekday;
+  final DateTime? selected;
+  final DateTime today;
   final VoidCallback onFilter;
   final VoidCallback onFit;
   final VoidCallback onList;
 
   const _TopBar({
     required this.selected,
-    required this.todayWeekday,
+    required this.today,
     required this.onFilter,
     required this.onFit,
     required this.onList,
@@ -1127,11 +1121,7 @@ class _TopBar extends StatelessWidget {
               },
             ),
             const Spacer(),
-            DayFilterButton(
-              weekday: selected,
-              todayWeekday: todayWeekday,
-              onPressed: onFilter,
-            ),
+            DayFilterButton(date: selected, today: today, onPressed: onFilter),
             IconButton(
               visualDensity: VisualDensity.compact,
               tooltip: 'Fit all pins',

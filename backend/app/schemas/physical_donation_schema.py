@@ -47,7 +47,11 @@ def pickup_rules() -> dict:
         "start_hour": start,
         "end_hour": end,
         "min_lead_hours": _env_int("PICKUP_MIN_LEAD_HOURS", 1),
-        "max_days_ahead": _env_int("PICKUP_MAX_DAYS_AHEAD", 30),
+        # Testing (Oct 28): Door to Door dates within the next 2 weeks
+        # (today + 13 days), the same 14 days the pickup planner covers
+        # (services/pickup_planner.py window_days), so every date a donor
+        # can choose is on the CSWS pickup calendar.
+        "max_days_ahead": _env_int("PICKUP_MAX_DAYS_AHEAD", 13),
         "timezone": "Asia/Manila",
         "label": f"{day_label}, {_hour_label(start)} to {_hour_label(end)}",
         # The donor picks the days they are home (Mon / Tue / ...); this is
@@ -55,6 +59,12 @@ def pickup_rules() -> dict:
         "hours_label": f"{_hour_label(start)} to {_hour_label(end)}",
         "day_names": _DAY_SHORT,
     }
+
+
+def _ahead_label(rules: dict) -> str:
+    """max_days_ahead 13 -> "the next 2 weeks" (today counts)."""
+    span = rules["max_days_ahead"] + 1
+    return f"the next {span // 7} weeks" if span % 7 == 0 else f"the next {span} days"
 
 
 def pickup_rules_view() -> dict:
@@ -181,7 +191,7 @@ def check_pickup_dates(values) -> List[date]:
     if dates[0] < today:
         raise ValueError("Pickup dates must be today or later")
     if dates[-1] > today + timedelta(days=rules["max_days_ahead"]):
-        raise ValueError(f"Choose pickup dates within {rules['max_days_ahead']} days")
+        raise ValueError(f"Choose pickup dates within {_ahead_label(rules)}")
     off = [d for d in dates if d.isoweekday() not in rules["days"]]
     if off:
         names = ", ".join(_date_short(d) for d in off)
@@ -303,7 +313,7 @@ def check_preferred_pickup(value: datetime) -> datetime:
         )
     if value > now + timedelta(days=rules["max_days_ahead"]):
         raise ValueError(
-            f"Preferred pickup must be within {rules['max_days_ahead']} days"
+            f"Preferred pickup must be within {_ahead_label(rules)}"
         )
     local = value.astimezone(MANILA)
     if local.isoweekday() not in rules["days"]:
