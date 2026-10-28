@@ -39,7 +39,11 @@ SourceType = Literal["Web", "Mobile", "SMS"]
 # Confirm both numbers with CSWS / your adviser; change them here only.
 # ---------------------------------------------------------------------------
 MAX_AFFECTED_FAMILIES = 20_000
-MAX_ESTIMATED_QUANTITY = 100_000
+# Testing (Oct 28): no business limit on how much a report may need, per
+# item or in total. Only the database's whole-number range is kept: one
+# need up to 9 digits, the total within a PostgreSQL integer.
+MAX_ESTIMATED_QUANTITY = 999_999_999
+MAX_TOTAL_QUANTITY = 2_147_483_647
 
 # Accepts 12 or "12" (in case the app sends the text field as a string),
 # rejects letters ("dwadawdas") and decimals (12.5).
@@ -57,11 +61,13 @@ def _families_field():
 
 
 def _quantity_field():
+    """estimated_quantity: the total of all needs (or one "General needs"
+    number from older apps and SMS)."""
     return Field(
         default=None,
         ge=1,
-        le=MAX_ESTIMATED_QUANTITY,
-        description=f"Whole number from 1 to {MAX_ESTIMATED_QUANTITY:,}",
+        le=MAX_TOTAL_QUANTITY,
+        description=f"Whole number from 1 to {MAX_TOTAL_QUANTITY:,}",
     )
 
 

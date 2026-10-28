@@ -64,7 +64,9 @@ def set_needs(db: Session, report: DisasterReport, needs: Optional[list],
                 raise HTTPException(status_code=422, detail="Each item can be listed only once in the needs.")
             seen.add(item_id)
             rows.append(ReportNeed(item_id=item_id, quantity=n.quantity))
-        report.estimated_quantity = sum(r.quantity for r in rows)
+        # Kept for older screens; capped at the column's integer range
+        # (no limit on needs since testing, Oct 28).
+        report.estimated_quantity = min(sum(r.quantity for r in rows), 2_147_483_647)
         if not (report.assistance_needed or "").strip():
             items = {i.item_id: i for i in db.query(Item).filter(Item.item_id.in_(seen)).all()}
             report.assistance_needed = ", ".join(
