@@ -571,7 +571,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
                     keyboardType: TextInputType.number,
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(6),
+                      LengthLimitingTextInputFormatter(9),
                     ],
                     decoration: const InputDecoration(labelText: 'How many?'),
                     validator: (v) {

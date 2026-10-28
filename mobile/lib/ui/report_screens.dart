@@ -19,12 +19,21 @@ import 'home_nav.dart';
 // (app/schemas/report.py: MAX_AFFECTED_FAMILIES, MAX_ESTIMATED_QUANTITY).
 // ---------------------------------------------------------------------------
 const maxAffectedFamilies = 20000;
-const maxEstimatedQuantity = 100000;
+// Testing (Oct 28): no limit on how much a report needs, per item or in
+// total; only what the database can store (9 digits per need).
+const maxEstimatedQuantity = 999999999;
+const _maxTotalQuantity = 2147483647;
 
 /// Only digits can be typed (no letters, dots, minus signs), up to 6 digits.
 final _wholeNumberInput = <TextInputFormatter>[
   FilteringTextInputFormatter.digitsOnly,
   LengthLimitingTextInputFormatter(6),
+];
+
+/// How many of one need: up to 9 digits (see [maxEstimatedQuantity]).
+final _quantityInput = <TextInputFormatter>[
+  FilteringTextInputFormatter.digitsOnly,
+  LengthLimitingTextInputFormatter(9),
 ];
 
 /// 20000 -> "20,000"
@@ -527,12 +536,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
       0,
       (a, n) => a + int.parse(n.qty.text.trim()),
     );
-    if (total > maxEstimatedQuantity) {
+    // No limit on the total (testing, Oct 28); only what can be stored.
+    if (total > _maxTotalQuantity) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'All needs together come to ${_withCommas(total)}. '
-            'The maximum is ${_withCommas(maxEstimatedQuantity)}.',
+            'All needs together come to ${_withCommas(total)}, more than '
+            'can be saved. Check the amounts.',
           ),
         ),
       );
@@ -705,7 +715,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             TextFormField(
               controller: n.qty,
               keyboardType: TextInputType.number,
-              inputFormatters: _wholeNumberInput,
+              inputFormatters: _quantityInput,
               decoration: InputDecoration(
                 labelText: 'How many?',
                 suffixText: unit.isEmpty ? null : unit,
