@@ -62,17 +62,21 @@ WHERE NOT EXISTS (
 );
 
 -- 2b. Disaster types for Mandaue City (report form dropdown). Same list as
---     migration d3f8b2a61c47; an existing type keeps its id and gets the
---     current description.
+--     migrations d3f8b2a61c47 and f6a2d9c4b8e1 (no Volcanic Eruption); an
+--     existing type keeps its id and gets the current description.
 INSERT INTO disaster_types (type_name, description)
 VALUES
-    ('Typhoon',     'Tropical cyclone with strong winds and heavy rain'),
-    ('Flood',       'Urban flooding, flash flood, or river overflow'),
-    ('Storm Surge', 'Coastal flooding caused by a typhoon''s storm surge'),
-    ('Earthquake',  'Ground shaking from a seismic event, including damage from aftershocks'),
-    ('Fire',        'Residential, commercial, or industrial fire'),
-    ('Tsunami',     'Coastal flooding caused by a seismic event'),
-    ('Other',       'Disaster not covered by the listed types; details go in the report description')
+    ('Typhoon',          'Tropical cyclone with strong winds and heavy rain'),
+    ('Flood',            'Rising water from heavy rain or overflowing rivers'),
+    ('Flash Flood',      'Sudden flooding within hours of heavy rain'),
+    ('Storm Surge',      'Coastal flooding caused by a typhoon''s storm surge'),
+    ('Earthquake',       'Ground shaking from a seismic event, including damage from aftershocks'),
+    ('Fire',             'Residential, commercial, or industrial fire'),
+    ('Landslide',        'Soil or rock sliding down slopes'),
+    ('Tsunami',          'Coastal flooding caused by a seismic event'),
+    ('Drought',          'Long dry spell affecting water and food supply'),
+    ('Disease Outbreak', 'Epidemic needing medical and hygiene supplies'),
+    ('Other',            'Disaster not covered by the listed types; details go in the report description')
 ON CONFLICT (type_name) DO UPDATE SET description = EXCLUDED.description;
 
 

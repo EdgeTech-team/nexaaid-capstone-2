@@ -1,4 +1,5 @@
-"""Migration d3f8b2a61c47: the Mandaue City disaster types.
+"""Migrations d3f8b2a61c47 (the Mandaue City disaster types) and
+f6a2d9c4b8e1 (the removed types back, except Volcanic Eruption).
 
 Runs only when TEST_POSTGRES_URL points at a throwaway local Postgres, like
 test_models_match_migrations.py (it refuses Neon). Builds the schema up to
@@ -21,7 +22,7 @@ from core.config import settings
 APP_DIR = Path(__file__).resolve().parents[1]
 BASELINE = APP_DIR / "tests" / "sql" / "baseline_e837b545b195.sql"
 TEST_URL = os.getenv("TEST_POSTGRES_URL")
-BEFORE, REVISION = "b7d3e9f1a2c4", "d3f8b2a61c47"
+BEFORE, REVISION, RESTORE = "b7d3e9f1a2c4", "d3f8b2a61c47", "f6a2d9c4b8e1"
 
 pytestmark = pytest.mark.skipif(
     not TEST_URL, reason="Set TEST_POSTGRES_URL to a throwaway local Postgres")
@@ -48,6 +49,10 @@ OLD = {
     "Drought": "Long dry spell affecting water and food supply",
     "Storm Surge": "Coastal flooding pushed in by a typhoon",
 }
+# After f6a2d9c4b8e1: the types d3f8b2a61c47 kept, plus the removed ones but
+# Volcanic Eruption, with their old descriptions (Flood's too).
+RESTORED = {**NEW, **{t: OLD[t] for t in (
+    "Flood", "Flash Flood", "Landslide", "Drought", "Disease Outbreak")}}
 
 
 @pytest.fixture()
@@ -151,3 +156,21 @@ def test_downgrade_restores_the_old_types_and_upgrade_runs_again(migrated):
     assert _types(engine) == OLD          # old descriptions back, Other gone
     command.upgrade(cfg, REVISION)
     assert _types(engine) == NEW
+
+
+def test_restore_brings_back_every_old_type_but_volcanic_eruption(migrated):
+    engine, cfg = migrated
+    command.upgrade(cfg, RESTORE)
+    assert _types(engine) == RESTORED
+    assert set(RESTORED) == set(OLD) - {"Volcanic Eruption"} | {"Other"}
+
+
+def test_restore_downgrade_keeps_a_type_a_report_uses(migrated):
+    engine, cfg = migrated
+    command.upgrade(cfg, RESTORE)
+    ids = _reports(engine, "Landslide")
+    command.downgrade(cfg, REVISION)
+    assert _types(engine) == {**NEW, "Landslide": OLD["Landslide"]}
+    assert _report_types(engine) == {ids["Landslide"]: "Landslide"}
+    command.upgrade(cfg, RESTORE)
+    assert _types(engine) == RESTORED
