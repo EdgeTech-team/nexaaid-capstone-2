@@ -61,23 +61,20 @@ WHERE NOT EXISTS (
     SELECT 1 FROM item_sizes s WHERE s.item_id = i.item_id AND s.label = v.label
 );
 
--- 2b. Disaster types common in Mandaue City / Cebu (report form dropdown).
+-- 2b. Disaster types for Mandaue City (report form dropdown). Same list as
+--     migration d3f8b2a61c47; an existing type keeps its id and gets the
+--     current description.
 INSERT INTO disaster_types (type_name, description)
-SELECT v.type_name, v.description
-FROM (VALUES
-    ('Flood',             'Rising water from heavy rain or overflowing rivers'),
-    ('Flash Flood',       'Sudden flooding within hours of heavy rain'),
-    ('Typhoon',           'Tropical cyclone with strong winds and heavy rain'),
-    ('Storm Surge',       'Coastal flooding pushed in by a typhoon'),
-    ('Fire',              'Residential or commercial fire'),
-    ('Earthquake',        'Ground shaking and structural damage'),
-    ('Landslide',         'Soil or rock sliding down slopes'),
-    ('Tsunami',           'Sea waves caused by an undersea earthquake'),
-    ('Volcanic Eruption', 'Ashfall or eruption affecting the area'),
-    ('Drought',           'Long dry spell affecting water and food supply'),
-    ('Disease Outbreak',  'Epidemic needing medical and hygiene supplies')
-) AS v(type_name, description)
-WHERE NOT EXISTS (SELECT 1 FROM disaster_types d WHERE lower(d.type_name) = lower(v.type_name));
+VALUES
+    ('Typhoon',     'Tropical cyclone with strong winds and heavy rain'),
+    ('Flood',       'Urban flooding, flash flood, or river overflow'),
+    ('Storm Surge', 'Coastal flooding caused by a typhoon''s storm surge'),
+    ('Earthquake',  'Ground shaking from a seismic event, including damage from aftershocks'),
+    ('Fire',        'Residential, commercial, or industrial fire'),
+    ('Tsunami',     'Coastal flooding caused by a seismic event'),
+    ('Other',       'Disaster not covered by the listed types; details go in the report description')
+ON CONFLICT (type_name) DO UPDATE SET description = EXCLUDED.description;
+
 
 -- 2c. audit_logs (manuscript data dictionary) for the activity logs on the
 --     Administrator and CSWS dashboards. Only created if it is missing.
