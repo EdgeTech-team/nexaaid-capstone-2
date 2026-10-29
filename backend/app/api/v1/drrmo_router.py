@@ -214,7 +214,7 @@ def request_rows(db: Session, requests) -> list:
             ),
             "report_label": (
                 r.title[0].upper() + r.title[1:] if r.request_type == "Pickup"
-                else (f"#{rep.report_id} {types.get(rep.disaster_type_id, 'Disaster')} - "
+                else (f"#{rep.report_id} {rep.disaster_label(types)} - "
                       f"{brgys.get(rep.barangay_id, 'Barangay')}") if rep else None
             ),
             "report_id": rep.report_id if rep else None,

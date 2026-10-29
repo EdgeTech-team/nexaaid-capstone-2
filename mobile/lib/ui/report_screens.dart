@@ -74,7 +74,7 @@ class ReportCard extends StatelessWidget {
     final guidance = r['priority_guidance'] ?? r['ai_recommendation'];
     return ReportSummaryCard(
       reportId: (r['report_id'] as num?)?.toInt(),
-      disaster: names.of('disaster_types', r['disaster_type_id']),
+      disaster: disasterLabel(r, names),
       barangay: names.of('barangays', r['barangay_id']),
       status: r['status'] as String?,
       priority: r['priority_level'] as String?,
@@ -139,6 +139,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
     for (final v in sitioRows.toSet())
       if (v.isNotEmpty) int.parse(v),
   ];
+
+  /// What kind of disaster, when the type is Other (e.g. "Gas leak").
+  final typeOther = TextEditingController();
   final desc = TextEditingController();
   final families = TextEditingController();
   final smsSender = TextEditingController();
@@ -178,6 +181,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
 
   Map<String, dynamic> _snapshot() => {
     'type_id': typeId,
+    'type_other': typeOther.text,
     'barangay_id': brgyId,
     'sitio_rows': sitioRows,
     'description': desc.text,
@@ -221,6 +225,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
           v,
     ];
     sitioRows = brgyId == null || rows.isEmpty ? [''] : rows;
+    typeOther.text = d.str('type_other');
     desc.text = d.str('description');
     families.text = d.str('families');
     smsSender.text = d.str('sms_sender');
@@ -256,6 +261,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
   void _startOver() {
     _draft?.clear();
     setState(() {
+      typeOther.clear();
       desc.clear();
       families.clear();
       smsSender.clear();
@@ -277,6 +283,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
   /// Water: 20 L" is read instead.
   void _fillFromReport(Map<String, dynamic> r, Names names) {
     typeId = '${r['disaster_type_id']}';
+    typeOther.text = '${r['disaster_type_other'] ?? ''}';
     brgyId = '${r['barangay_id']}';
     final ids =
         (r['sitio_ids'] as List?) ?? [if (r['sitio_id'] != null) r['sitio_id']];
@@ -449,7 +456,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
         'The SMS is missing: ${parsed.missing.join(', ')}.',
       ...parsed.problems,
     ];
-    final type = _idByName(names, 'disaster_types', parsed.disasterType);
+    // "TYPE: Other - Gas leak": Other, and the field under it says what.
+    final otherKind = smsOtherKind(parsed.disasterType);
+    final type = _idByName(
+      names,
+      'disaster_types',
+      otherKind != null ? otherDisasterType : parsed.disasterType,
+    );
     if (parsed.disasterType != null && type == null) {
       notes.add(
         'Disaster type "${parsed.disasterType}" not found. Choose it below.',
@@ -483,6 +496,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
     final newNeeds = [for (final n in parsed.needs) _needFrom(n, names)];
     setState(() {
       typeId = type;
+      typeOther.text = otherKind ?? '';
       brgyId = brgy;
       sitioRows = sitios.isEmpty ? [''] : sitios;
       if (parsed.families != null) families.text = '${parsed.families}';
@@ -496,6 +510,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
       _fills++;
     });
   }
+
+  bool _typeIsOther(Names names) =>
+      typeId != null &&
+      names.of('disaster_types', typeId, fallback: '') == otherDisasterType;
 
   String _needName(_Need n, Names names) => n.itemId == _other
       ? n.otherName.text.trim()
@@ -562,6 +580,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         .join(', ');
     final body = {
       'disaster_type_id': int.parse(typeId!),
+      'disaster_type_other': _typeIsOther(names) ? typeOther.text.trim() : null,
       'barangay_id': int.parse(brgyId!),
       'sitio_id': _sitioIds.firstOrNull,
       'sitio_ids': _sitioIds,
@@ -618,6 +637,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
       busy = false;
       if (r.ok) {
         _form.currentState!.reset();
+        typeOther.clear();
         desc.clear();
         families.clear();
         smsSender.clear();
@@ -852,6 +872,24 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   if (untouched) _applyTemplate(names);
                 }),
               ),
+              if (_typeIsOther(names)) ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: typeOther,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'What kind of disaster?',
+                    hintText: 'e.g. Gas leak',
+                  ),
+                  validator: (v) {
+                    final t = (v ?? '').trim();
+                    if (t.isEmpty) return 'Required';
+                    return t.length < 2 || t.length > 100
+                        ? 'Use 2 to 100 characters'
+                        : null;
+                  },
+                ),
+              ],
               const SizedBox(height: 12),
               LookupDropdown(
                 key: ValueKey('brgy-$_fills'),

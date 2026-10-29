@@ -25,9 +25,13 @@ class ReportApi {
     final lookups = await Api.instance.lookups();
     return (r.json as List).map((e) {
       final j = e as Map<String, dynamic>;
+      // Other shows what was typed for it (e.g. "Gas leak").
+      final other = '${j['disaster_type_other'] ?? ''}'.trim();
       return Report(
         reportId: j['report_id'] as int,
-        disasterType: _name(lookups, 'disaster_types', j['disaster_type_id']),
+        disasterType: other.isNotEmpty
+            ? other
+            : _name(lookups, 'disaster_types', j['disaster_type_id']),
         barangay: _name(lookups, 'barangays', j['barangay_id']),
         description: j['description'] as String?,
         assistanceNeeded: '${j['assistance_needed'] ?? ''}',
