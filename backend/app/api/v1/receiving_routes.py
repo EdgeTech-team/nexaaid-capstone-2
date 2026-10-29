@@ -16,6 +16,7 @@ from services.donation_expiry import CLOSED, close_rows, expire_overdue, nice_da
 
 
 from typing import Optional
+from pydantic import ConfigDict
 from pydantic import BaseModel, Field
 from models.item_model import Item
 from datetime import datetime
@@ -49,8 +50,7 @@ class InventoryResponse(BaseModel):
     quantity: int
     last_updated: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("/inventory", response_model=list[InventoryResponse])
