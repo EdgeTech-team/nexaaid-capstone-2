@@ -23,12 +23,16 @@ _SHELTER = {"Hygiene Kit": 1, "Blanket": 2, "Sleeping Mat": 1}
 
 NEED_TEMPLATES = {
     "Flood": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
+    "Flash Flood": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
     "Typhoon": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
     "Storm Surge": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
     "Tsunami": {**_FOOD, **_SHELTER, "Clothing": 2, "Medicine Kit": 0.2},
     # Families lose the house and everything in it.
     "Fire": {**_FOOD, **_SHELTER, "Clothing": 2},
     "Earthquake": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
+    "Landslide": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
+    "Drought": {**_FOOD, "Drinking Water": 40},
+    "Disease Outbreak": {**_FOOD, "Hygiene Kit": 1, "Medicine Kit": 0.5},
 }
 
 
