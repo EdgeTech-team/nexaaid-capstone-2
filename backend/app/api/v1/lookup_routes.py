@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, joinedload
 from core.auth import get_current_user_optional, has_role
 from core.database import get_db
 from models.report import DisasterReport, DisasterType, Barangay, Sitio
+from models.disaster_type_model import OTHER_DISASTER_TYPE
 from models.item_model import Item
 from models.physical_donation_model import PhysicalDonation
 from models.delivery import Delivery
@@ -76,7 +77,7 @@ def get_lookups(
     sitios = db.query(Sitio).order_by(Sitio.barangay_id, Sitio.sitio_id).all()
 
     def label(r):
-        return (f"#{r.report_id} {types.get(r.disaster_type_id, 'Disaster')} - "
+        return (f"#{r.report_id} {r.disaster_label(types)} - "
                 f"{barangays.get(r.barangay_id, 'Barangay')}")
 
     # Public: the validated reports, from their own query, so newer Pending,
@@ -89,7 +90,9 @@ def get_lookups(
     progress = progress_for_reports(db, validated)
 
     out = {
-        "disaster_types": [{"id": i, "name": n} for i, n in sorted(types.items())],
+        # In id order, with Other always last.
+        "disaster_types": [{"id": i, "name": n} for i, n in sorted(
+            types.items(), key=lambda t: (t[1] == OTHER_DISASTER_TYPE, t[0]))],
         "barangays": [{"id": i, "name": n} for i, n in sorted(barangays.items(), key=lambda x: x[1])],
         "sitios": [
             {"id": s.sitio_id, "name": s.sitio_name, "barangay_id": s.barangay_id}
@@ -117,7 +120,7 @@ def get_lookups(
                 "name": f"{label(r)} - {r.priority_level or 'No priority'}",
                 # Public summary for donor cards (UC-D2 step 2: needs,
                 # priority guidance and fulfillment status).
-                "disaster": types.get(r.disaster_type_id, "Disaster"),
+                "disaster": r.disaster_label(types),
                 "barangay": barangays.get(r.barangay_id, "Barangay"),
                 "barangay_id": r.barangay_id,
                 "sitio": ", ".join(r.sitio_names) or None,

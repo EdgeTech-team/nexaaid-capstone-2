@@ -22,10 +22,11 @@ CHANGE LOG
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional, Literal
+from typing import Annotated, List, Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from core.validators import clean_text
 from models.report import canonical_source
 
 # Stored exactly as the live DB constraint expects; any casing is accepted
@@ -49,6 +50,15 @@ MAX_TOTAL_QUANTITY = 2_147_483_647
 # rejects letters ("dwadawdas") and decimals (12.5).
 AffectedFamilies = Optional[int]
 EstimatedQuantity = Optional[int]
+
+
+def _clean_type_other(v):
+    return None if v is None or not v.strip() else clean_text(v, "Kind of disaster", 2, 100)
+
+
+# What kind of disaster, when the type is "Other" (e.g. "Gas leak"); blank =
+# none. The route requires it for Other and clears it for every other type.
+DisasterTypeOther = Annotated[Optional[str], AfterValidator(_clean_type_other)]
 
 
 def _families_field():
@@ -102,6 +112,7 @@ NeedsField = Optional[List[ReportNeedIn]]
 
 class DisasterReportCreate(BaseModel):
     disaster_type_id: int
+    disaster_type_other: DisasterTypeOther = None
     barangay_id: int
     sitio_id: Optional[int] = None
     # Several sitios of the barangay (problema_napud 2.2). When given, it
@@ -125,6 +136,7 @@ class DisasterReportEdit(BaseModel):
     Administrator validates it (Oct 11 notes). Same fields as a new report;
     the source stays as it was."""
     disaster_type_id: int
+    disaster_type_other: DisasterTypeOther = None
     barangay_id: int
     sitio_id: Optional[int] = None
     # Several sitios of the barangay (problema_napud 2.2). When given, it
@@ -184,6 +196,7 @@ class DisasterReportResponse(BaseModel):
     report_id: int
     user_id: int
     disaster_type_id: int
+    disaster_type_other: Optional[str] = None
     barangay_id: int
     sitio_id: Optional[int]
     sitio_ids: List[int] = []
@@ -243,6 +256,7 @@ class SmsReportIngest(BaseModel):
     raw_message: str
 
     disaster_type_id: int
+    disaster_type_other: DisasterTypeOther = None
     barangay_id: int
     sitio_id: Optional[int] = None
     sitio_ids: Optional[List[int]] = None

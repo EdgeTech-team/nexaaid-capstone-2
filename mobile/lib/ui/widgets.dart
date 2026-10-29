@@ -525,6 +525,14 @@ class Names {
   ];
 }
 
+/// A report's disaster type as the screens show it: what was typed for
+/// Other (`disaster_type_other`, e.g. "Gas leak"), else the type's name.
+String disasterLabel(Map r, Names names, {String fallback = '?'}) {
+  final other = '${r['disaster_type_other'] ?? ''}'.trim();
+  if (other.isNotEmpty) return other;
+  return names.of('disaster_types', r['disaster_type_id'], fallback: fallback);
+}
+
 /// Dropdown bound to a /lookups list, used inside forms.
 class LookupDropdown extends StatelessWidget {
   final String list;
