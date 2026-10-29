@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
-
+from pydantic import ConfigDict
 
 def _count(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
@@ -86,5 +86,4 @@ class LogisticsRequestResponse(BaseModel):
     notes: Optional[str]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
