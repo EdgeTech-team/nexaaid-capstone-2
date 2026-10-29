@@ -28,15 +28,12 @@ DISASTER_SEVERITY = {
     "Typhoon": 85,
     "Fire": 60,
     "Earthquake": 90,
-    # Added with the demo seed's disaster types
-    "Flash Flood": 75,
     "Storm Surge": 85,
-    "Landslide": 80,
     "Tsunami": 95,
-    "Volcanic Eruption": 90,
-    "Drought": 55,
-    "Disease Outbreak": 65,
+    # Not one of the listed types: scored like an unknown type.
+    "Other": 50,
 }
+
 
 # (at least this many families, score), highest first. 1-9 families = 10.
 FAMILY_TIERS = ((100, 100), (50, 75), (20, 50), (10, 25), (1, 10))
