@@ -40,7 +40,7 @@ from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
 from services.inventory import add_to_stock
 
-from services.delivery_allocation import allocate_delivery, chosen_refs, ready_lines
+from services.delivery_allocation import allocate_delivery, chosen_refs, readiness, ready_lines
 from services.delivery_notices import tell_barangay_prepared
 from services.delivery_views import delivery_views, report_labels
 
@@ -168,19 +168,32 @@ def trip_candidates(
     db: Session = Depends(get_db),
     current_user=Depends(require_role(*CSWS)),
 ):
-    """Validated reports that still have stock, grouped by barangay.
+    """Validated reports that have goods ready to send, grouped by barangay.
     Order: the chosen barangay first, then barangays with the most urgent
-    report (priority, then the lowest fulfillment). Reports with no stock are
-    listed separately so the screen can say "No more stock for this report"."""
+    report (priority, then the lowest fulfillment).
+
+    Each report gets a status:
+      available         in stock, and the CMO acknowledged at least one entry
+      not_acknowledged  in stock, but nothing acknowledged by the CMO yet, so
+                        it cannot go on a delivery (listed separately)
+      no_stock          nothing left (listed separately: "No more stock")"""
     reports = db.query(DisasterReport).filter(DisasterReport.status == "Validated").all()
     labels = report_labels(db, [r.report_id for r in reports])
     brgys = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     items = {i.item_id: i for i in db.query(Item).all()}
+    acks = readiness(db, [r.report_id for r in reports])
 
-    ready, empty = [], []
+    ready, waiting, empty = [], [], []
     for r in reports:
         stock = report_stock(db, r.report_id)
         f = r.fulfillment
+        ack = acks.get(r.report_id, {})
+        if not stock:
+            code = "no_stock"
+        elif ack.get("acknowledged"):
+            code = "available"
+        else:
+            code = "not_acknowledged"
         row = {
             "report_id": r.report_id,
             "report_label": labels.get(r.report_id),
@@ -189,6 +202,8 @@ def trip_candidates(
             "sitio_id": r.sitio_id,
             "priority_level": r.priority_level,
             "fulfillment_percentage": float(f.fulfillment_percentage) if f else 0.0,
+            "status": code,
+            "waiting_for_cmo": ack.get("waiting_for_cmo", 0),
             "items": [
                 {"item_id": iid, "item_name": items[iid].item_name if iid in items else f"Item #{iid}",
                  "unit": items[iid].unit_of_measure if iid in items else "", "quantity": qty}
@@ -199,7 +214,7 @@ def trip_candidates(
             text = q.strip().lower().lstrip("#")
             if text not in (row["report_label"] or "").lower() and text not in row["barangay_name"].lower():
                 continue
-        (ready if stock else empty).append(row)
+        {"available": ready, "not_acknowledged": waiting, "no_stock": empty}[code].append(row)
 
     def urgency(r):
         return (PRIORITY_RANK.get(r["priority_level"], 9), r["fulfillment_percentage"], r["report_id"])
@@ -217,12 +232,21 @@ def trip_candidates(
     )
     return {
         "barangays": ordered,
+        "not_acknowledged_reports": [
+            {"report_id": r["report_id"], "report_label": r["report_label"],
+             "barangay_name": r["barangay_name"], "status": "not_acknowledged",
+             "waiting_for_cmo": r["waiting_for_cmo"],
+             "message": "Not acknowledged by the CMO yet"}
+            for r in sorted(waiting, key=urgency)
+        ],
         "no_stock_reports": [
             {"report_id": r["report_id"], "report_label": r["report_label"],
-             "barangay_name": r["barangay_name"], "message": "No more stock for this report"}
+             "barangay_name": r["barangay_name"], "status": "no_stock",
+             "message": "No more stock for this report"}
             for r in sorted(empty, key=urgency)
         ],
     }
+
 
 
 # ---------------------------------------------------------------------------

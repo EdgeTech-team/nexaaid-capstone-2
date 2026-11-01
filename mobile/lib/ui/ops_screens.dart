@@ -973,7 +973,11 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           final names = Names(
             Map<String, dynamic>.from(snap.data![1].json as Map),
           );
-          final noReports = (candidates['barangays'] as List).isEmpty;
+          final noReports =
+              (candidates['barangays'] as List).isEmpty &&
+              ((candidates['not_acknowledged_reports'] as List?) ?? const [])
+                  .isEmpty;
+
           return Form(
             key: _form,
             child: ListView(
