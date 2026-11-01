@@ -194,6 +194,30 @@ def ready_donations(db: Session, report_id: int) -> dict:
         "waiting_for_cmo": len(waiting - set(entries)),
     }
 
+def readiness(db: Session, report_ids: Iterable[int]) -> dict:
+    """report_id -> {"acknowledged": n, "waiting_for_cmo": n}: donation
+    entries with goods not sent yet, counted the same way ready_donations()
+    counts them, for many reports at once (GET /trips/candidates)."""
+    ids = list(report_ids)
+    if not ids:
+        return {}
+    rows = (
+        db.query(PhysicalDonation, ReceivedGoods.actual_quantity)
+        .join(ReceivedGoods, ReceivedGoods.donation_id == PhysicalDonation.donation_id)
+        .filter(PhysicalDonation.report_id.in_(ids),
+                PhysicalDonation.status.in_(("Received", "Confirmed")))
+        .all()
+    )
+    sent = _allocated(db, [d.donation_id for d, _ in rows])
+    ready, waiting = defaultdict(set), defaultdict(set)
+    for d, qty in rows:
+        if (qty or 0) - sent.get(d.donation_id, 0) <= 0:
+            continue
+        (ready if d.status == "Confirmed" else waiting)[d.report_id].add(d.batch_reference)
+    return {rid: {"acknowledged": len(ready[rid]),
+                  "waiting_for_cmo": len(waiting[rid] - ready[rid])} for rid in ids}
+
+
 
 def allocate_delivery(db: Session, delivery: Delivery, refs: Optional[set] = None) -> None:
     """Record whose goods each line of a new delivery takes. Call once its

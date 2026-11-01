@@ -47,6 +47,16 @@ String niceWhen(dynamic iso) {
       '$h:$m ${l.hour < 12 ? 'AM' : 'PM'}';
 }
 
+/// Subtitle for a report whose goods CSWS received but the CMO has not
+/// acknowledged yet (not_acknowledged_reports of GET /trips/candidates).
+String notAcknowledgedText(Map r) {
+  final n = (r['waiting_for_cmo'] as num? ?? 0).toInt();
+  return n == 0
+      ? 'Not acknowledged by the CMO yet'
+      : 'Not acknowledged: $n ${n == 1 ? 'donation waits' : 'donations wait'} '
+            'for the CMO';
+}
+
 /// Date, then time. Returns an ISO string in UTC ("...Z"), or null if the
 /// user backed out. Past dates cannot be picked.
 Future<String?> pickDeliveryDateTime(
@@ -139,18 +149,27 @@ Future<Map?> pickReportWithStock(BuildContext context, Map candidates) {
             : (a['report_id'] as int).compareTo(b['report_id'] as int);
       });
   final empty = (candidates['no_stock_reports'] as List).cast<Map>();
+  final waiting =
+      ((candidates['not_acknowledged_reports'] as List?) ?? const [])
+          .cast<Map>();
   return showModalBottomSheet<Map>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (ctx) => _ReportPickerSheet(reports: reports, empty: empty),
+    builder: (ctx) =>
+        _ReportPickerSheet(reports: reports, waiting: waiting, empty: empty),
   );
 }
 
 class _ReportPickerSheet extends StatefulWidget {
   final List<Map> reports;
+  final List<Map> waiting; // received, not acknowledged by the CMO yet
   final List<Map> empty;
-  const _ReportPickerSheet({required this.reports, required this.empty});
+  const _ReportPickerSheet({
+    required this.reports,
+    required this.waiting,
+    required this.empty,
+  });
 
   @override
   State<_ReportPickerSheet> createState() => _ReportPickerSheetState();
@@ -170,6 +189,7 @@ class _ReportPickerSheetState extends State<_ReportPickerSheet> {
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final shown = widget.reports.where(_match).toList();
+    final waiting = widget.waiting.where(_match).toList();
     final empty = widget.empty.where(_match).toList();
     return SizedBox(
       height: MediaQuery.of(context).size.height * 0.8,
@@ -183,8 +203,8 @@ class _ReportPickerSheetState extends State<_ReportPickerSheet> {
               children: [
                 Text('Which report are these goods for?', style: t.titleLarge),
                 Text(
-                  'Only reports with goods in stock can be chosen. '
-                  'Most urgent first.',
+                  'Only reports with goods the CMO acknowledged can be '
+                  'chosen. Most urgent first.',
                   style: t.bodySmall,
                 ),
                 Gaps.v8,
@@ -204,11 +224,14 @@ class _ReportPickerSheetState extends State<_ReportPickerSheet> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
               children: [
                 if (shown.isEmpty)
-                  const EmptyView(
+                  EmptyView(
                     compact: true,
                     icon: Icons.inventory_2_outlined,
-                    title: 'No report with stock matches',
-                    message: 'Receive donations first, or search again.',
+                    title: 'No report ready to send matches',
+                    message: waiting.isEmpty
+                        ? 'Receive donations first, or search again.'
+                        : 'The reports below wait for the CMO to acknowledge '
+                              'their donations.',
                   ),
                 for (final r in shown)
                   Card(
@@ -224,6 +247,18 @@ class _ReportPickerSheetState extends State<_ReportPickerSheet> {
                       trailing: PriorityChip(r['priority_level'] as String?),
                     ),
                   ),
+                if (waiting.isNotEmpty) ...[
+                  Gaps.v16,
+                  Text('Not acknowledged', style: t.titleSmall),
+                  for (final r in waiting)
+                    ListTile(
+                      enabled: false,
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.hourglass_top),
+                      title: Text('${r['report_label']}'),
+                      subtitle: Text(notAcknowledgedText(r)),
+                    ),
+                ],
                 if (empty.isNotEmpty) ...[
                   Gaps.v16,
                   Text('No more stock', style: t.titleSmall),

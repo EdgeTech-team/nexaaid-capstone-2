@@ -750,6 +750,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
         '${r['barangay_name']}'.toLowerCase().contains(q);
     final groups = (data['barangays'] as List).cast<Map>();
     final empty = (data['no_stock_reports'] as List).cast<Map>();
+    final waiting = ((data['not_acknowledged_reports'] as List?) ?? const [])
+        .cast<Map>();
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -776,11 +778,13 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
           ),
         Gaps.v8,
         if (groups.isEmpty)
-          const EmptyView(
+          EmptyView(
             compact: true,
             icon: Icons.inventory_2_outlined,
             title: 'Nothing to send yet',
-            message: 'No report has goods in stock. Receive donations first.',
+            message: waiting.isEmpty
+                ? 'No report has goods in stock. Receive donations first.'
+                : 'No report has goods the CMO acknowledged yet.',
           ),
         for (final g in groups)
           if ((g['reports'] as List).cast<Map>().any(match)) ...[
@@ -817,6 +821,25 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
               ),
             const Divider(),
           ],
+        if (waiting.isNotEmpty)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            initiallyExpanded: groups.isEmpty,
+            title: Text('Not acknowledged (${waiting.length})'),
+            subtitle: const Text(
+              'Received by CSWS, but the CMO has not acknowledged them yet.',
+            ),
+            children: [
+              for (final r in waiting)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.hourglass_top),
+                  title: Text('${r['report_label']}'),
+                  subtitle: Text(notAcknowledgedText(r)),
+                ),
+            ],
+          ),
         if (empty.isNotEmpty)
           ExpansionTile(
             tilePadding: EdgeInsets.zero,

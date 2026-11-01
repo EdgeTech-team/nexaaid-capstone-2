@@ -17,8 +17,19 @@ def _report(client, t, barangay_id=1):
 
 
 def _stocked(client, t, barangay_id=1, qty=100, item_id=1):
+    """Received by CSWS (in stock), not acknowledged by the CMO yet."""
     rid = _report(client, t, barangay_id)
     _receive(client, t, _donate(client, t, rid, item_id, qty), qty)
+    return rid
+
+
+def _acknowledged(client, t, barangay_id=1, qty=100, item_id=1):
+    """Received by CSWS and acknowledged by the CMO: ready for a delivery."""
+    rid = _report(client, t, barangay_id)
+    did = _donate(client, t, rid, item_id, qty)
+    _receive(client, t, did, qty)
+    ok(client.post(f"/cmo/donations/{did}/confirm", headers=t["cmo"],
+                   json={"status": "Acknowledged"}), 201)
     return rid
 
 
@@ -86,19 +97,36 @@ def _trip(client, t, reports, **extra):
 
 def test_candidates_put_the_chosen_barangay_first_and_flag_empty_reports(api):
     client, t = api
-    a = _stocked(client, t)
-    b = _stocked(client, t, barangay_id=2)
+    a = _acknowledged(client, t)
+    b = _acknowledged(client, t, barangay_id=2)
     empty = _report(client, t)
     c = ok(client.get("/trips/candidates", headers=t["csws"], params={"near_barangay_id": 2}))
     assert [g["barangay_id"] for g in c["barangays"]] == [2, 1]
     assert [r["report_id"] for r in c["barangays"][1]["reports"]] == [a]
     assert c["barangays"][0]["reports"][0]["items"][0] == {
         "item_id": 1, "item_name": "Rice", "unit": "kg", "quantity": 100}
+    assert c["barangays"][0]["reports"][0]["status"] == "available"
     assert c["no_stock_reports"] == [{"report_id": empty, "report_label": c["no_stock_reports"][0]["report_label"],
-                                      "barangay_name": "Barangay Test",
+                                      "barangay_name": "Barangay Test", "status": "no_stock",
                                       "message": "No more stock for this report"}]
+    assert c["not_acknowledged_reports"] == []
     assert b in [r["report_id"] for r in c["barangays"][0]["reports"]]
     assert client.get("/trips/candidates", headers=t["donor"]).status_code == 403
+
+
+def test_candidates_say_not_acknowledged_instead_of_no_stock(api):
+    client, t = api
+    waiting = _stocked(client, t)              # received by CSWS, not acknowledged
+    c = ok(client.get("/trips/candidates", headers=t["csws"]))
+    # Not selectable, and not "No more stock" either.
+    assert waiting not in [r["report_id"] for g in c["barangays"] for r in g["reports"]]
+    assert waiting not in [r["report_id"] for r in c["no_stock_reports"]]
+    row = next(r for r in c["not_acknowledged_reports"] if r["report_id"] == waiting)
+    assert row["status"] == "not_acknowledged" and row["waiting_for_cmo"] == 1
+    assert row["message"] == "Not acknowledged by the CMO yet"
+    # Still cannot be delivered from the app (whole acknowledged entries only).
+    r = _trip(client, t, [{"report_id": waiting}])
+    assert r.status_code == 409 and "acknowledged by the CMO" in r.json()["detail"]
 
 
 def test_one_trip_for_several_reports_end_to_end(api):
