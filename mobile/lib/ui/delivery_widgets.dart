@@ -447,7 +447,16 @@ class ReadyDonations extends StatefulWidget {
   /// The ticked donation entries (batch references); empty = nothing to send.
   final ValueChanged<Set<String>>? onChanged;
 
-  const ReadyDonations({super.key, required this.reportId, this.onChanged});
+  /// How many different goods the ticked donations carry (Plan a trip uses
+  /// it for "N kinds of goods").
+  final ValueChanged<int>? onKindsChanged;
+
+  const ReadyDonations({
+    super.key,
+    required this.reportId,
+    this.onChanged,
+    this.onKindsChanged,
+  });
 
   @override
   State<ReadyDonations> createState() => _ReadyDonationsState();
@@ -456,17 +465,29 @@ class ReadyDonations extends StatefulWidget {
 class _ReadyDonationsState extends State<ReadyDonations> {
   late Future<ApiResult> _load = _fetch();
   final Set<String> _ticked = {};
+  List<Map> _entries = [];
+
+  /// Tells the parent what is ticked and how many kinds of goods that is.
+  void _report() {
+    widget.onChanged?.call({..._ticked});
+    widget.onKindsChanged?.call(
+      {
+        for (final e in _entries)
+          if (_ticked.contains('${e['batch_reference']}'))
+            for (final i in (e['items'] as List).cast<Map>()) i['item_id'],
+      }.length,
+    );
+  }
 
   Future<ApiResult> _fetch() async {
     final r = await api.get('/deliveries/ready/${widget.reportId}');
+    _entries = r.ok && r.json is Map
+        ? ((r.json as Map)['entries'] as List).cast<Map>()
+        : [];
     _ticked
       ..clear()
-      ..addAll([
-        if (r.ok && r.json is Map)
-          for (final e in ((r.json as Map)['entries'] as List).cast<Map>())
-            '${e['batch_reference']}',
-      ]);
-    widget.onChanged?.call({..._ticked});
+      ..addAll([for (final e in _entries) '${e['batch_reference']}']);
+    _report();
     return r;
   }
 
@@ -478,7 +499,7 @@ class _ReadyDonationsState extends State<ReadyDonations> {
 
   void _toggle(String ref, bool on) {
     setState(() => on ? _ticked.add(ref) : _ticked.remove(ref));
-    widget.onChanged?.call({..._ticked});
+    _report();
   }
 
   String _amount(Map i) =>
