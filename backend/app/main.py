@@ -30,8 +30,30 @@ from api.v1.account_router import router as account_router
 from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
 from api.v1.trips import router as trips_router
 from api.v1.delivery_problems import router as delivery_problems_router
+from api.v1.item_routes import router as item_router
 
-app = FastAPI()
+from core.config import settings
+from core.client_ip import ClientIPMiddleware
+from core.log_privacy import hide_query_strings_in_access_log
+
+# F-22: the access log keeps method, path and status, not the query string.
+hide_query_strings_in_access_log()
+
+
+
+def api_docs_settings(app_env: str) -> dict:
+    """F-20: /docs, /redoc and /openapi.json only when APP_ENV=development.
+    Production corrections call the endpoints directly with an
+    Administrator token."""
+    dev = app_env == "development"
+    return {
+        "docs_url": "/docs" if dev else None,
+        "redoc_url": "/redoc" if dev else None,
+        "openapi_url": "/openapi.json" if dev else None,
+    }
+
+
+app = FastAPI(**api_docs_settings(settings.APP_ENV))
 
 @app.exception_handler(RequestValidationError)
 async def validation_handler(request: Request, exc: RequestValidationError):
@@ -40,27 +62,44 @@ async def validation_handler(request: Request, exc: RequestValidationError):
           [(e["loc"], e["msg"]) for e in errors], flush=True)
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
-# DEV ONLY: turn unexpected crashes into a JSON error the app can show.
-# Without this a 500 has no CORS headers, so Chrome hides it and the app
-# can only say "cannot reach the server". Registered before CORS so the
-# CORS middleware still wraps these responses.
+# Convert unexpected crashes into JSON error responses.
+# Detailed exception messages are available only in development.
+# Production responses use a generic error message.
+# CORS middleware wraps these responses.
 @app.middleware("http")
 async def show_server_errors(request: Request, call_next):
     try:
         return await call_next(request)
     except Exception as exc:
-        logging.getLogger("uvicorn.error").exception("Unhandled error on %s", request.url.path)
-        return JSONResponse(
-            status_code=500,
-            content={"detail": f"Server error: {type(exc).__name__}: {str(exc).splitlines()[0][:300]}"},
+        logging.getLogger("uvicorn.error").exception(
+            "Unhandled error on %s", request.url.path
         )
 
+        if settings.APP_ENV == "development":
+            lines = str(exc).splitlines()
+            error_message = lines[0][:300] if lines else "Unexpected error"
+            detail = f"Server error: {type(exc).__name__}: {error_message}"
+        else:
+            detail = "Internal server error"
 
-# DEV ONLY: lets the Flutter test app (Chrome / emulator) call the API.
-# Tighten allow_origins before deployment.
+        return JSONResponse(
+            status_code=500,
+            content={"detail": detail},
+        )
+
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "NexaAid API"}
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://nexaaid1.netlify.app",
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    # F-20: no cookies anywhere; the app sends a Bearer token.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -89,3 +128,8 @@ app.include_router(admin_document_router)
 app.include_router(donation_info_router)
 app.include_router(contacts_router)
 app.include_router(account_router)
+app.include_router(item_router)          # F-15: new items waiting for review
+
+# F-21: the real client address behind Render's proxy (core/client_ip.py).
+# Added last, so it runs first.
+app.add_middleware(ClientIPMiddleware)

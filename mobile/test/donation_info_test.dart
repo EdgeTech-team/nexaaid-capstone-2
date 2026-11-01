@@ -131,4 +131,39 @@ void main() {
     await tester.enterText(number, '2311111111154543435345345');
     expect(c.accountNumber.text, '2311111111154543'); // first 16 digits
   });
+
+  testWidgets('Testing 2.1: Other asks for the provider name', (tester) async {
+    final c = DonationInfoController();
+    await _pump(tester, Form(child: DonationInfoFields(c: c)));
+    expect(find.widgetWithText(AppTextField, 'Provider name'), findsNothing);
+
+    c.setProvider('Other');
+    await tester.pump();
+    expect(find.widgetWithText(AppTextField, 'Provider name'), findsOneWidget);
+    expect(c.providerOtherRule(''), 'Enter the name of the provider');
+    expect(c.providerOtherRule('x'), '2-50 characters');
+    expect(c.providerOtherRule('Coins.ph'), isNull);
+
+    c.providerOther.text = ' Coins.ph ';
+    expect(c.toJson()['provider_other'], 'Coins.ph');
+
+    // Any other provider sends no name and needs none.
+    c.setProvider('GCash');
+    await tester.pump();
+    expect(c.providerOtherRule(''), isNull);
+    expect(c.toJson()['provider_other'], isNull);
+    expect(find.widgetWithText(AppTextField, 'Provider name'), findsNothing);
+  });
+
+  test('Testing 2.1: donors see the typed provider name', () {
+    expect(
+      providerLabel({'provider': 'Other', 'provider_other': 'Coins.ph'}),
+      'Coins.ph',
+    );
+    expect(providerLabel({'provider': 'Other'}), 'Other');
+    expect(
+      providerLabel({'provider': 'GCash', 'provider_other': 'Coins.ph'}),
+      'GCash',
+    );
+  });
 }

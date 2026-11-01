@@ -65,6 +65,16 @@ class Delivery(Base):
     cancelled_at = Column(TIMESTAMP(timezone=True), nullable=True)
     cancel_reason = Column(Text, nullable=True)
 
+    # Deleted from the delivery list (Cancelled or Confirmed only, testing
+    # Oct 27). The row stays for fulfillment and history; the lists and
+    # counts hide it. Migration b7d3e9f1a2c4.
+    deleted_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    deleted_by_user_id = Column(
+        Integer,
+        ForeignKey("users.user_id", ondelete="SET NULL", name="fk_deliveries_deleted_by"),
+        nullable=True,
+    )
+
     __table_args__ = (
         CheckConstraint(
              "status IN ('Preparing','In Transit','Delivered', 'Confirmed', 'Cancelled')", 
@@ -131,6 +141,9 @@ class DeliveryItem(Base):
         #Relationships
         delivery = relationship ("Delivery", back_populates="items")
         item = relationship("Item")
+        allocations = relationship(
+            "DeliveryAllocation", back_populates="delivery_item", cascade="all, delete-orphan"
+        )
 
 class Receipt(Base): 
         __tablename__ = "receipts"
@@ -152,3 +165,36 @@ class Receipt(Base):
         #relationships
         delivery = relationship ("Delivery", back_populates="receipt")
         received_by = relationship ("User", foreign_keys=[received_by_user_id])
+
+class DeliveryAllocation(Base):
+    """Whose goods went on a delivery (Oct 13 concerns, delivery
+    preparation). Stock is pooled per report and item, so when CSWS sends
+    65 of 80 kg the system records which donations they came from: first
+    received, first sent, CMO-acknowledged donations before the others
+    (services/delivery_allocation.py). A donor's step (In transit /
+    Delivered / Barangay confirmed) follows these rows. Cancelled
+    deliveries are ignored, so their goods count as unsent again.
+
+    Migration c6d2a8e4f1b7."""
+
+    __tablename__ = "delivery_allocations"
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="chk_delivery_allocations_quantity"),
+    )
+
+    allocation_id = Column(Integer, primary_key=True)
+    delivery_item_id = Column(
+        Integer,
+        ForeignKey("delivery_items.delivery_item_id", ondelete="CASCADE",
+                   name="fk_delivery_allocations_delivery_item_id"),
+        nullable=False, index=True,
+    )
+    donation_id = Column(
+        Integer,
+        ForeignKey("physical_donations.donation_id", ondelete="CASCADE",
+                   name="fk_delivery_allocations_donation_id"),
+        nullable=False, index=True,
+    )
+    quantity = Column(Integer, nullable=False)
+
+    delivery_item = relationship("DeliveryItem", back_populates="allocations")

@@ -12,10 +12,11 @@ from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResp
 from core.notifications import notify, notify_many, user_ids_with_role
 from services.inventory import add_received_stock
 from services.donation_entries import ENTRY_SORTS, build_entries, filter_and_sort, group_by_report
-from services.donation_expiry import CLOSED, expire_overdue, nice_date
+from services.donation_expiry import CLOSED, close_rows, expire_overdue, nice_date
 
 
 from typing import Optional
+from pydantic import ConfigDict
 from pydantic import BaseModel, Field
 from models.item_model import Item
 from datetime import datetime
@@ -49,8 +50,7 @@ class InventoryResponse(BaseModel):
     quantity: int
     last_updated: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("/inventory", response_model=list[InventoryResponse])
@@ -133,7 +133,8 @@ def find_by_qr(
 
 
 def _receive_line(db: Session, current_user: User, donation: PhysicalDonation,
-                  actual_quantity: int, notes: Optional[str]) -> ReceivedGoods:
+                  actual_quantity: int, notes: Optional[str],
+                  item_id: Optional[int] = None) -> ReceivedGoods:
     """UC-CM1 steps 3-8 for one item: record the actual quantity accepted
     (alt 4a: may be less than declared), mark it Received and add it to the
     report's inventory. Single receive and entry receive both use this.
@@ -148,6 +149,16 @@ def _receive_line(db: Session, current_user: User, donation: PhysicalDonation,
         )
     if donation.status != "Pending":
         raise HTTPException(status_code=400, detail=f"Donation is already '{donation.status}', cannot receive again")
+    # Per-item fulfillment (Oct 2026): staff can say what the goods really
+    # are before they enter the inventory. actual_quantity is then in THAT
+    # item's base unit. Only counted toward a need of the same item.
+    if item_id is not None and item_id != donation.item_id:
+        new_item = db.get(Item, item_id)
+        if new_item is None or not new_item.active:
+            raise HTTPException(status_code=422, detail="Choose an item from the list.")
+        log_action(db, current_user, "RECLASSIFY DONATION", "physical_donations", donation.donation_id,
+                   old={"item_id": donation.item_id}, new={"item_id": item_id})
+        donation.item_id = item_id
     receipt = ReceivedGoods(
         donation_id=donation.donation_id,
         actual_quantity=actual_quantity,
@@ -173,11 +184,12 @@ def receive_donation(
 ):
     donation = db.query(PhysicalDonation).filter(
         PhysicalDonation.donation_id == payload.donation_id
-    ).first()
+    ).with_for_update().populate_existing().first()     # F-06: a second scan waits, then sees "Received"
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found")
 
-    receipt = _receive_line(db, current_user, donation, payload.actual_quantity, payload.notes)
+    receipt = _receive_line(db, current_user, donation, payload.actual_quantity, payload.notes,
+                            payload.item_id)
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
                 "donation_awaiting_confirmation", "Donation awaiting acknowledgement",
                 f"Donation #{donation.donation_id} was received by CSWS and needs the CMO's acknowledgement.",
@@ -193,13 +205,21 @@ def receive_donation(
     return receipt
 
 
+NOT_BROUGHT = "Not brought to CSWS"
+
+
 class EntryReceiveLine(BaseModel):
     donation_id: int
-    actual_quantity: int = Field(gt=0)
+    actual_quantity: int = Field(gt=0)   # in the item's base unit
+    item_id: Optional[int] = None        # what it really is (see _receive_line)
 
 
 class EntryReceive(BaseModel):
-    items: list[EntryReceiveLine] = Field(min_length=1)
+    items: list[EntryReceiveLine] = []
+    # Oct 13 concerns: items the donor did not bring. They are closed
+    # ("Not brought to CSWS", kept for the record) instead of staying
+    # Pending, so the entry reads Received, not Partly Received.
+    not_brought: list[int] = []
     notes: Optional[str] = None
 
 
@@ -217,19 +237,38 @@ def receive_entry(
     ref = batch_reference.strip().upper()
     rows = {
         d.donation_id: d
-        for d in db.query(PhysicalDonation).filter(PhysicalDonation.batch_reference == ref).all()
+        for d in db.query(PhysicalDonation).filter(PhysicalDonation.batch_reference == ref)
+        .order_by(PhysicalDonation.donation_id)
+        .with_for_update().populate_existing().all()     # F-06: one receive of this entry at a time
     }
     if not rows:
         raise HTTPException(status_code=404, detail=f"No donation entry {batch_reference}")
     ids = [line.donation_id for line in payload.items]
-    if len(set(ids)) != len(ids):
+    if not ids and not payload.not_brought:
+        raise HTTPException(status_code=400, detail="Enter what was received, or mark the items that were not brought.")
+    every = ids + list(payload.not_brought)
+    if len(set(every)) != len(every):
         raise HTTPException(status_code=400, detail="Each item can be listed only once")
-    for donation_id in ids:
+    for donation_id in every:
         if donation_id not in rows:
             raise HTTPException(status_code=400, detail=f"Donation #{donation_id} is not part of entry {ref}")
+    for donation_id in payload.not_brought:
+        if rows[donation_id].status != "Pending":
+            raise HTTPException(status_code=409, detail=f"Donation #{donation_id} is no longer waiting, so it cannot be marked not brought.")
 
-    for line in payload.items:
-        _receive_line(db, current_user, rows[line.donation_id], line.actual_quantity, payload.notes)
+    # F-06: stock rows are locked in item order, like deliveries do.
+    for line in sorted(payload.items, key=lambda l: l.item_id or rows[l.donation_id].item_id):
+        _receive_line(db, current_user, rows[line.donation_id], line.actual_quantity, payload.notes,
+                      line.item_id)
+    closed = close_rows([rows[i] for i in payload.not_brought], "Cancelled", NOT_BROUGHT,
+                        user_id=current_user.user_id)
+    for r in closed:
+        log_action(db, current_user, "NOT BROUGHT", "physical_donations", r.donation_id,
+                   old={"status": "Pending"}, new={"status": "Cancelled", "reason": NOT_BROUGHT})
+    if not ids:
+        db.commit()
+        return {"batch_reference": ref, "received": [], "not_brought": list(payload.not_brought),
+                "pending_items": sum(1 for d in rows.values() if d.status == "Pending")}
 
     first = next(iter(rows.values()))
     notify_many(db, user_ids_with_role(db, ["CMO Representative"]),
@@ -250,6 +289,7 @@ def receive_entry(
             {"donation_id": line.donation_id, "actual_quantity": line.actual_quantity}
             for line in payload.items
         ],
+        "not_brought": list(payload.not_brought),
         "pending_items": still_pending,
     }
 

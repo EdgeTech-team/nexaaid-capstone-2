@@ -1,38 +1,91 @@
-"""send_email(): Gmail SMTP. Credentials come from environment variables, never code.
+"""send_email(): Brevo HTTPS API (used on Render) or Gmail SMTP (local fallback).
+Credentials come from environment variables, never code.
 
-.env:
+Render's free tier blocks SMTP ports 25/465/587, so on Render use Brevo:
+    BREVO_API_KEY=xkeysib-...         (Brevo > SMTP & API > API Keys)
+    EMAIL_FROM=team.nexaaid@gmail.com (a sender verified in Brevo)
+    EMAIL_FROM_NAME=NexaAid           (optional)
+
+Local fallback when BREVO_API_KEY is not set:
     SMTP_HOST=smtp.gmail.com          (optional)
     SMTP_PORT=587                     (optional)
     SMTP_USER=team.nexaaid@gmail.com
     SMTP_PASSWORD=xxxx xxxx xxxx xxxx (Google app password; SMTP_APP_PASSWORD also works)
 
-Never raises and never logs the message body (it may hold a temporary password).
+Never raises and never logs the message body (it may hold a temporary password)
+or a full recipient address (F-22: masked as j***@domain).
+
 """
 import logging
 import os
 import smtplib
 from email.message import EmailMessage
 
+import httpx
+from core.log_privacy import mask_email, without_email
+
 
 log = logging.getLogger("uvicorn.error")
 
 
+BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+
+
+def _brevo_key():
+    return (os.getenv("BREVO_API_KEY") or "").strip()
+
+
 def email_configured() -> bool:
-    """True when SMTP credentials are present. Checked before creating a staff
-    account, because the temporary password is only ever delivered by email."""
+    """True when Brevo or SMTP credentials are present. Checked before creating
+    a staff account, because the temporary password is only ever delivered by
+    email."""
     return bool(
-        os.getenv("SMTP_USER")
-        and (os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_APP_PASSWORD"))
+        _brevo_key()
+        or (
+            os.getenv("SMTP_USER")
+            and (os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_APP_PASSWORD"))
+        )
     )
 
 
-def send_email(to: str, subject: str, body: str) -> bool:
+def _send_via_brevo(to: str, subject: str, body: str) -> bool:
+    sender = os.getenv("EMAIL_FROM") or os.getenv("SMTP_USER")
+    if not sender:
+        log.warning("send_email skipped: EMAIL_FROM not set (needed with BREVO_API_KEY)")
+        return False
+    payload = {
+        "sender": {"name": os.getenv("EMAIL_FROM_NAME", "NexaAid"), "email": sender},
+        "to": [{"email": to}],
+        "subject": subject,
+        "textContent": body,
+    }
+    headers = {
+        "api-key": _brevo_key(),
+        "accept": "application/json",
+        "content-type": "application/json",
+    }
+    try:
+        r = httpx.post(BREVO_URL, json=payload, headers=headers, timeout=15)
+        r.raise_for_status()
+        return True
+    except httpx.HTTPStatusError as e:
+        # Brevo's reply explains the problem (bad key, sender not verified...).
+        # It never contains our message body; the address is masked (F-22).
+        log.error("Brevo rejected email to %s: %s %s", mask_email(to),
+                  e.response.status_code, without_email(e.response.text, to)[:500])
+    except Exception as e:
+        log.error("send_email (Brevo) failed for %s: %s: %s", mask_email(to),
+                  type(e).__name__, without_email(e, to))
+    return False
+
+
+def _send_via_smtp(to: str, subject: str, body: str) -> bool:
     host = os.getenv("SMTP_HOST", "smtp.gmail.com")
     port = int(os.getenv("SMTP_PORT", "587"))
     user = os.getenv("SMTP_USER")
     password = os.getenv("SMTP_PASSWORD") or os.getenv("SMTP_APP_PASSWORD")
     if not user or not password:
-        log.warning("send_email skipped: SMTP_USER or SMTP_PASSWORD not set")
+        log.warning("send_email skipped: set BREVO_API_KEY, or SMTP_USER and SMTP_PASSWORD")
         return False
 
     msg = EmailMessage()
@@ -46,9 +99,16 @@ def send_email(to: str, subject: str, body: str) -> bool:
             s.login(user, password.replace(" ", ""))
             s.send_message(msg)
         return True
-    except Exception:
-        log.exception("send_email failed for %s", to)
+    except Exception as e:
+        log.error("send_email failed for %s: %s: %s", mask_email(to),
+                  type(e).__name__, without_email(e, to))
         return False
+
+
+def send_email(to: str, subject: str, body: str) -> bool:
+    if _brevo_key():
+        return _send_via_brevo(to, subject, body)
+    return _send_via_smtp(to, subject, body)
 
 
 # ---------------------------------------------------------------------------

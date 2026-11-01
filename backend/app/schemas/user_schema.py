@@ -1,6 +1,7 @@
 # schemas/user_schema.py
 from typing import Literal, Optional
 
+from pydantic import ConfigDict
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from core.names import capitalize_words
@@ -109,8 +110,7 @@ class UserResponse(BaseModel):
     is_active: bool
     employee_id: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 INTERNAL_ROLES = {

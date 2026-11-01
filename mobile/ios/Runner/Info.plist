@@ -4,6 +4,8 @@
 <dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan donation QR codes at the CSWS Main Office.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>NexaAid needs photo access so you can attach pictures to reports and donations.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>

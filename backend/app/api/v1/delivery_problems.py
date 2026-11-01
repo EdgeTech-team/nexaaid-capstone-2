@@ -30,10 +30,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
+from services.inventory import add_to_stock
+
 from core.audit import log_action
 from core.auth import has_role, require_role
 from core.database import get_db
-from core.notifications import notify_event, notify_event_many, user_ids_with_role
+from core.notifications import logistics_team_ids, notify_event_many, user_ids_with_role
+from services.delivery_notices import tell_donors
 from models.delivery import Delivery, DeliveryTrip
 from models.inventory_model import Inventory
 from models.logistics_request_model import LogisticsRequest
@@ -123,12 +126,20 @@ def _reschedule(db: Session, d: Delivery, when: datetime, reason: Optional[str],
     _not_finished(d)
     old = d.delivery_date
     d.delivery_date = when
+    # Testing fix 7.4: Main Office's date is DRRMO's schedule too.
+    for req in db.query(LogisticsRequest).filter(
+        LogisticsRequest.delivery_id == d.delivery_id,
+        LogisticsRequest.status.in_(OPEN_REQUEST),
+    ):
+        req.scheduled_date = when
     log_action(db, user, "RESCHEDULE DELIVERY", "deliveries", d.delivery_id,
                old={"delivery_date": old.isoformat() if old else None},
                new={"delivery_date": when.isoformat(), "reason": reason})
     notify_event_many(db, _people(db, d, user.user_id), "delivery_rescheduled", "delivery",
                       d.delivery_id, title=f"Delivery #{d.delivery_id}",
                       date=when.strftime("%b %d, %Y %I:%M %p"), reason=reason or "")
+    tell_donors(db, d, "donation_delivery_rescheduled",
+                date=when.strftime("%b %d, %Y %I:%M %p"), reason=reason or "")
 
 
 def _return(db: Session, d: Delivery, reason: str, user: User) -> None:
@@ -142,6 +153,7 @@ def _return(db: Session, d: Delivery, reason: str, user: User) -> None:
                old={"status": "In Transit"}, new={"status": "Preparing", "reason": reason})
     notify_event_many(db, _people(db, d, user.user_id), "delivery_returned", "delivery",
                       d.delivery_id, title=f"Delivery #{d.delivery_id}", reason=reason)
+    tell_donors(db, d, "donation_delivery_returned", reason=reason)
 
 
 # ---------------------------------------------------------------------------
@@ -187,22 +199,20 @@ def cancel_delivery(
     """The delivery will not happen. Every item goes back to its report's
     stock, open DRRMO requests are cancelled, and the record is kept as
     Cancelled with the reason. A delivery on the road must come back first."""
-    d = _delivery(db, delivery_id)
+    d = (db.query(Delivery).filter(Delivery.delivery_id == delivery_id)
+         .with_for_update().populate_existing().first())   # F-06: one cancel at a time
+    if d is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
     _not_finished(d)
     if d.status == "In Transit":
         raise HTTPException(
             status_code=409,
             detail="This delivery is on the road. Tap \"Truck came back\" first, then cancel it.",
         )
-    returned = []
-    for line in d.items:
-        inv = (db.query(Inventory)
-               .filter(Inventory.item_id == line.item_id, Inventory.report_id == d.report_id).first())
-        if inv is None:
-            inv = Inventory(item_id=line.item_id, report_id=d.report_id, quantity=0)
-            db.add(inv)
-        inv.quantity += line.quantity
-        returned.append({"item_id": line.item_id, "quantity": line.quantity})
+    for line in sorted(d.items, key=lambda l: l.item_id):   # F-06: same lock order everywhere
+        add_to_stock(db, line.item_id, d.report_id, line.quantity)
+    returned = [{"item_id": line.item_id, "quantity": line.quantity} for line in d.items]
+
     requests = _close_requests(db, d, current_user, payload.reason)
     d.status = "Cancelled"
     d.cancelled_at = datetime.now(timezone.utc)
@@ -213,6 +223,7 @@ def cancel_delivery(
                     "returned_to_stock": returned, "cancelled_requests": requests})
     notify_event_many(db, _people(db, d, current_user.user_id), "delivery_cancelled", "delivery",
                       d.delivery_id, title=f"Delivery #{d.delivery_id}", reason=payload.reason)
+    tell_donors(db, d, "donation_delivery_cancelled", reason=payload.reason)
     db.commit()
     return {"delivery_id": d.delivery_id, "status": d.status,
             "returned_to_stock": returned, "cancelled_requests": requests}
@@ -302,8 +313,9 @@ def cancel_logistics_request(
                  else f"Cancelled by {who}: {payload.reason}")
     log_action(db, current_user, "CANCEL LOGISTICS REQUEST", "logistics_requests", req.request_id,
                old={"status": old}, new={"status": "Cancelled", "reason": payload.reason})
-    notify_event_many(db, user_ids_with_role(db, [DRRMO]), "logistics_cancelled",
-                      "logistics_request", req.request_id,
+    notify_event_many(db, logistics_team_ids(db, req.requested_by_user_id,
+                                             exclude_user_id=current_user.user_id),
+                      "logistics_cancelled", "logistics_request", req.request_id,
                       title=req.title, reason=payload.reason)
     db.commit()
     return {"request_id": req.request_id, "status": req.status}
@@ -332,7 +344,9 @@ def withdraw_logistics_request(
     req.notes = f"{req.notes}\nWithdrawn by DRRMO: {payload.reason}" if req.notes else f"Withdrawn by DRRMO: {payload.reason}"
     log_action(db, current_user, "WITHDRAW LOGISTICS SUPPORT", "logistics_requests", req.request_id,
                old={"status": "Accepted"}, new={"status": "Declined", "reason": payload.reason})
-    notify_event(db, req.requested_by_user_id, "logistics_withdrawn", "logistics_request",
-                 req.request_id, title=req.title, reason=payload.reason)
+    notify_event_many(db, logistics_team_ids(db, req.requested_by_user_id,
+                                             exclude_user_id=current_user.user_id),
+                      "logistics_withdrawn", "logistics_request", req.request_id,
+                      title=req.title, reason=payload.reason)
     db.commit()
     return {"request_id": req.request_id, "status": req.status}

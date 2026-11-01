@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Role names exactly as they are in the `roles` table.
 class Roles {
@@ -20,12 +22,15 @@ class ApiResult {
   final int status; // 0 = network error / blocked by the browser
   final dynamic json; // decoded body, or null if not JSON
   final String raw;
+
   ApiResult(this.status, this.json, this.raw);
 
   bool get ok => status >= 200 && status < 300;
 
   String get pretty {
-    if (json != null) return const JsonEncoder.withIndent('  ').convert(json);
+    if (json != null) {
+      return const JsonEncoder.withIndent('  ').convert(json);
+    }
     return raw.isEmpty ? '(empty response)' : raw;
   }
 
@@ -33,16 +38,20 @@ class ApiResult {
   String get errorText {
     if (json is Map && json['detail'] != null) {
       final d = json['detail'];
+
       if (d is String) return d;
-      // 422 from FastAPI: a list of {loc, msg, ...}. Show just the messages.
+
+      // 422 from FastAPI: a list of {loc, msg, ...}.
       if (d is List && d.every((e) => e is Map && e['msg'] is String)) {
         return d
             .map((e) => (e['msg'] as String).replaceFirst('Value error, ', ''))
             .toSet()
             .join('\n');
       }
+
       return const JsonEncoder.withIndent('  ').convert(d);
     }
+
     return raw;
   }
 }
@@ -50,9 +59,13 @@ class ApiResult {
 /// Tiny API client + session state (token, email, role).
 class Api extends ChangeNotifier {
   Api._();
+
   static final Api instance = Api._();
 
+  // Default backend: deployed NexaAid Render service.
+  // This avoids resetting to localhost when the app restarts.
   String baseUrl = _defaultBase();
+
   String? token;
   String? email;
   String? role;
@@ -68,9 +81,112 @@ class Api extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Dropdown data from GET /lookups: disaster_types, barangays, sitios,
-  /// items, reports -> list of {id, name}. Cached; cleared after any change.
+  // ---- Saved login: stays signed in after the app closes or the page refreshes ----
+
+  static const _kToken = 'session_token';
+  static const _kEmail = 'session_email';
+  static const _kRole = 'session_role';
+  static const _kMustChange = 'session_must_change';
+  // The tab RoleHome reopens after a refresh (home.dart). A new sign-in
+  // starts on the first tab, the dashboard (testing, Oct 27).
+  static const _kLastTab = 'last_tab';
+
+  // F-12: on Android and iOS the login token is kept in the Android
+  // Keystore / iOS Keychain, never in plain shared_preferences. The web and
+  // desktop builds keep it in shared_preferences (browsers have no secure
+  // store; a Content-Security-Policy protects the web build).
+  static const _secure = FlutterSecureStorage();
+
+  static bool get _onPhone =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  Future<void> _writeToken(SharedPreferences p) async {
+    if (!_onPhone) {
+      await p.setString(_kToken, token ?? '');
+      return;
+    }
+    if (token == null) {
+      await _secure.delete(key: _kToken);
+    } else {
+      await _secure.write(key: _kToken, value: token);
+    }
+    await p.remove(_kToken); // no plain copy left on the phone
+  }
+
+  Future<String?> _readToken(SharedPreferences p) async {
+    final plain = p.getString(_kToken);
+    if (!_onPhone) return plain;
+    // A session saved before F-12 moves to secure storage once.
+    if (plain != null && plain.isNotEmpty) {
+      await _secure.write(key: _kToken, value: plain);
+      await p.remove(_kToken);
+      return plain;
+    }
+    return _secure.read(key: _kToken);
+  }
+
+  Future<void> _saveSession() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kEmail, email ?? '');
+      await p.setString(_kRole, role ?? '');
+      await p.setBool(_kMustChange, mustChangePassword);
+      await _writeToken(p);
+    } catch (_) {}
+  }
+
+  Future<void> _clearSavedSession() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove(_kToken);
+      await p.remove(_kEmail);
+      await p.remove(_kRole);
+      await p.remove(_kMustChange);
+      await p.remove(_kLastTab);
+      if (_onPhone) await _secure.delete(key: _kToken);
+    } catch (_) {}
+  }
+
+  /// Call once before runApp(). Restores the saved login without any network
+  /// call, so the app opens straight to the role's home screen even while the
+  /// Render backend is still waking up.
+  Future<void> restoreSession() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final saved = await _readToken(p);
+      if (saved == null || saved.isEmpty) return;
+      token = saved;
+      email = p.getString(_kEmail);
+      final savedRole = p.getString(_kRole);
+      role = (savedRole == null || savedRole.isEmpty) ? null : savedRole;
+      mustChangePassword = p.getBool(_kMustChange) ?? false;
+    } catch (_) {}
+  }
+
+  /// Runs in the background after startup: refreshes the role. If the saved
+  /// token has expired, send() signs the user out (see the 401 check there).
+  Future<void> validateSession() async {
+    if (token == null) return;
+    final me = await get('/health/secure');
+    if (me.ok && me.json is Map) {
+      final r = me.json['role']?.toString();
+      if (r != null && r != role) {
+        role = r;
+        _lookups = null; // F-01: the lookup lists depend on the role
+
+        await _saveSession();
+        notifyListeners();
+      }
+    }
+  }
+
+  /// Dropdown data from GET /lookups:
+  /// disaster_types, barangays, sitios, items, reports -> list of {id, name}.
+  /// Cached; cleared after any change.
   Future<Map<String, dynamic>>? _lookups;
+
   Future<Map<String, dynamic>> lookups() => _lookups ??= get('/lookups').then(
     (r) => r.ok && r.json is Map
         ? Map<String, dynamic>.from(r.json as Map)
@@ -85,15 +201,43 @@ class Api extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Use the deployed backend on Android, Chrome, and other platforms.
+  /// The deployed Render backend, unless the build names another one:
+  ///   flutter run --dart-define=API_BASE=http://localhost:8000
+  /// (Android emulator: http://10.0.2.2:8000; phone on Wi-Fi: the laptop's IP).
   static String _defaultBase() {
-    // The Android emulator reaches the host machine at 10.0.2.2
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:8000';
+    const fromBuild = String.fromEnvironment('API_BASE');
+    if (fromBuild.isNotEmpty) return fromBuild.replaceAll(RegExp(r'/+$'), '');
+    return 'https://nexaaid-1.onrender.com';
+  }
+
+  /// F-13: the server address and the developer tools exist only in debug
+  /// and profile builds; a release build always uses the HTTPS default.
+  /// Tests switch it off to check the release behaviour.
+  bool devOptions = !kReleaseMode;
+
+  /// Team workflow (Oct 26): `uvicorn main:app --reload` in backend/app and
+  /// `flutter run -d chrome` in mobile. A debug run on this laptop uses the
+  /// local backend when it answers, so the plain command tests the code on
+  /// disk; otherwise (no backend running, a phone, a release build) it keeps
+  /// the deployed one. API_BASE still wins when given.
+  Future<void> useLocalBackendIfRunning() async {
+    if (!kDebugMode || const String.fromEnvironment('API_BASE').isNotEmpty) {
+      return;
     }
-    return 'http://localhost:8000';
+    const local = 'http://localhost:8000';
+    try {
+      final r = await http
+          .get(Uri.parse('$local/health'))
+          .timeout(const Duration(milliseconds: 1500));
+      if (r.statusCode == 200) baseUrl = local;
+    } catch (_) {
+      // Not running here: stay on the deployed backend.
+    }
   }
 
   void setBase(String v) {
+    if (!devOptions) return;
     baseUrl = v.trim().replaceAll(RegExp(r'/+$'), '');
     refreshLookups();
   }
@@ -107,51 +251,76 @@ class Api extends ChangeNotifier {
   }) async {
     try {
       var uri = Uri.parse('$baseUrl$path');
+
       if (query != null && query.isNotEmpty) {
         uri = uri.replace(queryParameters: query);
       }
+
       final req = http.Request(method, uri);
-      if (token != null) req.headers['Authorization'] = 'Bearer $token';
+
+      if (token != null) {
+        req.headers['Authorization'] = 'Bearer $token';
+      }
+
       if (form != null) {
-        req.bodyFields = form; // sets the form content-type itself
+        req.bodyFields = form;
       } else if (body != null) {
         req.headers['Content-Type'] = 'application/json';
         req.body = jsonEncode(body);
       }
+
       final streamed = await req.send().timeout(const Duration(seconds: 20));
+
       final res = await http.Response.fromStream(streamed);
+
       dynamic decoded;
+
       try {
         decoded = jsonDecode(res.body);
       } catch (_) {
         decoded = null;
       }
+
       // A new report / item may now exist, so reload dropdowns.
       if (method != 'GET' &&
           res.statusCode < 300 &&
           !path.startsWith('/token')) {
         refreshLookups();
       }
+
+      // The login expired or is invalid: sign out so the app goes back to the
+      // landing page instead of showing errors on every screen.
+      if (res.statusCode == 401 &&
+          token != null &&
+          decoded is Map &&
+          decoded['detail'].toString().startsWith('Could not validate')) {
+        logout();
+      }
+
       return ApiResult(res.statusCode, decoded, res.body);
     } catch (e) {
       return ApiResult(
         0,
         null,
-        'Network error: $e\n\nIs uvicorn running and is the base URL right? '
-        'In Chrome a server crash (500) also shows up here, so check the '
-        'uvicorn terminal for a traceback.',
+        'Network error: $e\n\n'
+        'Check the internet connection and API base URL. '
+        'If using the deployed backend, verify the Render service.',
       );
     }
   }
 
   Future<ApiResult> get(String path, {Map<String, String>? query}) =>
       send('GET', path, query: query);
+
   Future<ApiResult> post(String path, {Map<String, dynamic>? body}) =>
       send('POST', path, body: body ?? {});
+
   Future<ApiResult> patch(String path, {Map<String, dynamic>? body}) =>
       send('PATCH', path, body: body ?? {});
+
   Future<ApiResult> put(String path, {Map<String, dynamic>? body}) =>
       send('PUT', path, body: body ?? {});
+
   Future<ApiResult> delete(String path) => send('DELETE', path);
 
   /// POST /uploads as multipart form data (purpose + file).
@@ -163,27 +332,37 @@ class Api extends ChangeNotifier {
   }) async {
     try {
       final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/uploads'));
-      if (token != null) req.headers['Authorization'] = 'Bearer $token';
+
+      if (token != null) {
+        req.headers['Authorization'] = 'Bearer $token';
+      }
+
       req.fields['purpose'] = purpose;
+
       req.files.add(
         http.MultipartFile.fromBytes('file', bytes, filename: filename),
       );
+
       final streamed = await req.send().timeout(const Duration(seconds: 60));
+
       final res = await http.Response.fromStream(streamed);
+
       dynamic decoded;
+
       try {
         decoded = jsonDecode(res.body);
       } catch (_) {
         decoded = null;
       }
+
       return ApiResult(res.statusCode, decoded, res.body);
     } catch (e) {
       return ApiResult(0, null, 'Network error: $e');
     }
   }
 
-  /// Downloads a file the server only gives to allowed users (private
-  /// uploads: GET /uploads/{file_id} checks owner / Administrator).
+  /// Downloads a file the server only gives to allowed users.
+  /// Private uploads: GET /uploads/{file_id} checks owner / Administrator.
   /// Returns (status, bytes); status 0 means the server was not reached.
   Future<(int, Uint8List?)> download(String path) async {
     try {
@@ -193,30 +372,47 @@ class Api extends ChangeNotifier {
             headers: {if (token != null) 'Authorization': 'Bearer $token'},
           )
           .timeout(const Duration(seconds: 60));
+
       return (res.statusCode, res.statusCode == 200 ? res.bodyBytes : null);
     } catch (_) {
       return (0, null);
     }
   }
 
-  //   // ---- auth ----
+  // ---- Authentication ----
+
   Future<ApiResult> login(String emailIn, String password) async {
     final r = await send(
       'POST',
       '/token',
       form: {'username': emailIn.trim(), 'password': password},
     );
+
     if (r.ok && r.json is Map && r.json['access_token'] != null) {
       token = r.json['access_token'] as String;
       email = emailIn.trim();
       role = null;
       guest = false;
+      // F-01: /lookups answers per account, so lists cached as a guest (or as
+      // another account) must not be reused after signing in.
+      _lookups = null;
+
       final user = r.json['user'];
       mustChangePassword = user is Map && user['must_change_password'] == true;
+
       final me = await get('/health/secure');
-      if (me.ok && me.json is Map) role = me.json['role']?.toString();
+
+      if (me.ok && me.json is Map) {
+        role = me.json['role']?.toString();
+      }
+
+      await _saveSession();
+      try {
+        (await SharedPreferences.getInstance()).remove(_kLastTab);
+      } catch (_) {}
       notifyListeners();
     }
+
     return r;
   }
 
@@ -224,7 +420,7 @@ class Api extends ChangeNotifier {
   Future<ApiResult> forgotPassword(String email) =>
       post('/auth/forgot-password', body: {'email': email.trim()});
 
-  /// POST /auth/reset-password: the emailed code plus the new password.
+  /// POST /auth/reset-password: emailed code plus the new password.
   Future<ApiResult> resetPassword(
     String email,
     String code,
@@ -246,10 +442,14 @@ class Api extends ChangeNotifier {
     role = null;
     guest = false;
     mustChangePassword = false;
+    // F-01: staff-only lookup lists must not stay cached after signing out.
+    _lookups = null;
+
+    _clearSavedSession();
     notifyListeners();
   }
 
-  /// I1: POST /auth/change-password. Clears [mustChangePassword] on success.
+  /// POST /auth/change-password. Clears mustChangePassword on success.
   Future<ApiResult> changePassword(
     String current,
     String newPassword,
@@ -263,10 +463,17 @@ class Api extends ChangeNotifier {
         'confirm_password': confirm,
       },
     );
+
     if (r.ok) {
+      // F-10: the server ends every older token after a password change and
+      // sends this device a fresh one.
+      final fresh = r.json is Map ? r.json['access_token'] : null;
+      if (fresh is String) token = fresh;
       mustChangePassword = false;
+      await _saveSession();
       notifyListeners();
     }
+
     return r;
   }
 }

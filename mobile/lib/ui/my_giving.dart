@@ -14,26 +14,27 @@ import 'widgets.dart';
 // Ivan (simple donor screens): the donor / relief organization's Reports
 // tab is about their own giving (UC-D3 / UC-R3, section 7.3):
 //   1. four cards, each opens its list,
-//   2. donation status (Pledged -> Received by CSWS -> Acknowledged by CMO),
-//      with "Show QR" on donations still waiting for drop-off or pickup,
-//   3. delivery status (In transit -> Delivered -> Barangay confirmed).
-// Donated goods go into CSWS inventory and are delivered per report, so the
-// deliveries shown are the ones going to the reports this user donated to
-// (GET /donations/mine "deliveries").
+//   2. donation status, the whole journey on each donation (Pledged ->
+//      Received by CSWS -> In transit -> Delivered -> Barangay confirmed),
+//      with "Show QR" while it still waits. Oct 25: no "Acknowledged by
+//      CMO" step for donors; an acknowledged donation reads as received.
+// Oct 13: there is no separate delivery list any more. Each delivery
+// records whose goods it took (first received, first sent), so the
+// donation's own timeline moves (GET /donations/mine "lifecycle_status",
+// "delivery_note").
 // ---------------------------------------------------------------------------
 
-const _donationSteps = ['Pending', 'Received', 'Confirmed'];
-const _donationLabels = ['Pledged', 'Received by CSWS', 'Acknowledged by CMO'];
+const _donationSteps = ['Pending', 'Received'];
+const _donationLabels = ['Pledged', 'Received by CSWS'];
 
 /// Oct 12 (team): each donation entry shows its full journey again, as on
-/// develop: Pledged -> Received by CSWS -> Acknowledged by CMO -> In
-/// transit -> Delivered -> Barangay confirmed (design/status.dart), and
-/// "Show QR" while it still waits for drop-off or pickup.
-/// donationLifecycleLabels with line breaks, so six steps fit a phone.
+/// develop: Pledged -> Received by CSWS -> In transit -> Delivered ->
+/// Barangay confirmed (design/status.dart), and "Show QR" while it still
+/// waits for drop-off or pickup.
+/// donationLifecycleLabels with line breaks, so the steps fit a phone.
 const _journeyLabels = [
   'Pledged',
   'Received\nby CSWS',
-  'Acknowledged\nby CMO',
   'In transit',
   'Delivered',
   'Barangay\nconfirmed',
@@ -51,6 +52,23 @@ Widget entryJourney(BuildContext context, Map e) {
           labels: _journeyLabels,
           current: donationStep(e),
         ),
+      // Oct 13: part of the goods already left; the step moves when all do.
+      if (!closed && e['delivery_note'] != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(
+            children: [
+              const Icon(Icons.local_shipping_outlined, size: 16),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '${e['delivery_note']}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ),
+        ),
       if (isWaiting(e) && !closed)
         Align(
           alignment: Alignment.centerLeft,
@@ -64,32 +82,22 @@ Widget entryJourney(BuildContext context, Map e) {
   );
 }
 
-const _deliverySteps = ['In Transit', 'Delivered', 'Confirmed'];
-const _deliveryLabels = ['In transit', 'Delivered', 'Barangay confirmed'];
-
 /// Short status words a donor understands.
 String donationStatusLabel(Object? status) => switch ('$status') {
   'Pending' => 'Waiting',
   'Partly Received' => 'Partly received',
   'Received' => 'Received by CSWS',
-  'Confirmed' => 'Acknowledged by CMO',
-  final s => s,
-};
-
-String deliveryStatusLabel(Object? status) => switch ('$status') {
-  'Preparing' => 'Being prepared',
-  'In Transit' => 'In transit',
-  'Delivered' => 'Delivered',
-  'Confirmed' => 'Barangay confirmed',
+  'Confirmed' => 'Received by CSWS', // the CMO step is not shown to donors
   final s => s,
 };
 
 /// Still has goods waiting for drop-off or pickup.
 bool isWaiting(Map e) => ((e['pending_items'] as num?) ?? 0) > 0;
 
-/// On its way: being prepared or in transit.
-bool isInDelivery(Map d) =>
-    d['status'] == 'Preparing' || d['status'] == 'In Transit';
+/// Oct 13: goods of this donation are on the road (all of them in
+/// transit, or part of them already sent).
+bool isOnTheWay(Map e) =>
+    e['lifecycle_status'] == 'In Transit' || e['delivery_note'] != null;
 
 /// "See all reports" / "Find a barangay to help": the Reports tab (every
 /// validated report with its filters), not a second copy of it.
@@ -123,9 +131,8 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
         final entries = (m['entries'] as List? ?? const []).cast<Map>();
         final supported = (m['supported_reports'] as List? ?? const [])
             .cast<Map>();
-        final deliveries = (m['deliveries'] as List? ?? const []).cast<Map>();
         final waiting = entries.where(isWaiting).toList();
-        final moving = deliveries.where(isInDelivery).toList();
+        final moving = entries.where(isOnTheWay).toList();
 
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
@@ -179,9 +186,8 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
                   value: '${moving.length}',
                   icon: Icons.local_shipping_outlined,
                   color: StatusColors.base('In Transit'),
-                  onTap: () => _push(
-                    MyDeliveriesScreen(deliveries: moving, activeOnly: true),
-                  ),
+                  onTap: () =>
+                      _push(const MyDonationsScreen(onTheWayOnly: true)),
                 ),
                 StatCard(
                   label: 'Reports supported',
@@ -200,40 +206,15 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
               ),
               // Every entry (one QR each) with the status chips, search,
               // report and handover filters and the sort, as on develop.
+              // 9.4 (testing): more room between donations.
               DonationEntriesView(
                 entries: entries,
+                donor: true,
+                gap: Space.lg,
                 footer: (e) => entryJourney(context, e),
                 onTap: (e) => _push(DonationDetailScreen(entry: e)),
               ),
               Gaps.v8,
-
-              // ---- 3. Delivery status ---------------------------------
-              SectionHeader(
-                'Delivery status',
-                subtitle: 'Deliveries to the barangays you donated to.',
-                action: deliveries.length > 3
-                    ? TextButton(
-                        onPressed: () =>
-                            _push(MyDeliveriesScreen(deliveries: deliveries)),
-                        child: Text('See all ${deliveries.length}'),
-                      )
-                    : null,
-              ),
-              if (deliveries.isEmpty)
-                const AppCard(
-                  child: EmptyView(
-                    compact: true,
-                    icon: Icons.local_shipping_outlined,
-                    title: 'No deliveries yet',
-                    message:
-                        'When CSWS sends goods to a barangay you donated to, '
-                        'you will see it here.',
-                  ),
-                ),
-              for (final d in deliveries.take(3)) ...[
-                DeliveryStatusCard(delivery: d),
-                Gaps.v8,
-              ],
             ],
           ],
         );
@@ -320,79 +301,6 @@ class DonationStatusCard extends StatelessWidget {
   }
 }
 
-/// One delivery to a report this user donated to.
-class DeliveryStatusCard extends StatelessWidget {
-  final Map delivery;
-  const DeliveryStatusCard({super.key, required this.delivery});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    final d = delivery;
-    final status = '${d['status']}';
-    final when = d['confirmed_at'] ?? d['delivery_date'];
-    return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: StatusColors.of(
-                  status,
-                  Theme.of(context).brightness,
-                ).bg,
-                child: Icon(
-                  Icons.local_shipping_outlined,
-                  color: StatusColors.of(
-                    status,
-                    Theme.of(context).brightness,
-                  ).fg,
-                ),
-              ),
-              Gaps.h12,
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '${d['items_summary'] ?? 'Relief goods'} to Barangay '
-                      '${d['barangay'] ?? '-'}',
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: t.titleSmall,
-                    ),
-                    Gaps.v4,
-                    Text(
-                      [
-                        if (d['report_label'] != null) '${d['report_label']}',
-                        if (when != null) niceDate(when),
-                      ].join(' · '),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-              Gaps.h8,
-              StatusChip(status, label: deliveryStatusLabel(status)),
-            ],
-          ),
-          Gaps.v12,
-          StatusTimeline(
-            steps: _deliverySteps,
-            labels: _deliveryLabels,
-            current: status,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 /// The donation's QR, to show at the CSWS office or to the pickup team.
 Future<void> showDonationQr(BuildContext context, String reference) =>
     showDialog<void>(
@@ -468,7 +376,14 @@ Future<void> showDonationQr(BuildContext context, String reference) =>
 /// drop-off or pickup. Edits and deletes reload it.
 class MyDonationsScreen extends StatefulWidget {
   final bool waitingOnly;
-  const MyDonationsScreen({super.key, this.waitingOnly = false});
+
+  /// Oct 13: only donations whose goods are on the road.
+  final bool onTheWayOnly;
+  const MyDonationsScreen({
+    super.key,
+    this.waitingOnly = false,
+    this.onTheWayOnly = false,
+  });
 
   @override
   State<MyDonationsScreen> createState() => _MyDonationsScreenState();
@@ -484,6 +399,8 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
         title: Text(
           widget.waitingOnly
               ? 'Waiting for drop-off or pickup'
+              : widget.onTheWayOnly
+              ? 'In delivery'
               : 'My donations',
         ),
       ),
@@ -494,6 +411,8 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
           final all = ((data[0] as Map)['entries'] as List).cast<Map>();
           final entries = widget.waitingOnly
               ? all.where(isWaiting).toList()
+              : widget.onTheWayOnly
+              ? all.where(isOnTheWay).toList()
               : all;
           return ListView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -501,12 +420,18 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
             children: [
               DonationEntriesView(
                 entries: entries,
+                donor: true,
                 emptyTitle: widget.waitingOnly
                     ? 'Nothing is waiting'
+                    : widget.onTheWayOnly
+                    ? 'Nothing is on the road'
                     : 'You haven\'t donated yet',
                 emptyMessage: widget.waitingOnly
                     ? 'Every donation has been dropped off or picked up.'
+                    : widget.onTheWayOnly
+                    ? 'When CSWS sends your goods to the barangay, they show here.'
                     : 'Pick a barangay that needs help and pledge goods.',
+                gap: Space.lg,
                 footer: (e) => entryJourney(context, e),
                 onTap: (e) async {
                   final changed = await Navigator.of(context).push<bool>(
@@ -520,48 +445,6 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-/// Deliveries to the reports this user donated to.
-class MyDeliveriesScreen extends StatelessWidget {
-  final List<Map> deliveries;
-  final bool activeOnly;
-  const MyDeliveriesScreen({
-    super.key,
-    required this.deliveries,
-    this.activeOnly = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(activeOnly ? 'In delivery' : 'Delivery status'),
-      ),
-      body: ListView(
-        padding: Space.page,
-        children: [
-          if (deliveries.isEmpty)
-            AppCard(
-              child: EmptyView(
-                compact: true,
-                icon: Icons.local_shipping_outlined,
-                title: activeOnly
-                    ? 'Nothing is on the way right now'
-                    : 'No deliveries yet',
-                message:
-                    'When CSWS sends goods to a barangay you donated to, you '
-                    'will see it here.',
-              ),
-            ),
-          for (final d in deliveries) ...[
-            DeliveryStatusCard(delivery: d),
-            Gaps.v8,
-          ],
-        ],
       ),
     );
   }

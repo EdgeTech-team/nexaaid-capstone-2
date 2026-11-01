@@ -19,7 +19,7 @@ INSERT INTO items (item_name, category, unit_of_measure)
 SELECT v.item_name, v.category, v.unit
 FROM (VALUES
     ('Rice',            'Food',     'kg'),
-    ('Drinking Water',  'Water',    'gallons'),
+    ('Drinking Water',  'Water',    'L'),
     ('Canned Goods',    'Food',     'cans'),
     ('Noodles',         'Food',     'packs'),
     ('Hygiene Kit',     'Hygiene',  'kits'),
@@ -30,23 +30,51 @@ FROM (VALUES
 ) AS v(item_name, category, unit)
 WHERE NOT EXISTS (SELECT 1 FROM items i WHERE lower(i.item_name) = lower(v.item_name));
 
--- 2b. Disaster types common in Mandaue City / Cebu (report form dropdown).
-INSERT INTO disaster_types (type_name, description)
-SELECT v.type_name, v.description
+-- 2a. Base units and common sizes (per-item fulfillment, Oct 2026).
+--     Needs MIGRATION 9b3f7c1d2e48 first (alembic upgrade head).
+--     Every quantity of an item is a whole number in its unit_of_measure
+--     (its BASE UNIT): kg = weight, L = volume, anything else is counted.
+--     Sizes are what one piece holds, in that base unit. A donor picks one
+--     and the app works out packs x per pack x size (e.g. 3 boxes x 16 x
+--     1.5 L = 72 L). This list is maintained by the developers: add a row
+--     here and re-run this file to offer a new size.
+INSERT INTO item_sizes (item_id, label, amount, sort_order)
+SELECT i.item_id, v.label, v.amount, v.sort_order
 FROM (VALUES
-    ('Flood',             'Rising water from heavy rain or overflowing rivers'),
-    ('Flash Flood',       'Sudden flooding within hours of heavy rain'),
-    ('Typhoon',           'Tropical cyclone with strong winds and heavy rain'),
-    ('Storm Surge',       'Coastal flooding pushed in by a typhoon'),
-    ('Fire',              'Residential or commercial fire'),
-    ('Earthquake',        'Ground shaking and structural damage'),
-    ('Landslide',         'Soil or rock sliding down slopes'),
-    ('Tsunami',           'Sea waves caused by an undersea earthquake'),
-    ('Volcanic Eruption', 'Ashfall or eruption affecting the area'),
-    ('Drought',           'Long dry spell affecting water and food supply'),
-    ('Disease Outbreak',  'Epidemic needing medical and hygiene supplies')
-) AS v(type_name, description)
-WHERE NOT EXISTS (SELECT 1 FROM disaster_types d WHERE lower(d.type_name) = lower(v.type_name));
+    ('Rice',           '1 kg pack',              1,        1),
+    ('Rice',           '2 kg pack',              2,        2),
+    ('Rice',           '5 kg pack',              5,        3),
+    ('Rice',           '10 kg sack',             10,       4),
+    ('Rice',           '25 kg sack',             25,       5),
+    ('Rice',           '50 kg sack',             50,       6),
+    ('Drinking Water', '330 ml bottle',          0.33,     1),
+    ('Drinking Water', '350 ml bottle',          0.35,     2),
+    ('Drinking Water', '500 ml bottle',          0.5,      3),
+    ('Drinking Water', '1 L bottle',             1,        4),
+    ('Drinking Water', '1.5 L bottle',           1.5,      5),
+    ('Drinking Water', '2 L bottle',             2,        6),
+    ('Drinking Water', '1 gallon container',     3.7854,   7),
+    ('Drinking Water', '5 gallon container',     18.9271,  8)
+) AS v(item_name, label, amount, sort_order)
+JOIN items i ON lower(i.item_name) = lower(v.item_name) AND i.active
+WHERE NOT EXISTS (
+    SELECT 1 FROM item_sizes s WHERE s.item_id = i.item_id AND s.label = v.label
+);
+
+-- 2b. Disaster types for Mandaue City (report form dropdown). Same list as
+--     migration d3f8b2a61c47; an existing type keeps its id and gets the
+--     current description.
+INSERT INTO disaster_types (type_name, description)
+VALUES
+    ('Typhoon',     'Tropical cyclone with strong winds and heavy rain'),
+    ('Flood',       'Urban flooding, flash flood, or river overflow'),
+    ('Storm Surge', 'Coastal flooding caused by a typhoon''s storm surge'),
+    ('Earthquake',  'Ground shaking from a seismic event, including damage from aftershocks'),
+    ('Fire',        'Residential, commercial, or industrial fire'),
+    ('Tsunami',     'Coastal flooding caused by a seismic event'),
+    ('Other',       'Disaster not covered by the listed types; details go in the report description')
+ON CONFLICT (type_name) DO UPDATE SET description = EXCLUDED.description;
+
 
 -- 2c. audit_logs (manuscript data dictionary) for the activity logs on the
 --     Administrator and CSWS dashboards. Only created if it is missing.

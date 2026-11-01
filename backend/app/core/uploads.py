@@ -23,9 +23,17 @@ from sqlalchemy.orm import Session
 from core.config import settings
 from core.storage import get_storage
 from models.upload_model import Upload, UploadBlob
+from sqlalchemy import func
+
 
 MAX_BYTES = settings.MAX_UPLOAD_MB * 1024 * 1024
-UNCLAIMED_TTL = timedelta(hours=24) #ownerless registration uploads are purged after this
+UNCLAIMED_TTL = timedelta(hours=24)  # a registration upload can be claimed for this long
+# F-14: ownerless uploads are deleted once they can no longer be claimed. The
+# extra hour keeps the purge clear of a registration finishing at hour 24.
+PURGE_UNCLAIMED_AFTER = UNCLAIMED_TTL + timedelta(hours=1)
+# F-14: uploads made before login are refused while all unclaimed files
+# together exceed this, so nobody can fill the disk and the Neon database.
+MAX_UNCLAIMED_BYTES = 200 * 1024 * 1024
 
 JPEG, PNG, PDF = "image/jpeg", "image/png", "application/pdf"
 EXTENSION = {JPEG: "jpg", PNG: "png", PDF: "pdf"}
@@ -240,21 +248,34 @@ def transfer_upload(db: Session, file_id: str, from_user, to_user, purpose: str)
     return up
 
 
-def purge_unclaimed(db: Session, older_than: timedelta = UNCLAIMED_TTL) -> int:
-    """Delete ownerless files older than the TTL: abandoned registrations,
-    and files whose account was deleted (RA 10173: don't keep personal
-    data longer than needed). Run from a shell or a scheduled job:
- 
-        python -c "from core.database import SessionLocal; from core.uploads import purge_unclaimed; \\
-        db = SessionLocal(); print(purge_unclaimed(db)); db.commit()"
-    """
+def purge_unclaimed(db: Session, older_than: timedelta = PURGE_UNCLAIMED_AFTER) -> int:
+    """F-14: delete ownerless files that can no longer be claimed: abandoned
+    registrations (ID photos, organization documents) and files whose
+    account was deleted (RA 10173: don't keep personal data longer than
+    needed). Runs on every upload made before login and in the donation
+    expiry job, so no scheduler is needed. Deletes the row, its copy in
+    upload_blobs and the file on this machine. Does not commit."""
     cutoff = datetime.now(timezone.utc) - older_than
     rows = (
-        db.query(Upload)
+        db.query(Upload.upload_id, Upload.storage_key)
         .filter(Upload.owner_user_id.is_(None), Upload.created_at < cutoff)
         .all()
     )
-    for row in rows:
-        get_storage().delete(row.storage_key)
-        db.delete(row)
+    if not rows:
+        return 0
+    ids = [r.upload_id for r in rows]
+    db.query(UploadBlob).filter(UploadBlob.upload_id.in_(ids)).delete(synchronize_session=False)
+    db.query(Upload).filter(Upload.upload_id.in_(ids)).delete(synchronize_session=False)
+    db.flush()  # rows gone first; a file is never deleted while its row remains
+    for r in rows:
+        get_storage().delete(r.storage_key)
     return len(rows)
+
+
+def unclaimed_bytes(db: Session) -> int:
+    """F-14: total size of the files still waiting to be claimed."""
+    return int(
+        db.query(func.coalesce(func.sum(Upload.size_bytes), 0))
+        .filter(Upload.owner_user_id.is_(None))
+        .scalar()
+    )

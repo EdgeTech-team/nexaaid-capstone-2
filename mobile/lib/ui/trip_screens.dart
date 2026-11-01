@@ -21,7 +21,7 @@ import 'widgets.dart';
 
 /// Plain words for each trip status (same colors as delivery statuses).
 const tripStatusLabels = {
-  'Preparing': 'Being prepared',
+  'Preparing': 'Active',
   'In Transit': 'On the road',
   'Delivered': 'Waiting for barangay confirmation',
   'Completed': 'Completed',
@@ -200,8 +200,7 @@ class _TripsScreenState extends State<TripsScreen> {
                         Text(
                           '${trip['total_stops']} '
                           '${trip['total_stops'] == 1 ? 'stop' : 'stops'} · '
-                          '${trip['total_reports']} reports · '
-                          '${trip['total_quantity']} items'
+                          '${trip['total_reports']} reports'
                           '${trip['vehicle_details'] != null ? ' · ${trip['vehicle_details']}' : ''}',
                           style: t.bodySmall,
                         ),
@@ -309,7 +308,7 @@ class TripDetailScreen extends StatelessWidget {
       context,
       title: 'Truck came back?',
       message:
-          'Stops the truck did not reach go back to "Preparing", so you can '
+          'Stops the truck did not reach go back to "Active", so you can '
           'send them again or cancel them. Why did it come back?',
       choices: const [
         'The truck broke down',
@@ -397,7 +396,6 @@ class TripDetailScreen extends StatelessWidget {
                       '${trip['total_stops']} '
                       '${trip['total_stops'] == 1 ? 'stop' : 'stops'} · '
                       '${trip['total_reports']} reports · '
-                      '${trip['total_quantity']} items · '
                       '${counts['Confirmed']} of '
                       '${stops.fold<int>(0, (n, s) => n + (s['deliveries'] as List).length)} '
                       'confirmed by the barangays',
@@ -536,7 +534,7 @@ class _StopDelivery extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Delivery #${d['delivery_id']} · ${d['report_label'] ?? 'Report #${d['report_id']}'}',
+                  'Delivery #${d['delivery_id']} · ${reportName(d['report_label'] ?? 'Report')}',
                   style: t.titleSmall,
                 ),
                 Text(items, style: t.bodyMedium),
@@ -569,7 +567,7 @@ class _StopDelivery extends StatelessWidget {
                           visualDensity: VisualDensity.compact,
                         ),
                         onPressed: () => showDeliveryProblems(context, d),
-                        child: const Text('Something went wrong?'),
+                        child: const Text('Edit'),
                       ),
                   ],
                 ),
@@ -611,8 +609,11 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   /// Barangays in the order the truck visits them (staff can reorder).
   final List<int> stopOrder = [];
 
-  /// report_id -> item_id -> quantity box
-  final Map<int, Map<int, TextEditingController>> qty = {};
+  /// Oct 15: ticked donation entries per report (each goes whole).
+  final Map<int, Set<String>> _ready = {};
+
+  /// report_id -> how many kinds of goods its ticked donations carry.
+  final Map<int, int> _kinds = {};
 
   final _sendForm = GlobalKey<FormState>();
   final vehicle = TextEditingController();
@@ -621,11 +622,6 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   @override
   void dispose() {
-    for (final m in qty.values) {
-      for (final c in m.values) {
-        c.dispose();
-      }
-    }
     vehicle.dispose();
     notes.dispose();
     super.dispose();
@@ -633,18 +629,13 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   int _brgy(int reportId) => reports[reportId]!['barangay_id'] as int;
 
-  TextEditingController Function(int) _ctrlFor(int reportId) =>
-      (itemId) => qty
-          .putIfAbsent(reportId, () => <int, TextEditingController>{})
-          .putIfAbsent(itemId, () => TextEditingController());
+  /// How many different goods go for this report (from the donations
+  /// ticked in step 2). Quantities are not added up: they are in different
+  /// units (kg, L, pcs).
+  int _goods(int reportId) => _kinds[reportId] ?? 0;
 
-  List<Map> _items(int reportId) =>
-      (reports[reportId]!['items'] as List).cast<Map>();
-
-  int _total(int reportId) => linesFrom(
-    _items(reportId),
-    _ctrlFor(reportId),
-  ).fold(0, (a, l) => a + l['quantity']!);
+  static String _goodsLabel(int n) =>
+      '$n ${n == 1 ? 'kind' : 'kinds'} of goods';
 
   void _toggle(int reportId, bool on) {
     setState(() {
@@ -673,7 +664,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   bool get _stepOk => switch (step) {
     0 => chosen.isNotEmpty,
-    1 => chosen.every((r) => _total(r) > 0),
+    // Oct 13: every report needs at least one acknowledged donation.
+    1 => chosen.isNotEmpty && chosen.every((r) => (_ready[r] ?? {}).isNotEmpty),
     _ => date != null,
   };
 
@@ -707,7 +699,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
       'reports': [
         for (final stop in _stops)
           for (final r in stop.value)
-            {'report_id': r, 'items': linesFrom(_items(r), _ctrlFor(r))},
+            // Oct 15: the ticked donation entries, each one whole.
+            {'report_id': r, 'batch_references': (_ready[r] ?? {}).toList()},
       ],
     };
     final res = await act(
@@ -744,6 +737,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
         '${r['barangay_name']}'.toLowerCase().contains(q);
     final groups = (data['barangays'] as List).cast<Map>();
     final empty = (data['no_stock_reports'] as List).cast<Map>();
+    final waiting = ((data['not_acknowledged_reports'] as List?) ?? const [])
+        .cast<Map>();
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -770,11 +765,13 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
           ),
         Gaps.v8,
         if (groups.isEmpty)
-          const EmptyView(
+          EmptyView(
             compact: true,
             icon: Icons.inventory_2_outlined,
             title: 'Nothing to send yet',
-            message: 'No report has goods in stock. Receive donations first.',
+            message: waiting.isEmpty
+                ? 'No report has goods in stock. Receive donations first.'
+                : 'No report has goods the CMO acknowledged yet.',
           ),
         for (final g in groups)
           if ((g['reports'] as List).cast<Map>().any(match)) ...[
@@ -811,6 +808,25 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
               ),
             const Divider(),
           ],
+        if (waiting.isNotEmpty)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            initiallyExpanded: groups.isEmpty,
+            title: Text('Not acknowledged (${waiting.length})'),
+            subtitle: const Text(
+              'Received by CSWS, but the CMO has not acknowledged them yet.',
+            ),
+            children: [
+              for (final r in waiting)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.hourglass_top),
+                  title: Text('${r['report_label']}'),
+                  subtitle: Text(notAcknowledgedText(r)),
+                ),
+            ],
+          ),
         if (empty.isNotEmpty)
           ExpansionTile(
             tilePadding: EdgeInsets.zero,
@@ -841,8 +857,8 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
           Text(
-            'Enter how much to load for each report. Every report needs at '
-            'least one item.',
+            'Every donation the CMO acknowledged is ticked. If they do not all '
+            'fit the truck, untick whole donations; they wait for the next trip.',
             style: t.bodyMedium,
           ),
           for (final stop in _stops)
@@ -867,15 +883,19 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                           ),
                         ],
                       ),
-                      StockQuantities(
-                        key: ValueKey('trip-items-$rid'),
-                        items: _items(rid),
-                        controllerFor: _ctrlFor(rid),
-                        onChanged: () => setState(() {}),
+                      ReadyDonations(
+                        key: ValueKey('trip-ready-$rid'),
+                        reportId: rid,
+                        onChanged: (refs) {
+                          if (mounted) setState(() => _ready[rid] = refs);
+                        },
+                        onKindsChanged: (n) {
+                          if (mounted) setState(() => _kinds[rid] = n);
+                        },
                       ),
-                      if (tried && _total(rid) == 0)
+                      if (tried && (_ready[rid] ?? {}).isEmpty)
                         Text(
-                          'Enter at least one quantity, or tap Remove.',
+                          'Nothing ticked for this report. Tick a donation, or tap Remove.',
                           style: TextStyle(color: cs.error),
                         ),
                     ],
@@ -896,7 +916,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   Widget _stepWhen() {
     final t = Theme.of(context).textTheme;
     final stops = _stops;
-    final items = chosen.fold<int>(0, (a, r) => a + _total(r));
+    final goods = chosen.fold<int>(0, (a, r) => a + _goods(r));
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -938,7 +958,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
             subtitle: Text(
               '${stops[n].value.length} '
               '${stops[n].value.length == 1 ? 'report' : 'reports'} · '
-              '${stops[n].value.fold<int>(0, (a, r) => a + _total(r))} items',
+              '${_goodsLabel(stops[n].value.fold<int>(0, (a, r) => a + _goods(r)))}',
             ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
@@ -972,7 +992,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
             'Summary: ${chosen.length} '
             '${chosen.length == 1 ? 'report' : 'reports'}, '
             '${stops.length} ${stops.length == 1 ? 'stop' : 'stops'}, '
-            '$items items'
+            '${_goodsLabel(goods)}'
             '${date == null ? '' : ', leaving ${niceWhen(date)}'}.',
             style: t.bodyMedium,
           ),
@@ -983,7 +1003,7 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = ['Choose reports', 'What to send', 'When and which truck'];
+    const titles = ['Choose reports', 'What goes', 'When and which truck'];
     return Scaffold(
       appBar: AppBar(
         title: Text('Plan a trip · Step ${step + 1} of 3'),

@@ -226,10 +226,28 @@ def register_organization(
 # Forgot password (adviser comment: login page). A 6-digit code is emailed,
 # expires after RESET_CODE_MINUTES, works once, and allows MAX_RESET_ATTEMPTS
 # wrong guesses. Codes are stored hashed.
+# F-03: forgot-password answers the same for every email, so it cannot be
+# used to check who has an account. F-02: per account, at most
+# MAX_CODES_PER_HOUR codes and MAX_WRONG_CODES_PER_HOUR wrong guesses an
+# hour (counted from password_reset_tokens, no migration).
 # ---------------------------------------------------------------------------
+
+MAX_CODES_PER_HOUR = 5
+MAX_WRONG_CODES_PER_HOUR = 10
+RESET_REPLY = {"detail": "If that email has an active account, a reset code was sent."}
+
 
 def _code_hash(code: str) -> str:
     return hmac.new(settings.SECRET_KEY.encode(), code.encode(), hashlib.sha256).hexdigest()
+
+
+def _last_hour(db: Session, user_id: int):
+    """This account's reset codes created in the last hour."""
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    return db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user_id,
+        PasswordResetToken.created_at > since,
+    )
 
 
 @router.post("/forgot-password")
@@ -239,33 +257,30 @@ def forgot_password(
     db: Session = Depends(get_db),
 ):
     user = db.query(User).filter(func.lower(User.email) == payload.email.lower()).first()
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Email not registered")
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is deactivated. Please contact an administrator.",
-        )
-    if True:
-        now = datetime.now(timezone.utc)
-        # Only the newest code works.
-        db.query(PasswordResetToken).filter(
-            PasswordResetToken.user_id == user.user_id,
-            PasswordResetToken.used_at.is_(None),
-        ).update({"used_at": now})
-        code = f"{secrets.randbelow(1_000_000):06d}"
-        db.add(PasswordResetToken(
-            user_id=user.user_id,
-            code_hash=_code_hash(code),
-            expires_at=now + timedelta(minutes=RESET_CODE_MINUTES),
-        ))
-        background_tasks.add_task(
-            send_email, user.email, "Your NexaAid password reset code",
-            f"Hello {user.first_name},\n\n"
-            f"Your password reset code is {code}. It expires in {RESET_CODE_MINUTES} minutes.\n\n"
-            "If you did not ask for this, you can ignore this email.\n\nNexaAid",
-        )
-    return {"detail": "A reset code was sent to your email."}
+    # Unknown, deactivated or already sent enough codes this hour: the same
+    # answer, and no email.
+    if (user is None or not user.is_active
+            or _last_hour(db, user.user_id).count() >= MAX_CODES_PER_HOUR):
+        return RESET_REPLY
+    now = datetime.now(timezone.utc)
+    # Only the newest code works.
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.user_id,
+        PasswordResetToken.used_at.is_(None),
+    ).update({"used_at": now})
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    db.add(PasswordResetToken(
+        user_id=user.user_id,
+        code_hash=_code_hash(code),
+        expires_at=now + timedelta(minutes=RESET_CODE_MINUTES),
+    ))
+    background_tasks.add_task(
+        send_email, user.email, "Your NexaAid password reset code",
+        f"Hello {user.first_name},\n\n"
+        f"Your password reset code is {code}. It expires in {RESET_CODE_MINUTES} minutes.\n\n"
+        "If you did not ask for this, you can ignore this email.\n\nNexaAid",
+    )
+    return RESET_REPLY
 
 
 @router.post("/reset-password")
@@ -286,6 +301,13 @@ def reset_password(
         .first()
     )
     if token is None or token.attempts >= MAX_RESET_ATTEMPTS:
+        raise bad
+    # F-02: wrong guesses are counted per account, over every code of the
+    # last hour, so asking for new codes does not give new guesses.
+    wrong = (_last_hour(db, user.user_id)
+             .with_entities(func.coalesce(func.sum(PasswordResetToken.attempts), 0))
+             .scalar())
+    if wrong >= MAX_WRONG_CODES_PER_HOUR:
         raise bad
 
     now = datetime.now(timezone.utc)

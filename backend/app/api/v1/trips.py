@@ -38,6 +38,10 @@ from models.report import DisasterReport
 from schemas.delivery import ReceiptConfirm
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
+from services.inventory import add_to_stock
+
+from services.delivery_allocation import allocate_delivery, chosen_refs, readiness, ready_lines
+from services.delivery_notices import tell_barangay_prepared
 from services.delivery_views import delivery_views, report_labels
 
 router = APIRouter(prefix="/trips", tags=["Delivery trips"])
@@ -68,7 +72,10 @@ class TripStop(BaseModel):
     # Usually the report's own barangay, so the app may leave it out.
     destination_barangay_id: Optional[int] = None
     destination_sitio_id: Optional[int] = None
-    items: List[TripLine] = Field(min_length=1)
+    # Empty = every acknowledged donation of the report not sent yet (Oct 13).
+    items: List[TripLine] = []
+    # Oct 15: the donation entries that go, each whole (None = all acknowledged).
+    batch_references: Optional[List[str]] = None
 
 
 class TripCreate(BaseModel):
@@ -161,19 +168,32 @@ def trip_candidates(
     db: Session = Depends(get_db),
     current_user=Depends(require_role(*CSWS)),
 ):
-    """Validated reports that still have stock, grouped by barangay.
+    """Validated reports that have goods ready to send, grouped by barangay.
     Order: the chosen barangay first, then barangays with the most urgent
-    report (priority, then the lowest fulfillment). Reports with no stock are
-    listed separately so the screen can say "No more stock for this report"."""
+    report (priority, then the lowest fulfillment).
+
+    Each report gets a status:
+      available         in stock, and the CMO acknowledged at least one entry
+      not_acknowledged  in stock, but nothing acknowledged by the CMO yet, so
+                        it cannot go on a delivery (listed separately)
+      no_stock          nothing left (listed separately: "No more stock")"""
     reports = db.query(DisasterReport).filter(DisasterReport.status == "Validated").all()
     labels = report_labels(db, [r.report_id for r in reports])
     brgys = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     items = {i.item_id: i for i in db.query(Item).all()}
+    acks = readiness(db, [r.report_id for r in reports])
 
-    ready, empty = [], []
+    ready, waiting, empty = [], [], []
     for r in reports:
         stock = report_stock(db, r.report_id)
         f = r.fulfillment
+        ack = acks.get(r.report_id, {})
+        if not stock:
+            code = "no_stock"
+        elif ack.get("acknowledged"):
+            code = "available"
+        else:
+            code = "not_acknowledged"
         row = {
             "report_id": r.report_id,
             "report_label": labels.get(r.report_id),
@@ -182,6 +202,8 @@ def trip_candidates(
             "sitio_id": r.sitio_id,
             "priority_level": r.priority_level,
             "fulfillment_percentage": float(f.fulfillment_percentage) if f else 0.0,
+            "status": code,
+            "waiting_for_cmo": ack.get("waiting_for_cmo", 0),
             "items": [
                 {"item_id": iid, "item_name": items[iid].item_name if iid in items else f"Item #{iid}",
                  "unit": items[iid].unit_of_measure if iid in items else "", "quantity": qty}
@@ -192,7 +214,7 @@ def trip_candidates(
             text = q.strip().lower().lstrip("#")
             if text not in (row["report_label"] or "").lower() and text not in row["barangay_name"].lower():
                 continue
-        (ready if stock else empty).append(row)
+        {"available": ready, "not_acknowledged": waiting, "no_stock": empty}[code].append(row)
 
     def urgency(r):
         return (PRIORITY_RANK.get(r["priority_level"], 9), r["fulfillment_percentage"], r["report_id"])
@@ -210,12 +232,21 @@ def trip_candidates(
     )
     return {
         "barangays": ordered,
+        "not_acknowledged_reports": [
+            {"report_id": r["report_id"], "report_label": r["report_label"],
+             "barangay_name": r["barangay_name"], "status": "not_acknowledged",
+             "waiting_for_cmo": r["waiting_for_cmo"],
+             "message": "Not acknowledged by the CMO yet"}
+            for r in sorted(waiting, key=urgency)
+        ],
         "no_stock_reports": [
             {"report_id": r["report_id"], "report_label": r["report_label"],
-             "barangay_name": r["barangay_name"], "message": "No more stock for this report"}
+             "barangay_name": r["barangay_name"], "status": "no_stock",
+             "message": "No more stock for this report"}
             for r in sorted(empty, key=urgency)
         ],
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -251,11 +282,23 @@ def create_trip(
             raise HTTPException(status_code=404, detail=f"Barangay #{stop.destination_barangay_id} not found")
         reports[stop.report_id] = report
 
+    # Oct 13 (team): a stop without items takes the whole report.
+    lines_of, refs_of = {}, {}
+    for stop in payload.reports:
+        refs_of[stop.report_id] = None if stop.items else chosen_refs(db, stop.report_id, stop.batch_references)
+        lines_of[stop.report_id] = stop.items or ready_lines(db, stop.report_id, refs_of[stop.report_id])
+        if not lines_of[stop.report_id]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Nothing to send yet for report {labels.get(stop.report_id, stop.report_id)}: "
+                       "no donation has been acknowledged by the CMO.",
+            )
     checked = [
-        check_stock(db, stop.report_id, stop.items, report_name=f"report {labels.get(stop.report_id, stop.report_id)}")
-        for stop in payload.reports
+        check_stock(db, stop.report_id, lines_of[stop.report_id], report_name=f"report {labels.get(stop.report_id, stop.report_id)}")
+                for stop in sorted(payload.reports, key=lambda s: s.report_id)   # F-06: same lock order everywhere
     ]
     for c in checked:
+
         take_stock(c)
 
     trip = DeliveryTrip(
@@ -268,6 +311,7 @@ def create_trip(
     db.flush()
 
     stop_of: dict = {}   # barangay -> stop number, in the order staff listed them
+    made = []
     for stop in payload.reports:
         brgy = stop.destination_barangay_id or reports[stop.report_id].barangay_id
         stop_of.setdefault(brgy, len(stop_of) + 1)
@@ -283,14 +327,18 @@ def create_trip(
         )
         db.add(delivery)
         db.flush()
-        for line in stop.items:
+        made.append(delivery)
+        for line in lines_of[stop.report_id]:
             db.add(DeliveryItem(delivery_id=delivery.delivery_id, item_id=line.item_id, quantity=line.quantity))
+        db.flush()
+        allocate_delivery(db, delivery, refs_of[stop.report_id])   # whose donations
         # Same history entry a single delivery gets, plus the trip number.
         log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
                    new={"status": "Preparing", "trip_id": trip.trip_id,
-                        "items": [l.model_dump() for l in stop.items]})
+                        "items": [l.model_dump() for l in lines_of[stop.report_id]]})
     log_action(db, current_user, "PREPARE TRIP", "delivery_trips", trip.trip_id,
                new={"reports": [s.report_id for s in payload.reports], "stops": len(stop_of)})
+    tell_barangay_prepared(db, made)   # each stop's barangay gets ready to receive
     db.commit()
     return _trip_view(db, _get_trip(db, trip.trip_id))
 
@@ -439,6 +487,10 @@ def undo_trip(
     """Made a mistake while preparing? Undo the whole trip: its deliveries
     are removed and every item goes back to its report's stock. Only while
     nothing has left the office. The history keeps a record of the undo."""
+    # F-06: lock this trip's deliveries first, so a second undo (or a start)
+    # waits, then sees what the first one did.
+    (db.query(Delivery).filter(Delivery.trip_id == trip_id)
+     .order_by(Delivery.delivery_id).with_for_update().populate_existing().all())
     trip = _get_trip(db, trip_id)
     if any(d.status != "Preparing" for d in trip.deliveries):
         raise HTTPException(status_code=409, detail="This trip has already left, so it can no longer be undone.")
@@ -448,13 +500,13 @@ def undo_trip(
             status_code=409,
             detail="A DRRMO transport request is linked to this trip. Ask DRRMO to decline it first.",
         )
-    from models.inventory_model import Inventory
+    # F-06: back to stock, rows locked in (report, item) order.
+    for report_id, item_id, qty in sorted((d.report_id, line.item_id, line.quantity)
+                                          for d in trip.deliveries for line in d.items):
+        add_to_stock(db, item_id, report_id, qty)
     returned = []
     for d in trip.deliveries:
         for line in d.items:
-            inv = (db.query(Inventory)
-                   .filter(Inventory.item_id == line.item_id, Inventory.report_id == d.report_id).first())
-            inv.quantity += line.quantity
             returned.append({"report_id": d.report_id, "item_id": line.item_id, "quantity": line.quantity})
         log_action(db, current_user, "UNDO DELIVERY", "deliveries", d.delivery_id,
                    old={"status": "Preparing", "trip_id": trip_id}, new={"removed": True})

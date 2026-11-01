@@ -103,6 +103,10 @@ class AddressAutocompleteField extends StatefulWidget {
   final String label;
   final String hint;
   final IconData icon;
+
+  /// Door to Door geofence (Oct 2026): places outside the pickup cities are
+  /// shown but can't be picked. Off for addresses that aren't pickups.
+  final bool pickupAreaOnly;
   const AddressAutocompleteField({
     super.key,
     required this.controller,
@@ -111,6 +115,7 @@ class AddressAutocompleteField extends StatefulWidget {
     this.label = 'Pickup address',
     this.hint = 'Start typing: house no., street, barangay',
     this.icon = Icons.home_outlined,
+    this.pickupAreaOnly = false,
   });
 
   @override
@@ -232,14 +237,31 @@ class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
               children: [
                 for (var i = 0; i < _suggestions.length; i++) ...[
                   if (i > 0) const Divider(height: 1),
-                  ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.place_outlined),
-                    title: Text('${_suggestions[i]['main']}'),
-                    subtitle: '${_suggestions[i]['secondary']}'.isEmpty
-                        ? null
-                        : Text('${_suggestions[i]['secondary']}'),
-                    onTap: () => _choose(_suggestions[i]),
+                  Builder(
+                    builder: (context) {
+                      final s = _suggestions[i];
+                      final outside =
+                          widget.pickupAreaOnly && s['in_pickup_area'] == false;
+                      final where = '${s['secondary']}';
+                      return ListTile(
+                        dense: true,
+                        enabled: !outside,
+                        leading: Icon(
+                          outside ? Icons.block : Icons.place_outlined,
+                        ),
+                        title: Text('${s['main']}'),
+                        subtitle: outside
+                            ? Text(
+                                '${where.isEmpty ? '' : '$where\n'}'
+                                'Outside the Door to Door area. '
+                                'Choose Drop Off instead.',
+                              )
+                            : where.isEmpty
+                            ? null
+                            : Text(where),
+                        onTap: outside ? null : () => _choose(s),
+                      );
+                    },
                   ),
                 ],
               ],
@@ -264,6 +286,78 @@ class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
 // reopening older entries that had one preferred time.
 // ---------------------------------------------------------------------------
 
+/// One place where Door to Door pickup is offered. [barangays] empty = the
+/// whole city; otherwise only those barangays (northern Cebu City).
+class ServiceArea {
+  final String name;
+  final List<String> aliases; // other spellings, e.g. Lapulapu, Mactan
+  final List<String> barangays;
+  final String note; // shown under the name in the coverage card
+
+  const ServiceArea(
+    this.name, {
+    this.aliases = const [],
+    this.barangays = const [],
+    this.note = '',
+  });
+
+  factory ServiceArea.fromJson(Map j) {
+    final names = [for (final a in (j['aliases'] as List? ?? const [])) '$a'];
+    final brgys = [for (final b in (j['barangays'] as List? ?? const [])) '$b'];
+    final name = '${j['name']}';
+    final known = defaultServiceAreas.where((a) => a.name == name).firstOrNull;
+    return ServiceArea(
+      name,
+      aliases: names,
+      barangays: brgys,
+      note:
+          known?.note ??
+          (brgys.isEmpty
+              ? 'All barangays'
+              : 'Selected barangays, including ${brgys.take(2).join(' and ')}'),
+    );
+  }
+
+  /// "Lapu-Lapu City" -> "lapulapucity": spacing and dashes never matter.
+  static String _squash(String s) =>
+      s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+  /// Same rule as the server (schemas/physical_donation_schema.in_service_area).
+  bool covers(String text) {
+    final t = _squash(text);
+    if (!{name, ...aliases}.any((a) => t.contains(_squash(a)))) return false;
+    return barangays.isEmpty || barangays.any((b) => t.contains(_squash(b)));
+  }
+}
+
+/// Best guess of the town in an OpenStreetMap address, for messages (same
+/// rule as the server's place_in):
+/// "Carcar Diversion Road, Dapdap, Carcar, Cebu" -> "Carcar".
+String? placeIn(String text) {
+  final parts = [
+    for (final p in text.split(','))
+      if (p.trim().isNotEmpty) p.trim(),
+  ];
+  const region = {'cebu', 'philippines', 'central visayas'};
+  while (parts.length >= 2 && region.contains(parts.last.toLowerCase())) {
+    parts.removeLast();
+  }
+  return parts.isEmpty ? null : parts.last;
+}
+
+/// Door to Door service areas (CSWS, Oct 2026). The server sends its own
+/// list in /donations/pickup-rules; this one is used until it loads.
+const defaultServiceAreas = [
+  ServiceArea('Mandaue', note: 'All barangays'),
+  ServiceArea('Cebu City', note: 'All barangays'),
+  ServiceArea('Consolacion', note: 'Approved service areas only'),
+  ServiceArea(
+    'Lapu-Lapu',
+    aliases: ['Lapulapu', 'Mactan', 'Opon'],
+    note: 'All barangays',
+  ),
+];
+
 /// When CSWS does pickups. Loaded from GET /donations/pickup-rules (set in
 /// the backend .env); the defaults are used if the server can't be reached.
 class PickupRules {
@@ -273,26 +367,57 @@ class PickupRules {
   final int minLeadHours;
   final int maxDaysAhead;
   final String label;
+  final List<ServiceArea> serviceAreas;
 
   const PickupRules({
     this.days = const {1, 2, 3, 4, 5},
     this.startHour = 9,
     this.endHour = 17,
     this.minLeadHours = 1,
-    this.maxDaysAhead = 30,
+    this.maxDaysAhead = 13,
     this.label = 'Monday to Friday, 9:00 AM to 5:00 PM',
+    this.serviceAreas = defaultServiceAreas,
   });
 
-  factory PickupRules.fromJson(Map<String, dynamic> j) => PickupRules(
-    days: {
-      for (final d in (j['days'] as List? ?? const [])) (d as num).toInt(),
-    },
-    startHour: (j['start_hour'] as num?)?.toInt() ?? 9,
-    endHour: (j['end_hour'] as num?)?.toInt() ?? 17,
-    minLeadHours: (j['min_lead_hours'] as num?)?.toInt() ?? 1,
-    maxDaysAhead: (j['max_days_ahead'] as num?)?.toInt() ?? 30,
-    label: '${j['label'] ?? 'Monday to Friday, 9:00 AM to 5:00 PM'}',
-  );
+  factory PickupRules.fromJson(Map<String, dynamic> j) {
+    final areas = [
+      for (final a in (j['service_areas'] as List? ?? const []))
+        if (a is Map) ServiceArea.fromJson(a),
+    ];
+    return PickupRules(
+      days: {
+        for (final d in (j['days'] as List? ?? const [])) (d as num).toInt(),
+      },
+      startHour: (j['start_hour'] as num?)?.toInt() ?? 9,
+      endHour: (j['end_hour'] as num?)?.toInt() ?? 17,
+      minLeadHours: (j['min_lead_hours'] as num?)?.toInt() ?? 1,
+      maxDaysAhead: (j['max_days_ahead'] as num?)?.toInt() ?? 13,
+      label: '${j['label'] ?? 'Monday to Friday, 9:00 AM to 5:00 PM'}',
+      serviceAreas: areas.isEmpty ? defaultServiceAreas : areas,
+    );
+  }
+
+  /// The address / landmark text is inside a Door to Door service area.
+  bool inServiceArea(String text) => serviceAreas.any((a) => a.covers(text));
+
+  /// Dates the donor can choose: CSWS pickup days from today (Philippine
+  /// time) up to [maxDaysAhead] days ahead.
+  /// "the next 2 weeks" for 13 days ahead (today counts).
+  String get aheadLabel {
+    final span = maxDaysAhead + 1;
+    return span % 7 == 0
+        ? 'the next ${span ~/ 7} weeks'
+        : 'the next $span days';
+  }
+
+  bool isPickupDate(DateTime d) {
+    final now = phNow();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(d.year, d.month, d.day);
+    return days.contains(day.weekday) &&
+        !day.isBefore(today) &&
+        !day.isAfter(today.add(Duration(days: maxDaysAhead)));
+  }
 
   static Future<PickupRules> load() async {
     final r = await api.get('/donations/pickup-rules');
@@ -324,7 +449,7 @@ class PickupRules {
       return 'Choose a time at least $minLeadHours hour(s) from now.';
     }
     if (instant.isAfter(now.add(Duration(days: maxDaysAhead)))) {
-      return 'Choose a date within $maxDaysAhead days.';
+      return 'Choose a date within $aheadLabel.';
     }
     final ph = instant.toUtc().add(_phOffset);
     if (!days.contains(ph.weekday)) return 'CSWS does pickups only on: $label.';
@@ -459,11 +584,13 @@ class _DropOffCardState extends State<DropOffCard> {
         final lat = (j['lat'] as num?)?.toDouble();
         final lng = (j['lng'] as num?)?.toDouble();
         final pos = lat != null && lng != null ? LatLng(lat, lng) : null;
+        final cs = Theme.of(context).colorScheme;
+        final t = Theme.of(context).textTheme;
 
         return Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: Brand.pinkSoft.withValues(alpha: 0.5),
+           color: cs.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
@@ -546,9 +673,9 @@ class _DropOffCardState extends State<DropOffCard> {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(
+               Text(
                 note,
-                style: const TextStyle(fontSize: 12, color: Brand.muted),
+                style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
               if (pos != null) ...[
                 const SizedBox(height: 10),

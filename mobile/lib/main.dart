@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
@@ -6,8 +8,15 @@ import 'design/design.dart';
 import 'ui/home.dart';
 import 'ui/landing/landing_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Debug run with `uvicorn` going on this laptop: use that backend.
+  await Api.instance.useLocalBackendIfRunning();
+  // Restore the saved login so closing the app or refreshing the page does
+  // not sign the user out.
+  await Api.instance.restoreSession();
   runApp(const NexaAidApp());
+  unawaited(Api.instance.validateSession());
 }
 
 /// Lets every scrollable list be dragged with a mouse or touchpad too, not
@@ -36,7 +45,19 @@ class NexaAidApp extends StatefulWidget {
 
 class _NexaAidAppState extends State<NexaAidApp> {
   final _nav = GlobalKey<NavigatorState>();
+  final _messenger = GlobalKey<ScaffoldMessengerState>();
   late String _session;
+
+  /// Testing fix (UI notifications): when someone taps into a text field,
+  /// messages get out of the way so they never cover what is being typed.
+  /// Errors stay (they say what to fix) but can be closed with their X.
+  void _onFocus() {
+    final ctx = FocusManager.instance.primaryFocus?.context;
+    if (ctx == null) return;
+    if (ctx.findAncestorStateOfType<EditableTextState>() == null) return;
+    _messenger.currentState?.hideCurrentSnackBar();
+    AppToast.dismissWhere((kind) => kind != ToastKind.error);
+  }
 
   static String _sessionKey() {
     final a = Api.instance;
@@ -59,11 +80,13 @@ class _NexaAidAppState extends State<NexaAidApp> {
     super.initState();
     _session = _sessionKey();
     Api.instance.addListener(_onSession);
+    FocusManager.instance.addListener(_onFocus);
   }
 
   @override
   void dispose() {
     Api.instance.removeListener(_onSession);
+    FocusManager.instance.removeListener(_onFocus);
     super.dispose();
   }
 
@@ -73,6 +96,7 @@ class _NexaAidAppState extends State<NexaAidApp> {
       valueListenable: AppTheme.mode,
       builder: (context, mode, _) => MaterialApp(
         navigatorKey: _nav,
+        scaffoldMessengerKey: _messenger,
         title: 'NexaAid',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),

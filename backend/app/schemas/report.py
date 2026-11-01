@@ -24,7 +24,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import List, Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from models.report import canonical_source
 
@@ -39,7 +39,11 @@ SourceType = Literal["Web", "Mobile", "SMS"]
 # Confirm both numbers with CSWS / your adviser; change them here only.
 # ---------------------------------------------------------------------------
 MAX_AFFECTED_FAMILIES = 20_000
-MAX_ESTIMATED_QUANTITY = 100_000
+# Testing (Oct 28): no business limit on how much a report may need, per
+# item or in total. Only the database's whole-number range is kept: one
+# need up to 9 digits, the total within a PostgreSQL integer.
+MAX_ESTIMATED_QUANTITY = 999_999_999
+MAX_TOTAL_QUANTITY = 2_147_483_647
 
 # Accepts 12 or "12" (in case the app sends the text field as a string),
 # rejects letters ("dwadawdas") and decimals (12.5).
@@ -57,17 +61,44 @@ def _families_field():
 
 
 def _quantity_field():
+    """estimated_quantity: the total of all needs (or one "General needs"
+    number from older apps and SMS)."""
     return Field(
         default=None,
         ge=1,
-        le=MAX_ESTIMATED_QUANTITY,
-        description=f"Whole number from 1 to {MAX_ESTIMATED_QUANTITY:,}",
+        le=MAX_TOTAL_QUANTITY,
+        description=f"Whole number from 1 to {MAX_TOTAL_QUANTITY:,}",
     )
 
 
 # ---------------------------------------------------------------------------
 # DisasterReport schemas
 # ---------------------------------------------------------------------------
+
+class ReportNeedIn(BaseModel):
+    """One need of a report (per-item fulfillment, Oct 2026): an item from
+    the list, or "something else" (name + unit), and how much is needed in
+    that item's base unit (kg, L, pcs...)."""
+    item_id: Optional[int] = None
+    other_item_name: Optional[str] = Field(default=None, max_length=150)
+    other_item_unit: Optional[str] = Field(default=None, max_length=50)
+    quantity: int = Field(ge=1, le=MAX_ESTIMATED_QUANTITY)
+
+
+class ReportNeedOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    need_id: int
+    item_id: Optional[int]          # None = "General needs" (older report)
+    item_name: str
+    unit: Optional[str]
+    quantity: int
+
+
+# needs: newer apps send one line per item. When it is missing (older apps,
+# SMS), estimated_quantity becomes a single "General needs" line, as before.
+NeedsField = Optional[List[ReportNeedIn]]
+
 
 class DisasterReportCreate(BaseModel):
     disaster_type_id: int
@@ -80,6 +111,7 @@ class DisasterReportCreate(BaseModel):
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
     source: SourceType = "Web"
 
     @field_validator("source", mode="before")
@@ -102,6 +134,7 @@ class DisasterReportEdit(BaseModel):
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
 
 
 class ReportWithdraw(BaseModel):
@@ -109,21 +142,40 @@ class ReportWithdraw(BaseModel):
 
 
 class DisasterReportUpdate(BaseModel):
-    """Staff-only fields. All optional — PATCH semantics.
+    """Administrator corrections. All optional (PATCH semantics).
 
-    For approving/rejecting a report specifically, use the dedicated
-    /reports/{id}/validate and /reports/{id}/reject endpoints instead —
-    those also set validated_by / rejection_reason correctly. Use
-    `status` here only for other lifecycle transitions after validation
-    (e.g. 'Dispatched', 'Resolved')."""
-    status: Optional[str] = None
-    priority_level: Optional[str] = None
-    ai_priority_score: Optional[Decimal] = None
-    ai_recommendation: Optional[str] = None
+    F-07: the status is NOT set here. Validate, Reject (Administrator) and
+    Withdraw (the reporter) change it, each with its own checks, records and
+    notices."""
+
     description: Optional[str] = None
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
+
+    # Testing #5 (Oct 2026): priority is always computed by the system
+    # (manuscript Table 32: "automated but non-autonomous"; people decide
+    # the actual relief allocation). It can no longer be set by hand here:
+    # the next delivery receipt silently overwrote it anyway.
+    @model_validator(mode="before")
+    @classmethod
+    def _no_manual_priority(cls, data):
+        if isinstance(data, dict):
+            sent = {"priority_level", "ai_priority_score", "ai_recommendation"} & set(data)
+            if sent:
+                raise ValueError(
+                    "Priority is computed by the system and cannot be set by hand "
+                    f"({', '.join(sorted(sent))})."
+                )
+            
+            if "status" in data:
+                raise ValueError(
+                    "The report's status cannot be changed here. Use Validate or Reject "
+                    "(Administrator) or Withdraw (the reporter)."
+                )
+
+        return data
 
 
 class DisasterReportResponse(BaseModel):
@@ -153,6 +205,7 @@ class DisasterReportResponse(BaseModel):
     disaster_type_name: Optional[str] = None
     barangay_name: Optional[str] = None
     priority_guidance: Optional[str] = None
+    needs: List[ReportNeedOut] = []
 
     @field_validator("source", mode="before")
     @classmethod
@@ -197,6 +250,7 @@ class SmsReportIngest(BaseModel):
     affected_families: AffectedFamilies = _families_field()
     assistance_needed: Optional[str] = None
     estimated_quantity: EstimatedQuantity = _quantity_field()
+    needs: NeedsField = Field(default=None, max_length=30)
 
 
 class SmsReportMetadataResponse(BaseModel):
