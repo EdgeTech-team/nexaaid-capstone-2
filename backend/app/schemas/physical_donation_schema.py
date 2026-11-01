@@ -1,10 +1,14 @@
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import EmailStr
+
+from core.validators import clean_email, clean_person_name
+
 
 HandoverMethod = Literal["Drop Off", "Door to Door"]
 
@@ -43,13 +47,35 @@ def pickup_rules() -> dict:
         "start_hour": start,
         "end_hour": end,
         "min_lead_hours": _env_int("PICKUP_MIN_LEAD_HOURS", 1),
-        "max_days_ahead": _env_int("PICKUP_MAX_DAYS_AHEAD", 30),
+        # Testing (Oct 28): Door to Door dates within the next 2 weeks
+        # (today + 13 days), the same 14 days the pickup planner covers
+        # (services/pickup_planner.py window_days), so every date a donor
+        # can choose is on the CSWS pickup calendar.
+        "max_days_ahead": _env_int("PICKUP_MAX_DAYS_AHEAD", 13),
         "timezone": "Asia/Manila",
         "label": f"{day_label}, {_hour_label(start)} to {_hour_label(end)}",
         # The donor picks the days they are home (Mon / Tue / ...); this is
         # the note shown under the day buttons.
         "hours_label": f"{_hour_label(start)} to {_hour_label(end)}",
         "day_names": _DAY_SHORT,
+    }
+
+
+def _ahead_label(rules: dict) -> str:
+    """max_days_ahead 13 -> "the next 2 weeks" (today counts)."""
+    span = rules["max_days_ahead"] + 1
+    return f"the next {span // 7} weeks" if span % 7 == 0 else f"the next {span} days"
+
+
+def pickup_rules_view() -> dict:
+    """pickup_rules() plus the service areas, for GET /donations/pickup-rules."""
+    return {
+        **pickup_rules(),
+        "service_areas": [
+            {"name": a["name"], "aliases": a["aliases"], "barangays": a["barangays"]}
+            for a in pickup_service_areas()
+        ],
+        "service_areas_label": service_areas_label(),
     }
 
 
@@ -153,6 +179,128 @@ def pickup_days_label(raw) -> Optional[str]:
     return ", ".join(_DAY_SHORT[d - 1] for d in days)
 
 
+def check_pickup_dates(values) -> List[date]:
+    """The specific dates a donor is home for a Door to Door pickup (calendar
+    picker). Raises ValueError (shown to the donor) if none is chosen, a date
+    is in the past, too far ahead, or not a CSWS pickup day."""
+    rules = pickup_rules()
+    today = datetime.now(MANILA).date()
+    dates = sorted(set(values or []))
+    if not dates:
+        raise ValueError("Choose at least one date CSWS can pick up your donation")
+    if dates[0] < today:
+        raise ValueError("Pickup dates must be today or later")
+    if dates[-1] > today + timedelta(days=rules["max_days_ahead"]):
+        raise ValueError(f"Choose pickup dates within {_ahead_label(rules)}")
+    off = [d for d in dates if d.isoweekday() not in rules["days"]]
+    if off:
+        names = ", ".join(_date_short(d) for d in off)
+        raise ValueError(f"CSWS does not pick up on {names}. Pickups: {rules['label']}")
+    return dates
+
+
+def _date_short(d: date) -> str:
+    """date(2026, 10, 26) -> "Mon, Oct 26"."""
+    return f"{_DAY_SHORT[d.isoweekday() - 1]}, {d.strftime('%b')} {d.day}"
+
+
+def encode_pickup_dates(dates) -> Optional[str]:
+    """[date(2026, 10, 26), ...] -> "2026-10-26,..." (physical_donations.pickup_dates)."""
+    return ",".join(d.isoformat() for d in sorted(set(dates))) if dates else None
+
+
+def decode_pickup_dates(raw) -> List[date]:
+    """"2026-10-26,2026-10-28" -> [date, date]. Also accepts a list. Bad parts are skipped."""
+    if not raw:
+        return []
+    parts = raw if isinstance(raw, (list, tuple)) else str(raw).split(",")
+    out = set()
+    for p in parts:
+        if isinstance(p, date):
+            out.add(p)
+            continue
+        try:
+            out.add(date.fromisoformat(str(p).strip()))
+        except ValueError:
+            continue
+    return sorted(out)
+
+
+def pickup_dates_label(raw) -> Optional[str]:
+    """"2026-10-26,2026-10-28" -> "Mon, Oct 26 · Wed, Oct 28"."""
+    dates = decode_pickup_dates(raw)
+    return " · ".join(_date_short(d) for d in dates) if dates else None
+
+
+# Door to Door service areas (CSWS, Oct 2026). A pickup address or landmark
+# must name one of these places. Team decision (Oct 26): the whole of Cebu
+# City, Mandaue, Consolacion and Lapu-Lapu; this is the only list (the
+# separate PICKUP_CITIES geofence list is retired). Override in .env, e.g.
+#   PICKUP_SERVICE_AREAS="Mandaue;Cebu City:Banilad,Talamban;Consolacion"
+# (";" between areas, "|" between other names of the same place,
+#  ":" then the allowed barangays when only some of the city is served).
+_DEFAULT_SERVICE_AREAS = (
+    "Mandaue;"
+    "Cebu City;"
+    "Consolacion;"
+    "Lapu-Lapu|Lapulapu|Mactan|Opon"
+)
+
+
+def _squash(text: str) -> str:
+    """Lowercase letters and digits only: "Lapu-Lapu City" -> "lapulapucity"."""
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def pickup_service_areas() -> List[dict]:
+    """[{"name": "Mandaue", "aliases": [...], "barangays": [] = all}, ...]."""
+    raw = os.getenv("PICKUP_SERVICE_AREAS") or _DEFAULT_SERVICE_AREAS
+    areas = []
+    for part in raw.split(";"):
+        names, _, brgys = part.partition(":")
+        aliases = [n.strip() for n in names.split("|") if n.strip()]
+        if not aliases:
+            continue
+        areas.append({
+            "name": aliases[0],
+            "aliases": aliases,
+            "barangays": [b.strip() for b in brgys.split(",") if b.strip()],
+        })
+    return areas
+
+
+def in_service_area(*texts: Optional[str]) -> bool:
+    """True when the address / landmark text names a served place (and, for
+    a partly served city, one of its served barangays)."""
+    text = _squash(" ".join(t for t in texts if t))
+    if not text:
+        return False
+    for area in pickup_service_areas():
+        if not any(_squash(a) in text for a in area["aliases"]):
+            continue
+        if not area["barangays"] or any(_squash(b) in text for b in area["barangays"]):
+            return True
+    return False
+
+
+def place_in(text: Optional[str]) -> Optional[str]:
+    """Best guess of the town in an OpenStreetMap address, for messages:
+    "Carcar Diversion Road, Dapdap, Carcar, Cebu" -> "Carcar"."""
+    parts = [p.strip() for p in (text or "").split(",") if p.strip()]
+    while len(parts) >= 2 and _squash(parts[-1]) in ("cebu", "philippines", "centralvisayas"):
+        parts = parts[:-1]
+    return parts[-1] if parts else None
+
+
+def service_areas_label() -> str:
+    """"Mandaue, Cebu City, Consolacion, Lapu-Lapu" (a partly served city
+    lists its barangays: "Cebu City (Banilad, Talamban)")."""
+    parts = []
+    for a in pickup_service_areas():
+        parts.append(f"{a['name']} ({', '.join(a['barangays'])})" if a["barangays"] else a["name"])
+    return ", ".join(parts)
+
+
 def check_preferred_pickup(value: datetime) -> datetime:
     """Raises ValueError (shown to the donor) if the time is not allowed."""
     if value.tzinfo is None:
@@ -165,7 +313,7 @@ def check_preferred_pickup(value: datetime) -> datetime:
         )
     if value > now + timedelta(days=rules["max_days_ahead"]):
         raise ValueError(
-            f"Preferred pickup must be within {rules['max_days_ahead']} days"
+            f"Preferred pickup must be within {_ahead_label(rules)}"
         )
     local = value.astimezone(MANILA)
     if local.isoweekday() not in rules["days"]:
@@ -189,10 +337,69 @@ def normalize_ph_mobile(raw: str) -> str:
     return "0" + digits[-10:]
 
 
+# Testing fix 4.1: the quantity unit says how much (kg, pcs, gallons...). A
+# sack is packaging, which already has its own field, so it is not a unit.
+# Same list as mobile/lib/ui/quantity_units.dart.
+# Base units (per-item fulfillment): weight is kg, volume is L; grams, ml
+# and gallons are given as the size of each (services/units.py).
+QUANTITY_UNITS = (
+    "kg", "L", "pcs", "packs", "cans", "bottles", "boxes", "kits", "sets", "pairs",
+)
+_PACKAGING_WORDS = {"sack", "sacks"}
+
+
+def clean_quantity_unit(value: Optional[str]) -> Optional[str]:
+    """None/blank -> None. Rejects packaging words; matches the list
+    case-insensitively so "KG" is stored as "kg"."""
+    unit = (value or "").strip()
+    if not unit:
+        return None
+    if unit.lower() in _PACKAGING_WORDS:
+        raise ValueError(
+            "A sack is packaging, not a quantity unit. Choose the packaging "
+            "in the Packaging field and a unit like kg or pcs here.")
+    for u in QUANTITY_UNITS:
+        if u.lower() == unit.lower():
+            return u
+    raise ValueError(f"Unit must be one of: {', '.join(QUANTITY_UNITS)}")
+
+
 class GuestDonorInfo(BaseModel):
+    """A guest donor: no account (UC-D2 preconditions). F-09: checked with
+    the same rules as a registration, and the guest must agree to the
+    processing of this data (RA 10173). The API refuses it otherwise, so the
+    app's checkbox is never the only check."""
     full_name: str
     contact_number: str
-    email: Optional[str] = None
+    email: Optional[EmailStr] = None
+    consent: bool        # required: name, contact number and pickup address
+
+    @field_validator("full_name")
+    @classmethod
+    def _name(cls, v):
+        return clean_person_name(v, "Full name", 2, 100)
+
+    @field_validator("contact_number")
+    @classmethod
+    def _phone(cls, v):
+        return normalize_ph_mobile(v)   # both endpoints now, not only /donations/batch
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _blank_email(cls, v):
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v):
+        return None if v is None else clean_email(str(v))
+
+    @field_validator("consent")
+    @classmethod
+    def _consent(cls, v):
+        if v is not True:
+            raise ValueError("You must agree to the processing of your personal data (RA 10173)")
+        return v
 
 
 class _ItemFields(BaseModel):
@@ -204,14 +411,36 @@ class _ItemFields(BaseModel):
     item_id: Optional[int] = None
     other_item_name: Optional[str] = Field(default=None, max_length=150)
     other_item_unit: Optional[str] = Field(default=None, max_length=50)
-    packaging: str = Field(min_length=1, max_length=100)
-    quantity: int = Field(gt=0)
+    # Older apps: the total in the item's base unit + a packaging label.
+    packaging: Optional[str] = Field(default=None, max_length=100)
+    quantity: Optional[int] = Field(default=None, gt=0)
+    # Newer apps (per-item fulfillment, Oct 2026): describe it instead and
+    # the server works out the total in the base unit (services/units.py):
+    #   pack_count x per_pack x size   e.g. 3 boxes x 16 x 1.5 L = 72 L
+    # size = one of the item's sizes (size_id, from /lookups), or a custom
+    # size_amount + size_unit (kg/g for weight, L/ml/gallon for volume),
+    # or nothing (= 1 base unit, e.g. 1 can).
+    pack_count: Optional[int] = Field(default=None, gt=0, le=100_000)
+    per_pack: Optional[int] = Field(default=None, gt=0, le=10_000)
+    size_id: Optional[int] = None
+    size_amount: Optional[Decimal] = Field(default=None, gt=0, le=100_000)
+    size_unit: Optional[str] = Field(default=None, max_length=20)
     estimated_value: Optional[Decimal] = Field(default=None, ge=0)
+
+    @field_validator("other_item_unit")
+    @classmethod
+    def _unit_not_packaging(cls, v: Optional[str]) -> Optional[str]:
+        return clean_quantity_unit(v)   # testing fix 4.1
 
     @model_validator(mode="after")
     def check_item_given(self):
         if self.item_id is None and not (self.other_item_name or "").strip():
             raise ValueError("Choose an item, or enter the name of another item")
+        if self.pack_count is None:
+            if self.quantity is None:
+                raise ValueError("Enter the quantity, or the number of packs")
+            if not (self.packaging or "").strip():
+                raise ValueError("Choose the packaging")
         return self
 
 
@@ -229,6 +458,9 @@ class _PickupFields(BaseModel):
     # Replaces preferred_pickup_at in the app; older clients may still send a
     # single date and time instead.
     pickup_days: Optional[List[int]] = Field(default=None, max_length=7)
+    # The app now sends specific dates (calendar picker); pickup_days is then
+    # filled with their weekdays. Older clients may still send pickup_days.
+    pickup_dates: Optional[List[date]] = Field(default=None, max_length=10)
     preferred_pickup_at: Optional[datetime] = None
 
     @model_validator(mode="after")
@@ -243,6 +475,12 @@ class _PickupFields(BaseModel):
                     f"Door to Door pickups are only within {pickup_area()['name']}. "
                     "Choose a landmark there, or choose Drop Off."
                 )
+            # Service areas (Mandaue, Cebu City, ...) are checked in
+            # the routes (donation_routes._check_service_area): that needs the
+            # map lookup of the pin, which a validator should not do.
+            if self.pickup_dates:
+                self.pickup_dates = check_pickup_dates(self.pickup_dates)
+                self.pickup_days = sorted({d.isoweekday() for d in self.pickup_dates})
             self.pickup_address = self.pickup_address.strip()
             if self.pickup_landmark is not None:
                 self.pickup_landmark = self.pickup_landmark.strip() or None
@@ -260,6 +498,7 @@ class _PickupFields(BaseModel):
             self.pickup_landmark = None
             self.pickup_notes = None
             self.pickup_days = None
+            self.pickup_dates = None
             self.preferred_pickup_at = None
         return self
 
@@ -315,6 +554,28 @@ class DonationEntryEdit(_PickupFields):
         return self
 
 
+class DonationItemsAdd(BaseModel):
+    """More items for a donation the donor already pledged (Oct 23): they
+    join the same donation and QR as a new batch, with the same handover
+    and pickup details (POST /donations/entries/{ref}/items)."""
+
+    items: List[DonationLine] = Field(min_length=1, max_length=30)
+
+
+class DonationItemRemove(BaseModel):
+    """Why the donor removes an item (shown to CSWS and kept in the audit)."""
+
+    reason: str = Field(min_length=3, max_length=200)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_text(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError("Say briefly why you are removing this item")
+        return v
+
+
 class PhysicalDonationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -325,6 +586,10 @@ class PhysicalDonationResponse(BaseModel):
     item_id: int
     packaging: str
     quantity: int
+    pack_count: Optional[int] = None
+    per_pack: Optional[int] = None
+    size_amount: Optional[Decimal] = None
+    size_label: Optional[str] = None
     estimated_value: Optional[Decimal]
     handover_method: str
     pickup_address: Optional[str]
@@ -333,6 +598,7 @@ class PhysicalDonationResponse(BaseModel):
     pickup_landmark: Optional[str] = None
     pickup_notes: Optional[str] = None
     pickup_days: List[int] = []
+    pickup_dates: List[date] = []
     preferred_pickup_at: Optional[datetime] = None
     qr_reference: str
     batch_reference: Optional[str] = None
@@ -343,3 +609,9 @@ class PhysicalDonationResponse(BaseModel):
     def _days(cls, v):
         # Stored as "1,3,5" in physical_donations.pickup_days.
         return decode_pickup_days(v)
+
+    @field_validator("pickup_dates", mode="before")
+    @classmethod
+    def _dates(cls, v):
+        # Stored as "2026-10-26,2026-10-28" in physical_donations.pickup_dates.
+        return decode_pickup_dates(v)

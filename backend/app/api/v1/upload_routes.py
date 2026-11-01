@@ -19,7 +19,10 @@ from sqlalchemy.orm import Session
 from core.auth import get_current_user_optional, has_role
 from core.database import get_db
 from core.storage import get_storage
-from core.uploads import ( EXTENSION, LABEL, MAX_BYTES, PDF, PURPOSES, clean_image, file_url, hash_token, local_path, read_limited, sniff, )
+from core.uploads import (
+    EXTENSION, LABEL, MAX_BYTES, MAX_UNCLAIMED_BYTES, PDF, PURPOSES, clean_image, file_url,
+    hash_token, local_path, purge_unclaimed, read_limited, sniff, unclaimed_bytes,
+)
 
 from models.upload_model import Upload, UploadBlob
 from models.user_rbac_model import User
@@ -62,7 +65,18 @@ def upload_file(
                 413,
                 f"The image is too large",
             )
-    
+    if user is None:
+        # F-14: uploads made before login (registration) are cleaned up once
+        # they can no longer be claimed, and refused while too many wait.
+        purge_unclaimed(db)
+        db.commit()  # keep the clean-up even if this upload is refused below
+        if unclaimed_bytes(db) + len(data) > MAX_UNCLAIMED_BYTES:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Too many uploads are waiting right now. Please try again in a few minutes.",
+                headers={"Retry-After": "600"},
+            )
+
     file_id = str(uuid.uuid4())
     storage_key = f"{rule.visibility}/{file_id}.{EXTENSION[content_type]}"
     claim_token = None if user is not None else secrets.token_urlsafe(32)

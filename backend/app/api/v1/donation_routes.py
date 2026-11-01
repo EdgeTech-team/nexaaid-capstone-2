@@ -8,6 +8,8 @@ confirmation, inventory and deliveries keep working per item.
 import base64
 import io
 import os
+import threading
+from collections import deque
 import time
 import uuid
 from datetime import datetime, timezone
@@ -15,6 +17,8 @@ from typing import Optional
 
 import httpx
 import qrcode
+from services.items import resolve_item_id
+from services.units import line_amounts, describe as describe_amount
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -30,23 +34,38 @@ from models.notification import Notification
 from models.organization_model import Organization
 from models.report import DisasterReport, DisasterType, Barangay
 from models.delivery import Delivery
+from services.delivery_allocation import add_delivery_progress
 from schemas.physical_donation_schema import (
     DonationBatchCreate,
     DonationEntryEdit,
+    DonationItemRemove,
+    DonationItemsAdd,
     PhysicalDonationCreate,
     PhysicalDonationResponse,
     pickup_rules,
+    pickup_rules_view,
     pickup_area,
     km_from_office,
     encode_pickup_days,
     decode_pickup_days,
     pickup_days_label,
+    encode_pickup_dates,
+    decode_pickup_dates,
+    pickup_dates_label,
+    in_service_area,
+    pickup_service_areas,
+    place_in,
+    service_areas_label,
 )
 from core.audit import log_action
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 from services.donation_entries import build_entries, filter_and_sort, group_by_report
+from services.donation_additions import (
+    REMOVED_PREFIX, change_blocked, is_removed, next_addition_no, next_item_number,
+    removed_notes, removed_reason, summary as additions_summary, summary_text,
+)
 from services.donation_expiry import (
-    entry_expiry_info, entry_status, expire_overdue, set_deadline, now_utc,
+    close_rows, entry_expiry_info, entry_status, expire_overdue, set_deadline, now_utc,
 )
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
@@ -66,6 +85,13 @@ SEARCH_BBOX = ",".join(str(x) for x in pickup_area()["bbox"])
 _GEO_CACHE: dict = {}
 _GEO_CACHE_TTL = 24 * 3600                      # seconds
 _GEO_CACHE_MAX = 1000
+# F-19: calls to the free public Photon server per minute, across all users.
+# Cached answers are not counted. Above it, the app shows its "type the full
+# address yourself" hint until the minute is over.
+_GEO_CALLS_PER_MINUTE = 60
+_geo_calls: deque = deque()
+_geo_lock = threading.Lock()
+_geo_clock = time.monotonic
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +134,13 @@ def _get_report(db: Session, report_id: int, require_validated: bool) -> Disaste
 def _donor_ids(db: Session, current_user: Optional[User], guest_info) -> tuple:
     """(user_id, guest_donor_id). Guests are allowed by UC-D2 preconditions."""
     if current_user is not None:
+        # Appendix H 4.1/4.2: donors, relief organizations and guests give.
+        # Staff accounts record and process donations, they do not make them.
+        if not has_role(current_user, "Individual Donor", "Relief Organization"):
+            raise HTTPException(
+                status_code=403,
+                detail="Staff accounts cannot submit donations. Log out to donate as a guest.",
+            )
         return current_user.user_id, None
     if guest_info is None:
         raise HTTPException(
@@ -118,29 +151,19 @@ def _donor_ids(db: Session, current_user: Optional[User], guest_info) -> tuple:
         full_name=guest_info.full_name,
         contact_number=guest_info.contact_number,
         email=guest_info.email,
+        consent_at=datetime.now(timezone.utc),   # F-09: the schema refuses it without consent
     )
+
     db.add(guest)
     db.flush()  # assigns guest.guest_donor_id without committing yet
     return None, guest.guest_donor_id
 
 
 def _resolve_item_id(db: Session, item_id, other_name, other_unit) -> int:
-    if item_id is not None:
-        if db.get(Item, item_id) is None:
-            raise HTTPException(status_code=404, detail=f"Item {item_id} not found")
-        return item_id
-    # "Other" item: reuse it if it already exists, else add it to the list.
-    name = other_name.strip()
-    item = db.query(Item).filter(Item.item_name.ilike(name)).first()
-    if item is None:
-        item = Item(
-            item_name=name,
-            category="Other",
-            unit_of_measure=(other_unit or "pcs").strip() or "pcs",
-        )
-        db.add(item)
-        db.flush()
-    return item.item_id
+    # Moved to services/items.py (reports use it for their needs too).
+    # F-15: an item typed in on a donation waits for CSWS review.
+    return resolve_item_id(db, item_id, other_name, other_unit, review=True)
+
 
 
 def _report_label(db: Session, report_id: int) -> Optional[str]:
@@ -178,11 +201,14 @@ def _donor_info(db: Session, d: PhysicalDonation) -> dict:
 
 def _pickup_days_view(d: PhysicalDonation) -> dict:
     """Door to Door pickup days for the screens: [1, 3], "Mon, Wed" and
-    the pickup hours they apply to ("9:00 AM to 5:00 PM")."""
+    the pickup hours they apply to ("9:00 AM to 5:00 PM"). With specific
+    dates (calendar picker) the label lists the dates: "Mon, Oct 26 · Wed, Oct 28"."""
+    dates = decode_pickup_dates(d.pickup_dates)
     return {
         "pickup_days": decode_pickup_days(d.pickup_days),
-        "pickup_days_label": pickup_days_label(d.pickup_days),
-        "pickup_hours": pickup_rules()["hours_label"] if d.pickup_days else None,
+        "pickup_dates": [x.isoformat() for x in dates],
+        "pickup_days_label": pickup_dates_label(d.pickup_dates) or pickup_days_label(d.pickup_days),
+        "pickup_hours": pickup_rules()["hours_label"] if d.pickup_days or dates else None,
     }
 
 
@@ -217,8 +243,51 @@ def _batch_rows(db: Session, reference: str) -> list:
     )
 
 
+def _pickup_row(rows: list) -> PhysicalDonation:
+    """The row whose pickup details apply now: the first item still waiting
+    to be collected, else the first item (Oct 23, approved by Daniel)."""
+    return next((r for r in rows if r.status == "Pending"), rows[0])
+
+
+def _history(db: Session, rows: list) -> list:
+    """Who did what to this donation and when (audit_logs), newest first.
+    Staff only (UC-A4 activity logs, scoped to one donation)."""
+    from models.audit_log_model import AuditLog
+    ids = [r.donation_id for r in rows]
+    logs = (db.query(AuditLog)
+            .filter(AuditLog.entity_type == "physical_donations", AuditLog.entity_id.in_(ids))
+            .order_by(AuditLog.log_id.desc()).limit(50).all())
+    users = {u.user_id: f"{u.first_name} {u.last_name}".strip() for u in db.query(User).filter(
+        User.user_id.in_({l.user_id for l in logs if l.user_id})).all()} if logs else {}
+    return [
+        {
+            "action": l.action,
+            "by": users.get(l.user_id, "System") if l.user_id else "System",
+            "at": _iso(l.timestamp),
+            "details": l.new_value,
+        }
+        for l in logs
+    ]
+
+
+def _batches(view_items: list) -> list:
+    """Items grouped by batch: 1 = original pledge, 2+ = added later."""
+    out: dict = {}
+    for i in view_items:
+        b = out.setdefault(i["addition_no"], {
+            "addition_no": i["addition_no"],
+            "label": f"Batch {i['addition_no']}",
+            "added_later": i["addition_no"] > 1,
+            "added_at": i["added_at"],
+            "items": [],
+        })
+        b["items"].append(i)
+    return [out[k] for k in sorted(out)]
+
+
 def _batch_view(db: Session, rows: list, staff: bool) -> dict:
     first = rows[0]
+    pickup = _pickup_row(rows)
     item_ids = {r.item_id for r in rows}
     items = {i.item_id: i for i in db.query(Item).filter(Item.item_id.in_(item_ids)).all()}
     received = {
@@ -233,14 +302,14 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         "status": _batch_status({r.status for r in rows}),
         "report_id": first.report_id,
         "report_label": _report_label(db, first.report_id),
-        "handover_method": first.handover_method,
-        "pickup_address": first.pickup_address,
-        "pickup_lat": _num(first.pickup_lat),
-        "pickup_lng": _num(first.pickup_lng),
-        "pickup_landmark": first.pickup_landmark,
-        "pickup_notes": first.pickup_notes,
-        **_pickup_days_view(first),
-        "preferred_pickup_at": _iso(first.preferred_pickup_at),
+        "handover_method": pickup.handover_method,
+        "pickup_address": pickup.pickup_address,
+        "pickup_lat": _num(pickup.pickup_lat),
+        "pickup_lng": _num(pickup.pickup_lng),
+        "pickup_landmark": pickup.pickup_landmark,
+        "pickup_notes": pickup.pickup_notes,
+        **_pickup_days_view(pickup),
+        "preferred_pickup_at": _iso(pickup.preferred_pickup_at),
         "created_at": first.created_at,
         # Handover deadline / why it was closed (services/donation_expiry.py)
         **entry_expiry_info(rows),
@@ -250,20 +319,58 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
                 "donation_id": r.donation_id,
                 "qr_reference": r.qr_reference,
                 "item_id": r.item_id,
+                # F-15: still waiting for CSWS review (the app's edit form
+                # then opens it as "Something else").
+                "item_pending": bool(items[r.item_id].pending_review) if r.item_id in items else False,
                 "item_name": items[r.item_id].item_name if r.item_id in items else "Item",
                 "unit": items[r.item_id].unit_of_measure if r.item_id in items else "",
                 "quantity": r.quantity,
                 "packaging": r.packaging,
+                # Per-item fulfillment: how the donor described it (NULL
+                # for older donations) and a readable line for the screens.
+                "pack_count": r.pack_count,
+                "per_pack": r.per_pack,
+                "size_amount": _num(r.size_amount),
+                "size_label": r.size_label,
+                "amount_text": describe_amount(r, items[r.item_id].unit_of_measure if r.item_id in items else ""),
                 "estimated_value": _num(r.estimated_value),
                 "status": r.status,
                 "actual_quantity_received": received.get(r.donation_id),
+                # Oct 23: the batch it came with, when, and if the donor
+                # removed it, why (it stays listed, marked removed).
+                "addition_no": r.addition_no or 1,
+                "added_at": _iso(r.created_at),
+                "added_later": (r.addition_no or 1) > 1,
+                "removed_by_donor": is_removed(r),
+                "removed_reason": removed_reason(r),
+                "close_reason": r.close_reason,
             }
             for r in rows
         ],
     }
+    counts = additions_summary(rows)
+    view.update({
+        "batches": _batches(view["items"]),
+        "summary": counts,
+        "summary_text": summary_text(counts),
+        "removed_notes": [
+            {**n, "removed_at": _iso(n["removed_at"]),
+             "item_name": items[n["item_id"]].item_name if n["item_id"] in items else "Item"}
+            for n in removed_notes(rows)
+        ],
+    })
     if staff:
         view.update(_donor_info(db, first))
+        view["history"] = _history(db, rows)
     return view
+
+
+def _reverse_props(lat: float, lng: float) -> dict:
+    """OpenStreetMap address parts of a pin (raises when the geocoder is
+    unavailable). Tests replace this so they stay offline."""
+    data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
+    features = data.get("features") or []
+    return (features[0].get("properties") or {}) if features else {}
 
 
 # ---------------------------------------------------------------------------
@@ -278,18 +385,20 @@ def create_donation_batch(
     """One donation with one or more items, one QR reference. All items are
     saved together or none are (alt 3a: no QR for an incomplete entry)."""
     _get_report(db, payload.report_id, require_validated=True)
+    _check_service_area(payload)
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
 
     batch_reference = _new_reference()
     rows = []
     for n, line in enumerate(payload.items, start=1):
+        item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
         row = PhysicalDonation(
             user_id=user_id,
             guest_donor_id=guest_donor_id,
             report_id=payload.report_id,
-            item_id=_resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit),
-            packaging=line.packaging,
-            quantity=line.quantity,
+            item_id=item_id,
+            # quantity (base unit) + packaging + breakdown (services/units.py)
+            **line_amounts(db, db.get(Item, item_id), line),
             estimated_value=line.estimated_value,
             handover_method=payload.handover_method,
             pickup_address=payload.pickup_address,
@@ -298,6 +407,7 @@ def create_donation_batch(
             pickup_landmark=payload.pickup_landmark,
             pickup_notes=payload.pickup_notes,
             pickup_days=encode_pickup_days(payload.pickup_days),
+            pickup_dates=encode_pickup_dates(payload.pickup_dates),
             preferred_pickup_at=payload.preferred_pickup_at,
             qr_reference=f"{batch_reference}-{n}",
             batch_reference=batch_reference,
@@ -329,17 +439,21 @@ def create_donation(
     current_user: User | None = Depends(get_current_user_optional),
 ):
     """Single-item donation, kept for older clients. Same as a batch of one."""
-    _get_report(db, payload.report_id, require_validated=False)
+    # F-16: same rule as /donations/batch (UC-D2 alt 2a): only validated
+    # reports can receive donations.
+    _get_report(db, payload.report_id, require_validated=True)
+    _check_service_area(payload)
+
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
     reference = _new_reference()
 
+    item_id = _resolve_item_id(db, payload.item_id, payload.other_item_name, payload.other_item_unit)
     donation = PhysicalDonation(
         user_id=user_id,
         guest_donor_id=guest_donor_id,
         report_id=payload.report_id,
-        item_id=_resolve_item_id(db, payload.item_id, payload.other_item_name, payload.other_item_unit),
-        packaging=payload.packaging,
-        quantity=payload.quantity,
+        item_id=item_id,
+        **line_amounts(db, db.get(Item, item_id), payload),
         estimated_value=payload.estimated_value,
         handover_method=payload.handover_method,
         pickup_address=payload.pickup_address,
@@ -348,6 +462,7 @@ def create_donation(
         pickup_landmark=payload.pickup_landmark,
         pickup_notes=payload.pickup_notes,
         pickup_days=encode_pickup_days(payload.pickup_days),
+        pickup_dates=encode_pickup_dates(payload.pickup_dates),
         preferred_pickup_at=payload.preferred_pickup_at,
         qr_reference=reference,
         batch_reference=reference,
@@ -407,6 +522,120 @@ def _drop_from_pickup_runs(db: Session, reference: str) -> None:
             req.pickup_batches = reference  # keep the history readable
 
 
+# ---------------------------------------------------------------------------
+# Oct 23 (Dave): add items to a pledged donation, or remove one, keeping the
+# SAME donation and QR. Rules: services/donation_additions.py. Both are the
+# donor's own actions; CSWS Main Office is notified so it sees the change
+# before scanning, and the audit log keeps who did it and when.
+# ---------------------------------------------------------------------------
+def _own_rows(db: Session, reference: str, user: User, action: str) -> list:
+    rows = _batch_rows(db, reference)
+    if rows[0].user_id is None or rows[0].user_id != user.user_id:
+        raise HTTPException(status_code=403, detail=f"You can only {action} your own donations.")
+    blocked = change_blocked(db.get(DisasterReport, rows[0].report_id), rows)
+    if blocked:
+        raise HTTPException(status_code=409, detail=blocked)
+    return rows
+
+
+@router.post("/entries/{reference}/items", status_code=201)
+def add_items_to_entry(
+    reference: str,
+    payload: DonationItemsAdd,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """More items for the same donation: a new batch (Batch 2, 3 ...) with
+    the same QR, handover and pickup. The new items start Pending; items
+    already pledged keep their status and dates."""
+    rows = _own_rows(db, reference, current_user, "add items to")
+    first, base = rows[0], _pickup_row(rows)
+    ref = first.batch_reference
+    number, k = next_addition_no(rows), next_item_number(rows)
+    # The new items join the same handover, so they share its deadline.
+    from services.donation_expiry import effective_deadline
+    deadlines = [effective_deadline(r) for r in rows if r.status == "Pending"]
+    deadline = max((d for d in deadlines if d), default=None)
+    new = []
+    for line in payload.items:
+        item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
+        row = PhysicalDonation(
+            user_id=first.user_id,
+            guest_donor_id=first.guest_donor_id,
+            report_id=first.report_id,
+            item_id=item_id,
+            **line_amounts(db, db.get(Item, item_id), line),
+            estimated_value=line.estimated_value,
+            handover_method=base.handover_method,
+            pickup_address=base.pickup_address,
+            pickup_lat=base.pickup_lat,
+            pickup_lng=base.pickup_lng,
+            pickup_landmark=base.pickup_landmark,
+            pickup_notes=base.pickup_notes,
+            pickup_days=base.pickup_days,
+            pickup_dates=base.pickup_dates,
+            pickup_not_home_date=base.pickup_not_home_date,
+            preferred_pickup_at=base.preferred_pickup_at,
+            qr_reference=f"{ref}-{k}",
+            batch_reference=ref,
+            addition_no=number,
+            status="Pending",
+        )
+        k += 1
+        db.add(row)
+        new.append(row)
+    set_deadline(new)
+    if deadline is not None:
+        for r in new:
+            r.expires_at = deadline
+    db.flush()
+    log_action(db, current_user, "ADD DONATION ITEMS", "physical_donations", new[0].donation_id,
+               new={"batch_reference": ref, "addition_no": number,
+                    "items": [(r.item_id, r.quantity, r.packaging) for r in new]})
+    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]), "donation_items_added",
+                      "donation", new[0].donation_id, batch_no=ref, count=len(new),
+                      addition_no=number)
+    db.commit()
+    return _batch_view(db, _batch_rows(db, ref), staff=False)
+
+
+@router.post("/entries/{reference}/items/{donation_id}/remove")
+def remove_item_from_entry(
+    reference: str,
+    donation_id: int,
+    payload: DonationItemRemove,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove one waiting item, with a reason. It is closed, not deleted, so
+    CSWS sees "Removed by donor: <reason>" when scanning and in its lists.
+    The last open item of a donation cannot be removed."""
+    rows = _own_rows(db, reference, current_user, "remove items from")
+    row = next((r for r in rows if r.donation_id == donation_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="That item is not part of this donation.")
+    if row.status != "Pending":
+        raise HTTPException(status_code=409, detail="Only items still waiting can be removed.")
+    if not any(r.status in ("Pending", "Received", "Confirmed")
+               for r in rows if r.donation_id != donation_id):
+        raise HTTPException(
+            status_code=409,
+            detail="A donation needs at least one item, so this item cannot be removed. "
+                   "To withdraw the whole donation, cancel it instead.",
+        )
+    item = db.get(Item, row.item_id)
+    close_rows([row], "Cancelled", f"{REMOVED_PREFIX}{payload.reason}", user_id=current_user.user_id)
+    log_action(db, current_user, "REMOVE DONATION ITEM", "physical_donations", row.donation_id,
+               old={"status": "Pending", "item_id": row.item_id, "quantity": row.quantity},
+               new={"status": "Cancelled", "reason": payload.reason,
+                    "batch_reference": row.batch_reference, "addition_no": row.addition_no or 1})
+    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]), "donation_item_removed",
+                      "donation", row.donation_id, batch_no=row.batch_reference,
+                      item=item.item_name if item else "an item", reason=payload.reason)
+    db.commit()
+    return _batch_view(db, _batch_rows(db, row.batch_reference), staff=False)
+
+
 @router.put("/entries/{reference}")
 def edit_my_entry(
     reference: str,
@@ -418,21 +647,36 @@ def edit_my_entry(
     reference stays the same, so a saved QR image still works. A donation
     that was declined (Cancelled) is waiting again after the change."""
     rows = _own_entry(db, reference, current_user, _DONOR_EDITABLE, "change")
+    # This edit rewrites the whole item list. Once items were added later or
+    # removed with a reason, that history must stay: use add / remove.
+    if any((r.addition_no or 1) > 1 or is_removed(r) for r in rows):
+        raise HTTPException(
+            status_code=409,
+            detail="Items were added to or removed from this donation, so it can no longer "
+                   "be edited as a whole. Use Add items or remove single items instead.",
+        )
     first = rows[0]
     ref = first.batch_reference
     before = {
         "handover_method": first.handover_method, "pickup_days": first.pickup_days,
+        "pickup_dates": first.pickup_dates,
         "pickup_lat": _num(first.pickup_lat), "pickup_lng": _num(first.pickup_lng),
         "items": [(r.item_id, r.quantity, r.packaging) for r in rows],
         "statuses": sorted({r.status for r in rows}),
     }
+    # Only a new pin (or switching to Door to Door) is checked, so an
+    # older entry can still be edited if the area changes later.
+    if (before["handover_method"] != payload.handover_method
+            or before["pickup_lat"] != payload.pickup_lat or before["pickup_lng"] != payload.pickup_lng):
+        _check_service_area(payload)
     reopened = any(r.status == "Cancelled" for r in rows)
     days = encode_pickup_days(payload.pickup_days)
+    dates = encode_pickup_dates(payload.pickup_dates)
 
     def apply(row, line):
         row.item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
-        row.packaging = line.packaging
-        row.quantity = line.quantity
+        for field, value in line_amounts(db, db.get(Item, row.item_id), line).items():
+            setattr(row, field, value)
         row.estimated_value = line.estimated_value
         row.handover_method = payload.handover_method
         row.pickup_address = payload.pickup_address
@@ -441,6 +685,7 @@ def edit_my_entry(
         row.pickup_landmark = payload.pickup_landmark
         row.pickup_notes = payload.pickup_notes
         row.pickup_days = days
+        row.pickup_dates = dates
         row.preferred_pickup_at = payload.preferred_pickup_at
         row.status = "Pending"
         row.closed_at = None
@@ -470,12 +715,14 @@ def edit_my_entry(
     # is fixed gets a fresh one from today.
     set_deadline(kept, start=now_utc() if reopened else first.created_at)
     if (before["handover_method"] != payload.handover_method or before["pickup_days"] != days
+            or before["pickup_dates"] != dates
             or before["pickup_lat"] != payload.pickup_lat or before["pickup_lng"] != payload.pickup_lng):
         _drop_from_pickup_runs(db, ref)
     db.flush()
     log_action(db, current_user, "EDIT DONATION", "physical_donations", kept[0].donation_id,
                old=before, new={
                    "handover_method": payload.handover_method, "pickup_days": days,
+                   "pickup_dates": dates,
                    "items": [(r.item_id, r.quantity, r.packaging) for r in kept],
                    "reopened": reopened,
                })
@@ -515,18 +762,30 @@ def delete_my_entry(
 # ---------------------------------------------------------------------------
 @router.get("/batch/{reference}/qr")
 def get_batch_qr(reference: str, db: Session = Depends(get_db)):
-    """Re-show a donation's QR. Public like /{id}/qr: it returns only the
+    """Re-show a donation's QR by its reference. Public: it returns only the
     reference and the QR image, no donor or address details."""
+
     rows = _batch_rows(db, reference)
     ref = rows[0].batch_reference
     return {"batch_reference": ref, "qr_image_base64": _qr_b64(ref)}
 
 
 @router.get("/{donation_id}/qr")
-def get_donation_qr(donation_id: int, db: Session = Depends(get_db)):
+def get_donation_qr(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    """F-17: donation ids count up, so this is only for the donor who made it
+    and CSWS Main Office / the Administrator. Anyone else gets the same 404
+    as a missing id. Guests re-show theirs by reference (/batch/{ref}/qr)."""
     donation = db.query(PhysicalDonation).filter(PhysicalDonation.donation_id == donation_id).first()
-    if not donation:
+    allowed = current_user is not None and donation is not None and (
+        has_role(current_user, *CSWS_ROLES) or donation.user_id == current_user.user_id
+    )
+    if not allowed:
         raise HTTPException(status_code=404, detail="Donation not found")
+
     # The QR always holds the donation's shared reference.
     ref = donation.batch_reference or donation.qr_reference
     return {
@@ -680,10 +939,12 @@ def drop_off_info():
 @router.get("/pickup-rules")
 def get_pickup_rules():
     area = pickup_area()
-    return {**pickup_rules(), "area": {
+    return {**pickup_rules_view(), "area": {
         "name": area["name"], "bbox": area["bbox"],
         "office_lat": area["office"][0], "office_lng": area["office"][1],
         "max_km": area["max_km"],
+        # Door to Door only in these places (one list: PICKUP_SERVICE_AREAS).
+        "cities": [a["name"] for a in pickup_service_areas()],
     }}
 
 
@@ -693,6 +954,24 @@ def get_pickup_rules():
 # cached (fair use of the free public server) and the provider can be
 # swapped by changing GEOCODER_URL only. Public because guests donate too.
 # ---------------------------------------------------------------------------
+
+def _count_geocoder_call() -> None:
+    """F-19: one more call to Photon, or 503 when this minute's cap is used."""
+    now = _geo_clock()
+    with _geo_lock:
+        while _geo_calls and now - _geo_calls[0] >= 60:
+            _geo_calls.popleft()
+        if len(_geo_calls) >= _GEO_CALLS_PER_MINUTE:
+            wait = int(60 - (now - _geo_calls[0])) + 1
+            raise HTTPException(
+                status_code=503,
+                detail="Address suggestions are unavailable right now. Type the full address yourself.",
+                headers={"Retry-After": str(wait)},
+            )
+        _geo_calls.append(now)
+
+
+
 def _geocoder(path: str, params: dict) -> dict:
     base = os.getenv("GEOCODER_URL", "https://photon.komoot.io").rstrip("/")
     agent = os.getenv("GEOCODER_USER_AGENT", "NexaAid/1.0 (Mandaue City disaster relief system)")
@@ -701,6 +980,7 @@ def _geocoder(path: str, params: dict) -> dict:
     hit = _GEO_CACHE.get(key)
     if hit and now - hit[0] < _GEO_CACHE_TTL:
         return hit[1]
+    _count_geocoder_call()                  # F-19: cache hits never reach here
     try:
         r = httpx.request(
             "GET", f"{base}{path}", params=params,
@@ -723,8 +1003,17 @@ def _geocoder(path: str, params: dict) -> dict:
     return data
 
 
+def _city(props: dict) -> Optional[str]:
+    """The city of a Photon place. OpenStreetMap often tags Cebu City as just
+    "Cebu" (the province is in "state", e.g. Talisay: city "Talisay", state
+    "Cebu"), so a city of "Cebu" is Cebu City."""
+    city = (props.get("city") or "").strip()
+    return "Cebu City" if city.lower() == "cebu" else (city or None)
+
+
 def _describe(props: dict) -> tuple:
     """(main, secondary, full address) from a Photon feature's properties."""
+    props = {**props, "city": _city(props)}
     street = " ".join(p for p in (props.get("housenumber"), props.get("street")) if p)
     name = props.get("name")
     main = name or street or props.get("district") or props.get("city") or "Unnamed place"
@@ -770,8 +1059,69 @@ def location_autocomplete(q: str = Query(min_length=2, max_length=200)):
             "address": full,
             "lat": coords[1],
             "lng": coords[0],
+            # The app greys out places outside the Door to Door service
+            # areas (the server checks again on submit).
+            "city": _city(props),
+            "in_pickup_area": in_service_area(full),
         })
     return out
+
+
+def pin_coverage(text: Optional[str], lat: Optional[float], lng: Optional[float]) -> dict:
+    """Is this Door to Door pickup inside the service areas?
+    1. The landmark text (an OpenStreetMap address, so it names the town).
+    2. If that does not name a served place and there is a pin: ask the map
+       which town the pin is in (reverse lookup), and check that.
+    If the map lookup is down, the text answer stands."""
+    place = place_in(text)
+    if in_service_area(text):
+        return {"covered": True, "place": place}
+    if lat is not None and lng is not None:
+        try:
+            props = _reverse_props(lat, lng)
+        except Exception:  # map lookup down: the text answer stands
+            props = {}
+        if props:
+            full = _describe(props)[2]
+            place = _city(props) or props.get("county") or place_in(full) or place
+            if in_service_area(full):
+                return {"covered": True, "place": place}
+    return {"covered": False, "place": place}
+
+
+def _out_of_area_message(place: Optional[str]) -> str:
+    where = f"from {place}" if place else "from this location"
+    return (f"Sorry, door-to-door pickup is not available {where} yet. It only covers "
+            f"{service_areas_label()} for now. Please choose Drop Off and bring your "
+            "donation to the CSWS collection point.")
+
+
+def _check_service_area(payload) -> None:
+    """Door to Door only inside the service areas (Mandaue City, Cebu City,
+    Consolacion, Lapu-Lapu City). The landmark decides when given
+    (it carries the map pin); otherwise the typed address."""
+    if payload.handover_method != "Door to Door":
+        return
+    where = pin_coverage(payload.pickup_landmark or payload.pickup_address,
+                         payload.pickup_lat, payload.pickup_lng)
+    if not where["covered"]:
+        raise HTTPException(status_code=422, detail=_out_of_area_message(where["place"]))
+
+
+@router.get("/location/coverage")
+def location_coverage(
+    text: str = Query(default="", max_length=500),
+    lat: Optional[float] = Query(default=None, ge=-90, le=90),
+    lng: Optional[float] = Query(default=None, ge=-180, le=180),
+):
+    """The donate form asks this as soon as a landmark is picked, so the
+    donor learns right away whether Door to Door is possible there."""
+    where = pin_coverage(text, lat, lng)
+    return {
+        **where,
+        "areas_label": service_areas_label(),
+        "message": None if where["covered"] else _out_of_area_message(where["place"]),
+    }
 
 
 @router.get("/location/reverse")
@@ -783,7 +1133,11 @@ def location_reverse(
     data = _geocoder("/reverse", {"lat": round(lat, 5), "lon": round(lng, 5), "limit": 1})
     features = data.get("features") or []
     address = _describe(features[0].get("properties") or {})[2] if features else None
-    return {"address": address or f"{lat:.5f}, {lng:.5f}", "lat": lat, "lng": lng}
+    # Tell the donor right away if the pin is outside the service areas.
+    area = pin_coverage(address, lat, lng)
+    return {"address": address or f"{lat:.5f}, {lng:.5f}", "lat": lat, "lng": lng,
+            "city": area["place"], "in_pickup_area": area["covered"],
+            "area_message": None if area["covered"] else _out_of_area_message(area["place"])}
 
 
 # ---------------------------------------------------------------------------
@@ -836,9 +1190,18 @@ def my_donations(
 
     entries = build_entries(db, donations, include_cmo=True)
     group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
+    # Oct 13: In transit / Delivered / Barangay confirmed on the donor's own
+    # timeline, from whose goods went on each delivery.
+    add_delivery_progress(db, entries)
     by_ref = {}
+    rows_by_ref: dict = {}
     for d in donations:
         by_ref[d.batch_reference] = d  # rows are newest first, so this keeps the entry's first row
+        rows_by_ref.setdefault(d.batch_reference, []).append(d)
+    # Oct 23: can the donor still add or remove items (and if not, why)?
+    blocked_by_ref = {
+        ref: change_blocked(reports.get(rs[0].report_id), rs) for ref, rs in rows_by_ref.items()
+    }
 
     org = db.get(Organization, current_user.organization_id) if current_user.organization_id else None
     by_status = {}
@@ -916,6 +1279,8 @@ def my_donations(
                 **_pickup_days_view(by_ref[e["batch_reference"]]),
                 "preferred_pickup_at": _iso(by_ref[e["batch_reference"]].preferred_pickup_at),
                 "report": report_info(reports[e["report_id"]]) if e["report_id"] in reports else None,
+                "can_change_items": blocked_by_ref.get(e["batch_reference"]) is None,
+                "change_blocked_reason": blocked_by_ref.get(e["batch_reference"]),
             }
             for e in filter_and_sort(entries)
         ],

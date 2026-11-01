@@ -28,7 +28,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _aboutTaps = 0;
 
   void _tapAbout() {
-    if (ProfileScreen.devToolsShown.value) return;
+    // F-13: no developer tools in release builds.
+    if (!api.devOptions || ProfileScreen.devToolsShown.value) return;
     _aboutTaps++;
     if (_aboutTaps >= _tapsToReveal) {
       ProfileScreen.devToolsShown.value = true;
@@ -114,7 +115,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ],
           ),
-          if (devTools) ...[
+          if (devTools && api.devOptions) ...[
             const SectionHeader('Developer tools'),
             const _DevTools(),
           ],

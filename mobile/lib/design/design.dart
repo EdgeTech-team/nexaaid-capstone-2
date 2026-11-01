@@ -12,6 +12,7 @@ export 'components/display.dart';
 export 'components/feedback.dart';
 export 'components/motion.dart';
 export 'components/nav.dart';
+export 'components/toast.dart';
 export 'status.dart';
 export 'theme.dart';
 export 'tokens.dart';

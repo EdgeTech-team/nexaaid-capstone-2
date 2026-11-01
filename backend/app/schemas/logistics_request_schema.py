@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
-
+from pydantic import ConfigDict
 
 def _count(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
@@ -64,7 +64,8 @@ class SubmitPickupLogisticsRequest(_Needs):
 
 
 class AcceptLogisticsRequest(BaseModel):
-    """DRRMO just accepts. No schedule (I4)."""
+    """DRRMO just accepts. No schedule (I4; testing fix 7.4: CSWS Main
+    Office sets the date, as the delivery date or the pickup day)."""
     notes: Optional[str] = Field(default=None, max_length=1000)
 
 
@@ -85,5 +86,4 @@ class LogisticsRequestResponse(BaseModel):
     notes: Optional[str]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

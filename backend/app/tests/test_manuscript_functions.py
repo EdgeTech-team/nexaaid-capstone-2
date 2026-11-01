@@ -102,8 +102,8 @@ def test_qr_inventory_stock_and_delivery_history(api):
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
     # UC-B1 alt 4a: acknowledge only after receipt is confirmed
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]).status_code == 409
+    # Since Oct 20 confirming receipt also acknowledges (one tap).
     ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
-    ok(client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]))
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]).status_code == 409
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy2"]).status_code == 404
 
@@ -139,9 +139,11 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     assert ok(client.get("/cmo/dashboard", headers=t["cmo"]))["on_hold"] == 1
     ok(client.post(f"/cmo/donations/{did_}/confirm", headers=t["cmo"], json={"status": "Confirmed"}), 201)
     assert ok(client.get("/cmo/donations/confirmed", headers=t["cmo"]))[0]["officially_recognized"]
-    # Alt 4a: reverse the confirmation
-    ok(client.post(f"/cmo/donations/{did_}/revert", headers=t["cmo"]))
-    assert ok(client.get("/cmo/donations/pending", headers=t["cmo"]))[0]["status"] == "Received"
+    # Task #10: the confirmation is final (manuscript alt 4a "reverse" removed)
+    assert client.post(f"/cmo/donations/{did_}/revert", headers=t["cmo"]).status_code in (404, 405)
+    assert client.post(f"/cmo/donations/{did_}/confirm", headers=t["cmo"],
+                       json={"status": "On Hold", "notes": "again"}).status_code == 400
+    assert ok(client.get("/cmo/donations/pending", headers=t["cmo"])) == []
 
        # DRRMO: accept -> in transit -> completed with a summary
     delivery = ok(client.post("/deliveries/", headers=t["csws"], json={
@@ -154,11 +156,19 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     assert client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                         json={"summary": "done"}).status_code == 400   # not accepted yet
     ok(client.patch(f"/drrmo/requests/{rid_}/accept", headers=t["drrmo"], json={}))
-    ok(client.post(f"/deliveries/{delivery['delivery_id']}/advance", headers=t["csws"]))
+    ok(client.post(f"/drrmo/requests/{rid_}/picked-up", headers=t["drrmo"]))   # advisor, Oct 24
     dash = ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))
     assert (dash["scheduled"], dash["in_transit"]) == (0, 1)
     assert client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                         json={"summary": ""}).status_code == 422   # alt 6a: summary required
+    # Testing fix 7.5: not while the goods are still on the road ...
+    r = client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
+                     json={"summary": "Delivered by truck 2"})
+    assert r.status_code == 409 and "Mark it Delivered" in r.json()["detail"]
+    # ... only after the barangay representative confirms receipt (8.2).
+    ok(client.post(f"/drrmo/requests/{rid_}/delivered", headers=t["drrmo"]))   # testing, Oct 27
+    ok(client.post(f"/deliveries/{delivery['delivery_id']}/confirm-receipt",
+                   headers=t["brgy"], json={}), 201)
     done = ok(client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                            json={"summary": "Delivered by truck 2"}))
     assert done["status"] == "Completed" and "30 kg Rice" in done["notes"]
@@ -200,26 +210,38 @@ def test_appendix_h_module_access(api):
     for role in ("donor", "drrmo", "cmo"):
         ok(client.get("/reports/monitoring", headers=t[role]), 403)
 
-    # 2.2 SMS-based reporting (Oct 12 decision): the barangay rep texts the
-    # Disaster Unit, the Disaster Unit encodes it, the Administrator validates.
-    sms = {"contact_number": "09171234567", "raw_message": "FLOOD 5FAM",
-           "disaster_type_id": 1, "barangay_id": 1}
-    for role in ("admin", "csws", "brgy", "donor"):
-        ok(client.post("/reports/sms", json=sms, headers=t[role]), 403)
-    created = ok(client.post("/reports/sms", json=sms, headers=t["unit"]), 201)
-    assert created["report"]["source"] == "SMS"
-    assert created["report"]["status"] == "Pending"
-    ok(client.post(f"/reports/{created['report']['report_id']}/validate",
-                   headers=t["admin"], json={}))
-
-    # The rep (and the Disaster Unit) can read the Disaster Unit's numbers
-    # to send the SMS; members without a number are left out.
+    # 2.2 SMS-based reporting (Scope 2.4, UC-A3 8a, UC-CD1 11b): the
+    # Disaster Unit texts the Administrators, an Administrator encodes it
+    # (filed under the Disaster Unit member who sent it), then validates it.
     from tests.test_pickup_days_and_runs import _activate_everyone
     _activate_everyone()          # SQLite stores is_active as text
-    unit = ok(client.get("/contacts/disaster-unit", headers=t["brgy"]))
-    assert unit and all(c["contact_number"] for c in unit)
-    for role in ("donor", "cmo", "drrmo"):
-        ok(client.get("/contacts/disaster-unit", headers=t[role]), 403)
+    from core import database
+    from models.user_rbac_model import User
+    db = database.SessionLocal()
+    me = {k: db.query(User.user_id).filter(User.first_name == k).scalar() for k in ("admin", "unit")}
+    db.close()
+    sms = {"contact_number": "+63 917 000 0000", "raw_message": "FLOOD 5FAM",
+           "disaster_type_id": 1, "barangay_id": 1, "affected_families": 5}
+    for role in ("unit", "csws", "brgy", "donor"):
+        ok(client.post("/reports/sms", json=sms, headers=t[role]), 403)
+    created = ok(client.post("/reports/sms", json=sms, headers=t["admin"]), 201)
+    assert created["report"]["source"] == "SMS"
+    assert created["report"]["status"] == "Pending"
+    assert created["report"]["user_id"] == me["unit"]           # the sender
+    assert created["sms_metadata"]["encoded_by_user_id"] == me["admin"]
+    ok(client.post(f"/reports/{created['report']['report_id']}/validate",
+                   headers=t["admin"], json={}))
+    # A number that is no Disaster Unit member's: kept under the encoder.
+    other = ok(client.post("/reports/sms", json={**sms, "contact_number": "09998887777"},
+                           headers=t["admin"]), 201)
+    assert other["report"]["user_id"] == me["admin"]
+
+    # The Disaster Unit (and the Administrators) read the Administrators'
+    # numbers to send the SMS; members without a number are left out.
+    admins = ok(client.get("/contacts/sms-receivers", headers=t["unit"]))
+    assert admins and all(c["contact_number"] for c in admins)
+    for role in ("brgy", "donor", "cmo", "drrmo"):
+        ok(client.get("/contacts/sms-receivers", headers=t[role]), 403)
 
     # 4.4 / 4.5 Donation records: Admin, Main Office, CMO.
     for role in ("admin", "csws", "cmo"):

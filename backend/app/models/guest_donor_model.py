@@ -10,4 +10,8 @@ class GuestDonor(Base):
     full_name       = Column(String(150), nullable=False)
     contact_number  = Column(String(20), nullable=False)
     email           = Column(String(150), nullable=True)
+    # F-09: when the guest agreed to the processing of this data (RA 10173).
+    # NULL for guests saved before consent was asked.
+    consent_at      = Column(DateTime(timezone=True), nullable=True)
+
     created_at      = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

@@ -1,21 +1,33 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult, Roles;
-import 'records_screens.dart' show DonationRecordsScreen, SupportRecordsScreen;
+import 'records_screens.dart' show SupportRecordsScreen;
 import 'delivery_widgets.dart';
 import 'input_formatters.dart' show pesos;
 import 'trip_screens.dart';
 import 'widgets.dart';
-import 'entry_report_views.dart' show EntrySummaryList;
 import 'logistics_cards.dart';
+import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
+import 'scheduled_deliveries.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 
 /// Preparing -> In Transit -> Delivered -> Confirmed, as a dot stepper.
 class DeliveryStepper extends StatelessWidget {
   final String status;
-  const DeliveryStepper(this.status, {super.key});
+
+  /// When each step was reached (`status_times` from the delivery list,
+  /// Oct 2026), shown under the step.
+  final Map? times;
+  const DeliveryStepper(this.status, {super.key, this.times});
+
+  /// "Oct 23" over "2:15 PM", narrow enough for four steps on a phone.
+  static String _short(dynamic iso) {
+    final full = niceWhen(iso); // "Fri, Oct 23 · 2:15 PM"
+    final cut = full.indexOf(', ');
+    return (cut < 0 ? full : full.substring(cut + 2)).replaceAll(' · ', '\n');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,12 +53,21 @@ class DeliveryStepper extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                _deliverySteps[i],
+                StatusColors.label(_deliverySteps[i]),
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
                 ),
               ),
+              if (times?[_deliverySteps[i]] != null)
+                Text(
+                  _short(times![_deliverySteps[i]]),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
             ],
           ),
           if (i < _deliverySteps.length - 1)
@@ -170,6 +191,24 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     if (picked != null) setState(() => dates = picked);
   }
 
+  Future<void> _delete(BuildContext context, Map d) async {
+    final v = await formDialog(
+      context,
+      title: 'Delete delivery #${d['delivery_id']}?',
+      message:
+          'It is removed from this list. Its record, receipt and the '
+          'report\'s fulfillment stay as they are.',
+      fields: const [],
+      confirm: 'Delete',
+    );
+    if (v == null || !context.mounted) return;
+    await act(
+      context,
+      () => api.delete('/deliveries/${d['delivery_id']}'),
+      success: 'Delivery #${d['delivery_id']} deleted',
+    );
+  }
+
   Future<void> _requestTransport(BuildContext context, Map d) async {
     // I4: pick the numbers, no typing. Appendix H 7.1 (Oct 10 notes): no
     // driver count (a truck comes with its driver); each need can be None.
@@ -177,7 +216,11 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     final v = await formDialog(
       context,
       title: 'Request DRRMO logistics support',
-      message: 'For delivery #${d['delivery_id']}. Choose what is needed.',
+      // Testing fix 7.4: Main Office schedules. DRRMO is asked for the
+      // delivery date set here (change it with Reschedule).
+      message:
+          'For delivery #${d['delivery_id']} on ${niceDate(d['delivery_date'])}. '
+          'DRRMO will be asked for this date. Choose what is needed.',
       fields: [
         DialogField(
           'trucks',
@@ -232,16 +275,10 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       title: 'Confirm receipt',
       message:
-          'Confirm that delivery #${d['delivery_id']} arrived. If it is '
+          'Confirm that delivery #${d['delivery_id']} arrived. This is also '
+          'your barangay\'s acknowledgement of the aid. If it is '
           'incomplete you can wait until it is resolved (UC-B1 4a).',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+      fields: const [],
       confirm: 'Confirm receipt',
     );
     if (v == null || !context.mounted) return;
@@ -249,9 +286,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       context,
       () => api.post(
         '/deliveries/${d['delivery_id']}/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
+        body: const {},
       ),
-      success: 'Receipt confirmed. Fulfillment updated.',
+      success: 'Receipt confirmed and aid acknowledged. Fulfillment updated.',
     );
   }
 
@@ -264,24 +301,14 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
           'Trip #$tripId brought $n deliveries to your barangay. Confirm only '
           'if everything arrived. If something is missing, confirm the '
           'deliveries one by one instead.',
-      fields: const [
-        DialogField(
-          'remarks',
-          'Remarks (optional)',
-          required: false,
-          multiline: true,
-        ),
-      ],
+      fields: const [],
       confirm: 'Confirm all',
     );
     if (v == null || !context.mounted) return;
     await act(
       context,
-      () => api.post(
-        '/trips/$tripId/confirm-receipt',
-        body: {'remarks': v['remarks']!.isEmpty ? null : v['remarks']},
-      ),
-      success: '$n deliveries confirmed. Fulfillment updated.',
+      () => api.post('/trips/$tripId/confirm-receipt', body: const {}),
+      success: '$n deliveries confirmed and acknowledged. Fulfillment updated.',
     );
   }
 
@@ -349,8 +376,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
 
   Widget _filters(BuildContext context, Map counts) {
     final t = Theme.of(context).textTheme;
-    String chip(String? s) =>
-        s == null ? 'All (${counts['total'] ?? 0})' : '$s (${counts[s] ?? 0})';
+    String chip(String? s) => s == null
+        ? 'All (${counts['total'] ?? 0})'
+        : '${StatusColors.label(s)} (${counts[s] ?? 0})';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -595,8 +623,15 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                       '${it['item_name'] ?? names.of('items', it['item_id'], fallback: 'item')}'
                   .replaceAll(RegExp(r'\s+'), ' '),
         )
-        .join(', ');
+        .toList();
     final reqStage = request?['stage'] as String?;
+    // Testing (Oct 27): with a DRRMO request open, DRRMO moves the delivery
+    // (In Transit on pickup, Delivered on arrival); CSWS waits.
+    final reqOpen =
+        request != null &&
+        (request['status'] == 'Pending' || request['status'] == 'Accepted') &&
+        (status == 'Preparing' || status == 'In Transit');
+    final drrmo = api.role == Roles.drrmo;
     final barangayName =
         d['destination_barangay_name'] ??
         names.of('barangays', d['destination_barangay_id']);
@@ -621,10 +656,12 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                 Badge2.status(status),
               ],
             ),
-            const SizedBox(height: 4),
-            Text(items.isEmpty ? 'No items' : items),
+            const SizedBox(height: 6),
+            // Testing (Oct 27): the goods stand out, like the donate form.
+            if (items.isEmpty) const Text('No items') else NeedChips(items),
+            const SizedBox(height: 6),
             Text(
-              '${d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report #${d['report_id']}')}'
+              '${reportName(d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report'))}'
               ' · ${niceDate(d['delivery_date'])}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
@@ -692,7 +729,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
               )
             else ...[
               const SizedBox(height: 12),
-              DeliveryStepper(status),
+              DeliveryStepper(status, times: d['status_times'] as Map?),
             ],
             const SizedBox(height: 8),
             Wrap(
@@ -706,6 +743,16 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                   icon: const Icon(Icons.history),
                   label: const Text('History'),
                 ),
+                // Testing (Oct 27): finished deliveries can be cleared from
+                // the list (kept on record, see DELETE /deliveries/{id}).
+                if (!barangay &&
+                    !readOnly &&
+                    (status == 'Cancelled' || status == 'Confirmed'))
+                  TextButton.icon(
+                    onPressed: () => _delete(context, d),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete'),
+                  ),
                 // Unexpected problems: new date, truck came back, cancel,
                 // or no longer need DRRMO (delivery_widgets.dart).
                 if (!barangay &&
@@ -714,12 +761,14 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                   TextButton.icon(
                     onPressed: () =>
                         showDeliveryProblems(context, d, request: request),
-                    icon: const Icon(Icons.report_problem_outlined),
-                    label: const Text('Something went wrong?'),
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('Edit'),
                   ),
+                // Testing feedback (Oct 20): transport is asked for before
+                // the truck leaves, so only while Preparing.
                 if (!barangay &&
                     !readOnly &&
-                    (status == 'Preparing' || status == 'In Transit') &&
+                    status == 'Preparing' &&
                     (request == null ||
                         reqStage == 'Declined' ||
                         reqStage == 'Cancelled' ||
@@ -729,7 +778,46 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     icon: const Icon(Icons.fire_truck_outlined),
                     label: const Text('Request transport'),
                   ),
-                if (!barangay && !readOnly && next != null)
+                // Advisor (Oct 24) + testing (Oct 27): with a DRRMO request
+                // open, DRRMO moves it; CSWS sees who has it.
+                if (!barangay && !readOnly && reqOpen)
+                  Chip(
+                    avatar: const Icon(Icons.fire_truck_outlined, size: 18),
+                    label: Text(
+                      request['status'] == 'Pending'
+                          ? 'Waiting for DRRMO to accept'
+                          : status == 'Preparing'
+                          ? 'DRRMO marks it In Transit on pickup'
+                          : 'DRRMO marks it Delivered on arrival',
+                    ),
+                  )
+                else if (drrmo && reqOpen && request['status'] == 'Pending')
+                  const Chip(
+                    avatar: Icon(Icons.info_outline, size: 18),
+                    label: Text('Accept the request in Logistics first'),
+                  )
+                else if (drrmo && reqOpen)
+                  FilledButton.icon(
+                    onPressed: () => act(
+                      context,
+                      () => api.post(
+                        '/drrmo/requests/${request['request_id']}/'
+                        '${status == 'Preparing' ? 'picked-up' : 'delivered'}',
+                      ),
+                      success: 'Delivery #${d['delivery_id']} is now $next',
+                    ),
+                    icon: Icon(
+                      status == 'Preparing'
+                          ? Icons.local_shipping
+                          : Icons.where_to_vote_outlined,
+                    ),
+                    label: Text(
+                      status == 'Preparing'
+                          ? 'Picked up · mark In Transit'
+                          : 'Mark Delivered',
+                    ),
+                  )
+                else if (!barangay && !readOnly && next != null)
                   FilledButton.icon(
                     onPressed: () => act(
                       context,
@@ -808,27 +896,16 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   Map? report; // row from /trips/candidates (with its items)
   String? brgyId; // destination; defaults to the report's barangay
   bool changeBrgy = false;
-  final Map<int, TextEditingController> qty = {};
+
+  /// Oct 15: the ticked donation entries (each goes whole); null = loading.
+  Set<String>? chosen;
+  int get ready => chosen?.length ?? 0;
   String? date; // ISO, UTC
   bool tried = false;
   bool busy = false;
 
   Future<List<ApiResult>> _fetch() =>
       Future.wait([api.get('/trips/candidates'), api.lookupsResult()]);
-
-  @override
-  void dispose() {
-    for (final c in qty.values) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  TextEditingController _ctrl(int itemId) =>
-      qty.putIfAbsent(itemId, () => TextEditingController());
-
-  List<Map> get _items =>
-      report == null ? const [] : (report!['items'] as List).cast<Map>();
 
   Future<void> _chooseReport(Map candidates) async {
     final r = await pickReportWithStock(context, candidates);
@@ -837,9 +914,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
       report = r;
       brgyId = '${r['barangay_id']}';
       changeBrgy = false;
-      for (final c in qty.values) {
-        c.clear();
-      }
+      chosen = null;
     });
   }
 
@@ -847,8 +922,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
     setState(() => tried = true);
     if (report == null) return;
     if (!_form.currentState!.validate()) return;
-    final lines = linesFrom(_items, _ctrl);
-    if (lines.isEmpty || date == null) return;
+    if (ready == 0 || date == null) return;
     setState(() => busy = true);
     final r = await act(
       context,
@@ -858,7 +932,8 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           'report_id': report!['report_id'],
           'destination_barangay_id': int.parse(brgyId!),
           'delivery_date': date,
-          'items': lines,
+          // Oct 15: the ticked donation entries, each one whole.
+          'batch_references': chosen!.toList(),
         },
       ),
       success: 'Delivery prepared',
@@ -898,8 +973,11 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           final names = Names(
             Map<String, dynamic>.from(snap.data![1].json as Map),
           );
-          final lines = linesFrom(_items, _ctrl);
-          final noReports = (candidates['barangays'] as List).isEmpty;
+          final noReports =
+              (candidates['barangays'] as List).isEmpty &&
+              ((candidates['not_acknowledged_reports'] as List?) ?? const [])
+                  .isEmpty;
+
           return Form(
             key: _form,
             child: ListView(
@@ -972,17 +1050,13 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                   Gaps.v24,
                   Text('2. What to send', style: t.titleMedium),
                   Gaps.v8,
-                  StockQuantities(
-                    key: ValueKey('items-${report!['report_id']}'),
-                    items: _items,
-                    controllerFor: _ctrl,
-                    onChanged: () => setState(() {}),
+                  ReadyDonations(
+                    key: ValueKey('ready-${report!['report_id']}'),
+                    reportId: report!['report_id'] as int,
+                    onChanged: (refs) {
+                      if (mounted) setState(() => chosen = refs);
+                    },
                   ),
-                  if (tried && lines.isEmpty)
-                    Text(
-                      'Enter a quantity for at least one item.',
-                      style: TextStyle(color: cs.error),
-                    ),
                   // 3. When
                   Gaps.v24,
                   Text('3. When will it leave?', style: t.titleMedium),
@@ -1002,18 +1076,18 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                     },
                   ),
                   Gaps.v24,
-                  if (lines.isNotEmpty)
+                  if (ready > 0)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Sending ${lines.length} '
-                        '${lines.length == 1 ? 'item' : 'items'}'
+                        'Sending $ready '
+                        '${ready == 1 ? 'donation' : 'donations'}'
                         '${date == null ? '' : ' on ${niceWhen(date)}'}.',
                         style: t.bodyMedium,
                       ),
                     ),
                   FilledButton.icon(
-                    onPressed: busy ? null : _submit,
+                    onPressed: busy || ready == 0 ? null : _submit,
                     style: FilledButton.styleFrom(
                       minimumSize: const Size.fromHeight(52),
                     ),
@@ -1056,6 +1130,7 @@ Future<void> showCmoEntryPopout(BuildContext context, int donationId) async {
   }
   final e = Map<String, dynamic>.from(r.json as Map);
   final done = e['acknowledged'] == true;
+  var busy = false; // set while Acknowledge is being sent
   await showDetailPopout<void>(
     context,
     title: 'Donation entry',
@@ -1070,28 +1145,38 @@ Future<void> showCmoEntryPopout(BuildContext context, int donationId) async {
         ),
       ),
       if (!done)
-        Builder(
-          builder: (ctx) => AppButton(
-            'Acknowledge',
-            icon: Icons.verified,
-            expand: true,
-            onPressed: () async {
-              final res = await act(
-                ctx,
-                () => api.post(
-                  '/cmo/entries/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
-                  body: {'status': 'Acknowledged', 'notes': null},
-                ),
-                success: '${e['batch_reference']} acknowledged',
-              );
-              if (!res.ok || !ctx.mounted) return;
-              Navigator.of(ctx).pop();
-              HomeNav.go(
-                context,
-                const HomeTarget('Acknowledge', view: 'pending'),
-              );
-            },
-          ),
+        // Disabled while it is sent, so a double tap never acknowledges twice.
+        StatefulBuilder(
+          builder: (ctx, setBusy) {
+            return AppButton(
+              'Acknowledge',
+              icon: Icons.verified,
+              expand: true,
+              loading: busy,
+              onPressed: () async {
+                if (busy) return;
+                setBusy(() => busy = true);
+                final res = await act(
+                  ctx,
+                  () => api.post(
+                    '/cmo/entries/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
+                    body: {'status': 'Acknowledged', 'notes': null},
+                  ),
+                  success: '${e['batch_reference']} acknowledged',
+                );
+                if (!ctx.mounted) return;
+                if (!res.ok) {
+                  setBusy(() => busy = false);
+                  return;
+                }
+                Navigator.of(ctx).pop();
+                HomeNav.go(
+                  context,
+                  const HomeTarget('Acknowledge', view: 'pending'),
+                );
+              },
+            );
+          },
         ),
     ],
   );
@@ -1135,7 +1220,10 @@ class CmoEntryDetails extends StatelessWidget {
           ],
         ),
         Gaps.v8,
-        Text('For ${e['report_label'] ?? 'report #${e['report_id']}'}'),
+        // The report by disaster and barangay, without its number (Oct 23).
+        Text(
+          'For ${'${e['report_label'] ?? 'report'}'.replaceFirst(RegExp(r'^#\d+\s*'), '').replaceAll(' - ', ' · ')}',
+        ),
         Text(
           'Handover: ${e['handover_method'] ?? '-'} · Received by CSWS',
           style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
@@ -1183,365 +1271,6 @@ class CmoEntryDetails extends StatelessWidget {
   }
 }
 
-class CmoScreen extends StatefulWidget {
-  const CmoScreen({super.key});
-
-  @override
-  State<CmoScreen> createState() => _CmoScreenState();
-}
-
-class _CmoScreenState extends State<CmoScreen>
-    with HomeTargetListener<CmoScreen> {
-  String view = 'pending';
-  int _loads = 0;
-
-  /// 5.1: null = all waiting; 'On Hold' / 'Pending Review' = only those.
-  String? decision;
-  final _listKey = GlobalKey();
-
-  @override
-  String get homeTab => 'Acknowledge';
-
-  @override
-  void applyHomeTarget(HomeTarget target) {
-    view = target.view ?? 'pending';
-    decision = null;
-    _loads++; // e.g. an entry was just acknowledged from a notification
-  }
-
-  /// 5.1: a tile was tapped. Filter the list and scroll down to it.
-  void _show(String v, [String? d]) {
-    setState(() {
-      view = v;
-      decision = d;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final c = _listKey.currentContext;
-      if (c != null) {
-        Scrollable.ensureVisible(
-          c,
-          duration: const Duration(milliseconds: 300),
-        );
-      }
-    });
-  }
-
-  String get _base => '/cmo/entries';
-
-  Future<void> _decide(Map e, String decision) async {
-    String? notes;
-    if (decision != 'Acknowledged') {
-      final v = await formDialog(
-        context,
-        title: decision == 'On Hold'
-            ? 'Put ${e['batch_reference']} on hold'
-            : 'Keep ${e['batch_reference']} for review',
-        message: 'Applies to all ${e['total_items']} item(s) of this donation.',
-        fields: const [DialogField('notes', 'Reason', multiline: true)],
-      );
-      if (v == null) return;
-      notes = v['notes'];
-    }
-    if (!mounted) return;
-    final r = await act(
-      context,
-      () => api.post(
-        '$_base/${Uri.encodeComponent('${e['batch_reference']}')}/decide',
-        body: {'status': decision, 'notes': notes},
-      ),
-      success: decision == 'Acknowledged'
-          ? '${e['batch_reference']} acknowledged'
-          : '${e['batch_reference']} marked $decision',
-    );
-    if (r.ok && mounted) setState(() => _loads++);
-  }
-
-  Future<void> _revert(Map e) async {
-    final r = await act(
-      context,
-      () => api.post(
-        '$_base/${Uri.encodeComponent('${e['batch_reference']}')}/revert',
-      ),
-      success: 'Acknowledgement undone',
-    );
-    if (r.ok && mounted) setState(() => _loads++);
-  }
-
-  Widget _entryCard(Map e) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final done = e['acknowledged'] == true;
-    final items = (e['items'] as List).cast<Map>();
-    final value = (e['estimated_value'] as num?) ?? 0;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: Space.sm),
-      child: AppCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.qr_code_2, color: cs.primary),
-                Gaps.h8,
-                Expanded(
-                  child: Text(
-                    '${e['batch_reference']}',
-                    style: t.titleMedium?.copyWith(fontFamily: 'monospace'),
-                  ),
-                ),
-                if (done)
-                  const StatusChip('Confirmed', label: 'Acknowledged')
-                else
-                  StatusChip(
-                    e['cmo_decision'] as String? ?? 'Received',
-                    label: e['cmo_decision'] == null
-                        ? 'Waiting'
-                        : '${e['cmo_decision']}',
-                  ),
-              ],
-            ),
-            Gaps.v4,
-            Text(
-              'For ${e['report_label'] ?? 'report'} · ${e['handover_method']}',
-              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            Gaps.v8,
-            for (final i in items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.inventory_2_outlined,
-                      size: 16,
-                      color: cs.onSurfaceVariant,
-                    ),
-                    Gaps.h8,
-                    Expanded(
-                      child: Text(
-                        '${i['quantity']} ${i['unit']} ${i['item_name']} '
-                        '(${i['packaging']})',
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            if (value > 0)
-              Text('Estimated value ${pesos(value)}', style: t.bodySmall),
-            if (e['hold_reason'] != null && !done) ...[
-              Gaps.v8,
-              Text(
-                'On hold: ${e['hold_reason']}',
-                style: t.bodyMedium?.copyWith(color: AppColors.danger),
-              ),
-            ],
-            Gaps.v12,
-            if (done)
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  onPressed: () => _revert(e),
-                  icon: const Icon(Icons.undo),
-                  label: const Text('Undo'),
-                ),
-              )
-            else ...[
-              // One tap acknowledges the whole entry (every item in it).
-              AppButton(
-                'Acknowledge',
-                icon: Icons.verified,
-                expand: true,
-                onPressed: () => _decide(e, 'Acknowledged'),
-              ),
-              Gaps.v8,
-              Row(
-                children: [
-                  Expanded(
-                    child: AppButton(
-                      'Hold',
-                      icon: Icons.pause_circle_outline,
-                      variant: AppButtonVariant.secondary,
-                      expand: true,
-                      onPressed: () => _decide(e, 'On Hold'),
-                    ),
-                  ),
-                  Gaps.h8,
-                  Expanded(
-                    child: AppButton(
-                      'Review',
-                      icon: Icons.rate_review_outlined,
-                      variant: AppButtonVariant.text,
-                      expand: true,
-                      onPressed: () => _decide(e, 'Pending Review'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Loader(
-      key: ValueKey(_loads),
-      load: [
-        () => api.get('/cmo/dashboard'),
-        () => api.get('$_base/pending'),
-        () => api.get('$_base/acknowledged'),
-        () => api.get('/donations/entries'),
-      ],
-      builder: (context, data) {
-        final dash = data[0] as Map;
-        final pending = (data[1] as List).cast<Map>();
-        final acknowledged = (data[2] as List).cast<Map>();
-        final perReport = (dash['per_report'] as List).cast<Map>();
-        final rows = view == 'pending'
-            ? pending
-                  .where(
-                    (e) => decision == null || e['cmo_decision'] == decision,
-                  )
-                  .toList()
-            : acknowledged;
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            PageHeader(
-              'Acknowledge Donations',
-              subtitle:
-                  'Donation entries CSWS received, one QR at a time • '
-                  '${roleLine()}',
-            ),
-            // Appendix H 4.4 / 4.5: the CMO also views donation records.
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: const Text('Donation records')),
-                      body: const DonationRecordsScreen(header: false),
-                    ),
-                  ),
-                ),
-                icon: const Icon(Icons.folder_open_outlined),
-                label: const Text('All donation records'),
-              ),
-            ),
-            StatGrid([
-              StatTile(
-                'Waiting for acknowledgement',
-                '${dash['pending_entries'] ?? pending.length}',
-                Icons.hourglass_top,
-                color: const Color(0xFFEF6C00),
-                onTap: () => _show('pending'),
-              ),
-              StatTile(
-                'On hold',
-                '${dash['on_hold_entries'] ?? 0}',
-                Icons.pause_circle_outline,
-                onTap: () => _show('pending', 'On Hold'),
-              ),
-              StatTile(
-                'Pending review',
-                '${dash['review_entries'] ?? 0}',
-                Icons.rate_review_outlined,
-                onTap: () => _show('pending', 'Pending Review'),
-              ),
-              StatTile(
-                'Acknowledged',
-                '${dash['acknowledged_entries'] ?? acknowledged.length}',
-                Icons.verified,
-                color: const Color(0xFF2E7D32),
-                onTap: () => _show('acknowledged'),
-              ),
-            ]),
-            const SizedBox(height: 14),
-            SegmentedButton<String>(
-              key: _listKey,
-              segments: [
-                ButtonSegment(
-                  value: 'pending',
-                  label: Text('Waiting (${pending.length})'),
-                ),
-                ButtonSegment(
-                  value: 'acknowledged',
-                  label: Text('Acknowledged (${acknowledged.length})'),
-                ),
-              ],
-              selected: {view == 'pending' ? 'pending' : 'acknowledged'},
-              onSelectionChanged: (s) => setState(() {
-                view = s.first;
-                decision = null;
-              }),
-            ),
-            if (view == 'pending' && decision != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: InputChip(
-                    label: Text('Only: $decision'),
-                    onDeleted: () => setState(() => decision = null),
-                  ),
-                ),
-              ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty)
-              EmptyState(
-                view == 'pending'
-                    ? 'No donations waiting for acknowledgement.'
-                    : 'No acknowledged donations yet.',
-              ),
-            for (final e in rows) _entryCard(e),
-            const SectionTitle('Donation entries per report'),
-            EntrySummaryList(data[3] as Map),
-            const SectionTitle('Acknowledged per report'),
-            if (perReport.isEmpty) const EmptyState('No donations yet.'),
-            for (final r in perReport)
-              Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${r['report_label']}',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      if (r['priority_level'] != null)
-                        Text(
-                          'Priority: ${r['priority_level']}',
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${r['confirmed_count']} item(s) acknowledged '
-                        '(${r['confirmed_quantity']} units'
-                        '${(r['confirmed_value'] as num) > 0 ? ', PHP ${(r['confirmed_value'] as num).toStringAsFixed(0)}' : ''}'
-                        ') · ${r['pending_count']} waiting',
-                      ),
-                      const SizedBox(height: 8),
-                      Progress(
-                        delivered: 0,
-                        needed: 0,
-                        percent: r['fulfillment_percentage'] as num,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        );
-      },
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // UC-DR1 / UC-DR2 Logistics support (DRRMO)
 // ---------------------------------------------------------------------------
@@ -1559,9 +1288,18 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   @override
   String get homeTab => 'Logistics';
 
+  /// The request a notification is about (testing, Oct 27): its list opens
+  /// at the stage it is in now, with that request first and outlined.
+  int? _focus;
+  bool _focusPlaced = false;
+  int _loads = 0; // a new notice reloads the list, so a new request is in it
+
   @override
   void applyHomeTarget(HomeTarget target) {
     if (target.view != null) stage = target.view!;
+    _focus = target.id;
+    _focusPlaced = false;
+    _loads++;
   }
 
   Future<void> _accept(Map r) async {
@@ -1571,6 +1309,8 @@ class _DrrmoScreenState extends State<DrrmoScreen>
       message:
           '${r['needs'] ?? r['notes'] ?? 'No details'}\n'
           '${r['request_type'] == 'Pickup' ? 'Pickup run on ${pickupDay(r['pickup_date'])}: ${r['destination'] ?? '-'}' : 'Destination: ${r['destination'] ?? '-'}'}\n'
+          // Testing fix 7.4: CSWS Main Office already set the date.
+          '${r['request_type'] != 'Pickup' && r['scheduled_date'] != null ? 'Scheduled by CSWS Main Office: ${niceDate(r['scheduled_date'])}\n' : ''}'
           'Requested ${requestWhen(r['created_at'])}',
       fields: const [],
       confirm: 'Accept',
@@ -1660,14 +1400,28 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   @override
   Widget build(BuildContext context) {
     return Loader(
+      key: ValueKey('drrmo-$_loads'),
       load: [
         () => api.get('/drrmo/dashboard'),
         () => api.get('/drrmo/requests'),
+        // Testing #19: deliveries that have not arrived yet.
+        () => api.get('/deliveries/', query: scheduledDeliveriesQuery),
       ],
       builder: (context, data) {
         final dash = data[0] as Map;
         final all = (data[1] as List).cast<Map>();
-        final rows = all.where((r) => r['stage'] == stage).toList();
+        final scheduled = (data[2] as List).cast<Map>();
+        if (_focus != null && !_focusPlaced) {
+          // The request may have moved on since the notice (e.g. accepted).
+          final hit = all.where((r) => r['request_id'] == _focus);
+          if (hit.isNotEmpty) stage = '${hit.first['stage']}';
+          _focusPlaced = true;
+        }
+        final inStage = all.where((r) => r['stage'] == stage);
+        final rows = [
+          ...inStage.where((r) => r['request_id'] == _focus),
+          ...inStage.where((r) => r['request_id'] != _focus),
+        ];
         const stages = {
           'Pending': 'New',
           'Accepted': 'Accepted',
@@ -1680,32 +1434,42 @@ class _DrrmoScreenState extends State<DrrmoScreen>
           padding: const EdgeInsets.all(16),
           children: [
             PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
+            // 9.6 (testing): each card shows its requests in the list below.
             StatGrid([
               StatTile(
                 'New requests',
                 '${dash['pending_requests']}',
                 Icons.mark_email_unread_outlined,
                 color: const Color(0xFFEF6C00),
+                onTap: () => setState(() => stage = 'Pending'),
               ),
               StatTile(
                 'Accepted',
                 '${dash['scheduled']}',
                 Icons.event_available,
+                onTap: () => setState(() => stage = 'Accepted'),
               ),
               StatTile(
                 'In transit',
                 '${dash['in_transit']}',
                 Icons.local_shipping_outlined,
                 color: const Color(0xFF1565C0),
+                onTap: () => setState(() => stage = 'In Transit'),
               ),
               StatTile(
                 'Completed',
                 '${dash['completed']}',
                 Icons.done_all,
                 color: const Color(0xFF2E7D32),
+                onTap: () => setState(() => stage = 'Completed'),
               ),
             ]),
-            const SizedBox(height: 12),
+            ScheduledDeliveriesCard(
+              deliveries: scheduled,
+              onOpen: (d) =>
+                  showDeliveryHistory(context, d['delivery_id'] as int),
+            ),
+            const SectionTitle('Logistics requests'),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -1727,8 +1491,17 @@ class _DrrmoScreenState extends State<DrrmoScreen>
             const SizedBox(height: 12),
             if (rows.isEmpty) const EmptyState('No requests here.'),
             for (final r in rows)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: r['request_id'] == _focus
+                    ? BoxDecoration(
+                        borderRadius: BorderRadius.circular(Radii.lg),
+                        border: Border.all(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 2,
+                        ),
+                      )
+                    : null,
                 child: LogisticsRequestCard(
                   r,
                   actions: [
@@ -1748,9 +1521,47 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                         onPressed: () => _withdraw(r),
                         child: const Text('Can no longer do this'),
                       ),
+
+                    // Advisor (Oct 24): DRRMO picked the goods up from CSWS.
+                    if (r['stage'] == 'Accepted' &&
+                        r['request_type'] != 'Pickup' &&
+                        r['delivery_status'] == 'Preparing')
+                      FilledButton.icon(
+                        onPressed: () => act(
+                          context,
+                          () => api.post(
+                            '/drrmo/requests/${r['request_id']}/picked-up',
+                          ),
+                          success:
+                              'Delivery #${r['delivery_id']} is now In Transit',
+                        ),
+                        icon: const Icon(Icons.local_shipping),
+                        label: const Text('Picked up · mark In Transit'),
+                      ),
+                    // Testing (Oct 27): DRRMO carried it, so DRRMO marks it
+                    // Delivered at the barangay.
+                    if (r['stage'] == 'In Transit' &&
+                        r['request_type'] != 'Pickup' &&
+                        r['delivery_status'] == 'In Transit')
+                      FilledButton.icon(
+                        onPressed: () => act(
+                          context,
+                          () => api.post(
+                            '/drrmo/requests/${r['request_id']}/delivered',
+                          ),
+                          success:
+                              'Delivery #${r['delivery_id']} is now Delivered',
+                        ),
+                        icon: const Icon(Icons.where_to_vote_outlined),
+                        label: const Text('Mark Delivered'),
+                      ),
+                    // Testing fix 7.5: only after the date, In Transit (8.1)
+                    // and the barangay's receipt (8.2). The card shows why.
                     if (r['stage'] == 'Accepted' || r['stage'] == 'In Transit')
                       FilledButton.icon(
-                        onPressed: () => _complete(r),
+                        onPressed: r['can_complete'] == true
+                            ? () => _complete(r)
+                            : null,
                         icon: const Icon(Icons.done_all),
                         label: const Text('Mark completed'),
                       ),

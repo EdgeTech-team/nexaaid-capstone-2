@@ -61,3 +61,37 @@ def mark_all_read(
         Notification.is_read.is_(False),
     ).update({"is_read": True}, synchronize_session=False)
     return {"ok": True, "unread_count": 0}
+
+
+# Delete only what the user has already read. "/read" is declared before
+# "/{notification_id}" so the fixed path is matched first.
+@router.delete("/read")
+def delete_read(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    deleted = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == current_user.user_id,
+            Notification.is_read.is_(True),
+        )
+        .delete(synchronize_session=False)
+    )
+    return {"ok": True, "deleted": deleted, "unread_count": _unread(db, current_user.user_id)}
+
+
+@router.delete("/{notification_id}")
+def delete_one(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    n = db.get(Notification, notification_id)
+    if not n or n.user_id != current_user.user_id:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    if not n.is_read:
+        raise HTTPException(status_code=409, detail="Only read notifications can be deleted")
+    db.delete(n)
+    db.flush()
+    return {"ok": True, "unread_count": _unread(db, current_user.user_id)}

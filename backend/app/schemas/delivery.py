@@ -5,7 +5,7 @@ Pydantic schemas for Module 3.10 - Delivery Tracking & Receipt Confirmation.
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional, Literal
+from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 DeliveryStatus = Literal["Preparing", "In Transit", "Delivered", "Confirmed", "Cancelled"]
@@ -37,7 +37,12 @@ class DeliveryCreate(BaseModel):
     destination_barangay_id: int
     destination_sitio_id: Optional[int] = None
     delivery_date: datetime
-    items: List[DeliveryItemCreate] = Field(min_length=1)
+    # Empty = every acknowledged donation of the report that has not gone
+    # out yet (Oct 13; what the app sends). Typed lines are still accepted.
+    items: List[DeliveryItemCreate] = []
+    # Oct 15: the donation entries (batch references) that go, each whole.
+    # Left out = every acknowledged entry of the report.
+    batch_references: Optional[List[str]] = None
 
 class DeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -59,6 +64,9 @@ class DeliveryResponse(BaseModel):
     # Set when CSWS cancelled it (api/v1/delivery_problems.py).
     cancelled_at: Optional[datetime] = None
     cancel_reason: Optional[str] = None
+    # When each step was reached, e.g. {"Preparing": ..., "In Transit": ...}
+    # (services/delivery_views.py status_times).
+    status_times: Optional[Dict[str, datetime]] = None
 
 
 #receipt confirmation

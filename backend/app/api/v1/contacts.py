@@ -1,16 +1,17 @@
 """
 app/api/v1/contacts.py
 
-GET /contacts/disaster-unit  (Oct 12 team decision, claude/sms-reporting-decision.md)
-    Barangay Receiving Representatives with no internet send a structured SMS
-    report to a CSWS Disaster Unit member, who encodes it (POST /reports/sms).
-    So the rep needs the Disaster Unit's names and numbers. The app saves
-    this list on the phone so the "SMS report" screen still works offline.
+GET /contacts/sms-receivers  (Scope 2.4, UC-CD1 alt 11b; Oct 15 team)
+    The Administrators' numbers. The CSWS Disaster Unit, offline, sends a
+    structured SMS report to them; an Administrator reviews and encodes it
+    (POST /reports/sms), then validates it. The app saves this list on the
+    phone so the Disaster Unit's "SMS report" screen still works offline.
     Members without a contact number are left out.
 
-GET /contacts/sms-receivers  (Oct 8, no longer used by the app)
-    The Administrators' numbers, from when the Disaster Unit texted the
-    Administrator. Kept so nothing else breaks; safe to remove later.
+GET /contacts/disaster-unit  (Oct 12, no longer used by the app)
+    The Disaster Unit's numbers, from when the Barangay Receiving
+    Representative texted the Disaster Unit. Kept so nothing else breaks;
+    safe to remove later.
 
 Only names and contact numbers are returned, never the full user records.
 """
@@ -30,7 +31,7 @@ router = APIRouter(prefix="/contacts", tags=["contacts"])
 
 DISASTER_UNIT = "CSWS Disaster Unit"
 ADMINISTRATOR = "Administrator"
-# Roles allowed to read the Disaster Unit numbers (existing endpoint).
+# Roles allowed to read the Disaster Unit numbers (old endpoint).
 _ALLOWED = {"Barangay Receiving Representative", "CSWS Disaster Unit", "Administrator"}
 # Roles allowed to read the SMS receivers: the senders and the admins themselves.
 _SMS_SENDERS = {DISASTER_UNIT, ADMINISTRATOR}

@@ -77,59 +77,62 @@ void main() {
     expect(find.text('Receive into inventory'), findsOneWidget);
   });
 
-  testWidgets('Needs attention: Partly Received, On Hold, Expired', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(800, 2400);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      host(
-        DonationEntriesView(
-          entries: [
-            _entry(1, 'Partly Received'),
-            _entry(2, 'Received', onHold: 1),
-            _entry(3, 'Expired'),
-            _entry(4, 'Expired'),
-            _entry(5, 'Pending'),
-          ],
-        ),
-      ),
-    );
-    final card = find.byKey(const ValueKey('needs-attention'));
-    expect(card, findsOneWidget);
-    String count(String s) => tester
-        .widgetList<Text>(
-          find.descendant(
-            of: find.byKey(ValueKey('attention-$s')),
-            matching: find.byType(Text),
+  testWidgets(
+    'Needs attention: On Hold and Expired (Oct 13: no Partly Received row)',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        host(
+          DonationEntriesView(
+            entries: [
+              _entry(1, 'Partly Received'),
+              _entry(2, 'Received', onHold: 1),
+              _entry(3, 'Expired'),
+              _entry(4, 'Expired'),
+              _entry(5, 'Pending'),
+            ],
           ),
-        )
-        .last
-        .data!;
-    expect(count('Partly Received'), '1');
-    expect(count('On Hold'), '1');
-    expect(count('Expired'), '2');
-    // Each says what it means.
-    expect(find.textContaining('still expected'), findsOneWidget);
-    expect(find.textContaining('paused the acknowledgement'), findsOneWidget);
-    expect(find.textContaining('deadline'), findsOneWidget);
+        ),
+      );
+      final card = find.byKey(const ValueKey('needs-attention'));
+      expect(card, findsOneWidget);
+      String count(String s) => tester
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byKey(ValueKey('attention-$s')),
+              matching: find.byType(Text),
+            ),
+          )
+          .last
+          .data!;
+      expect(
+        find.byKey(const ValueKey('attention-Partly Received')),
+        findsNothing,
+      );
+      expect(count('On Hold'), '1');
+      expect(count('Expired'), '2');
+      // Each says what it means.
+      expect(find.textContaining('paused the acknowledgement'), findsOneWidget);
+      expect(find.textContaining('deadline'), findsOneWidget);
 
-    // Tap Expired: only the 2 expired entries; tap again: all 5.
-    await tester.tap(find.byKey(const ValueKey('attention-Expired')));
-    await tester.pumpAndSettle();
-    expect(find.text('DON-3 · 1 item'), findsOneWidget);
-    expect(find.text('DON-4 · 1 item'), findsOneWidget);
-    expect(find.text('DON-5 · 1 item'), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('attention-Expired')));
-    await tester.pumpAndSettle();
-    expect(find.text('DON-5 · 1 item'), findsOneWidget);
+      // Tap Expired: only the 2 expired entries; tap again: all 5.
+      await tester.tap(find.byKey(const ValueKey('attention-Expired')));
+      await tester.pumpAndSettle();
+      expect(find.text('DON-3 · 1 item'), findsOneWidget);
+      expect(find.text('DON-4 · 1 item'), findsOneWidget);
+      expect(find.text('DON-5 · 1 item'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('attention-Expired')));
+      await tester.pumpAndSettle();
+      expect(find.text('DON-5 · 1 item'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('attention-On Hold')));
-    await tester.pumpAndSettle();
-    expect(find.text('DON-2 · 1 item'), findsOneWidget);
-    expect(find.text('DON-1 · 1 item'), findsNothing);
-  });
+      await tester.tap(find.byKey(const ValueKey('attention-On Hold')));
+      await tester.pumpAndSettle();
+      expect(find.text('DON-2 · 1 item'), findsOneWidget);
+      expect(find.text('DON-1 · 1 item'), findsNothing);
+    },
+  );
 
   testWidgets('CMO notification: the whole entry, Acknowledge and Close only', (
     tester,

@@ -1,6 +1,6 @@
 // problema_napud 2.2: several sitios per report (only the chosen barangay's
-// sitios), and the SMS report goes to every CSWS Disaster Unit number with
-// no "Copy text" step.
+// sitios), and the SMS report goes to every Administrator number with no
+// "Copy text" step (Oct 15: the Disaster Unit sends it, Scope 2.4).
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -86,7 +86,7 @@ void main() {
     expect(find.byKey(const Key('add-sitio')), findsNothing);
   });
 
-  testWidgets('SMS: every Disaster Unit number is chosen, no Copy text', (
+  testWidgets('SMS: every Administrator number is chosen, no Copy text', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 2400);
@@ -111,7 +111,7 @@ void main() {
           ],
           'items': [],
         },
-        '/contacts/disaster-unit' => [
+        '/contacts/sms-receivers' => [
           {'name': 'Ana', 'contact_number': '09171111111'},
           {'name': 'Ben', 'contact_number': '09172222222'},
         ],
@@ -133,7 +133,7 @@ void main() {
       expect(chips.length, 2);
       expect(chips.every((c) => c.selected), isTrue);
       expect(find.text('Copy text'), findsNothing);
-      expect(find.text('CSWS Disaster Unit SMS number'), findsNothing);
+      expect(find.text('Administrator SMS number'), findsNothing);
 
       // The sitio list appears with the barangay and follows it.
       expect(find.byType(SitioPicker), findsNothing);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
 import 'admin_screens.dart';
@@ -10,6 +11,7 @@ import 'donor_screens.dart';
 import 'my_giving.dart';
 import 'notifications_screen.dart';
 import 'ops_screens.dart';
+import 'cmo_screens.dart';
 import 'pickup_map.dart';
 import 'profile_screen.dart';
 import 'records_screens.dart';
@@ -41,7 +43,16 @@ List<_Tab> _tabsFor(String? role) {
     case Roles.admin:
       return const [
         _Tab('Overview', Icons.dashboard_outlined, AdminDashboard()), // 9.1
-        _Tab('Validate', Icons.fact_check_outlined, AdminReportsScreen()), // 2.3, 2.4, 3.1, 3.3 (SMS reports arrive here from the Disaster Unit)
+        _Tab(
+          'Validate',
+          Icons.fact_check_outlined,
+          AdminReportsScreen(),
+        ), // 2.3, 2.4, 3.1, 3.3
+        _Tab(
+          'Encode SMS',
+          Icons.mark_chat_read_outlined,
+          NewReportScreen(smsEncode: true),
+        ), // 2.2, UC-A3 8a: encode the Disaster Unit's SMS report
         _Tab(
           'Monitoring',
           Icons.monitor_heart_outlined,
@@ -63,10 +74,10 @@ List<_Tab> _tabsFor(String? role) {
         _Tab('Overview', Icons.dashboard_outlined, DashboardScreen()), // 9.3
         _Tab('New report', Icons.edit_note, NewReportScreen()), // 2.1
         _Tab(
-          'Encode SMS',
-          Icons.mark_chat_read_outlined,
-          NewReportScreen(smsEncode: true),
-        ), // 2.2: encode the barangay rep's SMS report (Oct 12 decision)
+          'SMS report',
+          Icons.sms_outlined,
+          SmsSendScreen(),
+        ), // 2.2, UC-CD1 11b: offline SMS to the Administrator
         reportsHub, // 2.4, 2.5, 3.3
       ];
     case Roles.cswsMain:
@@ -96,6 +107,9 @@ List<_Tab> _tabsFor(String? role) {
           Icons.verified_outlined,
           CmoScreen(),
         ), // Module 6, 9.5 (Oct 11: "Acknowledge", not "Confirm")
+        // Oct 23 redesign: past acknowledgements and the summary per
+        // report (7.4) live here, so the Acknowledge tab is today's work.
+        _Tab('History', Icons.history, CmoHistoryScreen()),
         reports, // 2.4
       ];
     case Roles.drrmo:
@@ -120,11 +134,6 @@ List<_Tab> _tabsFor(String? role) {
           DeliveriesScreen(barangay: true),
         ), // 8.2-8.5
         _Tab('Overview', Icons.dashboard_outlined, BarangayDashboard()), // 9.7
-        _Tab(
-          'SMS report',
-          Icons.sms_outlined,
-          SmsSendScreen(),
-        ), // 2.2: offline SMS to the Disaster Unit (Oct 12 decision)
         reports, // 2.4
         _Tab(
           'Records',
@@ -184,6 +193,35 @@ class RoleHome extends StatefulWidget {
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
 
+  static const _kLastTab = 'last_tab';
+
+  /// Remember which tab the user opened, so a page refresh or app restart
+  /// returns to it instead of the first tab. Signing in, browsing as a
+  /// guest and Profile (where people sign out) start on the dashboard
+  /// instead (testing, Oct 27).
+  Future<void> _rememberTab(int i) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kLastTab, _allTabs[i].label);
+    } catch (_) {}
+  }
+
+  Future<void> _restoreTab() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final label = p.getString(_kLastTab);
+      if (label == null || !mounted || api.mustChangePassword) return;
+      if (api.guest || label == 'Profile') return;
+      final i = _allTabs.indexWhere((t) => t.label == label);
+      if (i >= 0) setState(() => index = i);
+    } catch (_) {}
+  }
+
+  void _selectTab(int i) {
+    setState(() => index = i);
+    _rememberTab(i);
+  }
+
   List<_Tab> get _allTabs => [
     ..._tabsFor(api.role),
     const _Tab('Profile', Icons.person_outline, ProfileScreen()),
@@ -214,6 +252,7 @@ class _RoleHomeState extends State<RoleHome> {
   void initState() {
     super.initState();
     HomeNav.target.addListener(_onHomeTarget);
+    _restoreTab();
     // I1: a temporary password must be changed first.
     if (api.mustChangePassword) {
       index = _tabsFor(api.role).length; // Profile is the last tab
@@ -285,7 +324,7 @@ class _RoleHomeState extends State<RoleHome> {
               children: [
                 NavigationRail(
                   selectedIndex: index,
-                  onDestinationSelected: (i) => setState(() => index = i),
+                  onDestinationSelected: _selectTab,
                   labelType: NavigationRailLabelType.all,
                   destinations: [
                     for (final tab in tabs)
@@ -304,7 +343,7 @@ class _RoleHomeState extends State<RoleHome> {
           ? null
           : FloatingNavBar(
               selectedIndex: index,
-              onSelected: (i) => setState(() => index = i),
+              onSelected: _selectTab,
               items: [
                 for (final tab in tabs) FloatingNavItem(tab.icon, tab.label),
               ],

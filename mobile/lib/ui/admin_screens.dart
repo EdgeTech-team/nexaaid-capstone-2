@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import 'account_detail_screen.dart';
 import 'account_form.dart' show AccountsScreen;
-import 'copyable_phone.dart';
 import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
 import 'widgets.dart';
+import 'pending_items.dart';
 import 'entry_report_views.dart';
 import 'home_nav.dart';
 
@@ -35,6 +35,8 @@ class AdminDashboard extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            const PendingItemsCard(), // F-15
+
             PageHeader('Administrator Dashboard', subtitle: roleLine()),
             StatGrid([
               StatTile(
@@ -76,13 +78,9 @@ class AdminDashboard extends StatelessWidget {
                 // Records > Donations: every entry with filters and sort.
                 onTap: () => HomeNav.go(context, const HomeTarget('Records')),
               ),
-              StatTile(
-                'Held donations',
-                '${m['held_donations']}',
-                Icons.pause_circle_outline,
-                color: const Color(0xFFC62828),
-                onTap: () => openHeldDonations(context),
-              ),
+              // 9.1 (testing, Oct 19): "Held donations" removed. It is not
+              // in the manuscript; held donations are in Records > Needs
+              // attention > On Hold.
             ]),
             const SectionTitle('Donation entries per report'),
             EntrySummaryList(entries),
@@ -210,6 +208,7 @@ class _UsersScreenState extends State<UsersScreen> {
   String role = '';
   String q = '';
   late String status = widget.status;
+  int reloads = 0; // bumped after an account is deleted, so the list reloads
 
   /// For a deactivated account, a labeled line with the reason the
   /// Administrator gave (or a note when none was recorded).
@@ -232,7 +231,7 @@ class _UsersScreenState extends State<UsersScreen> {
           },
         ),
       ],
-      key: ValueKey('$status|$role|$q'),
+      key: ValueKey('$status|$role|$q|$reloads'),
       builder: (context, data) {
         final users = (data[0] as List).cast<Map>();
         return ListView(
@@ -242,7 +241,7 @@ class _UsersScreenState extends State<UsersScreen> {
               'All accounts',
               subtitle:
                   'Active and deactivated accounts. Tap one to see its '
-                  'details, edit it, deactivate it or activate it again.',
+                  'details, edit it, deactivate it, restore it or delete it.',
             ),
             TextField(
               decoration: const InputDecoration(
@@ -330,12 +329,15 @@ class _UsersScreenState extends State<UsersScreen> {
                     '${_reasonLine(u)}',
                   ),
                   isThreeLine: true,
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) =>
-                          AccountDetailScreen(userId: u['user_id'] as int),
-                    ),
-                  ),
+                  onTap: () async {
+                    final deleted = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            AccountDetailScreen(userId: u['user_id'] as int),
+                      ),
+                    );
+                    if (deleted == true && mounted) setState(() => reloads++);
+                  },
                   // UC-A1: tap the row for details, Edit details and
                   // Deactivate (account_detail_screen.dart).
                   trailing: const Icon(Icons.chevron_right),
@@ -759,92 +761,111 @@ class _OrgDocument extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Appendix H 2.2: barangay reps see the CSWS Disaster Unit's phone number so
-// they can send the emergency SMS report from their own phone. The number is
-// copy-only: the app never opens the dialer or the SMS app.
+// UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
 // ---------------------------------------------------------------------------
-class DisasterUnitContactCard extends StatefulWidget {
-  const DisasterUnitContactCard({super.key});
-
-  @override
-  State<DisasterUnitContactCard> createState() =>
-      _DisasterUnitContactCardState();
+/// 9.7: the donations behind a Barangay dashboard card. [empty] says, in
+/// plain words, what will show here and when.
+void _openBarangayDonations(
+  BuildContext context,
+  String title,
+  List<Map> donations, {
+  required IconData icon,
+  required String empty,
+}) {
+  Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: donations.isEmpty
+            ? Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: EmptyView(
+                    icon: icon,
+                    title: 'Nothing here yet',
+                    message: empty,
+                  ),
+                ),
+              )
+            : _BarangayDonationList(donations: donations),
+      ),
+    ),
+  );
 }
 
-class _DisasterUnitContactCardState extends State<DisasterUnitContactCard> {
-  late final Future<ApiResult> _future = api.get('/contacts/disaster-unit');
+class _BarangayDonationList extends StatelessWidget {
+  final List<Map> donations;
+  const _BarangayDonationList({required this.donations});
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    return FutureBuilder<ApiResult>(
-      future: _future,
-      builder: (context, snap) {
-        final res = snap.data;
-        if (res == null || !res.ok || res.json is! List) {
-          return const SizedBox.shrink();
-        }
-        final contacts = (res.json as List).cast<Map>();
-        return Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: Breakpoints.contentMax),
+        child: ListView(
+          padding: Space.page,
+          children: [
+            Text(
+              '${donations.length} '
+              '${donations.length == 1 ? 'donation' : 'donations'}',
+              style: t.titleMedium,
+            ),
+            Gaps.v12,
+            for (final d in donations) ...[
+              AppCard(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.sms_outlined, size: 18, color: cs.primary),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'Emergency SMS report: CSWS Disaster Unit',
-                        style: TextStyle(fontWeight: FontWeight.w700),
+                    CircleAvatar(
+                      radius: 20,
+                      backgroundColor: cs.primaryContainer,
+                      child: Icon(
+                        Icons.inventory_2_outlined,
+                        size: 20,
+                        color: cs.onPrimaryContainer,
                       ),
                     ),
+                    Gaps.h12,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${d['quantity']} ${d['item_name']}',
+                            style: t.titleSmall,
+                          ),
+                          Gaps.v4,
+                          Text(
+                            '${d['report_label']}',
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                          Text(
+                            '${d['qr_reference']}',
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Gaps.h8,
+                    StatusChip('${d['status']}'),
                   ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Tap the number to copy it, then send your report from your phone\'s messaging app.',
-                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
-                ),
-                const SizedBox(height: 8),
-                if (contacts.isEmpty)
-                  Text(
-                    'No Disaster Unit contact number is available yet.',
-                    style: TextStyle(color: cs.onSurfaceVariant),
-                  ),
-                for (final c in contacts)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('${c['name']}'),
-                        CopyablePhone(
-                          number: '${c['contact_number']}',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: cs.primary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        );
-      },
+              ),
+              Gaps.v12,
+            ],
+          ],
+        ),
+      ),
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// UC-B2 / manuscript 7.6 Barangay Receiving dashboard (assigned barangay)
-// ---------------------------------------------------------------------------
 class BarangayDashboard extends StatelessWidget {
   const BarangayDashboard({super.key});
 
@@ -863,30 +884,59 @@ class BarangayDashboard extends StatelessWidget {
               'Barangay ${m['barangay'] ?? ''} Dashboard',
               subtitle: roleLine(),
             ),
-            // Appendix H 2.2: Disaster Unit phone number for the emergency SMS.
-            const DisasterUnitContactCard(),
+            // 9.7 (testing): each card opens the donations behind it; Aid
+            // acknowledged goes to the Incoming aid tab.
             StatGrid([
               StatTile(
                 'Donations linked to our reports',
                 '${m['donations_linked']}',
                 Icons.volunteer_activism_outlined,
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Donations linked to our reports',
+                  donations,
+                  icon: Icons.volunteer_activism_outlined,
+                  empty:
+                      "When donors give to your barangay's reports, their "
+                      'donations show here.',
+                ),
               ),
               StatTile(
                 'Waiting for CMO acknowledgement',
                 '${m['pending_city_confirmation']}',
                 Icons.hourglass_top,
                 color: const Color(0xFFEF6C00),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Waiting for CMO acknowledgement',
+                  donations.where((d) => d['status'] == 'Received').toList(),
+                  icon: Icons.hourglass_top,
+                  empty:
+                      'Donations that CSWS received for your barangay show '
+                      "here until the City Mayor's Office acknowledges them.",
+                ),
               ),
               StatTile(
                 'Acknowledged by CMO',
                 '${m['confirmed']}',
                 Icons.verified_outlined,
                 color: const Color(0xFF2E7D32),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Acknowledged by CMO',
+                  donations.where((d) => d['status'] == 'Confirmed').toList(),
+                  icon: Icons.verified_outlined,
+                  empty:
+                      "Donations the City Mayor's Office has acknowledged "
+                      'show here.',
+                ),
               ),
               StatTile(
                 'Aid acknowledged',
                 '${m['acknowledged']}',
                 Icons.task_alt,
+                onTap: () =>
+                    HomeNav.go(context, const HomeTarget('Incoming aid')),
               ),
             ]),
             const SectionTitle('Fulfillment per report'),

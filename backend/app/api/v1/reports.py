@@ -33,23 +33,28 @@ CHANGE LOG
   Row-building moved into _to_monitoring() so the detail, /monitoring and
   /validated endpoints all build the same shape.
 - SMS reporting, manuscript-aligned (claude/sms-reporting-decision.md):
-  * POST /reports/sms is now Administrator-only (UC-A3 alt 8a, UC-CD1 alt
+  * POST /reports/sms is Administrator-only (UC-A3 alt 8a, UC-CD1 alt
     11b, Scope 2.4: the Disaster Unit SENDS the SMS, the Administrator
-    reviews and ENCODES it). Was CSWS Disaster Unit.
+    reviews and ENCODES it). Oct 12 it moved to the Disaster Unit (the
+    Barangay Rep sent the SMS); Oct 15 (team) it is back to the manuscript.
+  * The report is filed under the Disaster Unit member whose number sent
+    the SMS, so they get the "validated" notice and can follow it.
   * Scope 2.4: when an SMS report is validated, every registered user is
     notified, not only the usual recipients.
 """
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timezone
-from core.priority_engine import compute_priority
+from core.priority_engine import apply_priority
+from services.fulfillment import progress as needs_progress, recalculate as recalculate_fulfillment, set_needs
+from services.items import resolve_item_id
 
 from core.database import get_db
-from core.auth import get_current_user, require_role, has_role, barangay_scope
+from core.auth import get_current_user, get_current_user_optional, require_role, has_role, barangay_scope, can_view_unvalidated_report
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from models.sitio_model import Sitio
@@ -200,6 +205,17 @@ def _apply_sitios(db: Session, report: DisasterReport, sitio_id, sitio_ids) -> N
     report.sitio_id = ids[0] if ids else None
 
 
+def _save_needs(db: Session, report: DisasterReport, needs, estimated_quantity) -> None:
+    """Per-item needs (Oct 2026). needs = list from newer apps; without it
+    estimated_quantity becomes one "General needs" line (older apps, SMS)."""
+    set_needs(db, report, needs, estimated_quantity,
+              lambda item_id, name, unit: resolve_item_id(db, item_id, name, unit))
+
+
+def _needs_log(report: DisasterReport) -> list:
+    return [{"item_id": n.item_id, "quantity": n.quantity} for n in report.needs]
+
+
 # ---------------------------------------------------------------------------
 # Create — any authenticated reporter (citizen / barangay official / staff)
 # ---------------------------------------------------------------------------
@@ -207,14 +223,17 @@ def _apply_sitios(db: Session, report: DisasterReport, sitio_id, sitio_ids) -> N
 def create_report(
     payload: DisasterReportCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+    # Appendix H 2.1 / UC-CD1: only the CSWS Disaster Unit submits reports
+    # (Oct 17 run-through: any logged-in account could before).
+    current_user=Depends(require_role("csws_disaster_unit")),
 ):
     report = DisasterReport(
-        **payload.model_dump(exclude={"sitio_ids"}), user_id=current_user.user_id
+        **payload.model_dump(exclude={"sitio_ids", "needs"}), user_id=current_user.user_id
     )
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()   # get report.report_id before commit (commit happens in get_db)
+    _save_needs(db, report, payload.needs, payload.estimated_quantity)
     db.refresh(report)
 
     _notify_new_report(db, report, current_user.user_id)
@@ -236,7 +255,7 @@ def list_reports(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
-    query = db.query(DisasterReport)
+    query = db.query(DisasterReport).filter(DisasterReport.deleted_at.is_(None))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
         query = query.filter(DisasterReport.barangay_id == own_barangay)
@@ -272,7 +291,11 @@ def list_report_monitoring(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
-    query = db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
+    query = (
+        db.query(DisasterReport)
+        .options(joinedload(DisasterReport.fulfillment))
+        .filter(DisasterReport.deleted_at.is_(None))
+    )
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
         query = query.filter(DisasterReport.barangay_id == own_barangay)
@@ -308,7 +331,7 @@ def list_validated_reports(
     query = (
         db.query(DisasterReport)
         .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.status == "Validated")
+        .filter(DisasterReport.status == "Validated", DisasterReport.deleted_at.is_(None))
     )
     if barangay_id:
         query = query.filter(DisasterReport.barangay_id == barangay_id)
@@ -337,15 +360,22 @@ def my_reports(
     query = (
         db.query(DisasterReport)
         .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.user_id == current_user.user_id)
+        .filter(DisasterReport.user_id == current_user.user_id,
+                DisasterReport.deleted_at.is_(None))
     )
     return _monitoring_rows(query, 0, 200)
 
 
-def _own_open_report(db: Session, report_id: int, user, action: str) -> DisasterReport:
+def _get_live_report(db: Session, report_id: int) -> DisasterReport:
+    """The report, or 404 when it does not exist or was deleted (testing 2.3)."""
     report = db.get(DisasterReport, report_id)
-    if not report:
+    if not report or report.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Report not found")
+    return report
+
+
+def _own_open_report(db: Session, report_id: int, user, action: str) -> DisasterReport:
+    report = _get_live_report(db, report_id)
     if report.user_id != user.user_id:
         raise HTTPException(status_code=403, detail=f"You can only {action} reports you submitted")
     if report.status not in _EDITABLE_REPORT:
@@ -367,20 +397,23 @@ def edit_my_report(
     """Correct a report before validation. A rejected report that is
     corrected goes back to the Administrator as Pending."""
     report = _own_open_report(db, report_id, current_user, "edit")
-    before = {k: getattr(report, k) for k in payload.model_dump()}
+    fields = payload.model_dump(exclude={"needs"})
+    before = {k: getattr(report, k) for k in fields}
     before["status"] = report.status
-    for field, value in payload.model_dump(exclude={"sitio_ids"}).items():
+    before["needs"] = _needs_log(report)
+    for field, value in payload.model_dump(exclude={"sitio_ids", "needs"}).items():
         setattr(report, field, value)
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
+    _save_needs(db, report, payload.needs, payload.estimated_quantity)
     resubmitted = report.status == "Rejected"
     if resubmitted:
         report.status = "Pending"
         report.rejection_reason = None
         report.validated_by = None
     log_action(db, current_user, "EDIT REPORT", "disaster_reports", report.report_id,
-               old={k: (str(v) if v is not None else None) for k, v in before.items()},
-               new={**{k: (str(v) if v is not None else None) for k, v in payload.model_dump().items()},
-                    "status": report.status})
+               old={k: (v if k == "needs" else str(v) if v is not None else None) for k, v in before.items()},
+               new={**{k: (str(v) if v is not None else None) for k, v in fields.items()},
+                    "needs": _needs_log(report), "status": report.status})
     if resubmitted:
         # Back in the validation queue, so the Administrators hear about it.
         _notify_new_report(db, report, current_user.user_id)
@@ -404,6 +437,9 @@ def withdraw_my_report(
     reason = (payload.reason or "").strip() if payload else ""
     log_action(db, current_user, "WITHDRAW REPORT", "disaster_reports", report.report_id,
                old={"status": old}, new={"status": "Cancelled", "reason": reason or None})
+    # It leaves the Administrators' validation queue: tell them why it went.
+    notify_event_many(db, user_ids_with_role(db, ["Administrator"]), "report_withdrawn",
+                      "report", report.report_id, title=f"Report #{report.report_id}")
     db.flush()
     db.refresh(report)
     return report
@@ -423,15 +459,20 @@ def get_report(
     report = (
         db.query(DisasterReport)
         .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.report_id == report_id)
+        .filter(DisasterReport.report_id == report_id,
+                DisasterReport.deleted_at.is_(None))
         .first()
     )
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
 
-    # Reporters can see their own report; staff can see any; every logged-in
-    # role can open a validated report (same rule as GET /reports/validated),
-    # so donors, the CMO and others can open it from their notification.
+      # Every logged-in role can open a validated report (same rule as GET
+    # /reports/validated), so donors, the CMO and others can open it from
+    # their notification. Any other status: core.auth.can_view_unvalidated_report
+    # (F-05: a barangay rep only in its own barangay).
+    if report.status != "Validated" and not can_view_unvalidated_report(current_user, report):
+        raise HTTPException(status_code=403, detail="Not authorized to view this report")
+
     is_owner = report.user_id == current_user.user_id
     is_staff = has_role(current_user, "csws_staff", "admin", "barangay_official")
     is_validated = report.status == "Validated"
@@ -442,22 +483,83 @@ def get_report(
 
 
 # ---------------------------------------------------------------------------
-# Update — staff only (status, priority, AI fields, corrections)
+# Per-item fulfillment (Oct 2026): for every need of the report, how much is
+# pledged, confirmed by the CMO ("in stock") and delivered (barangay
+# receipt, the official figure), each capped at 100%. Validated reports
+# are public like the rest of the transparency data; others follow the
+# same rule as GET /reports/{id}.
+# ---------------------------------------------------------------------------
+@router.get("/{report_id}/needs")
+def report_needs_progress(
+    report_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_optional),
+):
+    report = _get_live_report(db, report_id)
+    if report.status != "Validated" and not can_view_unvalidated_report(current_user, report):
+        raise HTTPException(status_code=404, detail="Report not found")   # F-05
+
+    return needs_progress(db, report)
+
+
+# ---------------------------------------------------------------------------
+# Corrections — Administrator only (description, families, needs, ...).
+# F-07: the status is not changed here (validate / reject / withdraw /
+# delete do that, with their own checks, records and notices), and every
+# correction is written to the audit log.
 # ---------------------------------------------------------------------------
 @router.patch("/{report_id}", response_model=DisasterReportResponse)
 def update_report(
     report_id: int,
     payload: DisasterReportUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin")),
+    # Administrator only (Oct 17 run-through). Reporters correct reports
+    # with PUT /{id}/mine.
+    current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = _get_live_report(db, report_id)
 
     updates = payload.model_dump(exclude_unset=True)
+    needs = updates.pop("needs", None)
+    old = {k: getattr(report, k) for k in updates}     # F-07: for the audit log
+    old_needs = _needs_log(report)
+    old_priority = report.priority_level
     for field, value in updates.items():
         setattr(report, field, value)
+
+    # Per-item needs (Oct 2026). A needs list replaces them; a new
+    # estimated_quantity alone only changes an older report's "General
+    # needs" line (it is ignored when the report has per-item needs).
+    needs_changed = False
+    if needs is not None:
+        _save_needs(db, report, payload.needs, None)
+        needs_changed = True
+    elif "estimated_quantity" in updates and all(n.item_id is None for n in report.needs):
+        _save_needs(db, report, None, updates["estimated_quantity"])
+        needs_changed = True
+
+    # Weak spot 5: changing what the report needs (or its families / type)
+    # after validation must move fulfillment and priority with it. Priority
+    # itself cannot be set here (schemas/report.py, testing #5).
+    affects_priority = needs_changed or {"affected_families", "disaster_type_id"} & set(updates)
+    if report.status == "Validated" and affects_priority:
+        if needs_changed and report.fulfillment is not None:
+            recalculate_fulfillment(db, report.report_id, None)
+            db.refresh(report)
+        apply_priority(report)
+
+    # F-07: who changed what, and what it was before.
+    if updates or needs_changed:
+        def plain(v):
+            return str(v) if v is not None else None
+        old_log = {k: plain(v) for k, v in old.items()}
+        new_log = {k: plain(v) for k, v in updates.items()}
+        if needs_changed:
+            old_log["needs"], new_log["needs"] = old_needs, _needs_log(report)
+        if report.priority_level != old_priority:
+            old_log["priority_level"], new_log["priority_level"] = old_priority, report.priority_level
+        log_action(db, current_user, "UPDATE REPORT", "disaster_reports", report.report_id,
+                   old=old_log, new=new_log)
 
     db.flush()
     db.refresh(report)
@@ -474,13 +576,20 @@ def validate_report(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = _get_live_report(db, report_id)
     if report.status == "Validated":
         raise HTTPException(status_code=400, detail="Report is already validated")
     if report.status == "Cancelled":
         raise HTTPException(status_code=409, detail="The reporter withdrew this report")
+    # UC-A3 7a / priority module 1a: no priority guidance can be computed
+    # without data, so the report is corrected first (reject it with a
+    # reason; the Disaster Unit fixes it and it comes back).
+    if not (report.affected_families or report.estimated_quantity or report.assistance_needed):
+        raise HTTPException(
+            status_code=422,
+            detail="This report has no affected families, assistance needed or quantity, so "
+                   "priority guidance cannot be computed. Reject it so the Disaster Unit can complete it.",
+        )
 
     report.status = "Validated"
     report.validated_by = current_user.user_id
@@ -503,19 +612,11 @@ def validate_report(
     # Flush so the newly-created fulfillment row is available
     # through report.fulfillment before priority is computed.
     db.flush()
+    # Per-item needs: totals and percentage from report_needs (0% now).
+    recalculate_fulfillment(db, report_id, None)
     db.refresh(report)
 
-    priority_result = compute_priority(report)
-
-    VALID_LEVELS = ("Low", "Medium", "High", "Critical")
-    level = priority_result["priority_level"]
-
-    report.ai_priority_score = priority_result["score"]
-    # "Needs Review" / "Review Required" violate chk_disaster_reports_priority,
-    # so store NULL and keep the reason in ai_recommendation.
-    report.priority_level = level if level in VALID_LEVELS else None
-    report.ai_recommendation = priority_result["recommendation"]
-    report.ai_processed_at = datetime.now(timezone.utc)
+    apply_priority(report)
     log_action(db, current_user, "VALIDATE REPORT", "disaster_reports", report.report_id,
                old={"status": "Pending"},
                new={"status": "Validated", "priority_level": report.priority_level})
@@ -549,9 +650,7 @@ def reject_report(
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
+    report = _get_live_report(db, report_id)
     if report.status == "Cancelled":
         raise HTTPException(status_code=409, detail="The reporter withdrew this report")
 
@@ -572,24 +671,59 @@ def reject_report(
 
 
 # ---------------------------------------------------------------------------
-# Delete — admin only
+# Delete — admin only, Rejected reports only (testing 2.3).
+# A soft delete: the row stays (with who rejected it and why) so the audit
+# trail survives, and every list and count hides it from now on.
 # ---------------------------------------------------------------------------
 @router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_report(
     report_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user=Depends(require_role("admin")),
 ):
-    report = db.get(DisasterReport, report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    db.delete(report)
+    report = _get_live_report(db, report_id)
+    if report.status != "Rejected":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Only rejected reports can be deleted. This one is {report.status}.",
+        )
+    report.deleted_at = datetime.now(timezone.utc)
+    report.deleted_by_user_id = current_user.user_id
+    log_action(db, current_user, "DELETE REPORT", "disaster_reports", report.report_id,
+               old={"status": report.status, "rejection_reason": report.rejection_reason},
+               new={"deleted": True}, request=request)
+    db.flush()
     return None
 
 
 # ---------------------------------------------------------------------------
-# SMS ingestion — staff encodes an incoming SMS into report + metadata
+# SMS ingestion — the Administrator encodes an incoming SMS into report + metadata
 # ---------------------------------------------------------------------------
+def _phone_key(number: Optional[str]) -> str:
+    """'+63 917-123-4567' and '09171234567' -> '9171234567'."""
+    digits = "".join(ch for ch in (number or "") if ch.isdigit())
+    return digits[-10:]
+
+
+def _disaster_unit_member(db: Session, number: Optional[str]):
+    """The active Disaster Unit member whose profile number sent the SMS,
+    or None (the report is then filed under the encoding Administrator)."""
+    from models.role_model import Role
+    from models.user_rbac_model import User
+
+    key = _phone_key(number)
+    if len(key) < 10:
+        return None
+    rows = (
+        db.query(User)
+        .join(Role, Role.role_id == User.role_id)
+        .filter(Role.role_name == "CSWS Disaster Unit", User.is_active.is_(True))
+        .order_by(User.user_id)
+        .all()
+    )
+    return next((u for u in rows if _phone_key(u.contact_number) == key), None)
+
 @router.post(
     "/sms",
     response_model=SmsReportIngestResponse,
@@ -598,18 +732,23 @@ def delete_report(
 def ingest_sms_report(
     payload: SmsReportIngest,
     db: Session = Depends(get_db),
-    # Oct 12 team decision (claude/sms-reporting-decision.md): the Barangay
-    # Receiving Representative, offline, SENDS the structured SMS to the CSWS
-    # Disaster Unit; the Disaster Unit reviews and ENCODES it here as its own
-    # report (source "SMS"); the Administrator validates it as usual
-    # (Scope 2.2). The rep never creates a report in the system (Scope 1.3).
-    current_user=Depends(require_role("csws_disaster_unit")),
+    # Scope 2.4, UC-A3 alt 8a, UC-CD1 alt 11b (Oct 15 team, back to the
+    # manuscript): the CSWS Disaster Unit, offline, SENDS the structured SMS
+    # to the Administrators; an Administrator reviews and ENCODES it here
+    # (source "SMS"). It then waits in the validation queue as Pending.
+    current_user=Depends(require_role("admin")),
 ):
-    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids"})
-    report = DisasterReport(**report_fields, user_id=current_user.user_id, source="SMS")
+    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids", "needs"})
+    sender = _disaster_unit_member(db, payload.contact_number)
+    report = DisasterReport(
+        **report_fields,
+        user_id=sender.user_id if sender else current_user.user_id,
+        source="SMS",
+    )
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()  # need report.report_id for the metadata FK
+    _save_needs(db, report, payload.needs, payload.estimated_quantity)
 
     sms_meta = SmsReportMetadata(
         report_id=report.report_id,
@@ -622,6 +761,7 @@ def ingest_sms_report(
     db.refresh(report)
     db.refresh(sms_meta)
 
+    # The other Administrators and both CSWS offices hear of the new report.
     _notify_new_report(db, report, current_user.user_id)
 
     return SmsReportIngestResponse(report=report, sms_metadata=sms_meta)

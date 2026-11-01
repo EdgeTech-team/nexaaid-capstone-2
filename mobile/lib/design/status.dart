@@ -71,6 +71,13 @@ abstract final class StatusColors {
   /// Every status the palette knows, for the component gallery.
   static Iterable<String> get known => _map.keys;
 
+  /// Words shown for a status when they differ from the stored value
+  /// (testing #17: the delivery status "Preparing" is shown as "Active").
+  static const Map<String, String> _labels = {'preparing': 'Active'};
+
+  static String label(String? status) =>
+      _labels[(status ?? '').trim().toLowerCase()] ?? (status ?? 'Unknown');
+
   static ToneStyle of(String? status, Brightness b) {
     final e = _map[(status ?? '').trim().toLowerCase()];
     return ToneStyle.from(e?.$1 ?? _slate, e?.$2 ?? Icons.circle_outlined, b);
@@ -111,10 +118,11 @@ abstract final class PriorityColors {
 }
 
 /// Donation status timeline for donor and org dashboards (adviser item 10).
+/// Oct 25: no "Acknowledged by CMO" step. That is an internal check the
+/// donor cannot act on; for them an acknowledged donation is received.
 const donationLifecycle = [
   'Pending',
   'Received',
-  'Confirmed',
   'In Transit',
   'Delivered',
   'Acknowledged',
@@ -123,7 +131,6 @@ const donationLifecycle = [
 const donationLifecycleLabels = [
   'Pledged',
   'Received by CSWS',
-  'Acknowledged by CMO',
   'In transit',
   'Delivered',
   'Barangay confirmed',

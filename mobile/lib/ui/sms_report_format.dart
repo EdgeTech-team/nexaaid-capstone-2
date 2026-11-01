@@ -1,8 +1,8 @@
 /// Concerns2.txt (Module 2, SMS reporting): ONE shared SMS format.
 ///
-/// - Barangay Representative (offline): fills a small form, the app builds
+/// - CSWS Disaster Unit (offline): fills a small form, the app builds
 ///   the text with [SmsReport.toMessage] and opens the phone's SMS app.
-/// - CSWS Disaster Unit: pastes the received text, [SmsReport.parse] reads
+/// - Administrator: pastes the received text, [SmsReport.parse] reads
 ///   it back and fills the "Encode SMS Report" form (UC-CD1 alt flow 11b:
 ///   structured SMS report).
 ///

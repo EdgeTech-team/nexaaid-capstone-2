@@ -13,9 +13,10 @@ from schemas.logistics_request_schema import (
     SubmitLogisticsRequest, SubmitPickupLogisticsRequest, LogisticsRequestResponse,
 )
 from schemas.physical_donation_schema import (
-    MANILA, decode_pickup_days, pickup_days_label, pickup_rules,
+    MANILA, decode_pickup_dates, decode_pickup_days, pickup_dates_label,
+    pickup_days_label, pickup_rules,
 )
-from core.notifications import notify_event_many, user_ids_with_role
+from core.notifications import logistics_team_ids, notify_event_many
 
 router = APIRouter(prefix="/logistics", tags=["logistics"])
 
@@ -36,8 +37,13 @@ def submit_logistics_request(
     delivery = db.get(Delivery, payload.delivery_id)
     if delivery is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
-    if delivery.status in ("Delivered", "Confirmed", "Cancelled"):
-        raise HTTPException(status_code=409, detail=f"Delivery is already {delivery.status}")
+    # Testing feedback (Oct 20): transport is asked for while the goods are
+    # still being prepared, not once the truck has left.
+    if delivery.status != "Preparing":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Delivery is already {delivery.status}. Ask DRRMO for transport while it is still Preparing.",
+        )
     open_request = (
         db.query(LogisticsRequest)
         .filter(LogisticsRequest.delivery_id == delivery.delivery_id,
@@ -52,6 +58,9 @@ def submit_logistics_request(
         request_type="Delivery",
         delivery_id=delivery.delivery_id,
         requested_by_user_id=current_user.user_id,
+        # Testing fix 7.4: Main Office schedules. The truck is needed on the
+        # delivery date Main Office chose; DRRMO does not pick a date.
+        scheduled_date=delivery.delivery_date,
         notes=payload.needs_text(),   # I4: "Needs 2 trucks, 2 drivers, 3 volunteers"
     )
     db.add(logistics_request)
@@ -59,7 +68,7 @@ def submit_logistics_request(
     log_action(db, current_user, "REQUEST LOGISTICS SUPPORT", "logistics_requests",
                logistics_request.request_id,
                new={"delivery_id": delivery.delivery_id, "needs": logistics_request.notes})
-    notify_event_many(db, user_ids_with_role(db, ["DRRMO Logistics Support"]),
+    notify_event_many(db, logistics_team_ids(db, exclude_user_id=current_user.user_id),
                       "logistics_requested", "logistics_request",
                       logistics_request.request_id, title=f"delivery #{delivery.delivery_id}")
 
@@ -103,14 +112,23 @@ def submit_pickup_request(
         lines = by_ref.get(ref)
         if not lines:
             raise HTTPException(status_code=404, detail=f"No donation with reference {ref}.")
-        first = lines[0]
+        # Oct 23 (approved by Daniel): the pickup details of the items still
+        # waiting, not of the first item (which the donor may have removed).
+        first = next((l for l in lines if l.status == "Pending"), lines[0])
         where = f" (near {first.pickup_landmark})" if first.pickup_landmark else ""
         if first.handover_method != "Door to Door":
             raise HTTPException(status_code=409, detail=f"{ref} is a Drop Off donation, not a pickup.")
         if not any(l.status == "Pending" for l in lines):
             raise HTTPException(status_code=409, detail=f"{ref}{where} has nothing left to collect.")
+        dates = decode_pickup_dates(first.pickup_dates)
+        if dates and day not in dates:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{ref}{where} is not available on {weekday}, {day.strftime('%b')} {day.day}. "
+                       f"The donor chose {pickup_dates_label(first.pickup_dates)}.",
+            )
         days = decode_pickup_days(first.pickup_days)
-        if days and day.isoweekday() not in days:
+        if not dates and days and day.isoweekday() not in days:
             raise HTTPException(
                 status_code=409,
                 detail=f"{ref}{where} is not available on {weekday}. "
@@ -141,7 +159,7 @@ def submit_pickup_request(
     log_action(db, current_user, "REQUEST PICKUP LOGISTICS SUPPORT", "logistics_requests",
                req.request_id,
                new={"pickup_date": day.isoformat(), "stops": payload.batch_references, "needs": needs})
-    notify_event_many(db, user_ids_with_role(db, ["DRRMO Logistics Support"]),
+    notify_event_many(db, logistics_team_ids(db, exclude_user_id=current_user.user_id),
                       "logistics_requested", "logistics_request", req.request_id, title=req.title)
     db.commit()
     db.refresh(req)

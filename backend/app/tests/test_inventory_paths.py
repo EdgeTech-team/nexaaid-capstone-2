@@ -7,7 +7,7 @@ One regression test per code path that sets physical_donations.status to
 Received / Confirmed or inserts received_goods:
   POST /donations/receive                 (CSWS, UC-CM1)       -> adds stock
   POST /cmo/donations/{id}/confirm        (CMO, UC-C1)          -> stock unchanged
-  POST /cmo/donations/{id}/revert         (CMO, UC-C1 alt 4a)   -> stock unchanged
+(The CMO undo, /cmo/donations/{id}/revert, was removed in task #10.)
 plus: receive is atomic, and scripts/rebuild_inventory.py.
 """
 from datetime import datetime
@@ -121,8 +121,6 @@ def test_confirm_paths_do_not_change_stock(api):
                    json={"status": "On Hold", "notes": "check"}), 201)              # CMO hold
     ok(client.post(f"/cmo/donations/{b}/confirm", headers=t["cmo"],
                    json={"status": "Confirmed"}), 201)                               # CMO confirm
-    assert _stock(1, rid) == 170
-    ok(client.post(f"/cmo/donations/{b}/revert", headers=t["cmo"]))                  # CMO revert
     assert _stock(1, rid) == 170
 
     db = database.SessionLocal()

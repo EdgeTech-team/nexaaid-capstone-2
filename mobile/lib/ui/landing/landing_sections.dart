@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../design/design.dart';
+import '../needs_progress.dart';
 import '../report_summary_card.dart' show NeedChips;
 import '../theme_toggle.dart';
 import '../widgets.dart' show api;
@@ -816,21 +817,9 @@ class LandingImpactSection extends StatelessWidget {
 
     // Reloads with the rest of the page (pull to refresh).
     final recent = _RecentDeliveriesCard(key: ValueKey(asOf));
-    final cards = wide
-        ? IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(flex: 3, child: recent),
-                Gaps.h16,
-                const Expanded(flex: 2, child: _WhyTrustCard()),
-              ],
-            ),
-          )
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [recent, Gaps.v16, const _WhyTrustCard()],
-          );
+     // Oct 26 redesign: "Why donors trust it" moved to the four trust cards
+    // (LandingTrustCards in landing_v2.dart), so only recent deliveries here.
+    final cards = recent;
 
     return Material(
       color: cs.surfaceContainerLowest,
@@ -1112,7 +1101,8 @@ class _RecentDeliveriesCardState extends State<_RecentDeliveriesCard> {
     );
   }
 }
-
+// Oct 26 redesign: replaced by LandingTrustCards; kept for now.
+// ignore: unused_element
 class _WhyTrustCard extends StatelessWidget {
   const _WhyTrustCard();
 
@@ -1705,6 +1695,9 @@ class LandingReportDetails extends StatelessWidget {
     final guidance = '${r['priority_guidance'] ?? ''}'.trim();
     final description = '${r['description'] ?? ''}'.trim();
     final families = r['affected_families'];
+    // Per-item needs: count the needs, never add kg + L + pcs together.
+    final needCount = (r['needs'] as List?)?.length ?? 0;
+    final reportId = (r['report_id'] ?? r['id']) as num?;
 
     Widget label(String text) => Padding(
       padding: const EdgeInsets.only(top: Space.lg, bottom: Space.xs),
@@ -1761,7 +1754,11 @@ class LandingReportDetails extends StatelessWidget {
               ),
             ),
             Gaps.h8,
-            Expanded(child: _StatBox(_fmt(needed.toInt()), 'items needed')),
+            Expanded(
+              child: needCount > 0
+                  ? _StatBox('$needCount', needCount == 1 ? 'need' : 'needs')
+                  : _StatBox(_fmt(needed.toInt()), 'items needed'),
+            ),
             Gaps.h8,
             Expanded(child: _StatBox('$pct%', 'delivered')),
           ],
@@ -1777,6 +1774,10 @@ class LandingReportDetails extends StatelessWidget {
           percent: percent,
           label: 'Delivered so far',
         ),
+        if (reportId != null) ...[
+          Gaps.v16,
+          NeedsProgress(reportId: reportId.toInt()),
+        ],
         if (description.isNotEmpty) ...[
           label('About this report'),
           Text(description, style: t.bodyMedium),

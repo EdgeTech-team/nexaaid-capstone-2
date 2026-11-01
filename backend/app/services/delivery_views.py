@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
+from models.audit_log_model import AuditLog
 from models.barangay_model import Barangay
 from models.delivery import Delivery, DeliveryItem
 from models.item_model import Item
@@ -101,6 +102,34 @@ def report_labels(db: Session, report_ids) -> dict:
     }
 
 
+STEPS = ("Preparing", "In Transit", "Delivered", "Confirmed")
+
+
+def status_times(db: Session, deliveries: list) -> dict:
+    """delivery_id -> {step: when it last reached that step} (Oct 2026,
+    delivery timestamps). Read from the status history already kept in the
+    audit log, so no new columns and older deliveries have times too.
+    A truck that came back is Preparing again, so its later steps are
+    dropped; a cancelled delivery keeps the steps it reached."""
+    ids = [d.delivery_id for d in deliveries]
+    out = {d.delivery_id: {"Preparing": d.created_at} for d in deliveries}
+    rows = (db.query(AuditLog.entity_id, AuditLog.new_value, AuditLog.timestamp)
+            .filter(AuditLog.entity_type == "deliveries", AuditLog.entity_id.in_(ids))
+            .order_by(AuditLog.log_id).all())
+    for delivery_id, new, at in rows:
+        status = new.get("status") if isinstance(new, dict) else None
+        if status in STEPS:
+            out[delivery_id][status] = at
+    for d in deliveries:
+        times = out[d.delivery_id]
+        if d.status in STEPS:
+            reached = STEPS.index(d.status)
+            out[d.delivery_id] = {s: t for s, t in times.items() if STEPS.index(s) <= reached}
+        elif d.status == "Cancelled" and d.cancelled_at:
+            times["Cancelled"] = d.cancelled_at
+    return out
+
+
 def delivery_views(db: Session, deliveries: list) -> list:
     """Deliveries as dicts with the names people read next to the ids."""
     if not deliveries:
@@ -113,6 +142,7 @@ def delivery_views(db: Session, deliveries: list) -> list:
     item_ids = {i.item_id for d in deliveries for i in d.items}
     items = {i.item_id: i for i in db.query(Item).filter(Item.item_id.in_(item_ids)).all()} if item_ids else {}
     labels = report_labels(db, {d.report_id for d in deliveries})
+    times = status_times(db, deliveries)
     return [
         {
             "delivery_id": d.delivery_id,
@@ -129,6 +159,7 @@ def delivery_views(db: Session, deliveries: list) -> list:
             "stop_order": d.stop_order,
             "cancelled_at": d.cancelled_at,
             "cancel_reason": d.cancel_reason,
+            "status_times": times[d.delivery_id],
             "items": [
                 {
                     "delivery_item_id": i.delivery_item_id,

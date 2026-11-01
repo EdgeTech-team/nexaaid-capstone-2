@@ -14,7 +14,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.audit import log_action
-from core.auth import get_current_user, hash_password, verify_password
+from core.auth import (build_login_response, get_current_user_allow_temporary_password,
+                       hash_password, verify_password)
 from core.database import get_db
 from core.passwords import validate_password_strength
 from models.user_rbac_model import User
@@ -33,7 +34,7 @@ def change_password(
     payload: ChangePasswordRequest,
     request: Request,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user_allow_temporary_password),
 ):
     # 400, not 401: a wrong current password must not log the app out.
     if not verify_password(payload.current_password, user.password_hash):
@@ -58,4 +59,7 @@ def change_password(
                old={"must_change_password": was_temporary},
                new={"must_change_password": False}, request=request)
     db.flush()
-    return {"detail": "Password changed", "must_change_password": False}
+    # F-10: the new hash ends every older token (other devices, a stolen
+    # one). This device carries on with the fresh token sent back here.
+    return {**build_login_response(user), "detail": "Password changed",
+            "must_change_password": False}

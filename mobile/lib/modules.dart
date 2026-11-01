@@ -86,8 +86,8 @@ final modules = <Module>[
     {Roles.admin},
     (_) => const AdminPage(),
   ),
-  
-    Module('Browse validated reports', '3.7 / 3.11', Icons.list_alt_outlined, {
+
+  Module('Browse validated reports', '3.7 / 3.11', Icons.list_alt_outlined, {
     Roles.cswsUnit,
     Roles.admin,
   }, (_) => const ReportListScreen(api: ReportApi())),
@@ -235,8 +235,8 @@ class ProcessReportsPage extends StatelessWidget {
       note:
           'UC-A3: review pending reports, then validate (runs the AI-assisted '
           'priority guidance and publishes it to donors) or reject with a '
-          'reason. SMS reports are encoded by the CSWS Disaster Unit '
-          '(Appendix H 2.2), so the SMS form below is for that role.',
+          'reason. SMS reports the CSWS Disaster Unit texts in are '
+          'encoded here (UC-A3 alt 8a), then validated.',
       children: [
         ApiForm(
           title: 'Pending reports',
@@ -506,7 +506,7 @@ class LogisticsPage extends StatelessWidget {
           button: 'Submit request',
           onSubmit: (v) => _api.post(
             '/logistics/requests',
-                       body: {
+            body: {
               'delivery_id': v.i('delivery_id'),
               'trucks': v.i('trucks'),
               'volunteers': v.i('volunteers'),
@@ -517,7 +517,7 @@ class LogisticsPage extends StatelessWidget {
         ApiForm(
           title: 'Pending requests (DRRMO)',
           subtitle: 'GET /drrmo/requests',
-          button: 'Load', 
+          button: 'Load',
           onSubmit: (_) => _api.get('/drrmo/requests'),
         ),
         ApiForm(

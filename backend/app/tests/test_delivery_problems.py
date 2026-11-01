@@ -4,6 +4,9 @@ truck came back, cancel (goods back to stock), cancel a DRRMO request, and
 DRRMO withdrawing an accepted request. Each keeps a record and tells the
 people affected.
 """
+from datetime import datetime
+
+import api.v1.deliveries as deliveries
 import core.database as database
 from models.logistics_request_model import LogisticsRequest
 from models.notification import Notification
@@ -61,12 +64,14 @@ def test_truck_came_back_then_cancel_returns_stock(api):
     rid = _stocked(client, t, qty=100)
     d = ok(_deliver(client, t, rid, [{"item_id": 1, "quantity": 40}]), 201)["delivery_id"]
     assert _stock(1, rid) == 60
-    ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": d, "trucks": 1, "drivers": 1, "volunteers": 0}), 201)
+    lr = ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": d, "trucks": 1, "drivers": 1, "volunteers": 0}), 201)["request_id"]
 
     # Not on the road yet: nothing to bring back.
     assert client.post(f"/deliveries/{d}/return-to-office", headers=t["csws"],
                        json={"reason": "Truck broke down"}).status_code == 409
-    ok(client.post(f"/deliveries/{d}/advance", headers=t["csws"]))
+    # Advisor (Oct 24): DRRMO's truck, so DRRMO marks it In Transit.
+    ok(client.patch(f"/drrmo/requests/{lr}/accept", headers=t["drrmo"], json={}))
+    ok(client.post(f"/drrmo/requests/{lr}/picked-up", headers=t["drrmo"]))
     # On the road: cannot cancel until it is back.
     r = client.post(f"/deliveries/{d}/cancel", headers=t["csws"], json={"reason": "Road closed"})
     assert r.status_code == 409 and "Truck came back" in r.json()["detail"]
@@ -112,7 +117,7 @@ def test_nothing_changes_after_it_arrived(api):
         assert client.post(f"/deliveries/{d}/{path}", headers=t["csws"], json=body).status_code == 409
 
 
-def test_trip_reschedule_return_and_cancel_one_stop(api):
+def test_trip_reschedule_return_and_cancel_one_stop(api, monkeypatch):
     client, t = api
     a, b = _stocked(client, t), _stocked(client, t, barangay_id=2)
     trip = ok(_trip(client, t, [
@@ -123,7 +128,10 @@ def test_trip_reschedule_return_and_cancel_one_stop(api):
     out = ok(client.post(f"/trips/{tid}/reschedule", headers=t["csws"], json={"delivery_date": LATER}))
     assert len(out["rescheduled_deliveries"]) == 2
     assert ok(client.get(f"/trips/{tid}", headers=t["csws"]))["trip_date"].startswith("2030-01-15")
+    # The truck can't leave before its day (Oct 20 testing feedback).
+    assert client.post(f"/trips/{tid}/start", headers=t["csws"]).status_code == 409
 
+    monkeypatch.setattr(deliveries, "now_utc", lambda: datetime.fromisoformat(LATER))  # the day comes
     ok(client.post(f"/trips/{tid}/start", headers=t["csws"]))
     ok(client.post(f"/trips/{tid}/stops/1/arrived", headers=t["csws"]))      # stop A done
     back = ok(client.post(f"/trips/{tid}/return-to-office", headers=t["csws"],

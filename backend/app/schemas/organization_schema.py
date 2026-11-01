@@ -11,6 +11,7 @@ from core.validators import (
 )
 from schemas.upload_schema import UploadRef
 from schemas.user_schema import clean_name
+from pydantic import ConfigDict
 
 ORGANIZATION_TYPES = (
     "NGO", "Religious", "Civic", "Private/CSR", "Academic", "Government", "Other",
@@ -159,5 +160,4 @@ class OrganizationResponse(BaseModel):
     org_name: str
     status: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

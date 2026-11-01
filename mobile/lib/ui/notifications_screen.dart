@@ -75,10 +75,22 @@ final Map<String, EntityOpener> notificationDestinations = {
   'logistics_request': (c, id, event) async {
     switch (api.role) {
       case Roles.drrmo:
+        // Shared notifications (Oct 23): DRRMO also hears what a teammate
+        // did. The Logistics screen opens the stage the request is in now,
+        // with that request first and outlined (testing, Oct 27); the event
+        // only decides the stage if the request is gone.
         _go(
           c,
           'Logistics',
-          view: event == 'logistics_requested' ? 'Pending' : null,
+          id: id,
+          view: switch (event) {
+            'logistics_requested' => 'Pending',
+            'logistics_accepted' => 'Accepted',
+            'logistics_completed' => 'Completed',
+            'logistics_declined' || 'logistics_withdrawn' => 'Declined',
+            'logistics_cancelled' => 'Cancelled',
+            _ => null,
+          },
         );
       case Roles.cswsMain:
         final r = await api.get('/logistics/requests');
@@ -350,11 +362,6 @@ class ReportSheet extends StatelessWidget {
                       '${report['fulfillment_percentage']}',
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '$delivered of $needed items delivered',
-                    style: t.bodyLarge,
-                  ),
                 ],
               ),
             ),
@@ -480,18 +487,20 @@ class _NotificationBellState extends State<NotificationBell> {
     setState(() => unread = n);
     if (isNew) {
       final note = top!;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text('${note['title'] ?? 'New notification'}'),
-          duration: const Duration(seconds: 6),
-          action: SnackBarAction(
-            label: 'View',
-            onPressed: () async {
-              await openNotification(context, note);
-              _refresh();
-            },
-          ),
-        ),
+      // Testing fix (UI notifications): this was a SnackBar with "View",
+      // which Flutter keeps open until tapped, so "Report validated" never
+      // went away and covered the form. Now a toast at the top with an X
+      // that also closes by itself; "View" still opens it.
+      final message = '${note['message'] ?? ''}'.trim();
+      AppToast.show(
+        context,
+        message.isEmpty ? 'Tap View to open it.' : message,
+        title: '${note['title'] ?? 'New notification'}',
+        kind: ToastKind.info,
+        action: ToastAction('View', () async {
+          await openNotification(context, note);
+          _refresh();
+        }),
       );
     }
   }
@@ -581,12 +590,60 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     _refreshList();
   }
 
+  /// Removes every notification the user has already read (unread stay).
+  Future<void> _deleteRead() async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.delete_outline, color: AppColors.danger),
+        title: const Text('Delete read notifications?'),
+        content: const Text(
+          'Notifications you have already read will be removed for good. '
+          'Unread ones stay.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (yes != true || !mounted) return;
+    await act(
+      context,
+      () => api.delete('/notifications/read'),
+      success: 'Read notifications deleted',
+    );
+    _refreshList();
+  }
+
+  /// Removes one read notification (the trash icon on a read tile).
+  Future<void> _deleteOne(Map<String, dynamic> n) async {
+    await act(
+      context,
+      () => api.delete('/notifications/${n['notification_id']}'),
+      success: 'Notification deleted',
+    );
+    _refreshList();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Notifications'),
         actions: [
+          IconButton(
+            tooltip: 'Delete read',
+            icon: const Icon(Icons.delete_sweep_outlined),
+            onPressed: _deleteRead,
+          ),
           TextButton(
             onPressed: () async {
               await act(
@@ -639,6 +696,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             fontWeight: read ? FontWeight.w500 : FontWeight.w800,
           ),
         ),
+        trailing: read
+            ? IconButton(
+                tooltip: 'Delete',
+                icon: const Icon(Icons.delete_outline, color: Brand.muted),
+                onPressed: () => _deleteOne(n),
+              )
+            : null,
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

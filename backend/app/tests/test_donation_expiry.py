@@ -85,7 +85,7 @@ def test_new_donations_get_a_deadline(api):
 
     slot = _pickup_slot()
     door = _entry(client, t["donor"], rid, handover_method="Door to Door",
-                  pickup_address="1 Test St", preferred_pickup_at=slot.isoformat())
+                  pickup_address="1 Test St, Mandaue City", preferred_pickup_at=slot.isoformat())
     assert utc(_rows(door["batch_reference"])[0].expires_at) == slot.astimezone(UTC) + timedelta(days=7)
 
     rules = ok(client.get("/donations/expiry-rules"))
@@ -156,7 +156,7 @@ def test_door_to_door_expires_after_the_pickup_window(api):
     client, t = api
     rid = _report(client, t)
     e = _entry(client, t["donor"], rid, handover_method="Door to Door",
-               pickup_address="1 Test St", preferred_pickup_at=_pickup_slot().isoformat())
+               pickup_address="1 Test St, Mandaue City", preferred_pickup_at=_pickup_slot().isoformat())
     assert ok(client.get("/donations/pickups", headers=t["csws"]))[0]["expires_label"]
     db = database.SessionLocal()
     try:
@@ -179,9 +179,10 @@ def test_donor_cancels_own_pending_donation(api):
     ok(client.post("/donations/receive", headers=t["csws"],
                    json={"donation_id": first, "actual_quantity": 2}))
 
-    # Someone else's account cannot cancel it; no login and no phone: 401.
+     # Someone else's account cannot cancel it; no login and no phone: 403 (F-17).
     assert client.post(f"/donations/entries/{ref}/cancel", headers=t["unit"], json={}).status_code == 403
-    assert client.post(f"/donations/entries/{ref}/cancel", json={}).status_code == 401
+    assert client.post(f"/donations/entries/{ref}/cancel", json={}).status_code == 403
+
 
     out = ok(client.post(f"/donations/entries/{ref.lower()}/cancel", headers=t["donor"],
                          json={"reason": "I gave the items another way"}))
@@ -197,7 +198,9 @@ def test_donor_cancels_own_pending_donation(api):
 def test_guest_cancels_with_their_phone_number(api):
     client, t = api
     rid = _report(client, t)
-    e = _entry(client, {}, rid, guest_donor={"full_name": "Guest", "contact_number": "0917 123 4567"})
+    e = _entry(client, {}, rid, guest_donor={"full_name": "Guest", "contact_number": "0917 123 4567", "consent": True})
+
+
     ref = e["batch_reference"]
     wrong = client.post(f"/donations/entries/{ref}/cancel", json={"contact_number": "09181234567"})
     assert wrong.status_code == 403

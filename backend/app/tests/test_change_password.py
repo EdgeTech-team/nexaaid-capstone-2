@@ -64,8 +64,11 @@ def test_new_internal_account_must_change_its_temporary_password(api):
 
     res = ok(change(STRONG_PASSWORD, NEW_PASSWORD))
     assert res["must_change_password"] is False
-    # The same session keeps working, and the flag is gone.
+    # F-10: the old token ends; this device carries on with the new one.
+    assert client.get("/auth/me", headers=h).status_code == 401
+    h = {"Authorization": f"Bearer {res['access_token']}"}
     assert ok(client.get("/auth/me", headers=h))["must_change_password"] is False
+
     assert _login(client, STRONG_PASSWORD).status_code == 401
     assert ok(_login(client, NEW_PASSWORD))["user"]["must_change_password"] is False
 

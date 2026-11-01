@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../api.dart';
+//import '../api.dart';
 import 'input_formatters.dart';
 import 'report_screens.dart' show maxAffectedFamilies, maxEstimatedQuantity;
 import 'sitio_picker.dart';
@@ -14,26 +14,40 @@ import 'sms_report_format.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
-// SMS-Based Alternative Reporting (Scope 2.4; Oct 12 team decision,
-// claude/sms-reporting-decision.md).
-// The Barangay Receiving Representative, with no internet, fills this form
-// and sends the report as a text in the structured format
-// (sms_report_format.dart). problema_napud 2.2: "Open SMS app" opens the
-// phone's messaging app with the text already written and EVERY CSWS
-// Disaster Unit number already filled in as recipients; the rep only taps
-// Send. Any Disaster Unit member who receives it pastes it into
-// "Encode SMS" and submits it as the unit's report; the Administrator
-// validates it as usual. The rep does not create a report in the system
-// (Scope 1.3): NexaAid only builds the text.
+// SMS-Based Alternative Reporting (Scope 2.4, UC-A3 alt 8a, UC-CD1 alt
+// 11b; Oct 15 team: back to the manuscript, claude/sms-reporting-decision.md).
+// The CSWS Disaster Unit, with no internet, fills this form and sends the
+// report as a text in the structured format (sms_report_format.dart).
+// "Open SMS app" opens the phone's messaging app with the text already
+// written and EVERY Administrator number already filled in as recipients;
+// the Disaster Unit only taps Send. An Administrator who receives it
+// reviews it and encodes it ("Encode SMS"), then validates it as usual.
+// NexaAid only builds the text here.
 //
-// Works offline: the dropdown lists and the Disaster Unit's SMS numbers are
+// Works offline: the dropdown lists and the Administrators' SMS numbers are
 // saved on the phone every time this screen opens with internet.
+//
+// Draft: what is typed is saved on the phone as it is typed, and comes back
+// after a refresh or restart (also offline). "Clear the form (new report)"
+// empties the form and the saved draft. "Open SMS app" keeps the draft, so
+// a message that was never sent is not lost.
 // ---------------------------------------------------------------------------
 
 const _cacheLookups = 'sms_cache_lookups';
-// v2: the receivers are now the Disaster Unit (v1 held Administrators).
-const _cacheReceivers = 'sms_cache_receivers_unit';
+// v3: the receivers are the Administrators again (v2 held the Disaster
+// Unit, from when the Barangay Rep sent the SMS).
+const _cacheReceivers = 'sms_cache_receivers_admin';
 const _cacheSavedAt = 'sms_cache_saved_at';
+const _cacheDraft = 'sms_draft_v1';
+/// The /lookups lists this screen uses. Only these are kept in memory and in
+/// the offline copy on the phone, so lists of internal records (F-01) are
+/// never saved on the device.
+const _offlineLookupKeys = ['disaster_types', 'barangays', 'sitios', 'items'];
+
+Map<String, dynamic> _offlineLookups(Map source) => {
+  for (final key in _offlineLookupKeys)
+    if (source.containsKey(key)) key: source[key],
+};
 
 class SmsSendScreen extends StatefulWidget {
   const SmsSendScreen({super.key});
@@ -47,6 +61,18 @@ class _NeedLine {
   final itemText = TextEditingController();
   final qty = TextEditingController();
   final unit = TextEditingController();
+
+  bool get isBlank =>
+      item == null &&
+      itemText.text.trim().isEmpty &&
+      qty.text.trim().isEmpty &&
+      unit.text.trim().isEmpty;
+
+  void dispose() {
+    itemText.dispose();
+    qty.dispose();
+    unit.dispose();
+  }
 }
 
 class _SmsSendScreenState extends State<SmsSendScreen> {
@@ -59,11 +85,19 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   bool loading = true;
   bool online = false;
 
-  /// Typed by hand only when no Disaster Unit number is saved yet.
+  SharedPreferences? _prefs;
+
+  /// Draft saving starts only after the saved draft has been put back.
+  bool _draftReady = false;
+
+  /// Changing this rebuilds the form fields (used by "Clear the form").
+  int _epoch = 0;
+
+  /// Typed by hand only when no Administrator number is saved yet.
   final to = TextEditingController();
 
-  /// The Disaster Unit numbers the text goes to: all of them, unless the
-  /// rep leaves some out.
+  /// The Administrator numbers the text goes to: all of them, unless the
+  /// sender leaves some out.
   final picked = <String>{};
   bool _choseReceivers = false;
   String? type, barangay;
@@ -83,6 +117,24 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    for (final c in [
+      to,
+      typeText,
+      barangayText,
+      sitioText,
+      families,
+      details,
+    ]) {
+      c.dispose();
+    }
+    for (final n in needs) {
+      n.dispose();
+    }
+    super.dispose();
+  }
+
   /// Show what is saved on the phone first, then try to refresh it.
   Future<void> _load() async {
     SharedPreferences? prefs;
@@ -90,21 +142,25 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       prefs = await SharedPreferences.getInstance();
       final l = prefs.getString(_cacheLookups);
       final r = prefs.getString(_cacheReceivers);
-      if (l != null) lookups = Map<String, dynamic>.from(jsonDecode(l) as Map);
+      if (l != null) lookups = _offlineLookups(jsonDecode(l) as Map);
       if (r != null) receivers = (jsonDecode(r) as List).cast<Map>();
       savedAt = prefs.getString(_cacheSavedAt);
     } catch (e) {
       debugPrint('SMS screen: could not read saved data: $e');
     }
+    if (!mounted) return;
+    _prefs = prefs;
+    _restoreDraft(prefs);
+    _draftReady = true;
     _pickAllReceivers();
-    if (mounted) setState(() => loading = false);
+    setState(() => loading = false);
 
     try {
       final fresh = await api.lookups().timeout(const Duration(seconds: 8));
       final r = await api
-          .get('/contacts/disaster-unit')
+          .get('/contacts/sms-receivers')
           .timeout(const Duration(seconds: 8));
-      lookups = Map<String, dynamic>.from(fresh);
+      lookups = _offlineLookups(fresh);
       if (r.ok && r.json is List) receivers = (r.json as List).cast<Map>();
       savedAt = DateTime.now().toIso8601String();
       online = true;
@@ -112,10 +168,195 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       await prefs?.setString(_cacheReceivers, jsonEncode(receivers));
       await prefs?.setString(_cacheSavedAt, savedAt!);
       _pickAllReceivers();
+      if (mounted && _reconcileChoices()) _epoch++;
     } catch (_) {
       online = false; // No internet: keep using what is saved.
     }
-    if (mounted) setState(() {});
+    if (mounted) {
+      setState(() {});
+      _saveDraft();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Draft (saved on the phone)
+  // -------------------------------------------------------------------------
+
+  bool get _draftEmpty =>
+      type == null &&
+      barangay == null &&
+      [
+        typeText,
+        barangayText,
+        sitioText,
+        families,
+        details,
+        to,
+      ].every((c) => c.text.trim().isEmpty) &&
+      sitioRows.every((r) => r.isEmpty) &&
+      needs.every((n) => n.isBlank);
+
+  Map<String, dynamic> get _draftJson => {
+    'type': type,
+    'typeText': typeText.text,
+    'barangay': barangay,
+    'barangayText': barangayText.text,
+    'sitioRows': sitioRows,
+    'sitioText': sitioText.text,
+    'families': families.text,
+    'details': details.text,
+    'to': to.text,
+    'needs': [
+      for (final n in needs)
+        {
+          'item': n.item,
+          'itemText': n.itemText.text,
+          'qty': n.qty.text,
+          'unit': n.unit.text,
+        },
+    ],
+  };
+
+  /// Saves what is typed. Called on every change; nothing is saved until the
+  /// old draft has been put back (so it is never overwritten by an empty one).
+  void _saveDraft() {
+    final p = _prefs;
+    if (!mounted || !_draftReady || p == null) return;
+    try {
+      if (_draftEmpty) {
+        unawaited(p.remove(_cacheDraft));
+      } else {
+        unawaited(p.setString(_cacheDraft, jsonEncode(_draftJson)));
+      }
+    } catch (e) {
+      debugPrint('SMS screen: could not save the draft: $e');
+    }
+  }
+
+  /// Puts the saved draft back. A dropdown choice only comes back if it is
+  /// still in the lists saved on the phone; typed text always comes back.
+  void _restoreDraft(SharedPreferences? prefs) {
+    try {
+      final raw = prefs?.getString(_cacheDraft);
+      if (raw == null) return;
+      final d = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      String s(String key) => '${d[key] ?? ''}';
+
+      typeText.text = s('typeText');
+      barangayText.text = s('barangayText');
+      sitioText.text = s('sitioText');
+      families.text = s('families');
+      details.text = s('details');
+      to.text = s('to');
+
+      final t = d['type'] as String?;
+      type = t != null && _namesOf('disaster_types').contains(t) ? t : null;
+      final b = d['barangay'] as String?;
+      barangay = b != null && _namesOf('barangays').contains(b) ? b : null;
+
+      final sitios = _sitiosOf(barangay);
+      final rows = [for (final r in (d['sitioRows'] as List? ?? const [])) '$r']
+          .where((r) => sitios.contains(r))
+          .toList();
+      sitioRows = rows.isEmpty ? [''] : rows;
+
+      final items = _namesOf('items');
+      final lines = <_NeedLine>[];
+      for (final raw in (d['needs'] as List? ?? const [])) {
+        final m = Map<String, dynamic>.from(raw as Map);
+        final n = _NeedLine();
+        final item = m['item'] as String?;
+        n.item = item != null && items.contains(item) ? item : null;
+        n.itemText.text = '${m['itemText'] ?? ''}';
+        n.qty.text = '${m['qty'] ?? ''}';
+        n.unit.text = '${m['unit'] ?? ''}';
+        lines.add(n);
+      }
+      if (lines.isNotEmpty) {
+        for (final n in needs) {
+          n.dispose();
+        }
+        needs
+          ..clear()
+          ..addAll(lines);
+      }
+    } catch (e) {
+      debugPrint('SMS screen: could not read the saved draft: $e');
+    }
+  }
+
+  /// After the lists were refreshed from the server: drop choices that no
+  /// longer exist, and turn text typed while offline into a dropdown choice
+  /// when it matches a name. Returns true if something changed.
+  bool _reconcileChoices() {
+    var changed = false;
+
+    String? fix(String? v, String text, List<String> options) {
+      if (options.isEmpty) return v;
+      if (v != null && options.contains(v)) return v;
+      final t = text.trim().toLowerCase();
+      if (t.isNotEmpty) {
+        for (final o in options) {
+          if (o.toLowerCase() == t) return o;
+        }
+      }
+      return null;
+    }
+
+    final t2 = fix(type, typeText.text, _namesOf('disaster_types'));
+    if (t2 != type) {
+      type = t2;
+      changed = true;
+    }
+    final b2 = fix(barangay, barangayText.text, _namesOf('barangays'));
+    if (b2 != barangay) {
+      barangay = b2;
+      sitioRows = [''];
+      changed = true;
+    }
+    final sitios = _sitiosOf(barangay);
+    if (sitios.isNotEmpty &&
+        sitioRows.any((r) => r.isNotEmpty && !sitios.contains(r))) {
+      final keep = [
+        for (final r in sitioRows)
+          if (sitios.contains(r)) r,
+      ];
+      sitioRows = keep.isEmpty ? [''] : keep;
+      changed = true;
+    }
+    final items = _namesOf('items');
+    for (final n in needs) {
+      final i2 = fix(n.item, n.itemText.text, items);
+      if (i2 != n.item) {
+        n.item = i2;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /// "Clear the form (new report)": empties the form and the saved draft.
+  Future<void> _clearForm() async {
+    setState(() {
+      type = null;
+      barangay = null;
+      sitioRows = [''];
+      typeText.clear();
+      barangayText.clear();
+      sitioText.clear();
+      families.clear();
+      details.clear();
+      to.clear();
+      needs
+        ..clear()
+        ..add(_NeedLine());
+      _epoch++;
+    });
+    try {
+      await _prefs?.remove(_cacheDraft);
+    } catch (e) {
+      debugPrint('SMS screen: could not clear the draft: $e');
+    }
   }
 
   void _pickAllReceivers() {
@@ -250,7 +491,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     if (_recipients.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Choose at least one Disaster Unit number.'),
+          content: Text('Choose at least one Administrator number.'),
         ),
       );
       return false;
@@ -265,6 +506,8 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     return true;
   }
 
+  /// Opens the messaging app. The draft is kept on purpose: if the message
+  /// is not sent, nothing is lost.
   Future<void> _openSmsApp() async {
     if (!_check()) return;
     final ok = await launchUrl(smsUri(_recipients, _report.toMessage()))
@@ -274,7 +517,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
         const SnackBar(
           content: Text(
             'Could not open the messaging app. Type the text above in a '
-            'new message to the Disaster Unit numbers.',
+            'new message to the Administrator numbers.',
           ),
         ),
       );
@@ -298,17 +541,23 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
                     options: items,
                     value: n.item,
                     text: n.itemText,
-                    onChanged: (v) => setState(() {
-                      n.item = v;
-                      final u = _unitOf(v);
-                      if (u.isNotEmpty) n.unit.text = u;
-                    }),
+                    onChanged: (v) {
+                      setState(() {
+                        n.item = v;
+                        final u = _unitOf(v);
+                        if (u.isNotEmpty) n.unit.text = u;
+                      });
+                      _saveDraft();
+                    },
                   ),
                 ),
                 if (needs.length > 1)
                   IconButton(
                     tooltip: 'Remove this need',
-                    onPressed: () => setState(() => needs.removeAt(i)),
+                    onPressed: () {
+                      setState(() => needs.removeAt(i));
+                      _saveDraft();
+                    },
                     icon: const Icon(Icons.close),
                   ),
               ],
@@ -322,7 +571,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
                     keyboardType: TextInputType.number,
                     inputFormatters: [
                       FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(6),
+                      LengthLimitingTextInputFormatter(9),
                     ],
                     decoration: const InputDecoration(labelText: 'How many?'),
                     validator: (v) {
@@ -361,16 +610,20 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     final sitios = _sitiosOf(barangay);
     return Form(
       key: _form,
+      // Typing in any text field saves the draft. Dropdowns, sitios and
+      // needs save from their own handlers (they change state after this).
+      onChanged: _saveDraft,
       child: ListView(
+        key: ValueKey('sms-form-$_epoch'),
         padding: const EdgeInsets.all(20),
         children: [
           const PageHeader(
             'Prepare an SMS Report',
             subtitle:
                 'For when there is no internet. Fill this in to make a text in '
-                'the NexaAid format and send it from your phone to the CSWS '
-                'Disaster Unit. They encode it as a report, then the '
-                'Administrator validates it.',
+                'the NexaAid format and send it from your phone to the '
+                'Administrator. They review and encode it as a report, then '
+                'validate it.',
           ),
           const Padding(
             padding: EdgeInsets.only(bottom: 12),
@@ -404,8 +657,8 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
           const SectionTitle('Send to'),
           if (_receiverNumbers.isNotEmpty) ...[
             Text(
-              'The text goes to every CSWS Disaster Unit number below, filled '
-              'in for you. Tap a number to leave it out.',
+              'The text goes to every Administrator number below, filled in '
+              'for you. Tap a number to leave it out.',
               style: t.bodySmall,
             ),
             const SizedBox(height: 8),
@@ -430,7 +683,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             ),
           ] else ...[
             Text(
-              'No Disaster Unit numbers saved yet. Open this screen once with '
+              'No Administrator numbers saved yet. Open this screen once with '
               'internet, or type the number you were given.',
               style: t.bodySmall,
             ),
@@ -440,7 +693,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               keyboardType: TextInputType.phone,
               inputFormatters: phoneFormatters,
               decoration: const InputDecoration(
-                labelText: 'CSWS Disaster Unit SMS number',
+                labelText: 'Administrator SMS number',
                 hintText: '09XXXXXXXXX',
               ),
               validator: (v) => RegExp(r'^09\d{9}$').hasMatch((v ?? '').trim())
@@ -454,7 +707,10 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             options: _namesOf('disaster_types'),
             value: type,
             text: typeText,
-            onChanged: (v) => setState(() => type = v),
+            onChanged: (v) {
+              setState(() => type = v);
+              _saveDraft();
+            },
           ),
           const SizedBox(height: 12),
           _choice(
@@ -462,10 +718,13 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             options: _namesOf('barangays'),
             value: barangay,
             text: barangayText,
-            onChanged: (v) => setState(() {
-              barangay = v;
-              sitioRows = [''];
-            }),
+            onChanged: (v) {
+              setState(() {
+                barangay = v;
+                sitioRows = [''];
+              });
+              _saveDraft();
+            },
           ),
           // problema_napud 2.2: only the chosen barangay's sitios, and
           // "Add another sitio" when more than one was hit.
@@ -475,7 +734,10 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               key: ValueKey('sitios-$barangay'),
               options: {for (final n in sitios) n: n},
               rows: sitioRows,
-              onChanged: (rows) => setState(() => sitioRows = rows),
+              onChanged: (rows) {
+                setState(() => sitioRows = rows);
+                _saveDraft();
+              },
             ),
           ] else if (_namesOf('barangays').isEmpty) ...[
             // Nothing saved on the phone: type the sitio names.
@@ -520,7 +782,10 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
           SectionTitle(
             'Assistance needed',
             trailing: TextButton.icon(
-              onPressed: () => setState(() => needs.add(_NeedLine())),
+              onPressed: () {
+                setState(() => needs.add(_NeedLine()));
+                _saveDraft();
+              },
               icon: const Icon(Icons.add),
               label: const Text('Add need'),
             ),
@@ -545,6 +810,21 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
             ),
             icon: const Icon(Icons.sms_outlined),
             label: const Text('Open SMS app'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _clearForm,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+            ),
+            icon: const Icon(Icons.restart_alt),
+            label: const Text('Clear the form (new report)'),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'What you type is saved on this phone, even without internet, '
+            'until you clear the form.',
+            style: t.bodySmall,
           ),
           const SizedBox(height: 8),
           Text(

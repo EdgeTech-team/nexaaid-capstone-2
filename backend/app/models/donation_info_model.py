@@ -19,6 +19,9 @@ class DonationInfoColumns:
     """Columns the donation-info tables share. Foreign keys and checks are declared per
     table so each gets its own constraint name (fk_<table>_..., chk_<table>_...)."""
     provider = Column(String(20), nullable=True)
+    # Testing 2.1: the actual provider's name when provider is "Other"
+    # (e.g. "PayMongo", "Coins.ph"). NULL for every other provider.
+    provider_other = Column(String(50), nullable=True)
     account_name = Column(String(100), nullable=True)
     account_number = Column(String(50), nullable=True)
     instructions = Column(String(500), nullable=True)

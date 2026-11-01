@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'report_model.dart';
 import 'nexa_widgets.dart';
+import 'ui/needs_progress.dart';
 
 /// Screen 2: report detail with AI-assisted priority guidance.
 /// Styled from the app theme (design/theme.dart) so it matches the rest of
@@ -109,10 +110,17 @@ class ReportDetailScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
           ],
-          _section(
+                    _section(
             context,
             title: 'Progress',
-            child: FulfillmentBar(percent: report.fulfillmentPercentage),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FulfillmentBar(percent: report.fulfillmentPercentage),
+                const SizedBox(height: 16),
+                NeedsProgress(reportId: report.reportId),
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           _section(

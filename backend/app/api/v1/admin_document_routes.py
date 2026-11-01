@@ -43,7 +43,7 @@ def _doc(up: Upload) -> dict:
 
 def _get_user(db: Session, user_id: int) -> User:
     user = db.get(User, user_id)
-    if user is None:
+    if user is None or user.deleted_at is not None:  # 1.2: deleted accounts are gone
         raise HTTPException(status_code=404, detail="Account not found")  # UC-A1 alt 3a
     return user
 

@@ -64,9 +64,9 @@ def test_edit_changes_the_sitios(reporter_client, seed, db_session):
     assert r.json()["sitio_ids"] == [] and r.json()["sitio_id"] is None
 
 
-def test_sms_report_with_several_sitios(unit_client, seed, db_session):
+def test_sms_report_with_several_sitios(admin_client, seed, db_session):
     _sitios(db_session)
-    r = unit_client.post("/reports/sms", json={
+    r = admin_client.post("/reports/sms", json={
         **_payload(seed, sitio_ids=[2, 3]),
         "contact_number": "09171234567",
         "raw_message": "NEXAAID REPORT\nSITIO: Sitio Two, Sitio Three",

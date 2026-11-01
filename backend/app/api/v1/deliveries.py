@@ -14,23 +14,30 @@ are placeholders- swap for real RBAC role names once Known.
 
 from datetime import date, datetime, timezone 
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status 
 from sqlalchemy.orm import Session, joinedload
 
 from core.database import get_db
-from core.notifications import notify_event_many, user_ids_with_role
+from core.notifications import logistics_team_ids, notify_event_many, user_ids_with_role
 from models.report import DisasterReport
-from core.auth import get_current_user, require_role, barangay_scope
+from core.auth import get_current_user, has_role, require_role, barangay_scope
 from core.audit import log_action
+from core.priority_engine import apply_priority
+from services.fulfillment import recalculate as recalculate_fulfillment
 from models.inventory_model import Inventory
 from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
 from models.delivery import Delivery, DeliveryItem, Receipt
+from models.logistics_request_model import LogisticsRequest
 from api.v1.drrmo_router import DRRMO
 from services.delivery_stock import check_stock, take_stock
+from services.donation_expiry import MANILA, nice_date, now_utc, utc
+from services.delivery_allocation import allocate_delivery, chosen_refs, ready_donations, ready_lines
+from services.delivery_notices import tell_barangay_prepared, tell_donors, tell_status
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from schemas.delivery import (
     DeliveryCreate,
@@ -69,7 +76,17 @@ def create_delivery(
   # Goods are released from this report's inventory (manuscript: "Inventory
   # is linked to specific report records"), so there must be enough stock.
   # services/delivery_stock.py: shared with trips, plain-language messages.
-  take_stock(check_stock(db, payload.report_id, payload.items))
+  # Oct 13 (team): no items = the whole report, i.e. every donation the CMO
+  # acknowledged that has not gone out yet (the app always does this).
+  # Oct 15: or only the entries Main Office kept ticked (each one whole).
+  refs = None if payload.items else chosen_refs(db, payload.report_id, payload.batch_references)
+  lines = payload.items or ready_lines(db, payload.report_id, refs)
+  if not lines:
+    raise HTTPException(
+      status_code=409,
+      detail="Nothing to send yet: no donation for this report has been acknowledged by the CMO.",
+    )
+  take_stock(check_stock(db, payload.report_id, lines))
 
   delivery = Delivery (
     report_id=payload.report_id,
@@ -82,7 +99,7 @@ def create_delivery(
   db.add(delivery)
   db.flush()
 
-  for item_payload in payload.items: 
+  for item_payload in lines: 
     db.add (
       DeliveryItem(
         delivery_id=delivery.delivery_id,
@@ -93,10 +110,27 @@ def create_delivery(
     )
 
   db.flush()
+  # Whose donations these goods are: first received, first sent.
+  allocate_delivery(db, delivery, refs)
   log_action(db, current_user, "PREPARE DELIVERY", "deliveries", delivery.delivery_id,
-             new={"status": "Preparing", "items": [i.model_dump() for i in payload.items]})
+             new={"status": "Preparing", "items": [i.model_dump() for i in lines]})
+  tell_barangay_prepared(db, [delivery])   # the barangay gets ready to receive
   db.refresh(delivery)
   return delivery
+
+@router.get("/ready/{report_id}")
+def ready_to_send(
+    report_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office", "admin")),
+):
+  """Oct 13 (team): what the next delivery of this report carries, i.e.
+  every donation the CMO acknowledged that has not gone out yet, and how
+  many still wait for the CMO. Changes nothing."""
+  if db.get(DisasterReport, report_id) is None:
+    raise HTTPException(status_code=404, detail="Report not found")
+  return ready_donations(db, report_id)
+
 
 # List — staff, with filters
 
@@ -124,7 +158,8 @@ def list_deliveries(
   current_user=Depends(require_role(*_LIST_ROLES)),
 
 ):
-    query = db.query(Delivery).options(joinedload(Delivery.items))
+    query = (db.query(Delivery).options(joinedload(Delivery.items))
+             .filter(Delivery.deleted_at.is_(None)))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
        query = query.filter(Delivery.destination_barangay_id == own_barangay)
@@ -143,7 +178,7 @@ def delivery_counts(
 ):
     """How many deliveries are in each status, for the filter chips
     ("In Transit (3)"). Same barangay scope as the list."""
-    query = db.query(Delivery)
+    query = db.query(Delivery).filter(Delivery.deleted_at.is_(None))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
        query = query.filter(Delivery.destination_barangay_id == own_barangay)
@@ -167,9 +202,39 @@ def get_delivery(
      .first()
   )
   own_barangay = barangay_scope(current_user)
-  if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
+  if (not delivery or delivery.deleted_at is not None
+          or (own_barangay is not None and delivery.destination_barangay_id != own_barangay)):
      raise HTTPException(status_code=404, detail="Delivery not found")
   return delivery
+
+
+# Delete (testing, Oct 27): CSWS clears finished deliveries from the list.
+# Only Cancelled (goods already back in stock) or Confirmed (the barangay
+# received them). A soft delete: the row, its receipt and its quantities
+# stay, so fulfillment, donor history and the audit log are unchanged.
+_DELETABLE = ("Cancelled", "Confirmed")
+
+
+@router.delete("/{delivery_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_delivery(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office", "admin")),
+):
+    delivery = db.get(Delivery, delivery_id)
+    if not delivery or delivery.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.status not in _DELETABLE:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Delivery #{delivery.delivery_id} is {delivery.status}. Only cancelled "
+                    "or confirmed deliveries can be deleted."),
+        )
+    delivery.deleted_at = now_utc()
+    delivery.deleted_by_user_id = current_user.user_id
+    log_action(db, current_user, "DELETE DELIVERY", "deliveries", delivery.delivery_id,
+               old={"status": delivery.status}, new={"deleted": True})
+    db.commit()
 
 
 # Advance status — CSWS Main Office moves it one step forward, in order
@@ -226,6 +291,38 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
 
     current_index = _STATUS_SEQUENCE.index(delivery.status)
 
+    # Advisor (Oct 24) + testing (Oct 27): once CSWS asked DRRMO for
+    # transport, DRRMO moves the delivery (In Transit on pickup, Delivered on
+    # arrival; drrmo_router picked_up / delivered). CSWS waits, or cancels
+    # the request to send it themselves.
+    if delivery.status in ("Preparing", "In Transit") and not has_role(current_user, DRRMO):
+        open_request = (db.query(LogisticsRequest)
+                        .filter(LogisticsRequest.delivery_id == delivery.delivery_id,
+                                LogisticsRequest.status.in_(("Pending", "Accepted")))
+                        .first())
+        if open_request is not None:
+            step = ("In Transit when they pick up the goods" if delivery.status == "Preparing"
+                    else "Delivered when they reach the barangay")
+            raise HTTPException(
+                status_code=409,
+                detail=(f"Delivery #{delivery.delivery_id} goes with DRRMO "
+                        f"(request #{open_request.request_id}, {open_request.status}). "
+                        f"DRRMO marks it {step}. "
+                        "To send it yourself, cancel the DRRMO request first."),
+            )
+
+    # Testing feedback (Oct 20): the truck can't leave before the day it is
+    # scheduled for (trips start through here too, so "Arrived" can't come
+    # first either). Leaving earlier means changing the date first.
+    if delivery.status == "Preparing" and delivery.delivery_date is not None:
+        leaves = utc(delivery.delivery_date)
+        if now_utc().astimezone(MANILA).date() < leaves.astimezone(MANILA).date():
+            raise HTTPException(
+                status_code=409,
+                detail=f"This delivery is scheduled to leave on {nice_date(leaves)}. "
+                       f"If the truck is leaving now, change the date first.",
+            )
+
     old_status = delivery.status
     delivery.status = _STATUS_SEQUENCE[current_index + 1]
     # Timestamped status history (UC-CM2 / delivery module step 3)
@@ -236,15 +333,15 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
     recipients = set(user_ids_with_role(
         db, ["Barangay Receiving Representative"],
         barangay_id=delivery.destination_barangay_id))
-    # 7.5: DRRMO is notified whenever a delivery is advanced
-    recipients |= set(user_ids_with_role(
-        db, ["DRRMO Logistics Support"],
-        exclude_user_id=current_user.user_id))
+    # 7.5: DRRMO is notified whenever a delivery is advanced, and CSWS Main
+    # Office too (shared logistics notifications, e.g. DRRMO picked it up).
+    recipients |= logistics_team_ids(db, exclude_user_id=current_user.user_id)
     if report and report.user_id != current_user.user_id:
         recipients.add(report.user_id)
     notify_event_many(db, recipients, "delivery_status_changed", "delivery",
                       delivery.delivery_id,
                       title=f"Delivery #{delivery.delivery_id}", status=delivery.status)
+    tell_status(db, delivery)   # donors follow their donation (Oct 17)
     return delivery
 
 
@@ -300,6 +397,11 @@ def confirm_receipt(
     delivery.status = "Confirmed"
     log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
                old={"status": "Delivered"}, new={"status": "Confirmed", "remarks": payload.remarks})
+    # Testing feedback (Oct 20): confirming receipt is also the barangay's
+    # acknowledgement (UC-B1 step 5), so the rep taps once. The
+    # "receipt confirmed" notice below reaches the same people.
+    log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery.delivery_id,
+               new={"acknowledged": True, "with_receipt": True})
     
     report = db.get(DisasterReport, delivery.report_id)
     recipients = set(user_ids_with_role(db, ["CSWS Main Office"],
@@ -308,6 +410,7 @@ def confirm_receipt(
         recipients.add(report.user_id)
     notify_event_many(db, recipients, "delivery_receipt_confirmed", "delivery",
                       delivery.delivery_id, title=f"Delivery #{delivery.delivery_id}")
+    tell_donors(db, delivery, "donation_barangay_confirmed")
     db.flush()
 
     fulfillment = _recalculate_fulfillment (
@@ -322,8 +425,9 @@ def confirm_receipt(
     return ReceiptConfirmResponse(receipt=receipt, delivery=delivery, fulfillment=fulfillment)
 
 # Acknowledge — Barangay Receiving Representative (UC-B1 step 5).
-# Acknowledgment is separate from receipt confirmation and only allowed
-# after it (delivery module alt flow 4a). Stored in audit_logs.
+# Since Oct 20 confirm-receipt records the acknowledgement too, so the app
+# no longer calls this; kept for deliveries confirmed before that.
+# Only allowed after receipt is confirmed (alt flow 4a). Stored in audit_logs.
 
 @router.post("/{delivery_id}/acknowledge")
 def acknowledge_delivery(
@@ -341,6 +445,15 @@ def acknowledge_delivery(
         raise HTTPException(status_code=409, detail="Already acknowledged")
     log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery_id,
                new={"acknowledged": True})
+    # Oct 17 run-through: the final record of the delivery reaches CSWS Main
+    # Office and the Disaster Unit member who reported the need.
+    report = db.get(DisasterReport, delivery.report_id)
+    recipients = set(user_ids_with_role(db, ["CSWS Main Office"], exclude_user_id=current_user.user_id))
+    if report and report.user_id != current_user.user_id:
+        recipients.add(report.user_id)
+    barangay = delivery.destination_barangay.barangay_name if delivery.destination_barangay else "The barangay"
+    notify_event_many(db, recipients, "delivery_acknowledged", "delivery", delivery_id,
+                      title=f"Delivery #{delivery_id}", barangay=barangay)
     db.flush()
     return {"delivery_id": delivery_id, "acknowledged": True}
 
@@ -366,7 +479,7 @@ def delivery_history(
     if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
         raise HTTPException(status_code=404, detail="Delivery not found")
     rows = (
-        db.query(AuditLog, User.email)
+        db.query(AuditLog, User.first_name, User.last_name, User.email)
         .join(User, User.user_id == AuditLog.user_id)
         .filter(AuditLog.entity_type == "deliveries", AuditLog.entity_id == delivery_id)
         .order_by(AuditLog.log_id)
@@ -375,11 +488,13 @@ def delivery_history(
     return {
         "delivery_id": delivery_id,
         "status": delivery.status,
-        "acknowledged": any(l.action == "ACKNOWLEDGE AID" for l, _ in rows),
+        "acknowledged": any(l.action == "ACKNOWLEDGE AID" for l, *_ in rows),
         "history": [
+            # F-23(c): a staff display name, not their email, for barangay reps
+            # and DRRMO. "{first} {last}" or the email only if both are blank.
             {"action": l.action, "old": l.old_value, "new": l.new_value,
-             "by": email, "at": l.timestamp}
-            for l, email in rows
+             "by": f"{first or ''} {last or ''}".strip() or email, "at": l.timestamp}
+            for l, first, last, email in rows
         ],
     }
 
@@ -387,65 +502,29 @@ def delivery_history(
 # Fulfillment recalculation — internal helper, not an endpoint
 
 def _recalculate_fulfillment(
-      db: Session, 
+      db: Session,
       report_id: int,
-      verified_by_user_id: int,     
-) -> ReportFulfillment: 
-  """
-  Sums delivered quantities across every CONFIRMED delivery this 
-  report, and updates the report fulfillments record accordingly
+      verified_by_user_id: int,
+) -> ReportFulfillment:
+  """Per-item fulfillment (Oct 2026): each need of the report is measured
+  against the confirmed deliveries of THAT item, capped at 100%, and the
+  report's percentage is the average (services/fulfillment.py). Old reports
+  have one "General needs" line, which counts every item like before.
 
   Alt flow 5a: if the linked report is already closed/resolved, this
-  still updates report_fulfillments — it deliberately does NOT touch
-  disaster_reports.status. Fulfillment and report status are tracked
-  independently; this function only ever writes to report_fulfillments.
+  still updates report_fulfillments; it never touches disaster_reports.status.
   """
-  fulfillment =(
-      db.query (ReportFulfillment)
-      .filter(ReportFulfillment.report_id == report_id)
-      .first()
-   )
+  fulfillment = recalculate_fulfillment(db, report_id, verified_by_user_id)
 
-  if not fulfillment:
-     raise HTTPException(
-        status_code=409,
-        detail="This report hs no fulfillment record yet- it may"
-               "not have been validated. cannot delivered"
-     ) 
-
-  total_delivered =(
-     db.query(DeliveryItem)
-     .join(Delivery, DeliveryItem.delivery_id == Delivery.delivery_id)
-     .filter(Delivery.report_id == report_id, Delivery.status == "Confirmed")
-     .with_entities(DeliveryItem.quantity)
-     .all()
-  )
-
-  total_delivered_quantity = sum(q for (q,) in total_delivered)
-
-  fulfillment.total_items_delivered = total_delivered_quantity
-
-  if fulfillment.total_items_needed > 0:
-     pct = (Decimal(total_delivered_quantity)/ Decimal(fulfillment.total_items_needed)) * 100
-     pct = min(pct, Decimal("100.00"))
-
-  else: 
-     pct = Decimal("0.00")
-  fulfillment.fulfillment_percentage = round(pct, 2)
-
-  if fulfillment.fulfillment_percentage <= 0:
-     fulfillment_verification_status = "Not Started"
-
-  elif fulfillment.fulfillment_percentage >= 100:
-      fulfillment_verification_status = "Complete"
-
-  else:
-    fulfillment_verification_status ="Partial"
-
-  fulfillment.verification_status = fulfillment_verification_status
-
-  fulfillment.verified_by_user_id = verified_by_user_id
-  fulfillment.verified_at = datetime.now(timezone.utc)
-  
-  db.flush()
+  # Testing, Module 3: the priority depends on fulfillment, so recompute it
+  # now. Before this it was set once, at validation, and never changed.
+  report = db.get(DisasterReport, report_id)
+  if report is not None and report.status == "Validated":
+    old_level = report.priority_level
+    apply_priority(report)
+    if report.priority_level != old_level:
+      log_action(db, SimpleNamespace(user_id=verified_by_user_id), "UPDATE PRIORITY", "disaster_reports",
+                 report_id, old={"priority_level": old_level},
+                 new={"priority_level": report.priority_level})
+    db.flush()
   return fulfillment

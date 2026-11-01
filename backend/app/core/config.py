@@ -12,6 +12,7 @@ def _required(name: str) -> str:
 
 
 class Settings:
+    APP_ENV: str = os.getenv("APP_ENV", "production").strip().lower()
     DATABASE_URL: str = _required("DATABASE_URL")
     DIRECT_URL: str | None = os.getenv("DIRECT_URL")   # only Alembic uses this
     SECRET_KEY: str = _required("SECRET_KEY")

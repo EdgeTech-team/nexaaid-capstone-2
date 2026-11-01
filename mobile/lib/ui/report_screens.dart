@@ -3,10 +3,13 @@ import 'package:flutter/services.dart';
 
 import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
+import 'form_draft.dart';
 import 'input_formatters.dart';
+import 'records_screens.dart' show SupportRecordsScreen;
 import 'report_filters.dart';
 import 'report_summary_card.dart';
 import 'sitio_picker.dart';
+import 'quantity_units.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
@@ -16,12 +19,21 @@ import 'home_nav.dart';
 // (app/schemas/report.py: MAX_AFFECTED_FAMILIES, MAX_ESTIMATED_QUANTITY).
 // ---------------------------------------------------------------------------
 const maxAffectedFamilies = 20000;
-const maxEstimatedQuantity = 100000;
+// Testing (Oct 28): no limit on how much a report needs, per item or in
+// total; only what the database can store (9 digits per need).
+const maxEstimatedQuantity = 999999999;
+const _maxTotalQuantity = 2147483647;
 
 /// Only digits can be typed (no letters, dots, minus signs), up to 6 digits.
 final _wholeNumberInput = <TextInputFormatter>[
   FilteringTextInputFormatter.digitsOnly,
   LengthLimitingTextInputFormatter(6),
+];
+
+/// How many of one need: up to 9 digits (see [maxEstimatedQuantity]).
+final _quantityInput = <TextInputFormatter>[
+  FilteringTextInputFormatter.digitsOnly,
+  LengthLimitingTextInputFormatter(9),
 ];
 
 /// 20000 -> "20,000"
@@ -87,13 +99,14 @@ class ReportCard extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 // UC-CD1 Submit post-disaster report (CSWS Disaster Unit), and
-// Encode SMS report (CSWS Disaster Unit, smsEncode: true).
-// Oct 12 decision (claude/sms-reporting-decision.md): the Barangay Receiving
-// Representative SENDS a structured SMS when offline (sms_send_screen.dart);
-// the Disaster Unit reviews and ENCODES it here; the Administrator validates.
+// Encode SMS report (Administrator, smsEncode: true).
+// Scope 2.4, UC-A3 alt 8a, UC-CD1 alt 11b (Oct 15 team, back to the
+// manuscript; claude/sms-reporting-decision.md): the Disaster Unit SENDS a
+// structured SMS when offline (sms_send_screen.dart); the Administrator
+// reviews and ENCODES it here, then validates it on the Validate tab.
 // ---------------------------------------------------------------------------
 class NewReportScreen extends StatefulWidget {
-  /// true = Disaster Unit encoding an SMS report a barangay rep sent.
+  /// true = Administrator encoding an SMS report the Disaster Unit sent.
   final bool smsEncode;
 
   /// Oct 11 (Daniel): the reporter corrects their own report before the
@@ -138,8 +151,130 @@ class _NewReportScreenState extends State<NewReportScreen> {
   bool get editing => widget.edit != null;
   bool _filledFromEdit = false;
 
-  /// Fill the form from the report being corrected. The needs were saved
-  /// as "Rice: 50 kg, Drinking Water: 20 gallons".
+  // Testing fix (UI): what was typed survives a refresh or a closed app.
+  // Not used when correcting an existing report.
+  late final FormDraft? _draft = editing
+      ? null
+      : FormDraft(sms ? 'report-sms' : 'report');
+
+  @override
+  void initState() {
+    super.initState();
+    _draft?.load().then((d) async {
+      if (d == null || !mounted) return;
+      // The lists are needed to check the saved ids (cached after the
+      // first load, so this is quick).
+      final names = Names(await api.lookups());
+      if (!mounted) return;
+      setState(() => _applyDraft(d, names));
+    });
+  }
+
+  @override
+  void dispose() {
+    _draft?.flush(_snapshot);
+    super.dispose();
+  }
+
+  Map<String, dynamic> _snapshot() => {
+    'type_id': typeId,
+    'barangay_id': brgyId,
+    'sitio_rows': sitioRows,
+    'description': desc.text,
+    'families': families.text,
+    'sms_sender': smsSender.text,
+    'sms_text': smsText.text,
+    'needs': [
+      for (final n in needs)
+        {
+          'item_id': n.itemId,
+          'qty': n.qty.text,
+          'other_name': n.otherName.text,
+          'other_unit': n.otherUnit.text,
+        },
+    ],
+  };
+
+  void _saveDraft() => _draft?.save(_snapshot);
+
+  /// Fills the form from the saved draft. Ids that no longer exist in the
+  /// lists are skipped, so every dropdown gets a valid value.
+  void _applyDraft(Map<String, dynamic> d, Names names) {
+    bool known(String list, String? id) =>
+        id != null && names.rows(list).any((r) => '${r['id']}' == id);
+    final t = d.strOrNull('type_id');
+    final b = d.strOrNull('barangay_id');
+    typeId = known('disaster_types', t) ? t : null;
+    brgyId = known('barangays', b) ? b : null;
+    final rows = <String>[
+      for (final v
+          in (d['sitio_rows'] is List ? d['sitio_rows'] as List : const []))
+        if (v is String &&
+            (v.isEmpty ||
+                names
+                    .rows('sitios')
+                    .any(
+                      (st) =>
+                          '${st['id']}' == v &&
+                          '${st['barangay_id']}' == brgyId,
+                    )))
+          v,
+    ];
+    sitioRows = brgyId == null || rows.isEmpty ? [''] : rows;
+    desc.text = d.str('description');
+    families.text = d.str('families');
+    smsSender.text = d.str('sms_sender');
+    smsText.text = d.str('sms_text');
+    _smsLen = smsText.text.length; // a restored SMS is not a new paste
+    final restored = <_Need>[];
+    for (final m in d.maps('needs')) {
+      final id = m.strOrNull('item_id');
+      final need = _Need()
+        ..itemId = id == _other || known('items', id) ? id : null;
+      need.qty.text = m.str('qty');
+      need.otherName.text = m.str('other_name');
+      need.otherUnit.text = m.str('other_unit');
+      restored.add(need);
+    }
+    if (restored.isNotEmpty) {
+      needs
+        ..clear()
+        ..addAll(restored);
+    }
+    _fills++; // the dropdowns rebuild with these values
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppToast.info(
+        context,
+        'We kept what you typed last time.',
+        action: ToastAction('Start over', _startOver),
+      );
+    });
+  }
+
+  /// "Start over": an empty form and no draft.
+  void _startOver() {
+    _draft?.clear();
+    setState(() {
+      desc.clear();
+      families.clear();
+      smsSender.clear();
+      smsText.clear();
+      _smsLen = 0;
+      needs
+        ..clear()
+        ..add(_Need());
+      typeId = brgyId = null;
+      sitioRows = [''];
+      _fillNotes = const [];
+      _fills++;
+    });
+  }
+
+  /// Fill the form from the report being corrected. Per-item fulfillment
+  /// (Oct 2026): the needs come back as rows (`needs`). Older reports only
+  /// have one "General needs" row, so their text "Rice: 50 kg, Drinking
+  /// Water: 20 L" is read instead.
   void _fillFromReport(Map<String, dynamic> r, Names names) {
     typeId = '${r['disaster_type_id']}';
     brgyId = '${r['barangay_id']}';
@@ -148,6 +283,27 @@ class _NewReportScreenState extends State<NewReportScreen> {
     sitioRows = ids.isEmpty ? [''] : [for (final i in ids) '$i'];
     desc.text = '${r['description'] ?? ''}';
     families.text = '${r['affected_families'] ?? ''}';
+    final rows = [
+      for (final n in (r['needs'] as List? ?? const []))
+        if (n is Map && n['item_id'] != null) n,
+    ];
+    if (rows.isNotEmpty) {
+      final offered = {for (final i in names.rows('items')) '${i['id']}'};
+      needs
+        ..clear()
+        ..addAll([
+          for (final n in rows)
+            _Need()
+              ..qty.text = '${n['quantity']}'
+              // A retired item (e.g. the old gallons water) is no longer
+              // in the list: the reporter picks the current one again.
+              ..itemId = offered.contains('${n['item_id']}')
+                  ? '${n['item_id']}'
+                  : null,
+        ]);
+      _fills++;
+      return;
+    }
     final parsed = <_Need>[];
     for (final part in '${r['assistance_needed'] ?? ''}'.split(',')) {
       final m = RegExp(r'^\s*(.+?):\s*(\d+)\s*(.*)$').firstMatch(part);
@@ -172,11 +328,72 @@ class _NewReportScreenState extends State<NewReportScreen> {
     _fills++;
   }
 
+  /// Module 3 (Oct 2026): suggested needs for a disaster type, from
+  /// /lookups `need_templates` (backend services/need_templates.py).
+  Map<String, dynamic>? _templateFor(Names names) {
+    for (final t in names.rows('need_templates')) {
+      if ('${t['id']}' == typeId) return t;
+    }
+    return null;
+  }
+
+  /// The needs as last filled from a template, to tell whether the reporter
+  /// changed them since. Untouched suggestions follow the disaster type and
+  /// the number of families; edited ones are left alone.
+  String? _templateSnapshot;
+
+  String get _needsSnapshot =>
+      needs.map((n) => '${n.itemId}:${n.qty.text.trim()}').join(',');
+
+  bool get _needsBlank => needs.every(
+    (n) =>
+        n.itemId == null &&
+        n.qty.text.trim().isEmpty &&
+        n.otherName.text.trim().isEmpty,
+  );
+
+  bool get _needsUntouched =>
+      _needsBlank || _needsSnapshot == _templateSnapshot;
+
+  /// Fills the needs list with the template of the chosen disaster type,
+  /// each amount per family x affected families, rounded up. Without a
+  /// family count the amounts are left for the reporter to type.
+  void _applyTemplate(Names names) {
+    final t = _templateFor(names);
+    if (t == null) return;
+    final fams = int.tryParse(families.text.trim()) ?? 0;
+    needs
+      ..clear()
+      ..addAll([
+        for (final line in (t['items'] as List).cast<Map>())
+          _Need()
+            ..itemId = '${line['item_id']}'
+            ..qty.text = fams > 0
+                ? '${((line['per_family'] as num) * fams).ceil().clamp(1, maxEstimatedQuantity)}'
+                : '',
+      ]);
+    _templateSnapshot = _needsSnapshot;
+  }
+
   /// Bumped after "Fill from SMS" so the dropdowns rebuild with the new values.
   int _fills = 0;
 
   /// What could not be filled from the SMS, shown to the Administrator.
   List<String> _fillNotes = const [];
+
+  /// Length of the SMS box the last time it changed, to tell a paste (many
+  /// characters at once) from typing.
+  int _smsLen = 0;
+
+  /// Problema 2.2: pasting the received SMS fills the form by itself. The
+  /// "Fill the form from this SMS" button stays for hand-typed or edited text.
+  void _smsChanged(String value, Names names) {
+    final grew = value.length - _smsLen;
+    _smsLen = value.length;
+    if (grew > 15 && value.toUpperCase().contains(smsReportHeader)) {
+      _fillFromSms(names, quiet: true);
+    }
+  }
 
   /// "Rice (kg)" / " rice " -> "rice"
   static String _norm(String s) => s
@@ -213,9 +430,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
   /// Reads the pasted SMS (sms_report_format.dart) and fills the form.
   /// Nothing is saved: the Administrator still checks every field and taps
   /// "Encode SMS report" (manual review, Scope 2.4).
-  void _fillFromSms(Names names) {
+  void _fillFromSms(Names names, {bool quiet = false}) {
     final parsed = SmsReport.parse(smsText.text);
     if (parsed == null) {
+      if (quiet) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -286,7 +504,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
             .replaceAll(RegExp(r'\s*\(.*\)$'), '');
 
   String _needUnit(_Need n, Names names) {
-    if (n.itemId == _other) return n.otherUnit.text.trim();
+    if (n.itemId == _other) {
+      return normalizeUnit(n.otherUnit.text) ?? n.otherUnit.text.trim();
+    }
     for (final i in names.rows('items')) {
       if ('${i['id']}' == n.itemId) return '${i['unit'] ?? ''}';
     }
@@ -316,20 +536,23 @@ class _NewReportScreenState extends State<NewReportScreen> {
       0,
       (a, n) => a + int.parse(n.qty.text.trim()),
     );
-    if (total > maxEstimatedQuantity) {
+    // No limit on the total (testing, Oct 28); only what can be stored.
+    if (total > _maxTotalQuantity) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'All needs together come to ${_withCommas(total)}. '
-            'The maximum is ${_withCommas(maxEstimatedQuantity)}.',
+            'All needs together come to ${_withCommas(total)}, more than '
+            'can be saved. Check the amounts.',
           ),
         ),
       );
       return;
     }
     setState(() => busy = true);
-    // The report table has one text field for the needs and one total
-    // quantity, so the list is stored as "Rice: 50 kg, Drinking Water: 20 gallons".
+    // Per-item fulfillment (Oct 2026): `needs` is one line per item, in the
+    // item's own unit, and fulfillment is measured per need. The readable
+    // summary "Rice: 50 kg, Drinking Water: 20 L" and the total are still
+    // sent for the screens that show them.
     final summary = needs
         .map(
           (n) =>
@@ -346,6 +569,20 @@ class _NewReportScreenState extends State<NewReportScreen> {
       'affected_families': int.parse(families.text.trim()),
       'assistance_needed': summary,
       'estimated_quantity': total,
+      'needs': [
+        for (final n in needs)
+          if (n.itemId == _other)
+            {
+              'other_item_name': n.otherName.text.trim(),
+              'other_item_unit': _needUnit(n, names),
+              'quantity': int.parse(n.qty.text.trim()),
+            }
+          else
+            {
+              'item_id': int.parse(n.itemId!),
+              'quantity': int.parse(n.qty.text.trim()),
+            },
+      ],
     };
     if (editing) {
       final r = await act(
@@ -373,7 +610,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             )
           : api.post('/reports/', body: {...body, 'source': 'Mobile'}),
       success: sms
-          ? 'SMS report encoded and sent to the Administrator for validation.'
+          ? 'SMS report encoded. It is now pending on the Validate tab.'
           : 'Report submitted. It is now pending admin validation.',
     );
     if (!mounted) return;
@@ -385,6 +622,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         families.clear();
         smsSender.clear();
         smsText.clear();
+        _smsLen = 0;
         needs
           ..clear()
           ..add(_Need());
@@ -394,6 +632,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         _fills++;
       }
     });
+    if (r.ok) _draft?.clear(); // submitted: the draft is no longer needed
   }
 
   Widget _needRow(int i, Names names) {
@@ -438,7 +677,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 if (needs.length > 1)
                   IconButton(
                     tooltip: 'Remove this need',
-                    onPressed: () => setState(() => needs.removeAt(i)),
+                    onPressed: () {
+                      setState(() => needs.removeAt(i));
+                      _saveDraft();
+                    },
                     icon: const Icon(Icons.close),
                   ),
               ],
@@ -460,15 +702,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: TextFormField(
+                    // Testing fix 4.1: same unit list as the donation form.
+                    child: QuantityUnitField(
                       controller: n.otherUnit,
-                      onChanged: (_) => setState(() {}),
-                      decoration: const InputDecoration(
-                        labelText: 'Unit',
-                        hintText: 'pcs, boxes',
-                      ),
-                      validator: (v) =>
-                          (v ?? '').trim().isEmpty ? 'Required' : null,
+                      onChanged: () => setState(() {}),
                     ),
                   ),
                 ],
@@ -478,7 +715,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             TextFormField(
               controller: n.qty,
               keyboardType: TextInputType.number,
-              inputFormatters: _wholeNumberInput,
+              inputFormatters: _quantityInput,
               decoration: InputDecoration(
                 labelText: 'How many?',
                 suffixText: unit.isEmpty ? null : unit,
@@ -510,6 +747,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
             .toList();
         return Form(
           key: _form,
+          onChanged: _saveDraft,
           child: ListView(
             padding: const EdgeInsets.all(20),
             children: [
@@ -518,18 +756,19 @@ class _NewReportScreenState extends State<NewReportScreen> {
                     ? 'Edit Report #${widget.edit!['report_id']}'
                     : sms
                     ? 'Encode SMS Report'
-                    : 'Submit Post-Disaster Report',
+                    : 'Submit Disaster Report',
                 subtitle: editing
                     ? (widget.edit!['status'] == 'Rejected'
                           ? 'Rejected: ${widget.edit!['rejection_reason'] ?? ''}\n'
                                 'Correct it and save to send it back for validation.'
                           : 'You can change it until the Administrator validates it.')
                     : sms
-                    ? 'Paste the text the barangay representative sent, tap '
-                          'Fill, then check every field before saving. It is '
-                          'saved as Pending until the Administrator validates it.'
+                    ? 'Paste the text the Disaster Unit sent, tap Fill, then '
+                          'check every field before saving. It is saved as '
+                          'Pending; validate it on the Validate tab.'
                     : 'Saved as Pending until the Administrator validates it. '
-                          'Got a report by SMS? Use the Encode SMS tab.',
+                          'No internet? Use the SMS report tab to text it to '
+                          'the Administrator.',
               ),
               if (sms) ...[
                 const SectionTitle('SMS as received'),
@@ -556,8 +795,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   controller: smsText,
                   minLines: 4,
                   maxLines: 10,
+                  onChanged: (v) => _smsChanged(v, names),
                   decoration: const InputDecoration(
                     labelText: 'SMS text (paste it exactly as received)',
+                    helperText:
+                        'Paste the text and the form below fills itself in.',
                     hintText: 'NEXAAID REPORT\nTYPE: ...\nBRGY: ...',
                   ),
                   validator: (v) =>
@@ -604,7 +846,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 label: 'Disaster type',
                 value: typeId,
                 names: names,
-                onChanged: (v) => setState(() => typeId = v),
+                onChanged: (v) => setState(() {
+                  final untouched = _needsUntouched;
+                  typeId = v;
+                  if (untouched) _applyTemplate(names);
+                }),
               ),
               const SizedBox(height: 12),
               LookupDropdown(
@@ -654,15 +900,45 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
                 ),
                 validator: _wholeNumber(maxAffectedFamilies),
+                onChanged: (_) {
+                  if (_templateSnapshot != null &&
+                      _needsSnapshot == _templateSnapshot) {
+                    setState(() => _applyTemplate(names));
+                  }
+                },
               ),
               SectionTitle(
                 'Assistance needed',
                 trailing: TextButton.icon(
-                  onPressed: () => setState(() => needs.add(_Need())),
+                  onPressed: () {
+                    setState(() => needs.add(_Need()));
+                    _saveDraft();
+                  },
                   icon: const Icon(Icons.add),
                   label: const Text('Add need'),
                 ),
               ),
+              if (_templateFor(names) case final t?)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.auto_awesome_outlined, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Suggested basic needs for ${t['name']}, '
+                          'per affected family. Change them as needed.',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => setState(() => _applyTemplate(names)),
+                        child: const Text('Use suggested'),
+                      ),
+                    ],
+                  ),
+                ),
               for (var i = 0; i < needs.length; i++) _needRow(i, names),
               const SizedBox(height: 16),
               FilledButton.icon(
@@ -1092,6 +1368,38 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
     );
   }
 
+  /// Testing 2.3: the Administrator deletes a Rejected report. The server
+  /// keeps the row for the audit trail and hides it from every list.
+  Future<void> _delete(Map<String, dynamic> r) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete report #${r['report_id']}?'),
+        content: const Text(
+          'It disappears from every list. The rejection and who made it '
+          'stay in the audit log.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep report'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await act(
+      context,
+      () => api.delete('/reports/${r['report_id']}'),
+      success: 'Report #${r['report_id']} deleted',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Loader(
@@ -1170,6 +1478,14 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
                           ),
                           icon: const Icon(Icons.check),
                           label: const Text('Validate'),
+                        ),
+                      ]
+                    : status == 'Rejected'
+                    ? [
+                        OutlinedButton.icon(
+                          onPressed: () => _delete(r),
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('Delete'),
                         ),
                       ]
                     : const [],
@@ -1260,6 +1576,20 @@ class DashboardScreen extends StatelessWidget {
           );
         }
 
+        // 9.3 (testing): the cards open what is behind the number.
+        void reportStatus() =>
+            HomeNav.go(context, const HomeTarget('Reports', view: 'status'));
+        void sheet(String title, List rows) => showModalBottomSheet<void>(
+          context: context,
+          showDragHandle: true,
+          builder: (_) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: bars(title, rows, 'status', statusTone),
+            ),
+          ),
+        );
+
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -1269,9 +1599,11 @@ class DashboardScreen extends StatelessWidget {
             ),
             StatCardGrid([
               StatCard(
+                // Rejected and withdrawn reports are not counted (backend).
                 label: 'Disaster reports',
                 value: '${s['total_reports']}',
                 icon: Icons.report_outlined,
+                onTap: reportStatus,
               ),
               StatCard(
                 label: 'Physical donations',
@@ -1282,11 +1614,25 @@ class DashboardScreen extends StatelessWidget {
                 label: 'Deliveries',
                 value: '${s['total_deliveries']}',
                 icon: Icons.local_shipping_outlined,
+                // The Disaster Unit has no delivery list (Appendix H 8.5):
+                // show the deliveries by status.
+                onTap: () => sheet(
+                  'Deliveries by status',
+                  l['deliveries_by_status'] as List,
+                ),
               ),
               StatCard(
                 label: 'Logistics requests',
                 value: '${s['total_logistics_requests']}',
                 icon: Icons.fire_truck_outlined,
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(title: const Text('Logistics requests')),
+                      body: const SupportRecordsScreen(),
+                    ),
+                  ),
+                ),
               ),
               StatCard(
                 label: 'Average fulfillment',
@@ -1294,6 +1640,7 @@ class DashboardScreen extends StatelessWidget {
                     '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
                 icon: Icons.pie_chart_outline,
                 color: AppColors.success,
+                onTap: reportStatus,
               ),
               StatCard(
                 label: 'Est. value of donations',

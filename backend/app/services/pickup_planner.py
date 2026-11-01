@@ -108,12 +108,33 @@ class Donation:
     days_left: Optional[int] = None        # to the handover deadline
     view: dict = field(default_factory=dict)   # passthrough fields for the screens
     flags: list = field(default_factory=list)  # filled in by plan()
+    # Specific dates the donor is home (calendar picker). When given, only
+    # these dates count, not every matching weekday.
+    dates: list = field(default_factory=list)
+
+    @property
+    def allowed(self) -> set:
+        """Dates when the donor chose dates, otherwise weekdays (1 = Mon)."""
+        return set(self.dates) if self.dates else set(self.days)
+
+
+def allows(allowed: set, day: date) -> bool:
+    """[allowed] holds dates, weekdays, or (rarely) both."""
+    return day in allowed or day.isoweekday() in allowed
+
+
+def weekdays_of(allowed: set) -> list:
+    return sorted({x.isoweekday() if isinstance(x, date) else x for x in allowed})
+
+
+def dates_of(allowed: set) -> list:
+    return sorted(x for x in allowed if isinstance(x, date))
 
 
 @dataclass
 class Stop:
     donations: list
-    days: set
+    days: set          # what every donor here allows: dates or weekdays
     lat: float
     lng: float
 
@@ -162,10 +183,11 @@ def build_stops(donations: list, radius_m: float) -> list:
 
     Donor A (Mon, Wed) + donor B (Tue, Wed) at the same school -> one stop,
     plannable only on Wednesday. A (Mon) + B (Tue) -> two stops.
+    Specific dates work the same way: A (Oct 26, 28) + B (Oct 28) -> Oct 28.
     Oldest donations are placed first, so they keep their stop."""
     stops: list = []
     for d in sorted(donations, key=lambda x: (x.created_at or datetime.max, x.ref)):
-        days = set(d.days)
+        days = d.allowed
         best = None
         for s in stops:
             if not (s.days & days):
@@ -264,7 +286,9 @@ def _clock(minutes_after_midnight: int) -> str:
 
 def _day_names(days) -> str:
     names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    return ", ".join(names[d - 1] for d in sorted(days)) or "no day"
+    out = [names[d - 1] for d in sorted(x for x in days if not isinstance(x, date))]
+    out += [f"{names[d.isoweekday() - 1]} {d.strftime('%b')} {d.day}" for d in dates_of(days)]
+    return ", ".join(out) or "no day"
 
 
 def plan(
@@ -308,7 +332,7 @@ def plan(
         start = (s.newest.date() if s.newest else today) + lead
         skip = s.not_home_date
         ok = [x for x in dates
-              if x.isoweekday() in s.days and x >= start and (skip is None or x > skip)]
+              if allows(s.days, x) and x >= start and (skip is None or x > skip)]
         if s.run_date in ok:          # in a DRRMO run: that date only
             return [s.run_date]
         return ok
@@ -367,8 +391,15 @@ def plan(
         })
 
     for s in remaining:
+        chosen = dates_of(s.days)
         if not s.days:
             why = "The donors at this place share no pickup day."
+        elif chosen and dates and chosen[0] > dates[-1]:
+            why = (f"The donor's pickup date ({_day_names(s.days)}) is after the next "
+                   f"{cfg['window_days']} days. It is planned closer to that date.")
+        elif chosen and not any(x >= today for x in chosen):
+            why = (f"Every date the donor chose ({_day_names(s.days)}) has passed. "
+                   "Call the donor about another date.")
         elif not feasible(s):
             why = (f"No CSWS pickup day in the next {cfg['window_days']} days matches "
                    f"{_day_names(s.days)}.")
@@ -401,7 +432,8 @@ def donation_view(d: Donation, cfg: dict) -> dict:
     return {
         **d.view,
         "batch_reference": d.ref,
-        "pickup_days": sorted(d.days),
+        "pickup_days": weekdays_of(d.allowed),
+        "pickup_dates": [x.isoformat() for x in sorted(d.dates)],
         "items": [
             {
                 "item_name": i.get("item_name") or "Item",
@@ -427,7 +459,8 @@ def stop_view(s: Stop, planned: dict, cfg: dict) -> dict:
         "landmark": first.view.get("pickup_landmark") or "",
         "barangay": first.view.get("barangay"),
         "address": first.view.get("pickup_address") or "",
-        "days": sorted(s.days),
+        "days": weekdays_of(s.days),
+        "dates": [x.isoformat() for x in dates_of(s.days)],
         "donation_count": len(s.donations),
         "donations": [donation_view(d, cfg) for d in s.donations],
         "heavy": any(is_heavy(i, cfg) for d in s.donations for i in d.items),

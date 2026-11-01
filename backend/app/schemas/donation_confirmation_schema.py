@@ -1,6 +1,7 @@
 # schemas/donation_confirmation_schema.py
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
+from pydantic import ConfigDict
 
 class ConfirmDonationRequest(BaseModel):
     # Oct 11 notes: the CMO "acknowledges" (the app's word); "Acknowledged"
@@ -26,5 +27,4 @@ class DonationConfirmationResponse(BaseModel):
     status: str
     notes: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

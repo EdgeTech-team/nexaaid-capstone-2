@@ -326,20 +326,30 @@ Future<ApiResult> act(
   required String success,
 }) async {
   final messenger = ScaffoldMessenger.of(context);
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
   final r = await call();
   messenger.hideCurrentSnackBar();
-  messenger.showSnackBar(
-    SnackBar(
-      backgroundColor: r.ok ? AppColors.success : AppColors.danger,
-      content: Text(
-        r.ok
-            ? success
-            : r.status == 0
-            ? 'Cannot reach the server'
-            : r.errorText,
+  final text = r.ok
+      ? success
+      : r.status == 0
+      ? 'Cannot reach the server'
+      : r.errorText;
+  // Testing fix (UI notifications): a toast at the top with an X that also
+  // closes by itself, instead of a bottom bar that covered the form.
+  if (overlay != null && overlay.mounted) {
+    AppToast.showOn(
+      overlay,
+      text,
+      kind: r.ok ? ToastKind.success : ToastKind.error,
+    );
+  } else {
+    messenger.showSnackBar(
+      SnackBar(
+        backgroundColor: r.ok ? AppColors.success : AppColors.danger,
+        content: Text(text),
       ),
-    ),
-  );
+    );
+  }
   return r;
 }
 
@@ -569,17 +579,23 @@ const _emptyHints = {
 
 /// A donation's status in the words the app uses (Oct 11 notes): the CMO
 /// "acknowledges" a donation, so the stored status "Confirmed" reads
-/// "Acknowledged". Deliveries keep their own words.
-String donationStatusText(String? status) =>
-    status == 'Confirmed' ? 'Acknowledged' : (status ?? '-');
+/// "Acknowledged". Deliveries keep their own words. Oct 25: donors do not
+/// see the CMO step ([donor]), so for them it still reads "Received".
+String donationStatusText(String? status, {bool donor = false}) =>
+    status == 'Confirmed'
+    ? (donor ? 'Received' : 'Acknowledged')
+    : (status ?? '-');
 
 class DonationStatusChip extends StatelessWidget {
   final String? status;
-  const DonationStatusChip(this.status, {super.key});
+  final bool donor;
+  const DonationStatusChip(this.status, {super.key, this.donor = false});
 
   @override
-  Widget build(BuildContext context) =>
-      StatusChip(status, label: donationStatusText(status));
+  Widget build(BuildContext context) => StatusChip(
+    donor && status == 'Confirmed' ? 'Received' : status,
+    label: donationStatusText(status, donor: donor),
+  );
 }
 
 /// The app's detail pop-out: centered, scrollable, with an X at the top
@@ -647,3 +663,8 @@ Future<T?> showDetailPopout<T>(
     },
   );
 }
+
+/// Report name without its "#12 " number (testing #16: no report IDs on
+/// the delivery view).
+String reportName(dynamic label) =>
+    '${label ?? ''}'.replaceFirst(RegExp(r'^#\d+\s*'), '');

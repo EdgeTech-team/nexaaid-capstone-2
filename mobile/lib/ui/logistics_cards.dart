@@ -272,12 +272,61 @@ class LogisticsRequestCard extends StatelessWidget {
               ),
             )
           else if (goods.isNotEmpty) ...[
+            // Testing (Oct 23): DRRMO sees what is in the prepared delivery,
+            // one line per item, so they know what the truck will carry.
             Gaps.v8,
-            Text('Goods: ${goods.join(', ')}', style: t.bodyMedium),
-          ],
-          if (r['scheduled_date'] != null) ...[
+            Text('Items to load (${goods.length})', style: t.titleSmall),
             Gaps.v4,
-            Text('Scheduled: ${niceDate(r['scheduled_date'])}'),
+            for (final g in goods)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.inventory_2_outlined,
+                      size: 18,
+                      color: cs.primary,
+                    ),
+                    Gaps.h8,
+                    Expanded(child: Text(g, style: t.bodyMedium)),
+                  ],
+                ),
+              ),
+          ],
+          // Testing fix 7.4: CSWS Main Office sets the date (the delivery
+          // date; a pickup run shows its pickup day above instead).
+          if (!_pickup && r['scheduled_date'] != null) ...[
+            Gaps.v4,
+            Row(
+              children: [
+                Icon(Icons.event_outlined, size: 16, color: cs.primary),
+                Gaps.h4,
+                Expanded(
+                  child: Text(
+                    'Scheduled by ${r['scheduled_by'] ?? 'CSWS Main Office'}: '
+                    '${niceDate(r['scheduled_date'])}',
+                  ),
+                ),
+              ],
+            ),
+          ],
+          // Testing fix 7.5: why DRRMO cannot mark it completed yet.
+          if (r['complete_blocker'] != null) ...[
+            Gaps.v4,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.lock_clock_outlined, size: 16, color: cs.error),
+                Gaps.h4,
+                Expanded(
+                  child: Text(
+                    '${r['complete_blocker']}',
+                    style: t.bodySmall?.copyWith(color: cs.error),
+                  ),
+                ),
+              ],
+            ),
           ],
           if (other.isNotEmpty) ...[
             Gaps.v8,

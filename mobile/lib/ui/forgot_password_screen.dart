@@ -63,7 +63,12 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     });
     if (r.ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('A reset code was sent to your email.')),
+               const SnackBar(
+          content: Text(
+            'If that email has an active account, a reset code was sent.',
+          ),
+        ),
+
       );
     }
   }
