@@ -15,14 +15,27 @@ that staff can check by hand:
              never planned earlier than lead_days after it was made, nor on
              or before a day the picker found nobody home. A stop already
              in an open DRRMO pickup run keeps that run's date.
-  3. Urgency (who goes first on a day), in this order:
+  3. Urgency (who must go first), in this order:
              a. fewest allowed dates left in the window (a donor with one
                 day left goes before a donor with four),
              b. closest handover deadline (days_left from donation_expiry),
              c. oldest donation first.
-  4. Fill:   add stops in that order while the run still finishes within
-             pickup hours; a stop that does not fit is tried on its next
-             allowed day.
+  4. Fill, by zone (testing, Oct 31: "cluster first, route second"):
+             a. must go today: the stop's last allowed date, or its
+                handover deadline is close (call_donor_days_left);
+             b. then the zone of the day (services/pickup_zones.py): the
+                zone of the first stop in the run, or of the most urgent
+                stop. Stops in that zone come first, nearest to the run;
+             c. a stop from another zone joins only if it is within
+                zone_reach_km of a stop already on the route (a neighbour
+                across the zone line; checked again as the route grows,
+                so a day spreads street by street, never jumping across
+                the city). The rest wait for their own zone's day.
+                Must-go stops (a) always go, whatever the zone.
+             A stop is added only while the run still finishes within
+             pickup hours; one that does not fit is tried on its next
+             allowed day. Urgency decides WHO goes on a day; the route
+             (5) decides the ORDER of that day's stops.
   5. Route:  one way from the CSWS office, nearest stop next, then remove
              crossings (2-opt) and move single stops to a better place
              (or-opt). Straight-line distance, not road distance
@@ -66,6 +79,10 @@ DEFAULTS: dict = {
     "include_return_trip": False,
     # Waiting this close to the handover deadline: staff should call.
     "call_donor_days_left": 3,
+    # Zones (testing, Oct 31): a stop from another zone joins a day's run
+    # only within this distance of a stop already on it (else it waits for
+    # its own zone's day). Must-go stops always join.
+    "zone_reach_km": 3,
     # Packaging words that mean "load these first" (a label only, no score).
     "heavy_words": ["sack", "gallon"],
 }
@@ -107,6 +124,7 @@ class Donation:
     too_far: bool = False
     days_left: Optional[int] = None        # to the handover deadline
     view: dict = field(default_factory=dict)   # passthrough fields for the screens
+    zone: Optional[str] = None             # services/pickup_zones.py
     flags: list = field(default_factory=list)  # filled in by plan()
     # Specific dates the donor is home (calendar picker). When given, only
     # these dates count, not every matching weekday.
@@ -141,6 +159,11 @@ class Stop:
     @property
     def stop_id(self) -> str:
         return "STOP-" + self.donations[0].ref
+
+    @property
+    def zone(self) -> Optional[str]:
+        """Donations of one stop are within group_radius_m: one zone."""
+        return self.donations[0].zone
 
     @property
     def not_home_date(self) -> Optional[date]:
@@ -337,6 +360,12 @@ def plan(
             return [s.run_date]
         return ok
 
+    def must_go(s: Stop, day: date) -> bool:
+        """4a: this is the stop's last allowed date, or its deadline is close."""
+        last = len([x for x in feasible(s) if x >= day]) == 1 and s.run_date is None
+        close = s.days_left is not None and s.days_left <= cfg["call_donor_days_left"]
+        return last or close
+
     def urgency(s: Stop, day: date) -> tuple:
         return (
             len([x for x in feasible(s) if x >= day]),               # a. fewest dates left
@@ -352,14 +381,46 @@ def plan(
         run: list = []
         forced = [s for s in remaining if s.run_date == day and day in feasible(s)]
         run.extend(forced)
-        candidates = sorted(
-            (s for s in remaining if s not in forced and day in feasible(s)),
-            key=lambda s: urgency(s, day),
-        )
-        for s in candidates:
-            if route_stats(run + [s], office, cfg)["minutes"] > day_minutes:
-                continue              # would not finish in time: next allowed day
-            run.append(s)
+        candidates = [s for s in remaining if s not in forced and day in feasible(s)]
+
+        def fits(s: Stop) -> bool:
+            return route_stats(run + [s], office, cfg)["minutes"] <= day_minutes
+
+        # 4a. Must go today (last allowed date, or deadline close), most urgent first.
+        must = sorted((s for s in candidates if must_go(s, day)), key=lambda s: urgency(s, day))
+        for s in must:
+            if fits(s):
+                run.append(s)         # else it is reported, never silently dropped
+        # 4b/c. The zone of the day, then nearest zones, nearest to the run.
+        rest = [s for s in candidates if s not in must]
+        if rest and not run:
+            first = min(rest, key=lambda s: urgency(s, day))
+            rest.remove(first)
+            if fits(first):
+                run.append(first)
+        anchor = run[0].zone if run else None
+
+        def reachable(s: Stop) -> bool:
+            """Zone of the day, or a neighbour within zone_reach_km of the route
+            so far (checked again each time the route grows)."""
+            return s.zone == anchor or not run or min(
+                km_between((x.lat, x.lng), (s.lat, s.lng)) for x in run
+            ) <= float(cfg["zone_reach_km"])
+
+        while True:
+            ready = [s for s in rest if reachable(s)]
+            if not ready:
+                break                 # the rest wait for their own zone's day
+            pts = [(x.lat, x.lng) for x in run] or [office]
+            here = (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+            nxt = min(ready, key=lambda s: (
+                s.zone != anchor,                       # zone of the day first
+                round(km_between(here, (s.lat, s.lng)), 3),   # then nearest to the run
+                urgency(s, day),
+            ))
+            rest.remove(nxt)
+            if fits(nxt):
+                run.append(nxt)       # else: tried on its next allowed day
         if not run:
             continue
         stats = route_stats(run, office, cfg)
@@ -385,6 +446,8 @@ def plan(
             "km": stats["km"],
             "minutes": stats["minutes"],
             "finish_label": _clock(start_hour * 60 + stats["minutes"]),
+            # Zones this run visits, in route order (testing, Oct 31).
+            "zones": list(dict.fromkeys(s.zone for s in stats["order"] if s.zone)),
             "heavy_stops": sum(
                 1 for s in run if any(is_heavy(i, cfg) for d in s.donations for i in d.items)
             ),
@@ -458,6 +521,7 @@ def stop_view(s: Stop, planned: dict, cfg: dict) -> dict:
         "lng": round(s.lng, 6),
         "landmark": first.view.get("pickup_landmark") or "",
         "barangay": first.view.get("barangay"),
+        "zone": s.zone,
         "address": first.view.get("pickup_address") or "",
         "days": weekdays_of(s.days),
         "dates": [x.isoformat() for x in dates_of(s.days)],
