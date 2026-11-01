@@ -12,8 +12,7 @@ import 'pickup_actions.dart'
 import 'pickup_days.dart';
 import 'pickup_list.dart';
 import 'pickup_plan.dart';
-import 'pickup_route.dart'
-    show centerOf, kmBetween, mandaueCenter, niceKm, pathKm;
+import 'pickup_route.dart' show centerOf, mandaueCenter, niceKm, pathKm;
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -31,10 +30,12 @@ import 'widgets.dart';
 //   * Without tapping anything: a summary of the day (donations, last
 //     chances, expiring soon, missed visits, heavy loads), and each stop's
 //     items and warnings in the sheet. Pins carry only the route number,
-//     so nearby pins don't cover each other. Choosing a day shows ONLY those stops (the same rule as
-//     the list's "Home on" filter), numbered by urgency: fewest dates left,
-//     then closest deadline, then oldest donation; distance from the
-//     previous stop only breaks an exact tie (_homeOn).
+//     so nearby pins don't cover each other. Choosing a day shows the stops
+//     the planner put on that day, numbered by the shortest route from the
+//     CSWS office, zone by zone (testing, Oct 31: services/pickup_zones.py,
+//     pickup_planner.py). Other donors home that day but planned on another
+//     day are shown faded, without a number (_dayStops). Pins take their
+//     zone's colour.
 //   * A short sheet under the map: the stops in that order, each with
 //     Navigate. Tapping a pin or a row opens the stop details (items as the
 //     donor wrote them, days, Navigate / Mark picked up / Not home).
@@ -173,80 +174,53 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
 
   // ----- what is shown --------------------------------------------------------
 
-  /// Stops with a donor home on [date] (far pickups left out), in
-  /// urgency order (Oct 12 notes), the same three rules as the planner:
-  ///   1. fewest pickup dates left in the next two weeks (a donor home only
-  ///      on Thursdays, with one Thursday left, goes first),
-  ///   2. closest handover deadline (days left before the donation expires),
-  ///   3. oldest donation first.
-  /// Only when two stops are exactly as urgent does distance decide: the
-  /// one nearest to the previous stop (or the CSWS office) goes first.
-  ///
-  /// A donor who chose specific dates shows only on those.
-  List<PlanStop> _homeOn(PickupPlan p, DateTime date) {
-    final from = date;
-    final left = [
-      for (final s in p.stops)
-        if (!s.far && s.availableOn(from)) s,
+  /// The stops of [date] (testing, Oct 31: fixed zones).
+  ///   route:  the stops the planner put on this date, in its order: the
+  ///           shortest one-way route from the CSWS office, zone by zone.
+  ///           Who goes on which day is decided by the planner (last
+  ///           allowed date first, then the zone of the day).
+  ///   others: donors also home that day but planned on another day
+  ///           (faded on the map, no number).
+  /// Far pickups are left out. A donor who chose dates shows only on those.
+  ({List<PlanStop> route, List<PlanStop> others}) _dayStops(
+    PickupPlan p,
+    DateTime date,
+  ) {
+    final route = [
+      for (final s in p.stopsOn(date))
+        if (!s.far) s,
     ];
-    final key = {for (final s in left) s.id: _urgency(p, s, from)};
-    final out = <PlanStop>[];
-    var here = p.office;
-    while (left.isNotEmpty) {
-      final at = here;
-      left.sort((a, b) {
-        final c = _compareUrgency(key[a.id]!, key[b.id]!);
-        if (c != 0 || at == null) return c;
-        return kmBetween(at, a.point).compareTo(kmBetween(at, b.point));
-      });
-      final next = left.removeAt(0);
-      out.add(next);
-      here = next.point;
-    }
-    return out;
+    final ids = {for (final s in route) s.id};
+    final others = [
+      for (final s in p.stops)
+        if (!s.far && !ids.contains(s.id) && s.availableOn(date)) s,
+    ];
+    return (route: route, others: others);
   }
 
-  /// (dates left, days to deadline, oldest donation) for one stop.
-  (int, int, DateTime) _urgency(PickupPlan p, PlanStop s, DateTime? from) {
-    // A visit where nobody was home: only dates after it count.
-    DateTime? missed;
-    for (final d in s.donations) {
-      final m = DateTime.tryParse('${d.raw['not_home_date'] ?? ''}');
-      if (m != null && (missed == null || m.isAfter(missed))) missed = m;
-    }
-    final dates = p.dates.where(
-      (d) =>
-          s.availableOn(d) &&
-          (from == null || !d.isBefore(from)) &&
-          (missed == null || d.isAfter(missed)),
-    );
-    var oldest = DateTime(9999);
-    for (final d in s.donations) {
-      final c = DateTime.tryParse('${d.raw['created_at'] ?? ''}');
-      if (c != null && c.isBefore(oldest)) oldest = c;
-    }
-    return (dates.length, s.daysLeft ?? 1 << 20, oldest);
-  }
-
-  int _compareUrgency((int, int, DateTime) a, (int, int, DateTime) b) {
-    if (a.$1 != b.$1) return a.$1.compareTo(b.$1);
-    if (a.$2 != b.$2) return a.$2.compareTo(b.$2);
-    return a.$3.compareTo(b.$3);
+  /// The numbered route of the chosen day (empty in "All").
+  List<PlanStop> get _route {
+    final p = _plan;
+    if (p == null || _day == null) return const [];
+    return _dayStops(p, _day!).route;
   }
 
   /// Stops on the map and in the sheet.
   List<PlanStop> get _shown {
     final p = _plan;
     if (p == null) return const [];
-    if (_day != null) return _homeOn(p, _day!);
+    if (_day != null) {
+      final d = _dayStops(p, _day!);
+      return [...d.route, ...d.others];
+    }
     return p.stops;
   }
 
-  /// Route number when a day is chosen; none in "All".
+  /// Route number when a day is chosen; none in "All" or for donors
+  /// planned on another day.
   Map<String, int> get _numbers {
-    if (_day == null) return const {};
-    final shown = _shown;
-    return {for (var i = 0; i < shown.length; i++) shown[i].id: i + 1};
+    final route = _route;
+    return {for (var i = 0; i < route.length; i++) route[i].id: i + 1};
   }
 
   Future<void> _openFilter() async {
@@ -257,7 +231,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
       current: _day,
       today: p.today,
       rules: _rules,
-      countOn: (d) => _homeOn(p, d).length,
+      countOn: (d) {
+        final day = _dayStops(p, d);
+        return day.route.length + day.others.length;
+      },
       allCount: p.stops.length,
     );
     if (v != null) _pickDay(v == kAllDays ? null : v);
@@ -602,10 +579,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     final cs = Theme.of(context).colorScheme;
     final p = _plan!;
     final numbers = _numbers;
+    final route = _route;
     final line = [
-      if (_day != null && p.office != null) p.office!,
-      if (_day != null)
-        for (final s in shown) s.point,
+      if (route.isNotEmpty && p.office != null) p.office!,
+      for (final s in route) s.point,
     ];
     // The selected pin is drawn last so it sits on top.
     final ordered = [
@@ -685,6 +662,7 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                       stop: s,
                       number: numbers[s.id],
                       selected: s.id == _selected,
+                      dimmed: _day != null && numbers[s.id] == null,
                       onTap: () => _openStop(s),
                     ),
                   ),
@@ -787,11 +765,16 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
     final numbers = _numbers;
     final day = _day;
     final date = day;
-    final km = day == null
+    final route = _route;
+    final others = shown.length - route.length;
+    final zones = day == null
+        ? const <String>[]
+        : (p.runOn(day)?.zones ?? const <String>[]);
+    final km = route.isEmpty
         ? 0.0
         : pathKm([
             if (p.office != null) p.office!,
-            for (final s in shown) s.point,
+            for (final s in route) s.point,
           ]);
 
     return RefreshIndicator(
@@ -832,10 +815,29 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                           ? '${shown.length} stop${shown.length == 1 ? '' : 's'} · pick a day to see the route'
                           : shown.isEmpty
                           ? 'No donor is home this day'
-                          : '${shown.length} stop${shown.length == 1 ? '' : 's'} · '
+                          : route.isEmpty
+                          ? 'No pickup planned this day'
+                          : '${route.length} stop${route.length == 1 ? '' : 's'} · '
                                 '${niceKm(km)} one way from CSWS',
                       style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                     ),
+                    if (zones.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Wrap(
+                          spacing: Space.xs,
+                          runSpacing: 4,
+                          children: [for (final z in zones) ZoneChip(z)],
+                        ),
+                      ),
+                    if (day != null && others > 0)
+                      Text(
+                        '$others more donor${others == 1 ? '' : 's'} home this day, '
+                        'planned on another day (faded)',
+                        style: t.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -873,14 +875,14 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                 label: const Text('Back to today'),
               ),
             ),
-          if (day != null && shown.isNotEmpty) _DaySummary(stops: shown),
+          if (route.isNotEmpty) _DaySummary(stops: route),
           // Turn-by-turn through the whole run in this order (Oct 2026,
           // route planning): one way from CSWS, in legs of 10 stops.
-          if (day != null && shown.isNotEmpty)
+          if (route.isNotEmpty)
             Wrap(
               spacing: Space.xs,
               children: [
-                for (var leg = 0; leg * routeLegStops < shown.length; leg++)
+                for (var leg = 0; leg * routeLegStops < route.length; leg++)
                   FilledButton.tonalIcon(
                     onPressed: () => openRouteNavigation(
                       context,
@@ -888,17 +890,17 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                           ? null
                           : (p.office!.latitude, p.office!.longitude),
                       stops: [
-                        for (final s in shown)
+                        for (final s in route)
                           (s.point.latitude, s.point.longitude),
                       ],
                       leg: leg,
                     ),
                     icon: const Icon(Icons.navigation_outlined),
                     label: Text(
-                      shown.length <= routeLegStops
+                      route.length <= routeLegStops
                           ? 'Navigate this route'
                           : 'Navigate stops ${leg * routeLegStops + 1}-'
-                                '${((leg + 1) * routeLegStops).clamp(0, shown.length)}',
+                                '${((leg + 1) * routeLegStops).clamp(0, route.length)}',
                     ),
                   ),
               ],
@@ -1154,10 +1156,13 @@ class _MiniStopRow extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final s = stop;
-    final color = s.far ? farGrey : cs.primary;
+    final color = s.far ? farGrey : zoneColor(s.zone, cs.primary);
     final where = [
+      if (s.zone != null) s.zone!,
       if (s.barangay != null) 'Brgy. ${s.barangay}',
       s.countLine,
+      if (number == null && s.plannedDate != null)
+        'planned ${planDateLabel(s.plannedDate!)}',
     ].join(' · ');
     final items = s.items;
     final what = items.isEmpty

@@ -45,6 +45,7 @@ from schemas.physical_donation_schema import (
 from services.donation_expiry import entry_expiry_info, expire_overdue
 from services.pickup_barangay import barangay_finder
 from services.pickup_planner import Donation, plan, planner_config
+from services.pickup_zones import ZONES, zone_of
 from api.v1.donation_routes import (
     PICKUP_ROLES,
     _distance_view,
@@ -123,8 +124,12 @@ def _waiting(db: Session) -> list:
         req = runs.get(ref)
         expiry = entry_expiry_info(lines)
         distance = _distance_view(spot)
+        # Fixed pickup zone (services/pickup_zones.py, testing Oct 31).
+        zone = zone_of(spot.pickup_address, spot.pickup_landmark,
+                       _num(spot.pickup_lat), _num(spot.pickup_lng))
         out.append(Donation(
             ref=ref,
+            zone=zone,
             lat=_num(spot.pickup_lat),
             lng=_num(spot.pickup_lng),
             days=days,
@@ -146,7 +151,10 @@ def _waiting(db: Session) -> list:
             too_far=distance["too_far"],
             days_left=expiry["days_left"],
             view={
-                "barangay": find_barangay(spot.pickup_address, spot.pickup_landmark),
+                # The barangay list is Mandaue's: outside Mandaue a word like
+                # "Poblacion" is another town's, so no label there.
+                "barangay": (find_barangay(spot.pickup_address, spot.pickup_landmark)
+                             if zone is None or zone.startswith("Mandaue") else None),
                 "pickup_address": spot.pickup_address,
                 "pickup_landmark": spot.pickup_landmark,
                 "pickup_notes": spot.pickup_notes,
@@ -187,6 +195,8 @@ def pickup_plan(
     area = pickup_area()
     result["office"] = {"lat": area["office"][0], "lng": area["office"][1]}
     result["max_km"] = area["max_km"]
+    # The fixed zones, for the legend and the zone colours (testing, Oct 31).
+    result["zones"] = [{"name": z["name"], "code": z["code"], "city": z["city"]} for z in ZONES]
     return result
 
 

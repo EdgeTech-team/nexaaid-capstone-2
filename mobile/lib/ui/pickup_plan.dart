@@ -77,6 +77,27 @@ bool _availableOn(Set<int> days, Set<DateTime> dates, DateTime? d) {
 /// Grey for pickups outside the distance limit.
 const farGrey = Color(0xFF6B7280);
 
+/// Fixed pickup zones (testing, Oct 31; backend services/pickup_zones.py):
+/// one colour each on the map and in the lists.
+const zoneColors = <String, Color>{
+  'Mandaue North': Color(0xFF1565C0),
+  'Mandaue West': Color(0xFF00796B),
+  'Mandaue East': Color(0xFF6A1B9A),
+  'Cebu City North': Color(0xFFE65100),
+  'Cebu City South': Color(0xFFAD1457),
+  'Lapu-Lapu (Mactan)': Color(0xFF2E7D32),
+  'Consolacion': Color(0xFF5D4037),
+};
+
+/// The zone's colour; a renamed or unknown zone still gets a steady one.
+Color zoneColor(String? zone, Color fallback) {
+  if (zone == null) return fallback;
+  final known = zoneColors[zone];
+  if (known != null) return known;
+  final all = zoneColors.values.toList();
+  return all[zone.codeUnits.fold<int>(0, (a, c) => a + c) % all.length];
+}
+
 /// Dark yellow text for "last chance".
 const lastChanceInk = Color(0xFF8A6100);
 
@@ -148,6 +169,7 @@ class PlanStop {
   final String landmark;
   final String address;
   final String? barangay; // read from the address text; null: not found
+  final String? zone; // fixed pickup zone (services/pickup_zones.py)
   final Set<int> days; // the days every donor here allows
   final Set<DateTime> dates; // the dates every donor here allows (calendar)
   final List<PlanDonation> donations;
@@ -170,6 +192,7 @@ class PlanStop {
       landmark = '${j['landmark'] ?? ''}'.trim(),
       address = '${j['address'] ?? ''}'.trim(),
       barangay = j['barangay'] as String?,
+      zone = j['zone'] as String?,
       days = pickupDaysOf(j['days']),
       dates = pickupDatesOf(j['dates']),
       donations = [
@@ -225,6 +248,7 @@ class PlanRun {
   final int minutes;
   final String finishLabel;
   final int heavyStops;
+  final List<String> zones; // zones this run visits, in route order
 
   PlanRun.fromJson(Map j)
     : date = _date(j['date'])!,
@@ -233,7 +257,8 @@ class PlanRun {
       km = _double(j['km']),
       minutes = _int(j['minutes']) ?? 0,
       finishLabel = '${j['finish_label'] ?? ''}',
-      heavyStops = _int(j['heavy_stops']) ?? 0;
+      heavyStops = _int(j['heavy_stops']) ?? 0,
+      zones = _strings(j['zones']);
 }
 
 class PickupPlan {
@@ -394,7 +419,8 @@ class DayChips extends StatelessWidget {
 
 /// One stop on the map.
 ///   number inside   route order on the chosen day (a dot in "All")
-///   colour          brand teal; grey = far (outside the distance limit)
+///   colour          its pickup zone; grey = far (outside the distance limit)
+///   faded           home on the chosen day but planned on another day
 ///   corner badge    how many donations (×3)
 ///   yellow ring     last chance: the donors' only remaining day
 ///   truck           already in a DRRMO pickup request
@@ -403,12 +429,14 @@ class PlanPin extends StatelessWidget {
   final int? number;
   final bool selected;
   final VoidCallback onTap;
+  final bool dimmed;
   const PlanPin({
     super.key,
     required this.stop,
     required this.number,
     required this.selected,
     required this.onTap,
+    this.dimmed = false,
   });
 
   static const double _size = 50;
@@ -419,11 +447,13 @@ class PlanPin extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final color = stop.far ? farGrey : cs.primary;
+    final color = stop.far ? farGrey : zoneColor(stop.zone, cs.primary);
     const inner = _size * 0.46;
     final label = [
       number == null ? 'Stop' : 'Stop $number',
       stop.area,
+      if (stop.zone != null) stop.zone!,
+      if (dimmed) 'planned on another day',
       '${stop.donations.length} donation${stop.donations.length == 1 ? '' : 's'}',
       if (stop.lastChance) 'last chance',
       if (stop.far) 'far from the CSWS office',
@@ -437,78 +467,82 @@ class PlanPin extends StatelessWidget {
       onTap: onTap,
       child: GestureDetector(
         onTap: onTap,
-        child: AnimatedScale(
+        child: AnimatedOpacity(
           duration: Motion.fast,
-          scale: selected ? 1.18 : 1,
-          alignment: Alignment.bottomCenter,
-          child: SizedBox(
-            width: box.width,
-            height: box.height,
-            child: Stack(
-              alignment: Alignment.topCenter,
-              clipBehavior: Clip.none,
-              children: [
-                Positioned(
-                  top: 6,
-                  child: Icon(
-                    Icons.location_on,
-                    size: _size,
-                    color: color,
-                    shadows: const [
-                      Shadow(blurRadius: 4, color: Colors.black38),
-                    ],
-                  ),
-                ),
-                Positioned(
-                  top: 6 + _size * 0.15,
-                  child: Container(
-                    width: inner,
-                    height: inner,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: selected ? AppColors.vest : Colors.white,
-                      shape: BoxShape.circle,
-                      border: stop.lastChance
-                          ? Border.all(color: AppColors.vest, width: 3)
-                          : null,
-                    ),
-                    child: number == null
-                        ? Icon(
-                            stop.far ? Icons.priority_high : Icons.circle,
-                            size: stop.far ? 14 : 8,
-                            color: selected ? AppColors.vestInk : color,
-                          )
-                        : Text(
-                            '$number',
-                            style: TextStyle(
-                              color: selected ? AppColors.vestInk : color,
-                              fontWeight: FontWeight.w900,
-                              fontSize: number! > 99 ? 9 : inner * 0.5,
-                            ),
-                          ),
-                  ),
-                ),
-                if (stop.donations.length > 1)
+          opacity: dimmed && !selected ? 0.45 : 1,
+          child: AnimatedScale(
+            duration: Motion.fast,
+            scale: selected ? 1.18 : 1,
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              width: box.width,
+              height: box.height,
+              child: Stack(
+                alignment: Alignment.topCenter,
+                clipBehavior: Clip.none,
+                children: [
                   Positioned(
-                    right: 0,
-                    top: 0,
-                    child: _Tag('×${stop.donations.length}', border: color),
+                    top: 6,
+                    child: Icon(
+                      Icons.location_on,
+                      size: _size,
+                      color: color,
+                      shadows: const [
+                        Shadow(blurRadius: 4, color: Colors.black38),
+                      ],
+                    ),
                   ),
-                if (stop.inRun)
-                  const Positioned(
-                    left: 0,
-                    bottom: _size * 0.30,
-                    child: CircleAvatar(
-                      radius: 9,
-                      backgroundColor: Colors.white,
-                      child: Icon(
-                        Icons.fire_truck,
-                        size: 12,
-                        color: AppColors.success,
+                  Positioned(
+                    top: 6 + _size * 0.15,
+                    child: Container(
+                      width: inner,
+                      height: inner,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: selected ? AppColors.vest : Colors.white,
+                        shape: BoxShape.circle,
+                        border: stop.lastChance
+                            ? Border.all(color: AppColors.vest, width: 3)
+                            : null,
+                      ),
+                      child: number == null
+                          ? Icon(
+                              stop.far ? Icons.priority_high : Icons.circle,
+                              size: stop.far ? 14 : 8,
+                              color: selected ? AppColors.vestInk : color,
+                            )
+                          : Text(
+                              '$number',
+                              style: TextStyle(
+                                color: selected ? AppColors.vestInk : color,
+                                fontWeight: FontWeight.w900,
+                                fontSize: number! > 99 ? 9 : inner * 0.5,
+                              ),
+                            ),
+                    ),
+                  ),
+                  if (stop.donations.length > 1)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      child: _Tag('×${stop.donations.length}', border: color),
+                    ),
+                  if (stop.inRun)
+                    const Positioned(
+                      left: 0,
+                      bottom: _size * 0.30,
+                      child: CircleAvatar(
+                        radius: 9,
+                        backgroundColor: Colors.white,
+                        child: Icon(
+                          Icons.fire_truck,
+                          size: 12,
+                          color: AppColors.success,
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -896,6 +930,38 @@ class _DonationRow extends StatelessWidget {
                   ),
               ],
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A pickup zone as a small coloured label ("Mandaue West").
+class ZoneChip extends StatelessWidget {
+  final String zone;
+  const ZoneChip(this.zone, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final color = zoneColor(zone, cs.primary);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(Radii.pill),
+        border: Border.all(color: color.withValues(alpha: 0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.place, size: 13, color: color),
+          const SizedBox(width: 4),
+          Text(
+            zone,
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: cs.onSurface, fontWeight: FontWeight.w700),
+          ),
         ],
       ),
     );
