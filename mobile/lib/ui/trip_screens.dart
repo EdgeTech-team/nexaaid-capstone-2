@@ -609,11 +609,11 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
   /// Barangays in the order the truck visits them (staff can reorder).
   final List<int> stopOrder = [];
 
-  /// report_id -> item_id -> quantity box
-  final Map<int, Map<int, TextEditingController>> qty = {};
-
   /// Oct 15: ticked donation entries per report (each goes whole).
   final Map<int, Set<String>> _ready = {};
+
+  /// report_id -> how many kinds of goods its ticked donations carry.
+  final Map<int, int> _kinds = {};
 
   final _sendForm = GlobalKey<FormState>();
   final vehicle = TextEditingController();
@@ -622,11 +622,6 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   @override
   void dispose() {
-    for (final m in qty.values) {
-      for (final c in m.values) {
-        c.dispose();
-      }
-    }
     vehicle.dispose();
     notes.dispose();
     super.dispose();
@@ -634,18 +629,10 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
 
   int _brgy(int reportId) => reports[reportId]!['barangay_id'] as int;
 
-  TextEditingController Function(int) _ctrlFor(int reportId) =>
-      (itemId) => qty
-          .putIfAbsent(reportId, () => <int, TextEditingController>{})
-          .putIfAbsent(itemId, () => TextEditingController());
-
-  List<Map> _items(int reportId) =>
-      (reports[reportId]!['items'] as List).cast<Map>();
-
-  /// How many different goods go for this report. Quantities are not
-  /// added up: they are in different units (kg, L, pcs).
-  int _goods(int reportId) =>
-      linesFrom(_items(reportId), _ctrlFor(reportId)).length;
+  /// How many different goods go for this report (from the donations
+  /// ticked in step 2). Quantities are not added up: they are in different
+  /// units (kg, L, pcs).
+  int _goods(int reportId) => _kinds[reportId] ?? 0;
 
   static String _goodsLabel(int n) =>
       '$n ${n == 1 ? 'kind' : 'kinds'} of goods';
@@ -901,6 +888,9 @@ class _TripPlannerScreenState extends State<TripPlannerScreen> {
                         reportId: rid,
                         onChanged: (refs) {
                           if (mounted) setState(() => _ready[rid] = refs);
+                        },
+                        onKindsChanged: (n) {
+                          if (mounted) setState(() => _kinds[rid] = n);
                         },
                       ),
                       if (tried && (_ready[rid] ?? {}).isEmpty)
