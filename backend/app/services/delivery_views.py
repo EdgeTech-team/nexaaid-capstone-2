@@ -7,7 +7,7 @@ same way.
 from datetime import date, datetime, time, timedelta
 from typing import Optional
 
-from sqlalchemy import case, func, or_
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from models.audit_log_model import AuditLog
@@ -22,7 +22,8 @@ STATUS_ORDER = ["Preparing", "In Transit", "Delivered", "Confirmed", "Cancelled"
 # newest / oldest: when the delivery was prepared.
 # date_soonest / date_latest: the planned delivery date.
 # status: Preparing first, Confirmed last (what still needs work comes first).
-DELIVERY_SORTS = ("newest", "oldest", "date_soonest", "date_latest", "status")
+DELIVERY_SORTS = ("newest", "oldest", "date_soonest", "date_latest", "status", "priority")
+PRIORITY_ORDER = ["Critical", "High", "Medium", "Low"]
 
 
 def _manila_start(d: date) -> datetime:
@@ -79,6 +80,12 @@ def apply_delivery_filters(
         return query.order_by(Delivery.delivery_date.desc(), Delivery.delivery_id.desc())
     if sort == "status":
         rank = case({s: i for i, s in enumerate(STATUS_ORDER)}, value=Delivery.status, else_=99)
+        return query.order_by(rank, Delivery.delivery_date.asc(), Delivery.delivery_id.asc())
+    if sort == "priority":
+        # Phase 6 (3.11 levels): Critical reports first, unrated last.
+        level = (select(DisasterReport.priority_level)
+                 .where(DisasterReport.report_id == Delivery.report_id).scalar_subquery())
+        rank = case({p: i for i, p in enumerate(PRIORITY_ORDER)}, value=level, else_=99)
         return query.order_by(rank, Delivery.delivery_date.asc(), Delivery.delivery_id.asc())
     return query.order_by(Delivery.created_at.desc(), Delivery.delivery_id.desc())
 

@@ -10,7 +10,8 @@ import 'package:http/testing.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/donate_screen.dart';
-import 'package:mobile/ui/location_picker.dart' show PickupRules, placeIn;
+import 'package:mobile/ui/location_picker.dart'
+    show AddressAutocompleteField, PickupRules, placeIn;
 import 'package:mobile/ui/pickup_days.dart';
 import 'package:mobile/ui/pickup_plan.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
@@ -103,7 +104,7 @@ void main() {
               place: 'Carcar',
               areas: const PickupRules().serviceAreas,
               onDropOff: () => dropOff++,
-              onChangeLandmark: () => change++,
+              onChangeAddress: () => change++,
             ),
           ),
         ),
@@ -131,7 +132,7 @@ void main() {
     expect(find.textContaining('current limitation'), findsOneWidget);
     expect(find.textContaining('Lapu-Lapu City'), findsOneWidget);
     await tester.tap(find.text('Switch to Drop Off'));
-    await tester.tap(find.text('Choose another landmark'));
+    await tester.tap(find.text('Choose another address'));
     expect((dropOff, change), (1, 1));
   });
 
@@ -188,8 +189,8 @@ void main() {
             edit: {
               'batch_reference': 'DON-DTD1',
               'handover_method': 'Door to Door',
-              'pickup_address': '12 Del Rosario St.',
-              'pickup_landmark': 'Oakridge IT Center, Banilad, Mandaue City',
+              'pickup_address': 'Oakridge IT Center, Banilad, Mandaue City',
+              'pickup_landmark': 'Blue gate beside the chapel',
               'pickup_lat': 10.3367,
               'pickup_lng': 123.9142,
               'pickup_dates': [pickupDateIso(wed), pickupDateIso(tue)],
@@ -201,11 +202,31 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      // Nov 1: Address (map suggestions) comes first, Landmark is typed.
+      final address = find.byType(AddressAutocompleteField);
+      final landmark = find.widgetWithText(TextFormField, 'Landmark');
+      expect(address, findsOneWidget);
+      expect(landmark, findsOneWidget);
+      expect(
+        find.descendant(of: address, matching: find.text('Address')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getTopLeft(address).dy,
+        lessThan(tester.getTopLeft(landmark).dy),
+      );
       await tester.tap(find.text('Save changes'));
       await tester.pumpAndSettle();
     }, () => server);
     final dates = [pickupDateIso(tue), pickupDateIso(wed)]..sort();
     expect(sent?['pickup_dates'], dates);
+    // The address carries the map pin; the landmark is the donor's own words.
+    expect(
+      sent?['pickup_address'],
+      'Oakridge IT Center, Banilad, Mandaue City',
+    );
+    expect(sent?['pickup_lat'], 10.3367);
+    expect(sent?['pickup_landmark'], 'Blue gate beside the chapel');
     // Weekdays are sent sorted (Tuesday 2, Wednesday 3), whichever date
     // comes first.
     expect(sent?['pickup_days'], [DateTime.tuesday, DateTime.wednesday]);

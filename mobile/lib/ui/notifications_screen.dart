@@ -3,10 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../realtime.dart';
 import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
 import 'home_nav.dart';
-import 'ops_screens.dart' show showCmoEntryPopout;
+import 'ops_screens.dart' show NewDeliveryScreen, showCmoEntryPopout;
 import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 
@@ -65,7 +66,8 @@ final Map<String, EntityOpener> notificationDestinations = {
         _go(c, 'Incoming aid');
       case Roles.cswsMain:
       case Roles.drrmo:
-        _go(c, 'Deliveries');
+        // Phase 6: that delivery, first in the list and outlined.
+        _go(c, 'Deliveries', id: id);
       default:
         break; // no deliveries page for this role: stay on the inbox
     }
@@ -94,15 +96,21 @@ final Map<String, EntityOpener> notificationDestinations = {
         );
       case Roles.cswsMain:
         final r = await api.get('/logistics/requests');
-        final pickup =
-            r.ok &&
-            r.json is List &&
-            (r.json as List).any(
-              (x) =>
-                  (x as Map)['request_id'] == id &&
-                  x['request_type'] == 'Pickup',
-            );
-        if (c.mounted) _go(c, pickup ? 'Pickups' : 'Deliveries');
+        final row = r.ok && r.json is List
+            ? (r.json as List).cast<Map>().where((x) => x['request_id'] == id)
+            : const <Map>[];
+        final pickup = row.any((x) => x['request_type'] == 'Pickup');
+        if (!c.mounted) return;
+        if (pickup) {
+          _go(c, 'Pickups');
+        } else {
+          // Phase 6: the delivery this request is for, outlined.
+          _go(
+            c,
+            'Deliveries',
+            id: row.isEmpty ? null : row.first['delivery_id'] as int?,
+          );
+        }
       default:
         break;
     }
@@ -392,6 +400,27 @@ class ReportSheet extends StatelessWidget {
                 style: t.bodyLarge?.copyWith(color: const Color(0xFFC62828)),
               ),
             ),
+
+          // Phase 6 (UC-CM2 step 3): send this report's goods from here.
+          if (api.role == Roles.cswsMain && status == 'Validated')
+            Padding(
+              padding: const EdgeInsets.only(top: 20),
+              child: FilledButton.icon(
+                onPressed: () {
+                  final nav = Navigator.of(context);
+                  nav.pop(); // close the pop-out first
+                  nav.push(
+                    MaterialPageRoute(
+                      builder: (_) => NewDeliveryScreen(
+                        reportId: report['report_id'] as int,
+                      ),
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.local_shipping_outlined),
+                label: const Text('Prepare delivery'),
+              ),
+            ),
         ],
       ),
     );
@@ -431,6 +460,16 @@ class _Section extends StatelessWidget {
 /// Administrator should see a new report almost as soon as it is sent).
 const notificationPollInterval = Duration(seconds: 8);
 
+/// With live updates connected (Realtime) notices arrive at once, so the
+/// bell only checks every 30 s as a fallback.
+const livePollInterval = Duration(seconds: 30);
+
+/// Whether a poll is due: always without live updates, otherwise once
+/// [livePollInterval] has passed since [last].
+bool pollDue(DateTime last) =>
+    !Realtime.instance.connected ||
+    DateTime.now().difference(last) >= livePollInterval;
+
 /// Opens what a notification is about (marks it read first).
 Future<void> openNotification(BuildContext context, Map n) async {
   if (n['is_read'] != true) {
@@ -459,8 +498,11 @@ class _NotificationBellState extends State<NotificationBell> {
   int unread = 0;
   int? _newest; // id of the newest unread notification seen so far
   Timer? _timer;
+  StreamSubscription? _live;
+  DateTime _last = DateTime.fromMillisecondsSinceEpoch(0);
 
   Future<void> _refresh() async {
+    _last = DateTime.now();
     var n = 0;
     Map? top;
     if (api.loggedIn) {
@@ -510,12 +552,19 @@ class _NotificationBellState extends State<NotificationBell> {
     super.initState();
     _refresh();
     api.addListener(_refresh);
-    _timer = Timer.periodic(notificationPollInterval, (_) => _refresh());
+    // Live: a new notice updates the badge and shows its toast at once.
+    _live = Realtime.instance.events.listen((m) {
+      if (m['type'] == 'notification') _refresh();
+    });
+    _timer = Timer.periodic(notificationPollInterval, (_) {
+      if (pollDue(_last)) _refresh();
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _live?.cancel();
     api.removeListener(_refresh);
     super.dispose();
   }
@@ -551,6 +600,8 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   // Changing this key makes Loader fetch again (after mark-read / mark-all).
   int _reload = 0;
   Timer? _timer;
+  StreamSubscription? _live;
+  DateTime _last = DateTime.fromMillisecondsSinceEpoch(0);
   String? _seen; // unread count + newest id last shown
 
   void _refreshList() {
@@ -559,6 +610,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   /// While the inbox is open, new notifications appear by themselves.
   Future<void> _check() async {
+    _last = DateTime.now();
     final r = await api.get('/notifications/', query: {'limit': '1'});
     if (!mounted || !r.ok || r.json is! Map) return;
     final m = r.json as Map;
@@ -574,12 +626,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void initState() {
     super.initState();
     _check();
-    _timer = Timer.periodic(notificationPollInterval, (_) => _check());
+    _live = Realtime.instance.events.listen((m) {
+      if (m['type'] == 'notification') _check();
+    });
+    _timer = Timer.periodic(notificationPollInterval, (_) {
+      if (pollDue(_last)) _check();
+    });
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _live?.cancel();
     super.dispose();
   }
 

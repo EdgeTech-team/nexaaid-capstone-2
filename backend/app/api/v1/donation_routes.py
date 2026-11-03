@@ -856,7 +856,9 @@ def door_to_door_pickups(
             labels[first.report_id] = _report_label(db, first.report_id)
         pending = [l for l in lines if l.status == "Pending"]
         summary = []
-        for l in lines:
+        # Nov 1: one QR, one accurate list: items the donor removed are not
+        # part of what is picked up.
+        for l in (l for l in lines if not is_removed(l)):
             it = items.get(l.item_id)
             unit = it.unit_of_measure if it else ""
             name = it.item_name if it else "Item"
@@ -1098,11 +1100,13 @@ def _out_of_area_message(place: Optional[str]) -> str:
 
 def _check_service_area(payload) -> None:
     """Door to Door only inside the service areas (Mandaue City, Cebu City,
-    Consolacion, Lapu-Lapu City). The landmark decides when given
-    (it carries the map pin); otherwise the typed address."""
+    Consolacion, Lapu-Lapu City). Nov 1: the address decides (the donor
+    picks it from the map suggestions, so it carries the pin); the landmark
+    is free text for the pickup team and only used when there is no
+    address."""
     if payload.handover_method != "Door to Door":
         return
-    where = pin_coverage(payload.pickup_landmark or payload.pickup_address,
+    where = pin_coverage(payload.pickup_address or payload.pickup_landmark,
                          payload.pickup_lat, payload.pickup_lng)
     if not where["covered"]:
         raise HTTPException(status_code=422, detail=_out_of_area_message(where["place"]))

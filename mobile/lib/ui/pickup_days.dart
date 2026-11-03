@@ -957,7 +957,7 @@ String serviceAreasSentence(List<ServiceArea> areas) {
   return '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
 }
 
-/// Shown as soon as the map check finds the landmark outside the Door to
+/// Shown as soon as the map check finds the address outside the Door to
 /// Door service areas: a sorry, why (a current limit of the app), and a
 /// one-tap switch to Drop Off.
 ///
@@ -968,14 +968,14 @@ class OutOfAreaNotice extends StatelessWidget {
   final String? place; // e.g. "Carcar", from the map
   final List<ServiceArea> areas;
   final VoidCallback onDropOff;
-  final VoidCallback onChangeLandmark;
+  final VoidCallback onChangeAddress;
 
   const OutOfAreaNotice({
     super.key,
     required this.place,
     required this.areas,
     required this.onDropOff,
-    required this.onChangeLandmark,
+    required this.onChangeAddress,
   });
 
   @override
@@ -989,9 +989,9 @@ class OutOfAreaNotice extends StatelessWidget {
       label: const Text('Switch to Drop Off'),
     );
     final change = TextButton.icon(
-      onPressed: onChangeLandmark,
+      onPressed: onChangeAddress,
       icon: const Icon(Icons.edit_location_alt_outlined),
-      label: const Text('Choose another landmark'),
+      label: const Text('Choose another address'),
     );
     return Semantics(
       liveRegion: true,
@@ -1104,7 +1104,7 @@ class OutOfAreaNotice extends StatelessWidget {
   }
 }
 
-/// Small line under the landmark while the map is checked, or when the
+/// Small line under the address while the map is checked, or when the
 /// place is covered.
 class CoverageStatusLine extends StatelessWidget {
   final bool checking;
@@ -1133,7 +1133,7 @@ class CoverageStatusLine extends StatelessWidget {
           child: Text(
             checking
                 ? 'Checking the map for pickup coverage…'
-                : 'Door-to-door pickup is available at this landmark.',
+                : 'Door-to-door pickup is available at this address.',
             style: t.bodySmall?.copyWith(
               color: checking ? cs.onSurfaceVariant : AppColors.success,
               fontWeight: checking ? null : FontWeight.w600,

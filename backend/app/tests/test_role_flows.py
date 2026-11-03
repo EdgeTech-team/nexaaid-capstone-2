@@ -121,6 +121,14 @@ def ok(r, code=200):
     return r.json() if r.content else None
 
 
+def accept_body(**extra):
+    """UC-DR1 step 5 / Table 36 alt 4a (Nov 2026): DRRMO accepts a delivery
+    request with when its truck comes. "Now", so the tests can pick the goods
+    up right away (the delivery date follows DRRMO's time)."""
+    from datetime import datetime, timezone
+    return {"scheduled_date": datetime.now(timezone.utc).isoformat(), **extra}
+
+
 def test_login_reports_real_role_name(api):
     client, t = api
     for key, (_, role_id) in ACCOUNTS.items():
@@ -271,7 +279,7 @@ def test_full_relief_chain_across_all_roles(api):
                           json={"notes": "No truck available"}))
     assert dec["status"] == "Declined"
     lr2 = ok(client.post("/logistics/requests", headers=t["csws"], json=req), 201)  # ask again
-    acc = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/accept", headers=t["drrmo"], json={}))
+    acc = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/accept", headers=t["drrmo"], json=accept_body()))
     assert acc["status"] == "Accepted"
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["scheduled"] == 1
 
