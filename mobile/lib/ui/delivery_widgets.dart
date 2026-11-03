@@ -47,6 +47,19 @@ String niceWhen(dynamic iso) {
       '$h:$m ${l.hour < 12 ? 'AM' : 'PM'}';
 }
 
+/// Delivery steps in plain staff words (Table 37). The server keeps the
+/// status names (Preparing, In Transit, Delivered, Confirmed); only the
+/// screens say it this way. Not in StatusColors.label, because "Confirmed"
+/// there also means a donation the CMO acknowledged.
+const deliveryWords = {
+  'Preparing': 'Being packed',
+  'In Transit': 'On the way',
+  'Delivered': 'Arrived',
+  'Confirmed': 'Received by barangay',
+};
+
+String deliveryWord(String? status) => deliveryWords[status] ?? (status ?? '-');
+
 /// Subtitle for a report whose goods CSWS received but the CMO has not
 /// acknowledged yet (not_acknowledged_reports of GET /trips/candidates).
 String notAcknowledgedText(Map r) {
@@ -65,7 +78,7 @@ Future<String?> pickDeliveryDateTime(
   String help = 'When will it leave?',
 }) async {
   final now = DateTime.now();
-  final cur = DateTime.tryParse('${current ?? ''}')?.toLocal();
+  final cur = DateTime.tryParse(current ?? '')?.toLocal();
   final today = DateTime(now.year, now.month, now.day);
   final day = await showDatePicker(
     context: context,

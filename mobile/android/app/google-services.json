@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "121547730757",
+    "project_id": "nexaaid",
+    "storage_bucket": "nexaaid.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:121547730757:android:cffedc883a490f239f582c",
+        "android_client_info": {
+          "package_name": "com.edgetech.nexaaid"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBjEWSBaY2ZWggdU2U5nHDPJctzid2cyCc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

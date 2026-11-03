@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'delivery_widgets.dart' show DateField, niceWhen, pickDeliveryDateTime;
 import 'pickup_actions.dart' show openNavigation;
 import 'widgets.dart';
 
@@ -45,13 +46,168 @@ String pickupDay(Object? ymd) {
   return '${_wd[d.weekday - 1]}, ${_mo[d.month - 1]} ${d.day}';
 }
 
+/// Note lines DRRMO adds when accepting; the card shows them on their own.
+const _drrmoLines = ['DRRMO vehicle: ', 'DRRMO driver: '];
+
+/// "Truck 2 · Driver: Juan" from a request row, or null if neither was given.
+String? vehicleAndDriver(Map r) {
+  final parts = [
+    if (r['vehicle'] != null) '${r['vehicle']}',
+    if (r['driver'] != null) 'Driver: ${r['driver']}',
+  ];
+  return parts.isEmpty ? null : parts.join(' · ');
+}
+
+/// UC-DR1 step 5 / Table 36 alt 4a: DRRMO accepts a delivery request and says
+/// when its truck comes, with date and time pickers (no typing). Vehicle and
+/// driver are optional. Starts at the time Main Office planned, if it has not
+/// passed. Returns the body for PATCH /drrmo/requests/{id}/accept, or null.
+Future<Map<String, dynamic>?> showAcceptDeliveryDialog(
+  BuildContext context,
+  Map r,
+) => showDialog<Map<String, dynamic>>(
+  context: context,
+  builder: (_) => _AcceptDeliveryDialog(r),
+);
+
+class _AcceptDeliveryDialog extends StatefulWidget {
+  final Map r;
+  const _AcceptDeliveryDialog(this.r);
+
+  @override
+  State<_AcceptDeliveryDialog> createState() => _AcceptDeliveryDialogState();
+}
+
+class _AcceptDeliveryDialogState extends State<_AcceptDeliveryDialog> {
+  final _vehicle = TextEditingController();
+  final _driver = TextEditingController();
+  String? _when; // ISO, UTC
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final planned = DateTime.tryParse('${widget.r['scheduled_date'] ?? ''}');
+    if (planned != null && planned.isAfter(DateTime.now())) {
+      _when = planned.toUtc().toIso8601String();
+    }
+  }
+
+  @override
+  void dispose() {
+    _vehicle.dispose();
+    _driver.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pick() async {
+    final v = await pickDeliveryDateTime(
+      context,
+      current: _when ?? '${widget.r['scheduled_date'] ?? ''}',
+      help: 'When will DRRMO pick up the goods?',
+    );
+    if (v != null && mounted) {
+      setState(() {
+        _when = v;
+        _error = null;
+      });
+    }
+  }
+
+  void _accept() {
+    final at = DateTime.tryParse(_when ?? '');
+    if (at == null) {
+      setState(() => _error = 'Pick the date and time');
+      return;
+    }
+    // Same 5 minutes of grace as the server (AcceptLogisticsRequest).
+    if (at.isBefore(DateTime.now().subtract(const Duration(minutes: 5)))) {
+      setState(() => _error = 'This time has passed. Pick a later one.');
+      return;
+    }
+    Navigator.pop(context, {
+      'scheduled_date': _when,
+      if (_vehicle.text.trim().isNotEmpty) 'vehicle': _vehicle.text.trim(),
+      if (_driver.text.trim().isNotEmpty) 'driver': _driver.text.trim(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final r = widget.r;
+    final t = Theme.of(context).textTheme;
+    return AlertDialog(
+      title: Text('Accept request #${r['request_id']}'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('${r['needs'] ?? 'Transport support'}', style: t.titleSmall),
+            Text('To ${r['destination'] ?? '-'}'),
+            if (r['scheduled_date'] != null)
+              Text(
+                'CSWS planned it for ${niceWhen(r['scheduled_date'])}',
+                style: t.bodySmall,
+              ),
+            Gaps.v12,
+            DateField(
+              label: 'When DRRMO picks up the goods',
+              value: _when,
+              error: _error,
+              onTap: _pick,
+            ),
+            Gaps.v12,
+            TextField(
+              controller: _vehicle,
+              maxLength: 80,
+              decoration: const InputDecoration(
+                labelText: 'Vehicle (optional)',
+                hintText: 'e.g. Truck 2, ABC-123',
+                prefixIcon: Icon(Icons.local_shipping_outlined),
+              ),
+            ),
+            TextField(
+              controller: _driver,
+              maxLength: 80,
+              decoration: const InputDecoration(
+                labelText: 'Driver (optional)',
+                prefixIcon: Icon(Icons.person_outline),
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: _accept,
+          icon: const Icon(Icons.check),
+          label: const Text('Accept'),
+        ),
+      ],
+    );
+  }
+}
+
 class LogisticsRequestCard extends StatelessWidget {
   final Map r;
 
   /// Buttons for this request (Accept, Decline, ...), shown at the bottom.
   final List<Widget> actions;
 
-  const LogisticsRequestCard(this.r, {super.key, this.actions = const []});
+  /// Tapping the card (not a button), e.g. the delivery's timeline.
+  final VoidCallback? onTap;
+
+  const LogisticsRequestCard(
+    this.r, {
+    super.key,
+    this.actions = const [],
+    this.onTap,
+  });
 
   bool get _pickup => r['request_type'] == 'Pickup';
 
@@ -62,8 +218,15 @@ class LogisticsRequestCard extends StatelessWidget {
     final needs = '${r['needs'] ?? ''}'.trim();
     final other = '${r['notes'] ?? ''}'
         .split('\n')
-        .where((l) => l.trim().isNotEmpty && l.trim() != needs)
+        .where(
+          (l) =>
+              l.trim().isNotEmpty &&
+              l.trim() != needs &&
+              !_drrmoLines.any(l.startsWith),
+        )
         .join('\n');
+    final byDrrmo = r['scheduled_by'] == 'DRRMO';
+    final truck = vehicleAndDriver(r);
     final goods = (r['goods'] as List? ?? const []).map((e) => '$e').toList();
     final stops = (r['stops'] as List? ?? const [])
         .map((e) => Map<String, dynamic>.from(e as Map))
@@ -73,6 +236,7 @@ class LogisticsRequestCard extends StatelessWidget {
         : 'CSWS Main Office';
 
     return AppCard(
+      onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -112,7 +276,10 @@ class LogisticsRequestCard extends StatelessWidget {
                   ],
                 ),
               ),
-              StatusChip('${r['stage'] ?? r['status']}'),
+              StatusChip(
+                '${r['stage'] ?? r['status']}',
+                label: r['stage'] == 'In Transit' ? 'On the way' : null,
+              ),
             ],
           ),
           Gaps.v12,
@@ -294,8 +461,8 @@ class LogisticsRequestCard extends StatelessWidget {
                 ),
               ),
           ],
-          // Testing fix 7.4: CSWS Main Office sets the date (the delivery
-          // date; a pickup run shows its pickup day above instead).
+          // Main Office plans the date; once DRRMO accepted, it is DRRMO's
+          // time (UC-DR1 step 5). A pickup run shows its pickup day above.
           if (!_pickup && r['scheduled_date'] != null) ...[
             Gaps.v4,
             Row(
@@ -304,15 +471,35 @@ class LogisticsRequestCard extends StatelessWidget {
                 Gaps.h4,
                 Expanded(
                   child: Text(
-                    'Scheduled by ${r['scheduled_by'] ?? 'CSWS Main Office'}: '
-                    '${niceDate(r['scheduled_date'])}',
+                    byDrrmo
+                        ? 'DRRMO comes ${niceWhen(r['scheduled_date'])}'
+                        : 'Planned by CSWS Main Office: '
+                              '${niceWhen(r['scheduled_date'])}',
+                    style: byDrrmo
+                        ? const TextStyle(fontWeight: FontWeight.w700)
+                        : null,
                   ),
                 ),
               ],
             ),
           ],
-          // Testing fix 7.5: why DRRMO cannot mark it completed yet.
-          if (r['complete_blocker'] != null) ...[
+          if (truck != null) ...[
+            Gaps.v4,
+            Row(
+              children: [
+                Icon(
+                  Icons.local_shipping_outlined,
+                  size: 16,
+                  color: cs.primary,
+                ),
+                Gaps.h4,
+                Expanded(child: Text(truck)),
+              ],
+            ),
+          ],
+          // Testing fix 7.5: why DRRMO cannot mark a pickup run completed
+          // yet. A delivery request completes itself on arrival (Table 36).
+          if (_pickup && r['complete_blocker'] != null) ...[
             Gaps.v4,
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -335,17 +522,58 @@ class LogisticsRequestCard extends StatelessWidget {
               style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
           ],
-          if (actions.isNotEmpty) ...[
+          if (onTap != null) ...[
             Gaps.v8,
-            Wrap(
-              alignment: WrapAlignment.end,
-              spacing: Space.xs,
-              runSpacing: 6,
-              children: actions,
+            Row(
+              children: [
+                Icon(Icons.timeline, size: 16, color: cs.primary),
+                Gaps.h4,
+                Expanded(
+                  child: Text(
+                    'Tap the card for the delivery timeline',
+                    style: t.bodySmall?.copyWith(color: cs.primary),
+                  ),
+                ),
+              ],
             ),
+          ],
+          if (actions.isNotEmpty) ...[
+            Gaps.v12,
+            _Actions(actions),
           ],
         ],
       ),
     );
   }
+}
+
+/// A card's buttons. On a phone two buttons (Decline / Accept) share the
+/// row at full width, so they are big and easy to hit; otherwise they sit
+/// at the end of the card and wrap.
+class _Actions extends StatelessWidget {
+  final List<Widget> actions;
+  const _Actions(this.actions);
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, c) {
+      final buttonsOnly = actions.every((a) => a is ButtonStyleButton);
+      if (c.maxWidth < 480 && buttonsOnly && actions.length <= 2) {
+        return Row(
+          children: [
+            for (var i = 0; i < actions.length; i++) ...[
+              if (i > 0) Gaps.h8,
+              Expanded(child: actions[i]),
+            ],
+          ],
+        );
+      }
+      return Wrap(
+        alignment: WrapAlignment.end,
+        spacing: Space.xs,
+        runSpacing: 6,
+        children: actions,
+      );
+    },
+  );
 }

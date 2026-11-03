@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'csws_screens.dart' show ActivityList;
-import 'donation_entries_view.dart'
-    show BatchHeader, RemovedItemsNote, withBatchHeaders;
+import 'donation_entries_view.dart' show AddedLaterTag, RemovedItemsNote;
 import 'expiry_widgets.dart';
 import 'input_formatters.dart' show pesos;
 import 'location_picker.dart' show formatPickupIso;
@@ -225,6 +224,8 @@ class _BatchSheetState extends State<BatchSheet> {
   @override
   Widget build(BuildContext context) {
     final items = _items;
+    // What is handed over: the donor's removed items are only in the note.
+    final shown = items.where((i) => i['removed_by_donor'] != true).toList();
     final lat = (b['pickup_lat'] as num?)?.toDouble();
     final lng = (b['pickup_lng'] as num?)?.toDouble();
     final pending = items.where((i) => i['status'] == 'Pending').length;
@@ -351,7 +352,7 @@ class _BatchSheetState extends State<BatchSheet> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Items (${items.length}) · $pending waiting to be received',
+                'Items (${shown.length}) · $pending waiting to be received',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
               // Oct 23: "1 received · 2 pending · 1 removed".
@@ -374,12 +375,9 @@ class _BatchSheetState extends State<BatchSheet> {
                   ),
                 ),
               const SizedBox(height: 8),
-              // Batch 1 = the original pledge, Batch 2+ = added later. Old
-              // donations have one batch and show a plain list.
-              for (final (line, header) in withBatchHeaders(items)) ...[
-                if (header != null) BatchHeader(header, items: items),
-                _itemCard(line),
-              ],
+              // Nov 1: one QR, one list of what is handed over. Items added
+              // later are tagged; removed ones are only in the note above.
+              for (final line in shown) _itemCard(line),
               if (pending > 0) ...[
                 // problema_napud 4.2: no notes for a guest donation.
                 if (b['donor_type'] != 'Guest') ...[
@@ -447,7 +445,6 @@ class _BatchSheetState extends State<BatchSheet> {
         ? '${line['amount_text']}'
         : '${line['quantity']} ${line['unit']} · ${line['packaging']}';
     final unit = '${(relabel ?? line)['unit'] ?? ''}';
-    final removed = line['removed_by_donor'] == true;
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
@@ -460,35 +457,22 @@ class _BatchSheetState extends State<BatchSheet> {
                 Expanded(
                   child: Text(
                     '${line['item_name']}',
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      decoration: removed ? TextDecoration.lineThrough : null,
-                    ),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ),
-                if (removed)
-                  const StatusChip('Cancelled', label: 'Removed')
-                else
-                  DonationStatusChip('${line['status']}'),
+                DonationStatusChip('${line['status']}'),
               ],
             ),
-            if (removed)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'Removed by the donor: ${line['removed_reason'] ?? ''}',
-                  style: const TextStyle(fontStyle: FontStyle.italic),
-                ),
-              ),
             const SizedBox(height: 4),
             Text(
               'Declared: $declared'
               '${line['estimated_value'] != null ? ' · ${pesos(line['estimated_value'])}' : ''}',
             ),
-            Text(
-              '${line['qr_reference']}',
-              style: const TextStyle(fontSize: 12, color: Brand.muted),
-            ),
+            if (AddedLaterTag.applies(line))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: AddedLaterTag(line),
+              ),
             if (line['actual_quantity_received'] != null)
               Padding(
                 padding: const EdgeInsets.only(top: 4),

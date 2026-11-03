@@ -1,7 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic import ConfigDict
 
 def _count(n: int, word: str) -> str:
@@ -34,6 +34,10 @@ class _Needs(BaseModel):
         return "Needs " + ", ".join(parts)
 
 
+# The same pickers when a delivery is created with "Needs DRRMO transport?".
+TransportNeeds = _Needs
+
+
 class SubmitLogisticsRequest(_Needs):
     """CSWS Main Office asks DRRMO for transport (UC-CM2 alt 3a)."""
     delivery_id: int
@@ -63,10 +67,37 @@ class SubmitPickupLogisticsRequest(_Needs):
         return self
 
 
+# UC-DR1 step 5 / Table 36 alt 4a: a few minutes for the time spent in the
+# accept dialog, so "now" still counts as a time to come.
+SCHEDULE_GRACE = timedelta(minutes=5)
+
+
 class AcceptLogisticsRequest(BaseModel):
-    """DRRMO just accepts. No schedule (I4; testing fix 7.4: CSWS Main
-    Office sets the date, as the delivery date or the pickup day)."""
+    """UC-DR1 step 5 / Table 36 alt 4a (Nov 2026, replaces testing fix 7.4
+    "DRRMO just accepts"): DRRMO accepts and says when its truck comes, with
+    date and time pickers. Required for a delivery request (the endpoint
+    answers 422 without it); a pickup run keeps its pickup day. Vehicle and
+    driver are optional free text, kept in the request notes."""
+    scheduled_date: Optional[datetime] = None
+    vehicle: Optional[str] = Field(default=None, max_length=80)
+    driver: Optional[str] = Field(default=None, max_length=80)
     notes: Optional[str] = Field(default=None, max_length=1000)
+
+    @field_validator("vehicle", "driver", "notes")
+    @classmethod
+    def _blank_is_none(cls, v: Optional[str]) -> Optional[str]:
+        return (v or "").strip() or None
+
+    @field_validator("scheduled_date")
+    @classmethod
+    def _not_past(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is None:
+            return None
+        if v.tzinfo is None:          # stored times are UTC (services/donation_expiry.utc)
+            v = v.replace(tzinfo=timezone.utc)
+        if v < datetime.now(timezone.utc) - SCHEDULE_GRACE:
+            raise ValueError("Pick a date and time that has not passed yet")
+        return v
 
 
 class DeclineLogisticsRequest(BaseModel):

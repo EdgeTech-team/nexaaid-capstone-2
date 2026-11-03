@@ -1,0 +1,52 @@
+# Checks that run on GitHub, so nobody has to build the Android app on a
+# laptop: the backend tests, and a debug APK build (Firebase setup included).
+# The APK is not kept; the job only proves it builds.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/app
+    env:
+      # Tests use their own in-memory SQLite; these only let the app import.
+      APP_ENV: development
+      DATABASE_URL: sqlite:///./ci-unused.db
+      SECRET_KEY: ci-only-secret-key-not-used-anywhere-else
+      REMINDERS: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r ../../requirements.txt
+      - run: python -m pytest -q -p no:cacheprovider
+
+  android-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.6"
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos
+      # Needs android/app/google-services.json in the repo (safe to commit).
+      - run: flutter build apk --debug

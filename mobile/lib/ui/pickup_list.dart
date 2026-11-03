@@ -216,8 +216,9 @@ class _PickupListViewState extends State<PickupListView> {
                         p.stops.where((s) => s.availableOn(d)).length,
                     allCount: p.stops.length,
                   );
-                  if (v != null)
+                  if (v != null) {
                     setState(() => _homeOn = v == kAllDays ? null : v);
+                  }
                 },
               ),
             ],

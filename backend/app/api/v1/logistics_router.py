@@ -53,27 +53,33 @@ def submit_logistics_request(
     if open_request:
         raise HTTPException(status_code=409, detail="This delivery already has an open logistics request")
 
-   
+    logistics_request = open_transport_request(db, delivery, current_user, payload)
+    db.commit()
+    db.refresh(logistics_request)
+    return logistics_request
+
+
+def open_transport_request(db: Session, delivery: Delivery, user, needs) -> LogisticsRequest:
+    """UC-CM2 alt 3a: ask DRRMO for transport for a delivery being prepared.
+    Also used when the delivery is created with "Needs DRRMO transport?"
+    (deliveries.create_delivery), in the same save. Does not commit."""
     logistics_request = LogisticsRequest(
         request_type="Delivery",
         delivery_id=delivery.delivery_id,
-        requested_by_user_id=current_user.user_id,
-        # Testing fix 7.4: Main Office schedules. The truck is needed on the
-        # delivery date Main Office chose; DRRMO does not pick a date.
-        scheduled_date=delivery.delivery_date,
-        notes=payload.needs_text(),   # I4: "Needs 2 trucks, 2 drivers, 3 volunteers"
+        requested_by_user_id=user.user_id,
+        # The truck is asked for on the delivery date Main Office planned
+        # (shown from the delivery); scheduled_date stays empty until DRRMO
+        # accepts and sets its time (UC-DR1 step 5, Table 36 alt 4a).
+        notes=needs.needs_text(),   # I4: "Needs 2 trucks, 2 drivers, 3 volunteers"
     )
     db.add(logistics_request)
     db.flush()
-    log_action(db, current_user, "REQUEST LOGISTICS SUPPORT", "logistics_requests",
+    log_action(db, user, "REQUEST LOGISTICS SUPPORT", "logistics_requests",
                logistics_request.request_id,
                new={"delivery_id": delivery.delivery_id, "needs": logistics_request.notes})
-    notify_event_many(db, logistics_team_ids(db, exclude_user_id=current_user.user_id),
+    notify_event_many(db, logistics_team_ids(db, exclude_user_id=user.user_id),
                       "logistics_requested", "logistics_request",
                       logistics_request.request_id, title=f"delivery #{delivery.delivery_id}")
-
-    db.commit()
-    db.refresh(logistics_request)
     return logistics_request
 
 
