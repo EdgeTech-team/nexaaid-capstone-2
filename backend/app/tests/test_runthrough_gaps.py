@@ -9,7 +9,7 @@ import api.v1.deliveries as deliveries
 from tests.test_delivery_allocation import _give
 from tests.test_donation_batch import _report
 from tests.test_pickup_days_and_runs import _activate_everyone
-from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
+from tests.test_role_flows import accept_body, api, ok  # noqa: F401  (fixture)
 
 
 def _types(client, headers):
@@ -114,17 +114,17 @@ def test_main_office_hears_when_drrmo_completes_the_support(api):
     _give(client, t, rid, 6)
     did = _deliver(client, t, rid, when="2026-01-05T08:00:00")
     req = ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": did, "trucks": 1}), 201)
-    ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json={}))
-    # Testing fix 7.5: In Transit (8.1), then the barangay's receipt (8.2).
+    ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json=accept_body()))
     # Advisor (Oct 24): DRRMO marks it In Transit when it picks up the goods.
+    # Nov 2026 (Table 36): marking it Delivered completes the support.
     ok(client.post(f"/drrmo/requests/{req['request_id']}/picked-up", headers=t["drrmo"]))
     ok(client.post(f"/drrmo/requests/{req['request_id']}/delivered", headers=t["drrmo"]))
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
-    ok(client.patch(f"/drrmo/requests/{req['request_id']}/complete", headers=t["drrmo"],
-                    json={"summary": "Delivered to Banilad"}))
     items = ok(client.get("/notifications/", headers=t["csws"]))["items"]
     done = [n for n in items if n["type"] == "logistics_completed"]
-    assert len(done) == 1 and "Delivered to Banilad" in done[0]["message"]
+    assert len(done) == 1 and "Goods arrived" in done[0]["message"]
+    # One notice: "support completed" already says the goods arrived.
+    assert not [n for n in items if n["type"] == "delivery_status_changed"
+                and "Arrived" in n["message"]]
 
 
 def test_the_admins_hear_when_a_pending_report_is_withdrawn(api):

@@ -52,9 +52,10 @@ def test_donation_outside_the_area_is_refused(monkeypatch):
     from fastapi import HTTPException
     from types import SimpleNamespace
 
-    def door(landmark, lat=None, lng=None):
-        return SimpleNamespace(handover_method="Door to Door", pickup_landmark=landmark,
-                               pickup_address="12 Rizal St.", pickup_lat=lat, pickup_lng=lng)
+    def door(address, lat=None, lng=None):
+        # Nov 1: the address (from the map suggestions) decides the area.
+        return SimpleNamespace(handover_method="Door to Door", pickup_address=address,
+                               pickup_landmark="Blue gate", pickup_lat=lat, pickup_lng=lng)
 
     monkeypatch.setattr(routes, "_reverse_props",
                         lambda lat, lng: {"name": "Plaza", "city": "Minglanilla"})

@@ -172,7 +172,8 @@ def test_pickups_stay_in_cebu_and_far_ones_can_be_declined(api, monkeypatch):
     import api.v1.donation_routes as routes
     monkeypatch.setattr(routes, "_geocoder", lambda path, params: {
         "features": [{"properties": {"name": "Bogo City Hall", "city": "Bogo City"}}]})
-    r = post(_door(rid, [1], landmark="Bogo City Hall, Bogo City, Cebu", lat=11.0517, lng=124.0055))
+    r = post(_door(rid, [1], lat=11.0517, lng=124.0055,
+                   pickup_address="Bogo City Hall, Bogo City, Cebu"))
     assert r.status_code == 422 and "Sorry" in r.text and "Bogo City" in r.text
 
     # A served area can still be farther than the distance limit (5 km here)

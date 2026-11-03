@@ -295,6 +295,14 @@ def sent_emails(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_push(monkeypatch):
+    """Android pushes (core/push.py) stay off in tests, even when .env names
+    a Firebase service account. test_push.py turns them on with a fake one."""
+    from core import push
+    monkeypatch.setattr(push, "credentials", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_geocoder(monkeypatch):
     """The Door to Door area check reverse geocodes pins with Photon. Tests
     run offline, so only the landmark / address text decides unless a test

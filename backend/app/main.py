@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -31,9 +33,12 @@ from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
 from api.v1.trips import router as trips_router
 from api.v1.delivery_problems import router as delivery_problems_router
 from api.v1.item_routes import router as item_router
+from api.v1.realtime_router import router as realtime_router
+from api.v1.push_router import router as push_router
 
 from core.config import settings
 from core.client_ip import ClientIPMiddleware
+from services.delivery_reminders import reminder_loop, reminders_enabled
 from core.log_privacy import hide_query_strings_in_access_log
 
 # F-22: the access log keeps method, path and status, not the query string.
@@ -53,7 +58,19 @@ def api_docs_settings(app_env: str) -> dict:
     }
 
 
-app = FastAPI(**api_docs_settings(settings.APP_ENV))
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Phase 5: delivery reminders every 5 minutes while the server runs
+    (services/delivery_reminders.py). REMINDERS=off turns them off."""
+    task = asyncio.create_task(reminder_loop()) if reminders_enabled() else None
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
+
+
+app = FastAPI(lifespan=lifespan, **api_docs_settings(settings.APP_ENV))
 
 @app.exception_handler(RequestValidationError)
 async def validation_handler(request: Request, exc: RequestValidationError):
@@ -129,6 +146,8 @@ app.include_router(donation_info_router)
 app.include_router(contacts_router)
 app.include_router(account_router)
 app.include_router(item_router)          # F-15: new items waiting for review
+app.include_router(realtime_router)      # GET /ws live updates (core/realtime.py)
+app.include_router(push_router)          # GET /push/topic, Android push (core/push.py)
 
 # F-21: the real client address behind Render's proxy (core/client_ip.py).
 # Added last, so it runs first.

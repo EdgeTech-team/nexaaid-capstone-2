@@ -12,7 +12,7 @@ from models.logistics_request_model import LogisticsRequest
 from models.notification import Notification
 from tests.test_delivery_trips import _deliver, _stocked, _trip
 from tests.test_inventory_paths import _stock
-from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
+from tests.test_role_flows import accept_body, api, ok  # noqa: F401  (fixture)
 
 LATER = "2030-01-15T09:00:00+08:00"
 
@@ -70,7 +70,7 @@ def test_truck_came_back_then_cancel_returns_stock(api):
     assert client.post(f"/deliveries/{d}/return-to-office", headers=t["csws"],
                        json={"reason": "Truck broke down"}).status_code == 409
     # Advisor (Oct 24): DRRMO's truck, so DRRMO marks it In Transit.
-    ok(client.patch(f"/drrmo/requests/{lr}/accept", headers=t["drrmo"], json={}))
+    ok(client.patch(f"/drrmo/requests/{lr}/accept", headers=t["drrmo"], json=accept_body()))
     ok(client.post(f"/drrmo/requests/{lr}/picked-up", headers=t["drrmo"]))
     # On the road: cannot cancel until it is back.
     r = client.post(f"/deliveries/{d}/cancel", headers=t["csws"], json={"reason": "Road closed"})
@@ -168,7 +168,7 @@ def test_cancel_and_withdraw_logistics_requests(api):
     # DRRMO can only withdraw what it accepted.
     assert client.post(f"/drrmo/requests/{req2}/withdraw", headers=t["drrmo"],
                        json={"reason": "Truck sent elsewhere"}).status_code == 409
-    ok(client.patch(f"/drrmo/requests/{req2}/accept", headers=t["drrmo"], json={}))
+    ok(client.patch(f"/drrmo/requests/{req2}/accept", headers=t["drrmo"], json=accept_body()))
     ok(client.post(f"/drrmo/requests/{req2}/withdraw", headers=t["drrmo"],
                    json={"reason": "Truck sent to a fire emergency"}))
     rows = ok(client.get("/logistics/requests", headers=t["csws"]))
