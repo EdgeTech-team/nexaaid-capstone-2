@@ -191,3 +191,26 @@ def test_scan_is_staff_only(api):
         assert client.get(f"/donations/by-batch/{ref}", headers=t[who]).status_code == 403, who
     r = client.get("/donations/by-batch/DON-000000000000", headers=t["csws"])
     assert r.status_code == 404 and "No donation" in r.json()["detail"]
+
+
+def test_one_qr_for_csws_pickup_after_adding_and_removing(api):
+    """Nov 1: a Door to Door donation with items added later and one removed
+    is ONE stop with ONE reference, listing only what is handed over."""
+    from tests.test_pickup_days_and_runs import _door
+    client, t = api
+    ref = ok(client.post("/donations/batch", headers=t["donor"],
+                         json=_door(_report(client, t), [1, 3])), 201)["batch_reference"]
+    view = ok(_add(client, t, ref, [WATER, LINE]), 201)
+    water = next(i["donation_id"] for i in view["items"] if i["item_name"] == "Bottled water")
+    ok(client.post(f"/donations/entries/{ref}/items/{water}/remove",
+                   headers=t["donor"], json={"reason": "Expired stock"}))
+
+    board = [p for p in ok(client.get("/donations/pickups", headers=t["csws"]))
+             if p["batch_reference"] == ref]
+    assert len(board) == 1
+    assert not any("Bottled water" in s for s in board[0]["items_summary"])
+    assert len(board[0]["items_summary"]) == 2                 # original + added rice
+
+    plan = ok(client.get("/donations/pickup-plan", headers=t["csws"]))
+    refs = [d["batch_reference"] for s in plan["stops"] for d in s["donations"]]
+    assert refs.count(ref) == 1

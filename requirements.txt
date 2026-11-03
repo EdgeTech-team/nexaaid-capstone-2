@@ -40,3 +40,5 @@ truststore==0.10.4
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 uvicorn==0.52.4
+# Live updates (/ws): uvicorn serves WebSockets only with this installed.
+websockets==17.4

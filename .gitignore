@@ -47,3 +47,7 @@ backend/app/var/
 .env.*
 .claude/
 .claude/settings.local.json
+
+# Firebase service account key: never in the repo (C:/nexaaid-secrets locally,
+# FIREBASE_CREDENTIALS_JSON on the server). Matches firebase-service-account.json too.
+*service-account*.json

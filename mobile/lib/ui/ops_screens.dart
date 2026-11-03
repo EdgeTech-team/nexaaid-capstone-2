@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult, Roles;
+import '../realtime.dart';
 import 'records_screens.dart' show SupportRecordsScreen;
 import 'delivery_widgets.dart';
 import 'input_formatters.dart' show pesos;
 import 'trip_screens.dart';
 import 'widgets.dart';
 import 'logistics_cards.dart';
+import 'needs_action.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
 import 'scheduled_deliveries.dart';
@@ -53,7 +55,9 @@ class DeliveryStepper extends StatelessWidget {
               ),
               const SizedBox(height: 3),
               Text(
-                StatusColors.label(_deliverySteps[i]),
+                // "Received by barangay" on two lines so four steps fit.
+                deliveryWord(_deliverySteps[i]).replaceFirst(' by ', ' by\n'),
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   fontSize: 10,
                   fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
@@ -84,32 +88,174 @@ class DeliveryStepper extends StatelessWidget {
   }
 }
 
-/// Timeline of a delivery's status changes (who, when).
+/// Timeline of a delivery (who, when), in a pop-out with the X
+/// (problema_napud 2.1).
 Future<void> showDeliveryHistory(BuildContext context, int deliveryId) async {
   final r = await api.get('/deliveries/$deliveryId/history');
   if (!context.mounted || !r.ok) return;
-  final h = (r.json['history'] as List).cast<Map>();
-  // A pop-out with the X (problema_napud 2.1).
   showDetailPopout<void>(
     context,
-    title: 'Delivery #$deliveryId history',
-    child: Column(
+    title: 'Delivery #$deliveryId',
+    child: DeliveryTimeline(deliveryId, first: r.json as Map),
+  );
+}
+
+/// Table 37 in staff words: Being packed -> Truck assigned -> On the way ->
+/// Arrived -> Received by barangay, each with when and who (GET
+/// /deliveries/{id}/history "timeline"). Reloads by itself when a delivery
+/// or DRRMO request changes (live updates). The full record is underneath.
+class DeliveryTimeline extends StatefulWidget {
+  final int deliveryId;
+  final Map first; // the history already loaded when the pop-out opened
+  const DeliveryTimeline(this.deliveryId, {super.key, required this.first});
+
+  @override
+  State<DeliveryTimeline> createState() => _DeliveryTimelineState();
+}
+
+class _DeliveryTimelineState extends State<DeliveryTimeline> {
+  late Map _data = widget.first;
+
+  @override
+  void initState() {
+    super.initState();
+    Realtime.instance.logistics.addListener(_reload);
+  }
+
+  @override
+  void dispose() {
+    Realtime.instance.logistics.removeListener(_reload);
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    final r = await api.get('/deliveries/${widget.deliveryId}/history');
+    if (mounted && r.ok && r.json is Map) setState(() => _data = r.json as Map);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final steps = ((_data['timeline'] as List?) ?? const []).cast<Map>();
+    final history = ((_data['history'] as List?) ?? const []).cast<Map>();
+    // The next step to happen is highlighted.
+    final next = steps.indexWhere((s) => s['done'] != true);
+    // Phase 7: a wrong tap can be taken back for 10 minutes (the server
+    // checks it is the same person and the barangay has not confirmed).
+    final last = history.isEmpty ? null : history.last;
+    final lastAt = DateTime.tryParse('${last?['at'] ?? ''}');
+    final canUndo =
+        last != null &&
+        last['action'] == 'UPDATE DELIVERY STATUS' &&
+        lastAt != null &&
+        DateTime.now().difference(lastAt.toLocal()).inMinutes < 10 &&
+        api.role != Roles.barangay;
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final e in h)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.schedule, color: Brand.pink),
-            title: Text(
-              e['new']?['status'] != null
-                  ? '${e['action']}: ${e['new']['status']}'
-                  : '${e['action']}',
+        if (canUndo)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () async {
+                await act(
+                  context,
+                  () => api.post('/deliveries/${widget.deliveryId}/undo'),
+                  success: 'Last step undone',
+                );
+                _reload();
+              },
+              icon: const Icon(Icons.undo),
+              label: const Text('Undo last step'),
             ),
-            subtitle: Text('${niceDate(e['at'])} · ${e['by']}'),
+          ),
+        for (var i = 0; i < steps.length; i++)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Column(
+                children: [
+                  Icon(
+                    steps[i]['key'] == 'cancelled'
+                        ? Icons.cancel
+                        : steps[i]['done'] == true
+                        ? Icons.check_circle
+                        : i == next
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    color: steps[i]['key'] == 'cancelled'
+                        ? cs.error
+                        : steps[i]['done'] == true || i == next
+                        ? cs.primary
+                        : cs.outline,
+                  ),
+                  if (i < steps.length - 1)
+                    Container(
+                      width: 2,
+                      height: 34,
+                      color: steps[i]['done'] == true
+                          ? cs.primary
+                          : cs.outlineVariant,
+                    ),
+                ],
+              ),
+              Gaps.h12,
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${steps[i]['label']}',
+                        style: t.titleSmall?.copyWith(
+                          fontWeight: i == next || steps[i]['done'] == true
+                              ? FontWeight.w700
+                              : FontWeight.normal,
+                          color: steps[i]['done'] == true || i == next
+                              ? null
+                              : cs.onSurfaceVariant,
+                        ),
+                      ),
+                      if (steps[i]['at'] != null)
+                        Text(
+                          [
+                            niceWhen(steps[i]['at']),
+                            if (steps[i]['by'] != null) '${steps[i]['by']}',
+                          ].join(' · '),
+                          style: t.bodySmall,
+                        ),
+                      if (steps[i]['detail'] != null)
+                        Text('${steps[i]['detail']}', style: t.bodySmall),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        if (history.isNotEmpty)
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            title: Text('Full record (${history.length})', style: t.titleSmall),
+            children: [
+              for (final e in history)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.schedule, color: Brand.pink),
+                  title: Text(
+                    e['new']?['status'] != null
+                        ? '${e['action']}: ${deliveryWord(e['new']['status'])}'
+                        : '${e['action']}',
+                  ),
+                  subtitle: Text('${niceDate(e['at'])} · ${e['by']}'),
+                ),
+            ],
           ),
       ],
-    ),
-  );
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,15 +284,34 @@ const _deliverySorts = {
   'date_soonest': 'Delivery date: soonest',
   'date_latest': 'Delivery date: latest',
   'status': 'Needs action first',
+  'priority': 'Most urgent first', // 3.11 priority of the report
 };
 
-class _DeliveriesScreenState extends State<DeliveriesScreen> {
+class _DeliveriesScreenState extends State<DeliveriesScreen>
+    with HomeTargetListener<DeliveriesScreen> {
   bool get barangay => widget.barangay;
   bool get readOnly => widget.readOnly;
 
+  @override
+  String get homeTab => barangay ? 'Incoming aid' : 'Deliveries';
+
+  /// The delivery a notification or "Needs your action" points at: shown
+  /// first and outlined (Phase 6).
+  int? _focus;
+
+  @override
+  void applyHomeTarget(HomeTarget target) {
+    status = target.view; // null = every status
+    search = '';
+    searchC.clear();
+    dates = null;
+    _focus = target.id;
+  }
+
   // Filters (all optional). Changing one reloads the list.
   String? status;
-  String sort = 'newest';
+  // Phase 6: Critical reports first, as on DRRMO's list (drrmo_router).
+  String sort = 'priority';
   String search = '';
   DateTimeRange? dates;
   final searchC = TextEditingController();
@@ -163,7 +328,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
   Map<String, String> get _query => {
     'sort': sort,
     'limit': '200',
-    if (status != null) 'status': status!,
+    'status': ?status,
     if (search.trim().isNotEmpty) 'q': search.trim(),
     if (dates != null) 'date_from': _ymd(dates!.start),
     if (dates != null) 'date_to': _ymd(dates!.end),
@@ -209,39 +374,52 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     );
   }
 
-  Future<void> _requestTransport(BuildContext context, Map d) async {
+  /// UC-CM2 alt 3a. [previous] is a declined or cancelled request: Table 36
+  /// alt 3a "Ask DRRMO again" starts from what was asked the last time.
+  Future<void> _requestTransport(
+    BuildContext context,
+    Map d, {
+    Map? previous,
+  }) async {
     // I4: pick the numbers, no typing. Appendix H 7.1 (Oct 10 notes): no
     // driver count (a truck comes with its driver); each need can be None.
     String none(int i) => i == 0 ? 'None' : '$i';
+    int before(String word) {
+      final m = RegExp('(\\d+) $word')
+          .firstMatch('${previous?['needs'] ?? ''}');
+      return m == null ? 0 : int.parse(m.group(1)!);
+    }
+
+    final again = previous != null;
+    final reason = previous?['reason'];
     final v = await formDialog(
       context,
-      title: 'Request DRRMO logistics support',
-      // Testing fix 7.4: Main Office schedules. DRRMO is asked for the
-      // delivery date set here (change it with Reschedule).
+      title: again ? 'Ask DRRMO again' : 'Request DRRMO logistics support',
       message:
-          'For delivery #${d['delivery_id']} on ${niceDate(d['delivery_date'])}. '
-          'DRRMO will be asked for this date. Choose what is needed.',
+          '${again && reason != null ? 'Last time DRRMO said: $reason\n\n' : ''}'
+          'For delivery #${d['delivery_id']}, planned for '
+          '${niceWhen(d['delivery_date'])}. Choose what is needed.',
       fields: [
         DialogField(
           'trucks',
           'Trucks needed',
-          initial: '1',
+          initial: again ? none(before('truck')) : '1',
           options: [for (var i = 0; i <= 10; i++) none(i)],
         ),
         DialogField(
           'volunteers',
           'Manpower (volunteers)',
-          initial: 'None',
+          initial: none(before('volunteer')),
           options: [for (var i = 0; i <= 20; i++) none(i)],
         ),
         DialogField(
           'pushcarts',
           'Pushcarts',
-          initial: 'None',
+          initial: none(before('pushcart')),
           options: [for (var i = 0; i <= 10; i++) none(i)],
         ),
       ],
-      confirm: 'Send request',
+      confirm: again ? 'Ask again' : 'Send request',
     );
     if (v == null || !context.mounted) return;
     int n(String key) => int.tryParse(v[key] ?? '') ?? 0;
@@ -267,6 +445,117 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
         },
       ),
       success: 'Logistics request sent to DRRMO',
+    );
+  }
+
+  /// CSWS moves its own delivery one step, after a confirm (Phase 6).
+  Future<void> _advance(BuildContext context, Map d, String next) async {
+    final v = await formDialog(
+      context,
+      title: 'Mark delivery #${d['delivery_id']} ${deliveryWord(next)}?',
+      message: next == 'In Transit'
+          ? 'The barangay and the donors will see it is on the way.'
+          : 'The barangay will be asked to confirm receipt.',
+      fields: const [],
+      confirm: 'Yes, ${deliveryWord(next)}',
+    );
+    if (v == null || !context.mounted) return;
+    await stepWithUndo(
+      context,
+      () => api.post('/deliveries/${d['delivery_id']}/advance'),
+      deliveryId: d['delivery_id'] as int,
+      success: 'Delivery #${d['delivery_id']} is now ${deliveryWord(next)}',
+    );
+  }
+
+  /// Phase 6: CSWS sends several packed deliveries at once. Only deliveries
+  /// CSWS sends itself (no DRRMO request open); those due today or earlier
+  /// start ticked. Same rules as one by one, all or nothing.
+  Widget _batchButton(BuildContext context, List<Map> rows, Map requests) {
+    bool open(Map d) {
+      final r = requests[d['delivery_id']];
+      return r != null &&
+          (r['status'] == 'Pending' || r['status'] == 'Accepted');
+    }
+
+    final ready = rows
+        .where((d) => d['status'] == 'Preparing' && !open(d))
+        .toList();
+    if (ready.length < 2) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: OutlinedButton.icon(
+          onPressed: () => _sendMany(context, ready),
+          icon: const Icon(Icons.local_shipping_outlined),
+          label: const Text('Mark several as On the way'),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sendMany(BuildContext context, List<Map> ready) async {
+    final today = DateTime.now();
+    final picked = <int>{
+      for (final d in ready)
+        if (!(DateTime.tryParse('${d['delivery_date']}')?.toLocal() ?? today)
+            .isAfter(DateTime(today.year, today.month, today.day, 23, 59)))
+          d['delivery_id'] as int,
+    };
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, set) => AlertDialog(
+          title: const Text('Mark as On the way'),
+          content: SizedBox(
+            width: 420,
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                const Text(
+                  'Tick the deliveries leaving now. If one cannot go yet, '
+                  'none are changed and you are told which.',
+                ),
+                for (final d in ready)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: picked.contains(d['delivery_id']),
+                    onChanged: (v) => set(
+                      () => v == true
+                          ? picked.add(d['delivery_id'] as int)
+                          : picked.remove(d['delivery_id']),
+                    ),
+                    title: Text(
+                      '#${d['delivery_id']} to '
+                      '${d['destination_barangay_name'] ?? 'barangay'}',
+                    ),
+                    subtitle: Text(niceWhen(d['delivery_date'])),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: picked.isEmpty ? null : () => Navigator.pop(ctx, true),
+              child: Text('Mark ${picked.length} On the way'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    await act(
+      context,
+      () => api.post(
+        '/deliveries/advance-batch',
+        body: {'delivery_ids': picked.toList()},
+      ),
+      success: '${picked.length} deliveries are on the way',
     );
   }
 
@@ -378,7 +667,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
     final t = Theme.of(context).textTheme;
     String chip(String? s) => s == null
         ? 'All (${counts['total'] ?? 0})'
-        : '${StatusColors.label(s)} (${counts[s] ?? 0})';
+        : '${deliveryWord(s)} (${counts[s] ?? 0})';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -474,6 +763,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
       body: Loader(
         // A new key reloads the list whenever a filter changes.
         key: ValueKey(_query.toString()),
+        // Live: a delivery or DRRMO request changed (Realtime).
+        refresh: Realtime.instance.logistics,
         load: [
           () => api.get('/deliveries/', query: _query),
           api.lookupsResult,
@@ -591,13 +882,29 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                       ? 'No deliveries yet.'
                       : 'No deliveries yet. Tap "Prepare delivery".',
                 ),
-              for (final d in rows)
-                _card(
-                  context,
-                  d,
-                  names,
-                  acked.contains(d['delivery_id']),
-                  requests[d['delivery_id']],
+              // Phase 6: several deliveries leave together (all or nothing).
+              if (!barangay && !readOnly) _batchButton(context, rows, requests),
+              for (final d in [
+                ...rows.where((d) => d['delivery_id'] == _focus),
+                ...rows.where((d) => d['delivery_id'] != _focus),
+              ])
+                Container(
+                  decoration: d['delivery_id'] == _focus
+                      ? BoxDecoration(
+                          borderRadius: BorderRadius.circular(Radii.lg),
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.primary,
+                            width: 2,
+                          ),
+                        )
+                      : null,
+                  child: _card(
+                    context,
+                    d,
+                    names,
+                    acked.contains(d['delivery_id']),
+                    requests[d['delivery_id']],
+                  ),
                 ),
             ],
           );
@@ -653,7 +960,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     ),
                   ),
                 ),
-                Badge2.status(status),
+                StatusChip(status, label: deliveryWord(status)),
               ],
             ),
             const SizedBox(height: 6),
@@ -692,15 +999,44 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     const Icon(Icons.fire_truck_outlined, size: 16),
                     const SizedBox(width: 4),
                     const Text('DRRMO: ', style: TextStyle(fontSize: 12)),
-                    Badge2.status(reqStage ?? 'Pending'),
-                    if (request['scheduled_date'] != null) ...[
-                      const SizedBox(width: 6),
-                      Text(
-                        niceDate(request['scheduled_date']),
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                    ],
+                    StatusChip(
+                      reqStage ?? 'Pending',
+                      label: reqStage == 'In Transit' ? 'On the way' : null,
+                    ),
                   ],
+                ),
+              ),
+            // UC-DR1 step 5 / Table 36 alt 4a: when DRRMO comes, and with what.
+            if (request != null &&
+                request['scheduled_by'] == 'DRRMO' &&
+                status == 'Preparing' &&
+                (reqStage == 'Accepted' || reqStage == 'Completed'))
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'DRRMO arriving ${niceWhen(request['scheduled_date'])}'
+                  '${vehicleAndDriver(request) != null ? '\n${vehicleAndDriver(request)}' : ''}',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            // Table 36 alt 3a: why DRRMO said no, so CSWS can decide quickly.
+            if (request != null &&
+                (reqStage == 'Declined' || reqStage == 'Cancelled') &&
+                request['reason'] != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '${reqStage == 'Declined' ? 'DRRMO said' : 'Cancelled'}: '
+                  '${request['reason']}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: reqStage == 'Declined'
+                        ? Theme.of(context).colorScheme.error
+                        : null,
+                  ),
                 ),
               ),
             if (acknowledged)
@@ -774,9 +1110,21 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                         reqStage == 'Cancelled' ||
                         reqStage == 'Completed'))
                   OutlinedButton.icon(
-                    onPressed: () => _requestTransport(context, d),
+                    onPressed: () => _requestTransport(
+                      context,
+                      d,
+                      previous:
+                          reqStage == 'Declined' || reqStage == 'Cancelled'
+                          ? request
+                          : null,
+                    ),
                     icon: const Icon(Icons.fire_truck_outlined),
-                    label: const Text('Request transport'),
+                    // Table 36 alt 3a: after a decline, ask again in one tap.
+                    label: Text(
+                      reqStage == 'Declined'
+                          ? 'Ask DRRMO again'
+                          : 'Request transport',
+                    ),
                   ),
                 // Advisor (Oct 24) + testing (Oct 27): with a DRRMO request
                 // open, DRRMO moves it; CSWS sees who has it.
@@ -787,8 +1135,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                       request['status'] == 'Pending'
                           ? 'Waiting for DRRMO to accept'
                           : status == 'Preparing'
-                          ? 'DRRMO marks it In Transit on pickup'
-                          : 'DRRMO marks it Delivered on arrival',
+                          ? 'DRRMO marks it On the way at pickup'
+                          : 'DRRMO marks it Arrived at the barangay',
                     ),
                   )
                 else if (drrmo && reqOpen && request['status'] == 'Pending')
@@ -796,16 +1144,16 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     avatar: Icon(Icons.info_outline, size: 18),
                     label: Text('Accept the request in Logistics first'),
                   )
+                else if (drrmo && reqOpen && request['mine'] != true)
+                  Chip(
+                    avatar: const Icon(Icons.person_outline, size: 18),
+                    label: Text(
+                      'Accepted by ${request['assigned_to'] ?? 'a teammate'}',
+                    ),
+                  )
                 else if (drrmo && reqOpen)
                   FilledButton.icon(
-                    onPressed: () => act(
-                      context,
-                      () => api.post(
-                        '/drrmo/requests/${request['request_id']}/'
-                        '${status == 'Preparing' ? 'picked-up' : 'delivered'}',
-                      ),
-                      success: 'Delivery #${d['delivery_id']} is now $next',
-                    ),
+                    onPressed: () => moveDrrmoDelivery(context, request),
                     icon: Icon(
                       status == 'Preparing'
                           ? Icons.local_shipping
@@ -813,19 +1161,15 @@ class _DeliveriesScreenState extends State<DeliveriesScreen> {
                     ),
                     label: Text(
                       status == 'Preparing'
-                          ? 'Picked up · mark In Transit'
-                          : 'Mark Delivered',
+                          ? 'Picked up · mark On the way'
+                          : 'Mark Arrived',
                     ),
                   )
                 else if (!barangay && !readOnly && next != null)
                   FilledButton.icon(
-                    onPressed: () => act(
-                      context,
-                      () => api.post('/deliveries/${d['delivery_id']}/advance'),
-                      success: 'Delivery #${d['delivery_id']} is now $next',
-                    ),
+                    onPressed: () => _advance(context, d, next),
                     icon: const Icon(Icons.arrow_forward),
-                    label: Text('Mark $next'),
+                    label: Text('Mark ${deliveryWord(next)}'),
                   ),
                 if (barangay && status == 'Delivered')
                   FilledButton.icon(
@@ -884,7 +1228,10 @@ String niceDay(DateTime d) {
 ///      it still works with many items). Empty box = not sent.
 ///   4. Pick the date and time, then Prepare delivery.
 class NewDeliveryScreen extends StatefulWidget {
-  const NewDeliveryScreen({super.key});
+  /// Phase 6: opened from a report ("Prepare delivery"), that report is
+  /// already chosen, with its barangay and the goods ready for it.
+  final int? reportId;
+  const NewDeliveryScreen({super.key, this.reportId});
 
   @override
   State<NewDeliveryScreen> createState() => _NewDeliveryScreenState();
@@ -896,6 +1243,36 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   Map? report; // row from /trips/candidates (with its items)
   String? brgyId; // destination; defaults to the report's barangay
   bool changeBrgy = false;
+  bool _preset = false; // widget.reportId was applied
+
+  /// "Needs DRRMO transport?" (UC-CM2 alt 3a): asked in the same save.
+  bool transport = false;
+  int trucks = 1, volunteers = 0, pushcarts = 0;
+
+  /// What the report still needs, per item (GET /reports/{id}/needs).
+  List<Map>? stillNeeded;
+
+  Future<void> _loadNeeds(int reportId) async {
+    final r = await api.get('/reports/$reportId/needs');
+    if (!mounted || !r.ok || r.json is! Map) return;
+    setState(() {
+      stillNeeded = [
+        for (final n in ((r.json as Map)['needs'] as List? ?? const []))
+          if (((n as Map)['needed'] as num? ?? 0) >
+              (n['delivered'] as num? ?? 0))
+            n,
+      ];
+    });
+  }
+
+  void _pick(Map r) {
+    report = r;
+    brgyId = '${r['barangay_id']}';
+    changeBrgy = false;
+    chosen = null;
+    stillNeeded = null;
+    _loadNeeds(r['report_id'] as int);
+  }
 
   /// Oct 15: the ticked donation entries (each goes whole); null = loading.
   Set<String>? chosen;
@@ -910,12 +1287,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
   Future<void> _chooseReport(Map candidates) async {
     final r = await pickReportWithStock(context, candidates);
     if (r == null || !mounted) return;
-    setState(() {
-      report = r;
-      brgyId = '${r['barangay_id']}';
-      changeBrgy = false;
-      chosen = null;
-    });
+    setState(() => _pick(r));
   }
 
   Future<void> _submit() async {
@@ -923,6 +1295,7 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
     if (report == null) return;
     if (!_form.currentState!.validate()) return;
     if (ready == 0 || date == null) return;
+    if (transport && trucks + volunteers + pushcarts == 0) return;
     setState(() => busy = true);
     final r = await act(
       context,
@@ -934,9 +1307,17 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           'delivery_date': date,
           // Oct 15: the ticked donation entries, each one whole.
           'batch_references': chosen!.toList(),
+          if (transport)
+            'transport': {
+              'trucks': trucks,
+              'volunteers': volunteers,
+              'pushcarts': pushcarts,
+            },
         },
       ),
-      success: 'Delivery prepared',
+      success: transport
+          ? 'Delivery prepared and DRRMO asked for transport'
+          : 'Delivery prepared',
     );
     if (!mounted) return;
     setState(() => busy = false);
@@ -973,6 +1354,19 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
           final names = Names(
             Map<String, dynamic>.from(snap.data![1].json as Map),
           );
+          if (widget.reportId != null && !_preset) {
+            // Opened from a report: choose it (if it has goods ready).
+            _preset = true;
+            final hit = [
+              for (final g in (candidates['barangays'] as List).cast<Map>())
+                ...(g['reports'] as List).cast<Map>(),
+            ].where((r) => r['report_id'] == widget.reportId);
+            if (hit.isNotEmpty) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) setState(() => _pick(hit.first));
+              });
+            }
+          }
           final noReports =
               (candidates['barangays'] as List).isEmpty &&
               ((candidates['not_acknowledged_reports'] as List?) ?? const [])
@@ -1050,6 +1444,19 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                   Gaps.v24,
                   Text('2. What to send', style: t.titleMedium),
                   Gaps.v8,
+                  // Phase 6: what the report still needs, to choose by.
+                  if (stillNeeded != null && stillNeeded!.isNotEmpty) ...[
+                    Text('Still needed for this report', style: t.titleSmall),
+                    Gaps.v4,
+                    NeedChips([
+                      for (final n in stillNeeded!)
+                        '${(n['needed'] as num) - ((n['delivered'] as num?) ?? 0)} '
+                                '${n['unit'] ?? ''} ${n['item_name'] ?? ''}'
+                            .replaceAll(RegExp(r'\s+'), ' ')
+                            .trim(),
+                    ]),
+                    Gaps.v12,
+                  ],
                   ReadyDonations(
                     key: ValueKey('ready-${report!['report_id']}'),
                     reportId: report!['report_id'] as int,
@@ -1075,6 +1482,64 @@ class _NewDeliveryScreenState extends State<NewDeliveryScreen> {
                       if (d != null) setState(() => date = d);
                     },
                   ),
+                  // 4. Transport (UC-CM2 alt 3a), asked in the same save.
+                  Gaps.v16,
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: transport,
+                    onChanged: (v) => setState(() => transport = v),
+                    title: const Text('Needs DRRMO transport?'),
+                    subtitle: const Text(
+                      'DRRMO is asked for this date and picks up the goods.',
+                    ),
+                  ),
+                  if (transport) ...[
+                    Row(
+                      children: [
+                        for (final (label, value, max, set)
+                            in <(String, int, int, void Function(int))>[
+                              ('Trucks', trucks, 10, (v) => trucks = v),
+                              (
+                                'Volunteers',
+                                volunteers,
+                                20,
+                                (v) => volunteers = v,
+                              ),
+                              (
+                                'Pushcarts',
+                                pushcarts,
+                                10,
+                                (v) => pushcarts = v,
+                              ),
+                            ])
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: DropdownButtonFormField<int>(
+                                initialValue: value,
+                                decoration: InputDecoration(labelText: label),
+                                items: [
+                                  for (var i = 0; i <= max; i++)
+                                    DropdownMenuItem(
+                                      value: i,
+                                      child: Text(i == 0 ? 'None' : '$i'),
+                                    ),
+                                ],
+                                onChanged: (v) => setState(() => set(v ?? 0)),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    if (tried && trucks + volunteers + pushcarts == 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          'Choose at least one: a truck, volunteers or a pushcart.',
+                          style: TextStyle(color: cs.error),
+                        ),
+                      ),
+                  ],
                   Gaps.v24,
                   if (ready > 0)
                     Padding(
@@ -1271,6 +1736,74 @@ class CmoEntryDetails extends StatelessWidget {
   }
 }
 
+/// Phase 7: a delivery step, then a success message with "Undo" (the
+/// server allows it for 10 minutes, to the same person, never after the
+/// barangay confirmed). Uses the navigator's context, which outlives the
+/// card that is rebuilt when the list reloads.
+Future<void> stepWithUndo(
+  BuildContext context,
+  Future<ApiResult> Function() call, {
+  required int deliveryId,
+  required String success,
+}) async {
+  final screen = Navigator.of(context).context;
+  final r = await call();
+  if (!screen.mounted) return;
+  if (!r.ok) {
+    AppToast.show(
+      screen,
+      r.status == 0 ? 'Cannot reach the server' : r.errorText,
+      kind: ToastKind.error,
+    );
+    return;
+  }
+  AppToast.show(
+    screen,
+    success,
+    kind: ToastKind.success,
+    duration: const Duration(seconds: 10),
+    action: ToastAction('Undo', () {
+      if (screen.mounted) {
+        act(
+          screen,
+          () => api.post('/deliveries/$deliveryId/undo'),
+          success: 'Last step undone',
+        );
+      }
+    }),
+  );
+}
+
+/// Table 36 / 37: DRRMO's next step for the delivery it carries, after a
+/// confirm ("Picked up" -> On the way, "Arrived" -> completes the request).
+/// [r] is a request row from GET /drrmo/requests.
+Future<void> moveDrrmoDelivery(BuildContext context, Map r) async {
+  final pickup = r['delivery_status'] == 'Preparing';
+  final v = await formDialog(
+    context,
+    title: pickup
+        ? 'Picked up delivery #${r['delivery_id']}?'
+        : 'Arrived at ${r['destination'] ?? 'the barangay'}?',
+    message: pickup
+        ? 'CSWS and the barangay will see it is on the way.'
+        : 'CSWS and the barangay will see it arrived, and this request is '
+              'completed. The barangay then confirms receipt.',
+    fields: const [],
+    confirm: pickup ? 'Yes, on the way' : 'Yes, it arrived',
+  );
+  if (v == null || !context.mounted) return;
+  await stepWithUndo(
+    context,
+    () => api.post(
+      '/drrmo/requests/${r['request_id']}/${pickup ? 'picked-up' : 'delivered'}',
+    ),
+    deliveryId: r['delivery_id'] as int,
+    success: pickup
+        ? 'Delivery #${r['delivery_id']} is on the way'
+        : 'Delivery #${r['delivery_id']} arrived. Request completed.',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // UC-DR1 / UC-DR2 Logistics support (DRRMO)
 // ---------------------------------------------------------------------------
@@ -1293,6 +1826,20 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   int? _focus;
   bool _focusPlaced = false;
   int _loads = 0; // a new notice reloads the list, so a new request is in it
+  String _q = ''; // search box
+
+  // Testing (Nov 3): the dashboard sits above the request list, so a tile
+  // or a "Needs your action" line only changed the list off screen and
+  // looked dead. Now the list scrolls into view after such a tap.
+  final _scroll = ScrollController();
+  final _dashboard = GlobalKey(); // everything above the stage chips
+  bool _scrollToList = false;
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   void applyHomeTarget(HomeTarget target) {
@@ -1300,9 +1847,56 @@ class _DrrmoScreenState extends State<DrrmoScreen>
     _focus = target.id;
     _focusPlaced = false;
     _loads++;
+    _scrollToList = target.id != null || target.view != null;
+  }
+
+  /// Show the requests at [s] (a stat tile, a "Needs your action" line, or
+  /// after accepting), with [focus] first and outlined, and scroll to them.
+  void _show(String s, {int? focus}) {
+    setState(() {
+      stage = s;
+      _focus = focus;
+      _focusPlaced = true;
+      _scrollToList = true;
+    });
+  }
+
+  /// Bring the stage chips to the top of the screen (or as far as the
+  /// list allows), once the list for the new stage is built.
+  void _revealList() {
+    _scrollToList = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final box = _dashboard.currentContext?.findRenderObject() as RenderBox?;
+      if (!mounted || box == null || !_scroll.hasClients) return;
+      final p = _scroll.position;
+      final target = (Space.md + box.size.height).clamp(0.0, p.maxScrollExtent);
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _scroll.jumpTo(target);
+      } else {
+        _scroll.animateTo(
+          target,
+          duration: const Duration(milliseconds: 380),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
   }
 
   Future<void> _accept(Map r) async {
+    // UC-DR1 step 5: a delivery request is accepted with DRRMO's time.
+    if (r['request_type'] != 'Pickup') {
+      final body = await showAcceptDeliveryDialog(context, r);
+      if (body == null || !mounted) return;
+      final res = await act(
+        context,
+        () =>
+            api.patch('/drrmo/requests/${r['request_id']}/accept', body: body),
+        success: 'Accepted. CSWS was told when DRRMO comes.',
+      );
+      // The request moves to Accepted: follow it there.
+      if (res.ok && mounted) _show('Accepted', focus: r['request_id'] as int?);
+      return;
+    }
     final v = await formDialog(
       context,
       title: 'Accept request #${r['request_id']}?',
@@ -1316,11 +1910,12 @@ class _DrrmoScreenState extends State<DrrmoScreen>
       confirm: 'Accept',
     );
     if (v == null || !mounted) return;
-    await act(
+    final res = await act(
       context,
       () => api.patch('/drrmo/requests/${r['request_id']}/accept'),
       success: 'Request accepted',
     );
+    if (res.ok && mounted) _show('Accepted', focus: r['request_id'] as int?);
   }
 
   Future<void> _decline(Map r) async {
@@ -1401,6 +1996,7 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   Widget build(BuildContext context) {
     return Loader(
       key: ValueKey('drrmo-$_loads'),
+      refresh: Realtime.instance.logistics, // live: new or changed requests
       load: [
         () => api.get('/drrmo/dashboard'),
         () => api.get('/drrmo/requests'),
@@ -1417,7 +2013,17 @@ class _DrrmoScreenState extends State<DrrmoScreen>
           if (hit.isNotEmpty) stage = '${hit.first['stage']}';
           _focusPlaced = true;
         }
-        final inStage = all.where((r) => r['stage'] == stage);
+        if (_scrollToList) _revealList();
+        // Phase 6: search by barangay, report or request / delivery number.
+        final q = _q.trim().toLowerCase().replaceFirst('#', '');
+        bool hit(Map r) =>
+            q.isEmpty ||
+            '${r['destination'] ?? ''} ${r['report_label'] ?? ''}'
+                .toLowerCase()
+                .contains(q) ||
+            '${r['request_id']}' == q ||
+            '${r['delivery_id']}' == q;
+        final inStage = all.where((r) => r['stage'] == stage && hit(r));
         final rows = [
           ...inStage.where((r) => r['request_id'] == _focus),
           ...inStage.where((r) => r['request_id'] != _focus),
@@ -1425,152 +2031,266 @@ class _DrrmoScreenState extends State<DrrmoScreen>
         const stages = {
           'Pending': 'New',
           'Accepted': 'Accepted',
-          'In Transit': 'In transit',
+          'In Transit': 'On the way',
           'Completed': 'Completed',
           'Declined': 'Declined',
           'Cancelled': 'Cancelled by CSWS',
         };
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
-            // 9.6 (testing): each card shows its requests in the list below.
-            StatGrid([
-              StatTile(
-                'New requests',
-                '${dash['pending_requests']}',
-                Icons.mark_email_unread_outlined,
-                color: const Color(0xFFEF6C00),
-                onTap: () => setState(() => stage = 'Pending'),
+        StatTile tile(
+          String label,
+          Object? value,
+          IconData icon,
+          String to, {
+          Color? color,
+        }) => StatTile(
+          label,
+          '${value ?? 0}',
+          icon,
+          color: color,
+          selected: stage == to,
+          note: stage == to ? 'Showing below' : 'Tap to view',
+          onTap: () => _show(to),
+        );
+        final cs = Theme.of(context).colorScheme;
+        return CustomScrollView(
+          controller: _scroll,
+          physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(
+                Space.md,
+                Space.md,
+                Space.md,
+                0,
               ),
-              StatTile(
-                'Accepted',
-                '${dash['scheduled']}',
-                Icons.event_available,
-                onTap: () => setState(() => stage = 'Accepted'),
+              sliver: SliverToBoxAdapter(
+                child: Column(
+                  key: _dashboard,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    PageHeader(
+                      'DRRMO Logistics Support',
+                      subtitle: roleLine(),
+                    ),
+                    // Phase 6: new requests, today's pickups, on the way.
+                    NeedsActionCard(
+                      onOpen: (i) => _show(
+                        '${i['view'] ?? stage}',
+                        focus:
+                            ((i['ids'] as List?) ?? const []).firstOrNull
+                                as int?,
+                      ),
+                    ),
+                    const ResponseTimesCard(), // Phase 7
+                    // 9.6 (testing): each card shows its requests below.
+                    StatGrid([
+                      tile(
+                        'New requests',
+                        dash['pending_requests'],
+                        Icons.mark_email_unread_outlined,
+                        'Pending',
+                        color: const Color(0xFFEF6C00),
+                      ),
+                      tile(
+                        'Accepted',
+                        dash['scheduled'],
+                        Icons.event_available,
+                        'Accepted',
+                      ),
+                      tile(
+                        'On the way',
+                        dash['in_transit'],
+                        Icons.local_shipping_outlined,
+                        'In Transit',
+                        color: const Color(0xFF1565C0),
+                      ),
+                      tile(
+                        'Completed',
+                        dash['completed'],
+                        Icons.done_all,
+                        'Completed',
+                        color: const Color(0xFF2E7D32),
+                      ),
+                    ]),
+                    ScheduledDeliveriesCard(
+                      deliveries: scheduled,
+                      onOpen: (d) =>
+                          showDeliveryHistory(context, d['delivery_id'] as int),
+                    ),
+                    const SectionTitle('Logistics requests'),
+                  ],
+                ),
               ),
-              StatTile(
-                'In transit',
-                '${dash['in_transit']}',
-                Icons.local_shipping_outlined,
-                color: const Color(0xFF1565C0),
-                onTap: () => setState(() => stage = 'In Transit'),
-              ),
-              StatTile(
-                'Completed',
-                '${dash['completed']}',
-                Icons.done_all,
-                color: const Color(0xFF2E7D32),
-                onTap: () => setState(() => stage = 'Completed'),
-              ),
-            ]),
-            ScheduledDeliveriesCard(
-              deliveries: scheduled,
-              onOpen: (d) =>
-                  showDeliveryHistory(context, d['delivery_id'] as int),
             ),
-            const SectionTitle('Logistics requests'),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final e in stages.entries)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        label: Text(
-                          '${e.value} (${all.where((r) => r['stage'] == e.key).length})',
+            // The stage chips stay at the top while the list scrolls.
+            SliverPersistentHeader(
+              pinned: true,
+              delegate: _PinnedBar(
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: Space.md),
+                  child: Row(
+                    children: [
+                      for (final e in stages.entries)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: ChoiceChip(
+                            label: Text(
+                              '${e.value} (${all.where((r) => r['stage'] == e.key).length})',
+                            ),
+                            selected: stage == e.key,
+                            onSelected: (_) => setState(() => stage = e.key),
+                          ),
                         ),
-                        selected: stage == e.key,
-                        onSelected: (_) => setState(() => stage = e.key),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(
+                Space.md,
+                Space.sm,
+                Space.md,
+                Space.xl,
+              ),
+              sliver: SliverList.list(
+                children: [
+                  TextField(
+                    textInputAction: TextInputAction.search,
+                    decoration: const InputDecoration(
+                      labelText: 'Search barangay, report or request no.',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onChanged: (v) => setState(() => _q = v),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
+                    child: Text(
+                      '${stages[stage] ?? stage}: ${rows.length} '
+                      'request${rows.length == 1 ? '' : 's'}',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelLarge?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ),
+                  if (rows.isEmpty) const EmptyState('No requests here.'),
+                  for (final r in rows)
+                    AnimatedContainer(
+                      key: ValueKey('request-${r['request_id']}'),
+                      duration: const Duration(milliseconds: 250),
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(Radii.lg),
+                        border: Border.all(
+                          color: r['request_id'] == _focus
+                              ? cs.primary
+                              : Colors.transparent,
+                          width: 2,
+                        ),
+                      ),
+                      child: LogisticsRequestCard(
+                        r,
+                        // The delivery's timeline (who did each step, when).
+                        onTap: r['delivery_id'] is int
+                            ? () => showDeliveryHistory(
+                                context,
+                                r['delivery_id'] as int,
+                              )
+                            : null,
+                        actions: _actionsFor(r),
                       ),
                     ),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty) const EmptyState('No requests here.'),
-            for (final r in rows)
-              Container(
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: r['request_id'] == _focus
-                    ? BoxDecoration(
-                        borderRadius: BorderRadius.circular(Radii.lg),
-                        border: Border.all(
-                          color: Theme.of(context).colorScheme.primary,
-                          width: 2,
-                        ),
-                      )
-                    : null,
-                child: LogisticsRequestCard(
-                  r,
-                  actions: [
-                    if (r['stage'] == 'Pending') ...[
-                      OutlinedButton(
-                        onPressed: () => _decline(r),
-                        child: const Text('Decline'),
-                      ),
-                      FilledButton.icon(
-                        onPressed: () => _accept(r),
-                        icon: const Icon(Icons.check),
-                        label: const Text('Accept'),
-                      ),
-                    ],
-                    if (r['stage'] == 'Accepted')
-                      TextButton(
-                        onPressed: () => _withdraw(r),
-                        child: const Text('Can no longer do this'),
-                      ),
-
-                    // Advisor (Oct 24): DRRMO picked the goods up from CSWS.
-                    if (r['stage'] == 'Accepted' &&
-                        r['request_type'] != 'Pickup' &&
-                        r['delivery_status'] == 'Preparing')
-                      FilledButton.icon(
-                        onPressed: () => act(
-                          context,
-                          () => api.post(
-                            '/drrmo/requests/${r['request_id']}/picked-up',
-                          ),
-                          success:
-                              'Delivery #${r['delivery_id']} is now In Transit',
-                        ),
-                        icon: const Icon(Icons.local_shipping),
-                        label: const Text('Picked up · mark In Transit'),
-                      ),
-                    // Testing (Oct 27): DRRMO carried it, so DRRMO marks it
-                    // Delivered at the barangay.
-                    if (r['stage'] == 'In Transit' &&
-                        r['request_type'] != 'Pickup' &&
-                        r['delivery_status'] == 'In Transit')
-                      FilledButton.icon(
-                        onPressed: () => act(
-                          context,
-                          () => api.post(
-                            '/drrmo/requests/${r['request_id']}/delivered',
-                          ),
-                          success:
-                              'Delivery #${r['delivery_id']} is now Delivered',
-                        ),
-                        icon: const Icon(Icons.where_to_vote_outlined),
-                        label: const Text('Mark Delivered'),
-                      ),
-                    // Testing fix 7.5: only after the date, In Transit (8.1)
-                    // and the barangay's receipt (8.2). The card shows why.
-                    if (r['stage'] == 'Accepted' || r['stage'] == 'In Transit')
-                      FilledButton.icon(
-                        onPressed: r['can_complete'] == true
-                            ? () => _complete(r)
-                            : null,
-                        icon: const Icon(Icons.done_all),
-                        label: const Text('Mark completed'),
-                      ),
-                  ],
-                ),
-              ),
           ],
         );
       },
     );
   }
+
+  /// The buttons a request card shows (Phase 6: the next allowed action).
+  List<Widget> _actionsFor(Map r) => [
+    if (r['stage'] == 'Pending') ...[
+      OutlinedButton(
+        onPressed: () => _decline(r),
+        child: const Text('Decline'),
+      ),
+      FilledButton.icon(
+        onPressed: () => _accept(r),
+        icon: const Icon(Icons.check),
+        label: const Text('Accept'),
+      ),
+    ],
+    if (r['stage'] == 'Accepted')
+      TextButton(
+        onPressed: () => _withdraw(r),
+        child: const Text('Can no longer do this'),
+      ),
+
+    // Table 36 / 37: only the DRRMO user who accepted it moves the
+    // delivery; teammates see who has it.
+    if (r['request_type'] != 'Pickup' &&
+        (r['stage'] == 'Accepted' || r['stage'] == 'In Transit') &&
+        r['mine'] != true)
+      Chip(
+        avatar: const Icon(Icons.person_outline, size: 18),
+        label: Text('Accepted by ${r['assigned_to'] ?? 'a teammate'}'),
+      ),
+    // Advisor (Oct 24): DRRMO picked the goods up from CSWS.
+    if (r['stage'] == 'Accepted' &&
+        r['request_type'] != 'Pickup' &&
+        r['delivery_status'] == 'Preparing' &&
+        r['mine'] == true)
+      FilledButton.icon(
+        onPressed: () => moveDrrmoDelivery(context, r),
+        icon: const Icon(Icons.local_shipping),
+        label: const Text('Picked up · mark On the way'),
+      ),
+    // Testing (Oct 27): DRRMO carried it, so DRRMO marks it Arrived at
+    // the barangay; that completes the request.
+    if (r['stage'] == 'In Transit' &&
+        r['request_type'] != 'Pickup' &&
+        r['delivery_status'] == 'In Transit' &&
+        r['mine'] == true)
+      FilledButton.icon(
+        onPressed: () => moveDrrmoDelivery(context, r),
+        icon: const Icon(Icons.where_to_vote_outlined),
+        label: const Text('Mark Arrived'),
+      ),
+    // Pickup runs (and requests accepted before Nov 2026) are still
+    // completed by hand, once allowed (7.5).
+    if (r['can_complete'] == true)
+      FilledButton.icon(
+        onPressed: () => _complete(r),
+        icon: const Icon(Icons.done_all),
+        label: const Text('Mark completed'),
+      ),
+  ];
+}
+
+/// A bar that stays at the top of a CustomScrollView (DRRMO stage chips).
+class _PinnedBar extends SliverPersistentHeaderDelegate {
+  final Widget child;
+  const _PinnedBar(this.child);
+
+  static const double _height = 56;
+
+  @override
+  double get minExtent => _height;
+
+  @override
+  double get maxExtent => _height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlaps) =>
+      Material(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        elevation: overlaps ? 2 : 0,
+        child: Align(alignment: Alignment.centerLeft, child: child),
+      );
+
+  @override
+  bool shouldRebuild(_PinnedBar old) => true;
 }

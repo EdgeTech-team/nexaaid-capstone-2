@@ -97,11 +97,13 @@ def _not_finished(d: Delivery) -> None:
 
 
 def _people(db: Session, d: Delivery, exclude: int) -> set:
-    """Barangay rep(s) of the destination, plus DRRMO if a truck was asked for."""
+    """Barangay rep(s) of the destination, plus DRRMO when it is involved:
+    every DRRMO user while the request waits, then only the one who accepted
+    it (Table 36; drrmo_router.drrmo_to_tell)."""
+    from api.v1.drrmo_router import drrmo_to_tell
     out = set(user_ids_with_role(db, ["Barangay Receiving Representative"],
                                  barangay_id=d.destination_barangay_id))
-    if db.query(LogisticsRequest).filter(LogisticsRequest.delivery_id == d.delivery_id).first():
-        out |= set(user_ids_with_role(db, [DRRMO]))
+    out |= drrmo_to_tell(db, d.delivery_id)
     out.discard(exclude)
     return out
 
@@ -213,6 +215,7 @@ def cancel_delivery(
         add_to_stock(db, line.item_id, d.report_id, line.quantity)
     returned = [{"item_id": line.item_id, "quantity": line.quantity} for line in d.items]
 
+    people = _people(db, d, current_user.user_id)   # before its DRRMO request closes
     requests = _close_requests(db, d, current_user, payload.reason)
     d.status = "Cancelled"
     d.cancelled_at = datetime.now(timezone.utc)
@@ -221,7 +224,7 @@ def cancel_delivery(
                old={"status": "Preparing"},
                new={"status": "Cancelled", "reason": payload.reason,
                     "returned_to_stock": returned, "cancelled_requests": requests})
-    notify_event_many(db, _people(db, d, current_user.user_id), "delivery_cancelled", "delivery",
+    notify_event_many(db, people, "delivery_cancelled", "delivery",
                       d.delivery_id, title=f"Delivery #{d.delivery_id}", reason=payload.reason)
     tell_donors(db, d, "donation_delivery_cancelled", reason=payload.reason)
     db.commit()

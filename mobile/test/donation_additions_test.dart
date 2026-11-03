@@ -127,9 +127,11 @@ void main() {
         await http.runWithClient(() async {
           await tester.pumpWidget(_app(DonationDetailScreen(entry: entry)));
           await tester.pumpAndSettle();
-          expect(find.text('Batch 1'), findsOneWidget);
-          expect(find.text('Batch 2'), findsOneWidget);
-          expect(find.text('Added later'), findsOneWidget);
+          // Nov 1: one list (one QR), no "Batch" sections. The added item
+          // is tagged; the removed one is only in the note.
+          expect(find.textContaining('Batch'), findsNothing);
+          expect(find.textContaining('Added later'), findsOneWidget);
+          expect(find.textContaining('pcs Bottled water'), findsNothing);
           expect(find.text('1 item removed by the donor'), findsOneWidget);
           expect(find.text('Bottled water: Expired stock'), findsOneWidget);
           expect(
@@ -317,12 +319,16 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    expect(find.text('Batch 1'), findsOneWidget);
-    expect(find.text('Original pledge'), findsOneWidget);
-    expect(find.text('Added later'), findsOneWidget);
+    // Nov 1: one reference (one QR) and one list of what is handed over:
+    // no "Batch" sections, no per-item codes, the removed item only in the
+    // note, the added item tagged.
+    expect(find.textContaining('Batch'), findsNothing);
+    expect(find.textContaining('DON-ADD-'), findsNothing);
+    expect(find.text('DON-ADD'), findsOneWidget);
+    expect(find.text('Items (2) · 2 waiting to be received'), findsOneWidget);
+    expect(find.textContaining('Added later'), findsOneWidget);
     expect(find.text('2 pending · 1 removed'), findsOneWidget);
     expect(find.text('Bottled water: Expired stock'), findsOneWidget);
-    expect(find.text('Removed by the donor: Expired stock'), findsOneWidget);
     // Only the two waiting items can be received; a removed item is not
     // "reopened" either.
     expect(

@@ -4,6 +4,9 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'app_navigator.dart';
+import 'push.dart';
+import 'realtime.dart';
 import 'design/design.dart';
 import 'ui/home.dart';
 import 'ui/landing/landing_screen.dart';
@@ -17,6 +20,11 @@ Future<void> main() async {
   await Api.instance.restoreSession();
   runApp(const NexaAidApp());
   unawaited(Api.instance.validateSession());
+  // Live updates for the signed-in user (bell, deliveries, logistics).
+  Realtime.instance.start();
+  // Android push notifications (push.dart). Skipped on the web; any
+  // Firebase problem only turns pushes off.
+  unawaited(Push.instance.start());
 }
 
 /// Lets every scrollable list be dragged with a mouse or touchpad too, not
@@ -44,7 +52,6 @@ class NexaAidApp extends StatefulWidget {
 }
 
 class _NexaAidAppState extends State<NexaAidApp> {
-  final _nav = GlobalKey<NavigatorState>();
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   late String _session;
 
@@ -72,7 +79,7 @@ class _NexaAidAppState extends State<NexaAidApp> {
     final k = _sessionKey();
     if (k == _session) return;
     _session = k;
-    _nav.currentState?.popUntil((r) => r.isFirst);
+    appNavigator.currentState?.popUntil((r) => r.isFirst);
   }
 
   @override
@@ -95,7 +102,7 @@ class _NexaAidAppState extends State<NexaAidApp> {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: AppTheme.mode,
       builder: (context, mode, _) => MaterialApp(
-        navigatorKey: _nav,
+        navigatorKey: appNavigator, // also used by push.dart
         scaffoldMessengerKey: _messenger,
         title: 'NexaAid',
         debugShowCheckedModeBanner: false,
