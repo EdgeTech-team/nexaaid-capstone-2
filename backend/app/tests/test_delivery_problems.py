@@ -72,18 +72,24 @@ def test_truck_came_back_then_cancel_returns_stock(api):
     # Advisor (Oct 24): DRRMO's truck, so DRRMO marks it In Transit.
     ok(client.patch(f"/drrmo/requests/{lr}/accept", headers=t["drrmo"], json=accept_body()))
     ok(client.post(f"/drrmo/requests/{lr}/picked-up", headers=t["drrmo"]))
-    # On the road: cannot cancel until it is back.
+    # Nov 4 (team): DRRMO has it, so CSWS changes nothing; the Administrator
+    # can step in. On the road: cannot cancel until it is back.
     r = client.post(f"/deliveries/{d}/cancel", headers=t["csws"], json={"reason": "Road closed"})
+    assert r.status_code == 409 and "Only DRRMO updates it" in r.json()["detail"]
+    r = client.post(f"/deliveries/{d}/cancel", headers=t["admin"], json={"reason": "Road closed"})
     assert r.status_code == 409 and "Truck came back" in r.json()["detail"]
 
-    ok(client.post(f"/deliveries/{d}/return-to-office", headers=t["csws"],
+    # DRRMO's truck came back (DRRMO marks it, not CSWS).
+    assert client.post(f"/deliveries/{d}/return-to-office", headers=t["csws"],
+                       json={"reason": "Truck broke down"}).status_code == 409
+    ok(client.post(f"/deliveries/{d}/return-to-office", headers=t["drrmo"],
                    json={"reason": "Truck broke down"}))
     assert ok(client.get(f"/deliveries/{d}", headers=t["csws"]))["status"] == "Preparing"
     assert _stock(1, rid) == 60                                   # still loaded for it
     assert _notes("delivery_returned") >= 1
 
     assert client.post(f"/deliveries/{d}/cancel", headers=t["csws"], json={"reason": "x"}).status_code == 422
-    out = ok(client.post(f"/deliveries/{d}/cancel", headers=t["csws"],
+    out = ok(client.post(f"/deliveries/{d}/cancel", headers=t["admin"],
                          json={"reason": "Road to the barangay is closed"}))
     assert out["status"] == "Cancelled" and out["returned_to_stock"] == [{"item_id": 1, "quantity": 40}]
     assert _stock(1, rid) == 100                                  # goods back in stock
@@ -156,10 +162,13 @@ def test_cancel_and_withdraw_logistics_requests(api):
     d = ok(_deliver(client, t, rid, [{"item_id": 1, "quantity": 5}]), 201)["delivery_id"]
     req = ok(client.post("/logistics/requests", headers=t["csws"], json={"delivery_id": d, "trucks": 1, "drivers": 1, "volunteers": 0}), 201)["request_id"]
 
-    # CSWS cancels it: DRRMO is told; a new request is then allowed.
+    # Nov 4 (team): the request is DRRMO's to answer, so CSWS cannot cancel
+    # it; the Administrator can. DRRMO is told; a new request is then allowed.
     assert client.post(f"/logistics/requests/{req}/cancel", headers=t["drrmo"],
                        json={"reason": "found a truck"}).status_code == 403
-    ok(client.post(f"/logistics/requests/{req}/cancel", headers=t["csws"], json={"reason": "Found a city truck"}))
+    assert client.post(f"/logistics/requests/{req}/cancel", headers=t["csws"],
+                       json={"reason": "Found a city truck"}).status_code == 409
+    ok(client.post(f"/logistics/requests/{req}/cancel", headers=t["admin"], json={"reason": "Found a city truck"}))
     assert _notes("logistics_cancelled") >= 1
     assert client.post(f"/logistics/requests/{req}/cancel", headers=t["csws"],
                        json={"reason": "again"}).status_code == 409
