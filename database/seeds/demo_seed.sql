@@ -124,6 +124,23 @@ UPDATE users
 SET password_hash = (SELECT password_hash FROM users WHERE email = 'csws.test@example.com')
 WHERE email IN ('halberz43@gmail.com', 'maria.santos@helpinghands.org');
 
+-- 5. A second Administrator account for the CSWS Head Office (Nov 4).
+--    Login: headoffice@gmail.com   Password: testpass123 (same hash as
+--    csws.test@example.com). Skipped if the email already exists.
+INSERT INTO users (first_name, last_name, email, password_hash, contact_number,
+                   role_id, is_active, must_change_password)
+SELECT 'Head',
+       'Office',
+       'headoffice@gmail.com',
+       (SELECT password_hash FROM users WHERE email = 'csws.test@example.com'),
+       '09170000000',
+       (SELECT role_id FROM roles
+        WHERE lower(role_name) IN ('administrator', 'admin')
+        ORDER BY role_id LIMIT 1),
+       true,
+       false
+ON CONFLICT (email) DO NOTHING;
+
 -- Check the results:
 SELECT u.email, r.role_name, b.barangay_name
 FROM users u
