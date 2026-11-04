@@ -4,7 +4,6 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../realtime.dart';
 import 'needs_action.dart';
-import 'pending_items.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'home_nav.dart';
 import 'widgets.dart';
@@ -639,7 +638,6 @@ class CswsMainDashboard extends StatelessWidget {
               ),
             ),
             const ResponseTimesCard(), // Phase 7
-            const PendingItemsCard(), // F-15
             StatGrid([
               // Tiles open the tab that lists what they count.
               StatTile(

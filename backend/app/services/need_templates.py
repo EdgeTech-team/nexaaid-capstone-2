@@ -18,7 +18,11 @@ from sqlalchemy.orm import Session
 from models.item_model import Item
 from models.report import DisasterType
 
-_FOOD = {"Rice": 6, "Canned Goods": 8, "Noodles": 4, "Drinking Water": 20}
+# Concerns Nov 4: every disaster type has a template, and every template
+# includes Municipal Water (the city's water supply, for cooking and
+# washing), on top of Drinking Water.
+_FOOD = {"Rice": 6, "Canned Goods": 8, "Noodles": 4, "Drinking Water": 20,
+         "Municipal Water": 40}
 _SHELTER = {"Hygiene Kit": 1, "Blanket": 2, "Sleeping Mat": 1}
 
 NEED_TEMPLATES = {
@@ -29,6 +33,8 @@ NEED_TEMPLATES = {
     # Families lose the house and everything in it.
     "Fire": {**_FOOD, **_SHELTER, "Clothing": 2},
     "Earthquake": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
+    # Any other disaster: the basic relief pack; the reporter adjusts it.
+    "Other": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
 }
 
 

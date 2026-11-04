@@ -27,7 +27,11 @@ class ReportApi {
       final j = e as Map<String, dynamic>;
       return Report(
         reportId: j['report_id'] as int,
-        disasterType: _name(lookups, 'disaster_types', j['disaster_type_id']),
+        // The typed name for "Other" (Concerns Nov 4) comes as
+        // disaster_type_name.
+        disasterType:
+            (j['disaster_type_name'] as String?) ??
+            _name(lookups, 'disaster_types', j['disaster_type_id']),
         barangay: _name(lookups, 'barangays', j['barangay_id']),
         description: j['description'] as String?,
         assistanceNeeded: '${j['assistance_needed'] ?? ''}',

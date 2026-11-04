@@ -2103,7 +2103,9 @@ class _DrrmoScreenState extends State<DrrmoScreen>
           '${value ?? 0}',
           icon,
           color: color,
-          selected: stage == to,
+          // Concerns Nov 4: a card with nothing in it is never tinted, so
+          // the dashboard does not turn orange when there are no requests.
+          selected: stage == to && (num.tryParse('${value ?? 0}') ?? 0) > 0,
           note: stage == to ? 'Showing below' : 'Tap to view',
           onTap: () => _show(to),
         );

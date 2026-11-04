@@ -335,10 +335,8 @@ def test_donor_dashboard_and_other_item(api):
     again = ok(client.post("/donations/", headers=t["donor"], json={
         **base, "other_item_name": "face masks", "quantity": 2}))
     assert other["item_id"] == again["item_id"] != 1
-        # F-15: a typed-in item waits for CSWS review before it is in the list.
+    # F-15 / Concerns Nov 4: a typed-in item stays on the donation only.
     assert "Face Masks (boxes)" not in [i["name"] for i in ok(client.get("/lookups"))["items"]]
-    ok(client.post(f"/items/{other['item_id']}/approve", headers=t["csws"], json={}))
-    assert "Face Masks (boxes)" in [i["name"] for i in ok(client.get("/lookups"))["items"]]
 
     assert client.post("/donations/", headers=t["donor"], json={**base, "quantity": 1}).status_code == 422
 

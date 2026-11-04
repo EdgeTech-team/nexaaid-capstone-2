@@ -140,6 +140,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
       if (v.isNotEmpty) int.parse(v),
   ];
   final desc = TextEditingController();
+
+  /// Concerns Nov 4: what the disaster is, typed when the type is "Other".
+  final otherType = TextEditingController();
   final families = TextEditingController();
   final smsSender = TextEditingController();
   final smsText = TextEditingController();
@@ -178,6 +181,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
 
   Map<String, dynamic> _snapshot() => {
     'type_id': typeId,
+    'other_type': otherType.text,
     'barangay_id': brgyId,
     'sitio_rows': sitioRows,
     'description': desc.text,
@@ -222,6 +226,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
     ];
     sitioRows = brgyId == null || rows.isEmpty ? [''] : rows;
     desc.text = d.str('description');
+    otherType.text = d.str('other_type');
     families.text = d.str('families');
     smsSender.text = d.str('sms_sender');
     smsText.text = d.str('sms_text');
@@ -257,6 +262,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
     _draft?.clear();
     setState(() {
       desc.clear();
+      otherType.clear();
       families.clear();
       smsSender.clear();
       smsText.clear();
@@ -282,6 +288,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         (r['sitio_ids'] as List?) ?? [if (r['sitio_id'] != null) r['sitio_id']];
     sitioRows = ids.isEmpty ? [''] : [for (final i in ids) '$i'];
     desc.text = '${r['description'] ?? ''}';
+    otherType.text = '${r['other_disaster_type'] ?? ''}';
     families.text = '${r['affected_families'] ?? ''}';
     final rows = [
       for (final n in (r['needs'] as List? ?? const []))
@@ -327,6 +334,12 @@ class _NewReportScreenState extends State<NewReportScreen> {
     }
     _fills++;
   }
+
+  /// Concerns Nov 4: "Other" asks the reporter to type the disaster.
+  bool _isOther(Names names) =>
+      typeId != null &&
+      names.of('disaster_types', typeId, fallback: '').trim().toLowerCase() ==
+          'other';
 
   /// Module 3 (Oct 2026): suggested needs for a disaster type, from
   /// /lookups `need_templates` (backend services/need_templates.py).
@@ -449,11 +462,23 @@ class _NewReportScreenState extends State<NewReportScreen> {
         'The SMS is missing: ${parsed.missing.join(', ')}.',
       ...parsed.problems,
     ];
-    final type = _idByName(names, 'disaster_types', parsed.disasterType);
+    var type = _idByName(names, 'disaster_types', parsed.disasterType);
+    String? typedOther;
     if (parsed.disasterType != null && type == null) {
-      notes.add(
-        'Disaster type "${parsed.disasterType}" not found. Choose it below.',
-      );
+      // Concerns Nov 4: a type not on the list is filed as "Other", with
+      // the name from the SMS typed in.
+      type = _idByName(names, 'disaster_types', 'Other');
+      if (type != null) {
+        typedOther = parsed.disasterType!.trim();
+        notes.add(
+          'Disaster type "${parsed.disasterType}" is not on the list. '
+          'It was set to Other. Check it below.',
+        );
+      } else {
+        notes.add(
+          'Disaster type "${parsed.disasterType}" not found. Choose it below.',
+        );
+      }
     }
     final brgy = _idByName(names, 'barangays', parsed.barangay);
     if (parsed.barangay != null && brgy == null) {
@@ -483,6 +508,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
     final newNeeds = [for (final n in parsed.needs) _needFrom(n, names)];
     setState(() {
       typeId = type;
+      if (typedOther != null) otherType.text = typedOther;
       brgyId = brgy;
       sitioRows = sitios.isEmpty ? [''] : sitios;
       if (parsed.families != null) families.text = '${parsed.families}';
@@ -562,6 +588,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         .join(', ');
     final body = {
       'disaster_type_id': int.parse(typeId!),
+      'other_disaster_type': _isOther(names) ? otherType.text.trim() : null,
       'barangay_id': int.parse(brgyId!),
       'sitio_id': _sitioIds.firstOrNull,
       'sitio_ids': _sitioIds,
@@ -852,6 +879,22 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   if (untouched) _applyTemplate(names);
                 }),
               ),
+              // Concerns Nov 4: "Other" (always the last choice) asks what
+              // the disaster is. Shown instead of "Other" everywhere.
+              if (_isOther(names)) ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: otherType,
+                  textCapitalization: TextCapitalization.words,
+                  maxLength: 100,
+                  decoration: const InputDecoration(
+                    labelText: 'What disaster is it?',
+                    hintText: 'e.g. Sinkhole',
+                  ),
+                  validator: (v) =>
+                      (v ?? '').trim().isEmpty ? 'Type the disaster' : null,
+                ),
+              ],
               const SizedBox(height: 12),
               LookupDropdown(
                 key: ValueKey('brgy-$_fills'),
@@ -907,17 +950,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   }
                 },
               ),
-              SectionTitle(
-                'Assistance needed',
-                trailing: TextButton.icon(
-                  onPressed: () {
-                    setState(() => needs.add(_Need()));
-                    _saveDraft();
-                  },
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add need'),
-                ),
-              ),
+              const SectionTitle('Assistance needed'),
+              // Concerns Nov 4: the needs fill in by themselves from the
+              // disaster type and the families, so there is no "Use
+              // suggested" button. "Add need" comes after the list.
               if (_templateFor(names) case final t?)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
@@ -927,19 +963,27 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Suggested basic needs for ${t['name']}, '
+                          'Filled in with the basic needs for '
+                          '${_isOther(names) ? 'any disaster' : t['name']}, '
                           'per affected family. Change them as needed.',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
-                      ),
-                      TextButton(
-                        onPressed: () => setState(() => _applyTemplate(names)),
-                        child: const Text('Use suggested'),
                       ),
                     ],
                   ),
                 ),
               for (var i = 0; i < needs.length; i++) _needRow(i, names),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() => needs.add(_Need()));
+                    _saveDraft();
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add need'),
+                ),
+              ),
               const SizedBox(height: 16),
               FilledButton.icon(
                 onPressed: busy ? null : () => _submit(names),

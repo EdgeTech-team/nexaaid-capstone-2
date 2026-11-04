@@ -58,3 +58,25 @@ def test_an_item_waiting_for_review_is_never_suggested(api):
     flood = {line["item_name"] for line in templates["Flood"]["items"]}
     assert "Rice" in flood                   # the template itself still works
     assert "Clothing" not in flood           # waiting for review (F-15)
+
+
+def test_every_disaster_type_has_a_template_with_municipal_water(api):
+    """Concerns Nov 4: every type auto-fills needs, "Other" too, and each
+    template includes Municipal Water."""
+    from services.need_templates import NEED_TEMPLATES
+    for name in ("Typhoon", "Flood", "Storm Surge", "Earthquake", "Fire", "Tsunami", "Other"):
+        assert "Municipal Water" in NEED_TEMPLATES[name], name
+
+    client, _ = api
+    db = database.SessionLocal()
+    try:
+        db.add(DisasterType(disaster_type_id=91, type_name="Other"))
+        if not db.query(Item).filter_by(item_name="Municipal Water").first():
+            db.add(Item(item_name="Municipal Water", category="Water", unit_of_measure="L"))
+        db.commit()
+    finally:
+        db.close()
+    templates = {t["name"]: t for t in ok(client.get("/lookups"))["need_templates"]}
+    other = {line["item_name"]: line for line in templates["Other"]["items"]}
+    assert other["Municipal Water"]["unit"] == "L"
+    assert "Municipal Water" in {line["item_name"] for line in templates["Flood"]["items"]}

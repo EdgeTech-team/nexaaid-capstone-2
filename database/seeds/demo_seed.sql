@@ -20,6 +20,7 @@ SELECT v.item_name, v.category, v.unit
 FROM (VALUES
     ('Rice',            'Food',     'kg'),
     ('Drinking Water',  'Water',    'L'),
+    ('Municipal Water', 'Water',    'L'),
     ('Canned Goods',    'Food',     'cans'),
     ('Noodles',         'Food',     'packs'),
     ('Hygiene Kit',     'Hygiene',  'kits'),
@@ -54,7 +55,11 @@ FROM (VALUES
     ('Drinking Water', '1.5 L bottle',           1.5,      5),
     ('Drinking Water', '2 L bottle',             2,        6),
     ('Drinking Water', '1 gallon container',     3.7854,   7),
-    ('Drinking Water', '5 gallon container',     18.9271,  8)
+    ('Drinking Water', '5 gallon container',     18.9271,  8),
+    ('Municipal Water', '1 gallon container',    3.7854,   1),
+    ('Municipal Water', '5 gallon container',    18.9271,  2),
+    ('Municipal Water', '200 L drum',            200,      3),
+    ('Municipal Water', '1,000 L water tank',    1000,     4)
 ) AS v(item_name, label, amount, sort_order)
 JOIN items i ON lower(i.item_name) = lower(v.item_name) AND i.active
 WHERE NOT EXISTS (

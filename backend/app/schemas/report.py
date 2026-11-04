@@ -102,6 +102,9 @@ NeedsField = Optional[List[ReportNeedIn]]
 
 class DisasterReportCreate(BaseModel):
     disaster_type_id: int
+    # Concerns Nov 4: what the disaster is, typed by the reporter when the
+    # type is "Other". Required for "Other", ignored for every other type.
+    other_disaster_type: Optional[str] = Field(default=None, max_length=100)
     barangay_id: int
     sitio_id: Optional[int] = None
     # Several sitios of the barangay (problema_napud 2.2). When given, it
@@ -125,6 +128,9 @@ class DisasterReportEdit(BaseModel):
     Administrator validates it (Oct 11 notes). Same fields as a new report;
     the source stays as it was."""
     disaster_type_id: int
+    # Concerns Nov 4: what the disaster is, typed by the reporter when the
+    # type is "Other". Required for "Other", ignored for every other type.
+    other_disaster_type: Optional[str] = Field(default=None, max_length=100)
     barangay_id: int
     sitio_id: Optional[int] = None
     # Several sitios of the barangay (problema_napud 2.2). When given, it
@@ -184,6 +190,7 @@ class DisasterReportResponse(BaseModel):
     report_id: int
     user_id: int
     disaster_type_id: int
+    other_disaster_type: Optional[str] = None
     barangay_id: int
     sitio_id: Optional[int]
     sitio_ids: List[int] = []
@@ -243,6 +250,9 @@ class SmsReportIngest(BaseModel):
     raw_message: str
 
     disaster_type_id: int
+    # Concerns Nov 4: what the disaster is, typed by the reporter when the
+    # type is "Other". Required for "Other", ignored for every other type.
+    other_disaster_type: Optional[str] = Field(default=None, max_length=100)
     barangay_id: int
     sitio_id: Optional[int] = None
     sitio_ids: Optional[List[int]] = None

@@ -39,6 +39,7 @@ const _cacheLookups = 'sms_cache_lookups';
 const _cacheReceivers = 'sms_cache_receivers_admin';
 const _cacheSavedAt = 'sms_cache_saved_at';
 const _cacheDraft = 'sms_draft_v1';
+
 /// The /lookups lists this screen uses. Only these are kept in memory and in
 /// the offline copy on the phone, so lists of internal records (F-01) are
 /// never saved on the device.
@@ -105,6 +106,11 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   /// Sitio names, one per row ('' = not chosen); see SitioPicker.
   List<String> sitioRows = [''];
   final typeText = TextEditingController();
+
+  /// Concerns Nov 4: what the disaster is when the type is "Other". The SMS
+  /// carries this name; the Administrator's form files it under Other.
+  final otherTypeText = TextEditingController();
+  bool get _isOther => (type ?? '').trim().toLowerCase() == 'other';
   final barangayText = TextEditingController();
   final sitioText = TextEditingController();
   final families = TextEditingController();
@@ -122,6 +128,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     for (final c in [
       to,
       typeText,
+      otherTypeText,
       barangayText,
       sitioText,
       families,
@@ -187,6 +194,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       barangay == null &&
       [
         typeText,
+        otherTypeText,
         barangayText,
         sitioText,
         families,
@@ -199,6 +207,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   Map<String, dynamic> get _draftJson => {
     'type': type,
     'typeText': typeText.text,
+    'otherTypeText': otherTypeText.text,
     'barangay': barangay,
     'barangayText': barangayText.text,
     'sitioRows': sitioRows,
@@ -243,6 +252,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       String s(String key) => '${d[key] ?? ''}';
 
       typeText.text = s('typeText');
+      otherTypeText.text = s('otherTypeText');
       barangayText.text = s('barangayText');
       sitioText.text = s('sitioText');
       families.text = s('families');
@@ -342,6 +352,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       barangay = null;
       sitioRows = [''];
       typeText.clear();
+      otherTypeText.clear();
       barangayText.clear();
       sitioText.clear();
       families.clear();
@@ -464,7 +475,9 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       (picked ?? text.text).trim();
 
   SmsReport get _report => SmsReport(
-    disasterType: _val(type, typeText),
+    disasterType: _isOther && otherTypeText.text.trim().isNotEmpty
+        ? otherTypeText.text.trim()
+        : _val(type, typeText),
     barangay: _val(barangay, barangayText),
     sitio: () {
       final s = _sitiosOf(barangay).isEmpty
@@ -712,6 +725,21 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               _saveDraft();
             },
           ),
+          if (_isOther) ...[
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: otherTypeText,
+              textCapitalization: TextCapitalization.words,
+              maxLength: 100,
+              decoration: const InputDecoration(
+                labelText: 'What disaster is it?',
+                hintText: 'e.g. Sinkhole',
+              ),
+              onChanged: (_) => _saveDraft(),
+              validator: (v) =>
+                  (v ?? '').trim().isEmpty ? 'Type the disaster' : null,
+            ),
+          ],
           const SizedBox(height: 12),
           _choice(
             label: 'Barangay',
