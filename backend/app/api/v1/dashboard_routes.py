@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.auth import require_role
-from models.report import DisasterReport, ReportFulfillment, disaster_name
+from models.report import DisasterReport, ReportFulfillment
 from models.physical_donation_model import PhysicalDonation
 from models.organization_model import Organization
 from models.delivery import Delivery as delivery
@@ -126,7 +126,7 @@ def _labels(db: Session, report_ids) -> dict:
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     brgys = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     return {
-        r.report_id: f"#{r.report_id} {disaster_name(r, types)} - {brgys.get(r.barangay_id, 'Barangay')}"
+        r.report_id: f"#{r.report_id} {r.disaster_label(types)} - {brgys.get(r.barangay_id, 'Barangay')}"
         for r in db.query(DisasterReport).filter(DisasterReport.report_id.in_(report_ids)).all()
     }
 

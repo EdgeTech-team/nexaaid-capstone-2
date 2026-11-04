@@ -28,8 +28,12 @@ DISASTER_SEVERITY = {
     "Typhoon": 85,
     "Fire": 60,
     "Earthquake": 90,
+    "Flash Flood": 75,
     "Storm Surge": 85,
+    "Landslide": 80,
     "Tsunami": 95,
+    "Drought": 55,
+    "Disease Outbreak": 65,
     # Not one of the listed types: scored like an unknown type.
     "Other": 50,
 }

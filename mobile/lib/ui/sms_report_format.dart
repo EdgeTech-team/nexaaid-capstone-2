@@ -17,12 +17,37 @@
 ///   NEEDS: Rice 50 kg; Drinking Water 20 gallons
 ///   DETAILS: Waist-deep flood near the chapel
 ///
+/// A disaster not on the list is sent as Other with what it was:
+/// "TYPE: Other - Gas leak".
+///
 /// The reader is forgiving: keys can be in any order and any case, and
 /// common alternatives work (BARANGAY for BRGY, DESCRIPTION for DETAILS...).
 library;
 
 const smsReportHeader = 'NEXAAID REPORT';
 const smsWholeBarangay = 'Whole barangay';
+
+/// The disaster type for anything not on the list (backend
+/// models/disaster_type_model.py). A report of this type also says what
+/// kind of disaster it was (`disaster_type_other`, e.g. "Gas leak").
+const otherDisasterType = 'Other';
+
+/// The TYPE value for Other and what it was: "Other - Gas leak".
+String smsOtherType(String kind) {
+  final k = kind.replaceAll('\n', ' ').trim();
+  return k.isEmpty ? otherDisasterType : '$otherDisasterType - $k';
+}
+
+/// "Other - Gas leak" (also "Other: Gas leak", "Other (Gas leak)") ->
+/// "Gas leak". null when [type] is not Other followed by a name.
+String? smsOtherKind(String? type) {
+  final m = RegExp(
+    r'^other\s*[-–:,(]\s*(.*?)\s*\)?$',
+    caseSensitive: false,
+  ).firstMatch((type ?? '').trim());
+  final kind = m?.group(1)?.trim() ?? '';
+  return kind.isEmpty ? null : kind;
+}
 
 /// One line of NEEDS: "Rice 50 kg" -> item Rice, quantity 50, unit kg.
 class SmsNeed {

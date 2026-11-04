@@ -13,7 +13,7 @@ from models.user_rbac_model import User
 from models.logistics_request_model import LogisticsRequest
 from models.delivery import Delivery
 from models.item_model import Item
-from models.report import DisasterReport, DisasterType, Barangay, disaster_name
+from models.report import DisasterReport, DisasterType, Barangay
 from models.physical_donation_model import PhysicalDonation
 from services.donation_expiry import entry_status, utc
 from core.notifications import logistics_team_ids, notify_event_many, user_ids_with_role
@@ -289,7 +289,7 @@ def request_rows(db: Session, requests) -> list:
             ),
             "report_label": (
                 r.title[0].upper() + r.title[1:] if r.request_type == "Pickup"
-                else (f"#{rep.report_id} {disaster_name(rep, types)} - "
+                else (f"#{rep.report_id} {rep.disaster_label(types)} - "
                       f"{brgys.get(rep.barangay_id, 'Barangay')}") if rep else None
             ),
             "report_id": rep.report_id if rep else None,

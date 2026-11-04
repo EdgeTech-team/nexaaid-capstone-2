@@ -107,10 +107,8 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   List<String> sitioRows = [''];
   final typeText = TextEditingController();
 
-  /// Concerns Nov 4: what the disaster is when the type is "Other". The SMS
-  /// carries this name; the Administrator's form files it under Other.
-  final otherTypeText = TextEditingController();
-  bool get _isOther => (type ?? '').trim().toLowerCase() == 'other';
+  /// What kind of disaster, when the type is Other (e.g. "Gas leak").
+  final typeOther = TextEditingController();
   final barangayText = TextEditingController();
   final sitioText = TextEditingController();
   final families = TextEditingController();
@@ -128,7 +126,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
     for (final c in [
       to,
       typeText,
-      otherTypeText,
+      typeOther,
       barangayText,
       sitioText,
       families,
@@ -194,7 +192,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       barangay == null &&
       [
         typeText,
-        otherTypeText,
+        typeOther,
         barangayText,
         sitioText,
         families,
@@ -207,7 +205,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   Map<String, dynamic> get _draftJson => {
     'type': type,
     'typeText': typeText.text,
-    'otherTypeText': otherTypeText.text,
+    'typeOther': typeOther.text,
     'barangay': barangay,
     'barangayText': barangayText.text,
     'sitioRows': sitioRows,
@@ -252,7 +250,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       String s(String key) => '${d[key] ?? ''}';
 
       typeText.text = s('typeText');
-      otherTypeText.text = s('otherTypeText');
+      typeOther.text = s('typeOther');
       barangayText.text = s('barangayText');
       sitioText.text = s('sitioText');
       families.text = s('families');
@@ -352,7 +350,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       barangay = null;
       sitioRows = [''];
       typeText.clear();
-      otherTypeText.clear();
+      typeOther.clear();
       barangayText.clear();
       sitioText.clear();
       families.clear();
@@ -475,8 +473,8 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       (picked ?? text.text).trim();
 
   SmsReport get _report => SmsReport(
-    disasterType: _isOther && otherTypeText.text.trim().isNotEmpty
-        ? otherTypeText.text.trim()
+    disasterType: type == otherDisasterType
+        ? smsOtherType(typeOther.text)
         : _val(type, typeText),
     barangay: _val(barangay, barangayText),
     sitio: () {
@@ -725,19 +723,23 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               _saveDraft();
             },
           ),
-          if (_isOther) ...[
+          if (type == otherDisasterType) ...[
             const SizedBox(height: 12),
             TextFormField(
-              controller: otherTypeText,
-              textCapitalization: TextCapitalization.words,
-              maxLength: 100,
+              controller: typeOther,
+              textCapitalization: TextCapitalization.sentences,
+              onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
-                labelText: 'What disaster is it?',
-                hintText: 'e.g. Sinkhole',
+                labelText: 'What kind of disaster?',
+                hintText: 'e.g. Gas leak',
               ),
-              onChanged: (_) => _saveDraft(),
-              validator: (v) =>
-                  (v ?? '').trim().isEmpty ? 'Type the disaster' : null,
+              validator: (v) {
+                final t = (v ?? '').trim();
+                if (t.isEmpty) return 'Required';
+                return t.length < 2 || t.length > 100
+                    ? 'Use 2 to 100 characters'
+                    : null;
+              },
             ),
           ],
           const SizedBox(height: 12),

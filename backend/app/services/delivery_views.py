@@ -14,7 +14,7 @@ from models.audit_log_model import AuditLog
 from models.barangay_model import Barangay
 from models.delivery import Delivery, DeliveryItem
 from models.item_model import Item
-from models.report import DisasterReport, DisasterType, disaster_name
+from models.report import DisasterReport, DisasterType
 from schemas.physical_donation_schema import MANILA
 
 STATUS_ORDER = ["Preparing", "In Transit", "Delivered", "Confirmed", "Cancelled"]
@@ -104,7 +104,7 @@ def report_labels(db: Session, report_ids) -> dict:
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     brgys = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     return {
-        r.report_id: f"#{r.report_id} {disaster_name(r, types)} - {brgys.get(r.barangay_id, 'Barangay')}"
+        r.report_id: f"#{r.report_id} {r.disaster_label(types)} - {brgys.get(r.barangay_id, 'Barangay')}"
         for r in db.query(DisasterReport).filter(DisasterReport.report_id.in_(report_ids)).all()
     }
 
