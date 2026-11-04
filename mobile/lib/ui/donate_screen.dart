@@ -278,7 +278,7 @@ class _DonateScreenState extends State<DonateScreen> {
       if (value != null) {
         l.value.text = ThousandsFormatter.format('${value.round()}');
       }
-      lines.add(l);
+      lines.insert(0, l); // newest on top, as on a new donation
     }
     if (lines.isEmpty) lines.add(_Line());
     handover = '${e['handover_method'] ?? 'Drop Off'}';
@@ -303,7 +303,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final packs = i['pack_count'] ?? i['quantity'];
     l.packs.text = packs == null ? '' : '$packs';
     if (info == null && i['item_pending'] == true) {
-      // F-15: an item still waiting for CSWS review is in no dropdown:
+      // F-15: an item the donor typed in is in no dropdown:
       // open it as "Something else" with its name and unit filled in.
       l
         ..itemId = _otherItem
@@ -649,17 +649,12 @@ class _DonateScreenState extends State<DonateScreen> {
     ),
   );
 
+  /// Concerns Nov 4: a new item goes at the top, right under the button
+  /// and the report's needs, and the earlier items move down. The donor
+  /// can still read what the report needs while filling it in.
   void _addItem() {
-    setState(() => lines.add(_Line()));
-    // Bring the new item into view.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      _scroll.animateTo(
-        math.min(_scroll.offset + 360, _scroll.position.maxScrollExtent),
-        duration: Motion.normal,
-        curve: Motion.curve,
-      );
-    });
+    setState(() => lines.insert(0, _Line()));
+    _saveDraft();
   }
 
   /// Oct 23: send only the new items; they join the same donation and QR.
@@ -669,7 +664,8 @@ class _DonateScreenState extends State<DonateScreen> {
     final r = await api.post(
       '/donations/entries/${Uri.encodeComponent(ref)}/items',
       body: {
-        'items': [for (final l in lines) l.toJson(_infoOf(l)!)],
+        // Newest is on top: send them in the order they were added.
+        'items': [for (final l in lines.reversed) l.toJson(_infoOf(l)!)],
       },
     );
     if (!mounted) return;
@@ -730,7 +726,7 @@ class _DonateScreenState extends State<DonateScreen> {
         if (pickupNotes.text.trim().isNotEmpty)
           'pickup_notes': pickupNotes.text.trim(),
       },
-      'items': [for (final l in lines) l.toJson(_infoOf(l)!)],
+      'items': [for (final l in lines.reversed) l.toJson(_infoOf(l)!)],
       if (!api.loggedIn && !_editing)
         'guest_donor': {
           'full_name': guestName.text.trim(),
@@ -856,7 +852,10 @@ class _DonateScreenState extends State<DonateScreen> {
               children: [
                 Icon(Icons.inventory_2_outlined, size: 20, color: cs.primary),
                 Gaps.h8,
-                Expanded(child: Text('Item ${i + 1}', style: t.titleMedium)),
+                // Newest on top: the first item added stays "Item 1".
+                Expanded(
+                  child: Text('Item ${lines.length - i}', style: t.titleMedium),
+                ),
                 if (lines.length > 1)
                   TextButton.icon(
                     onPressed: () {
@@ -1538,7 +1537,8 @@ class _DonateScreenState extends State<DonateScreen> {
                       ? 'These items join your donation as a new batch.'
                       : 'Add every item you are giving. They all share one QR code.',
                 ),
-                for (var i = 0; i < lines.length; i++) _lineCard(i),
+                // Concerns Nov 4: the button is at the top and new items
+                // appear right under it (newest first).
                 AppButton(
                   'Add another item',
                   icon: Icons.add,
@@ -1546,6 +1546,8 @@ class _DonateScreenState extends State<DonateScreen> {
                   expand: true,
                   onPressed: _addItem,
                 ),
+                Gaps.v12,
+                for (var i = 0; i < lines.length; i++) _lineCard(i),
 
                 // Adding to a donation: only the items. Handover, pickup
                 // and donor details stay as they are.

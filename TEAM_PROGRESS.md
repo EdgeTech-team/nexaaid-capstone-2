@@ -393,3 +393,41 @@ work in dark mode.
 **Next:** Item 10 donor/org dashboards (stat cards, `StatusTimeline` per
 donation, supported-report progress, optional self-declared financial log),
 then Module 8 delivery screens.
+
+---
+
+## Mariquit — New concerns (Nov 4), on `copy-develop`
+
+**Status:** Built and tested, waiting for team review
+**Last updated:** Nov 4, 2026
+
+**Disaster report form**
+- Every disaster type fills in its needs by itself, "Other" too
+  (`services/need_templates.py`). The "Use suggested" button is gone;
+  "Add need" is now below the list.
+- "Other" is always the last disaster type. Choosing it asks "What disaster
+  is it?" (required). Saved in the new column
+  `disaster_reports.other_disaster_type` and shown instead of "Other" on
+  every screen (`models.report.disaster_name`). The offline SMS screen asks
+  too; the Administrator's form files an unknown SMS type under Other.
+- New item **Municipal Water** (Water, L, 40 L per family in every
+  template), with gallon / 200 L drum / 1,000 L tank sizes.
+
+**DRRMO:** the selected dashboard card is only tinted when it has requests,
+so "New requests: 0" no longer turns orange.
+
+**Donors**
+- The "Hand over by …" line now reads "Bring to the CSWS office by … · N days
+  left" and explains that the donation expires if not handed over (this is
+  the 14-day Drop Off expiry from Oct 9).
+- "Add another item" is at the top; new items appear right under it, so the
+  report's needs stay in view. Items are still numbered in the order added.
+
+**Admin / CSWS:** no more "New items to review". An item a donor types under
+"Something else" is saved on that donation only (CSWS sees it when the goods
+arrive) and never added to anyone's dropdown, so audit finding F-15 stays
+fixed. `GET /items/pending`, `/items/{id}/approve` and `/reject` are removed.
+
+**Schema:** migration `e1c7a4b9d352` (additive; upgrade/downgrade tested on
+local Postgres): `other_disaster_type` column + the Municipal Water item.
+Re-run `database/seeds/demo_seed.sql` is optional (it has Municipal Water too).

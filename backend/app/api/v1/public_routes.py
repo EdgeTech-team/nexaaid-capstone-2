@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from core.database import get_db
-from models.report import DisasterReport, DisasterType, Barangay
+from models.report import DisasterReport, DisasterType, Barangay, disaster_name
 from models.delivery import Delivery, DeliveryItem, Receipt
 from models.physical_donation_model import PhysicalDonation
 from core.priority_engine import explain_priority
@@ -46,7 +46,7 @@ def public_reports(db: Session = Depends(get_db)):
         out.append({
             "id": r.report_id,
             "report_id": r.report_id,
-            "disaster": types.get(r.disaster_type_id, "Disaster"),
+            "disaster": disaster_name(r, types),
             "barangay": barangays.get(r.barangay_id, "Barangay"),
             "sitio": ", ".join(r.sitio_names) or None,
             "sitios": r.sitio_names,

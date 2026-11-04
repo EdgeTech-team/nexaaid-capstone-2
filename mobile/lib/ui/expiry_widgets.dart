@@ -46,7 +46,7 @@ String _short(dynamic iso) {
 }
 
 /// One line under a donation that says what happens next, in plain words:
-///   "Hand over by Fri, Oct 23 · 5 days left"
+///   "Bring to the CSWS office by Fri, Oct 23 · 5 days left"
 ///   "Only 2 days left to hand this over (by Fri, Oct 23)"
 ///   "Expired on Oct 3. Not brought to the CSWS office by Oct 3."
 class ExpiryNote extends StatelessWidget {
@@ -111,15 +111,23 @@ class ExpiryNote extends StatelessWidget {
     } else if (urgent) {
       title = 'Only $days ${days == 1 ? 'day' : 'days'} left (by $label)';
     } else {
+      // Concerns Nov 4: say plainly what the date is for.
       title =
-          '${dropOff ? 'Hand over by' : 'Pickup window ends'} $label'
-          '${days == null ? '' : ' · $days days left'}';
+          '${dropOff ? 'Bring to the CSWS office by' : 'Pickup window ends'} '
+          '$label${days == null ? '' : ' · $days days left'}';
     }
     return _Box(
       tone: tone,
       icon: urgent ? Icons.timer_outlined : Icons.event_outlined,
       title: title,
       lines: [
+        if (!urgent && !forStaff)
+          dropOff
+              ? 'Drop off your goods at the CSWS office before this date. '
+                    'If they are not handed over by then, this donation '
+                    'expires and is closed.'
+              : 'CSWS collects your goods before this date. If they are '
+                    'not collected by then, this donation expires.',
         if (urgent && !forStaff)
           dropOff
               ? 'Bring it to the CSWS office before then, or it will expire.'

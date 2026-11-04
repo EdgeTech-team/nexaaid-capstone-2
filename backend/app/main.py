@@ -32,7 +32,6 @@ from api.v1.account_router import router as account_router
 from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
 from api.v1.trips import router as trips_router
 from api.v1.delivery_problems import router as delivery_problems_router
-from api.v1.item_routes import router as item_router
 from api.v1.realtime_router import router as realtime_router
 from api.v1.push_router import router as push_router
 
@@ -145,7 +144,6 @@ app.include_router(admin_document_router)
 app.include_router(donation_info_router)
 app.include_router(contacts_router)
 app.include_router(account_router)
-app.include_router(item_router)          # F-15: new items waiting for review
 app.include_router(realtime_router)      # GET /ws live updates (core/realtime.py)
 app.include_router(push_router)          # GET /push/topic, Android push (core/push.py)
 

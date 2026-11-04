@@ -88,6 +88,17 @@ report_sitios = Table(
     ),
 )
 
+def disaster_name(report, types: dict, fallback: str = "Disaster") -> str:
+    """The disaster a report is about, as people read it: the type name
+    (types = {disaster_type_id: type_name}), or what the reporter typed
+    when they chose "Other" (Concerns Nov 4)."""
+    typed = (getattr(report, "other_disaster_type", None) or "").strip()
+    name = types.get(report.disaster_type_id)
+    if typed and (name is None or name == "Other"):
+        return typed
+    return name or fallback
+
+
 class DisasterReport(Base):
     __tablename__ = "disaster_reports"
 
@@ -107,6 +118,11 @@ class DisasterReport(Base):
     sitio_id = Column(
         Integer, ForeignKey("sitios.sitio_id", ondelete="SET NULL"), nullable=True
     )
+
+    # Concerns Nov 4: when the type is "Other", the reporter types what the
+    # disaster is (e.g. "Sinkhole"). Shown instead of "Other" on every
+    # screen. Migration e1c7a4b9d352.
+    other_disaster_type = Column(String(100), nullable=True)
 
     description = Column(Text, nullable=True)
     affected_families = Column(Integer, nullable=True)
@@ -200,7 +216,8 @@ class DisasterReport(Base):
     # only if the response schema declares them (see DisasterReportResponse).
     @property
     def disaster_type_name(self):
-        return self.disaster_type.type_name if self.disaster_type else None
+        name = self.disaster_type.type_name if self.disaster_type else None
+        return disaster_name(self, {self.disaster_type_id: name} if name else {})
 
     @property
     def barangay_name(self):
