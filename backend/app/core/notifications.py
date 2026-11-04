@@ -65,7 +65,7 @@ EVENTS: dict[str, tuple[str, str]] = {
     "logistics_withdrawn": ("DRRMO can no longer help", "Transport for {title} was withdrawn: {reason}. Ask again or arrange another vehicle."),
     # Reminders (services/delivery_reminders.py, every 5 minutes)
     "reminder_request_waiting": ("Request waiting for DRRMO", "The transport request for {title} has waited {hours}. Please accept or decline it."),
-    "reminder_request_waiting_csws": ("DRRMO has not answered", "DRRMO has not answered the transport request for {title} in {hours}. Call DRRMO, or cancel the request and send it yourself."),
+    "reminder_request_waiting_csws": ("DRRMO has not answered", "DRRMO has not answered the transport request for {title} in {hours}. Please call DRRMO to accept or decline it."),
     "reminder_in_transit_long": ("Still on the way", "{title} has been on the way for {hours}. Check with the driver, or use \"Truck came back\" if it returned."),
     "reminder_pickup_overdue": ("Pickup is late", "DRRMO was due to pick up {title} on {when}, but it is still being packed. Check with DRRMO, or reschedule it."),
     "reminder_not_confirmed": ("Not received yet", "{title} arrived at {barangay} {hours} ago, but the barangay has not confirmed receipt. Please follow up."),

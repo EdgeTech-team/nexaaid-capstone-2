@@ -104,11 +104,12 @@ def test_7_4_main_office_plans_drrmo_confirms_the_time(api):
     assert row["scheduled_by"] == "CSWS Main Office"
     assert row["scheduled_date"].startswith("2026-10-20")
 
-    # Main Office moves the delivery before DRRMO answers: DRRMO sees the new date.
+    # Nov 4 (team): once asked, the delivery is DRRMO's; Main Office can no
+    # longer move it while DRRMO decides.
     later = (datetime.now(timezone.utc) + timedelta(days=10)).replace(microsecond=0)
-    ok(client.post(f"/deliveries/{did}/reschedule", headers=t["csws"],
-                   json={"delivery_date": later.isoformat(), "reason": "Road closed"}))
-    assert _row(client, t, req)["scheduled_date"][:10] == later.date().isoformat()
+    assert client.post(f"/deliveries/{did}/reschedule", headers=t["csws"],
+                       json={"delivery_date": later.isoformat(), "reason": "Road closed"}
+                       ).status_code == 409
 
     # DRRMO accepts for a day earlier: that is now the time everywhere.
     sooner = later - timedelta(days=1)

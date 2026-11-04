@@ -27,7 +27,7 @@ def test_pending_request_blocks_csws_with_a_plain_reason(api):
     r = client.post(f"/deliveries/{did}/advance", headers=t["csws"])
     assert r.status_code == 409
     assert f"waiting for DRRMO to accept request #{rid}" in r.json()["detail"]
-    assert "cancel the DRRMO request" in r.json()["detail"]
+    assert "only DRRMO can change it" in r.json()["detail"]
 
 
 def test_declined_request_tells_all_csws_and_lets_them_ask_again_or_send(api):
@@ -81,11 +81,13 @@ def test_drrmo_hears_about_a_delivery_only_when_involved(api):
     rid = _ask(client, t, did)["request_id"]
     ok(client.patch(f"/drrmo/requests/{rid}/accept", headers=drrmo2, json=accept_body()))
     ok(client.post(f"/drrmo/requests/{rid}/picked-up", headers=drrmo2))
-    ok(client.post(f"/deliveries/{did}/reschedule", headers=t["csws"],
+    # Nov 4: the DRRMO user carrying it changes the date; CSWS is told.
+    ok(client.post(f"/deliveries/{did}/reschedule", headers=drrmo2,
                    json={"delivery_date": "2027-01-05T08:00:00+08:00", "reason": "Road closed"}))
     assert "delivery_status_changed" not in _events(client, t["drrmo"])  # not their job
     assert "delivery_rescheduled" not in _events(client, t["drrmo"])
-    assert "delivery_rescheduled" in _events(client, drrmo2)
+    assert "delivery_rescheduled" in _events(client, t["csws"])
+    assert "delivery_rescheduled" in _events(client, csws2)
     assert "delivery_status_changed" in _events(client, t["csws"])
     assert "delivery_status_changed" not in _events(client, drrmo2)     # did it themselves
 
@@ -248,7 +250,10 @@ def test_cancelling_a_packed_delivery_tells_the_drrmo_user_who_accepted(api):
     did = _delivery(client, t)["delivery_id"]
     rid = _ask(client, t, did)["request_id"]
     ok(client.patch(f"/drrmo/requests/{rid}/accept", headers=t["drrmo"], json=accept_body()))
-    out = ok(client.post(f"/deliveries/{did}/cancel", headers=t["csws"], json={"reason": "Road closed"}))
+    # Nov 4: while DRRMO has it, CSWS cannot cancel; the Administrator can.
+    assert client.post(f"/deliveries/{did}/cancel", headers=t["csws"],
+                       json={"reason": "Road closed"}).status_code == 409
+    out = ok(client.post(f"/deliveries/{did}/cancel", headers=t["admin"], json={"reason": "Road closed"}))
     assert out["status"] == "Cancelled" and out["cancelled_requests"] == [rid] and out["returned_to_stock"]
     assert "delivery_cancelled" in _events(client, t["drrmo"])
     assert "delivery_cancelled" not in _events(client, drrmo2)
@@ -266,3 +271,62 @@ def test_response_times_from_the_audit_log(api):
     assert out["accepted"] == 1 and out["accept_minutes"] is not None
     assert out["trips"] == 1 and out["trip_minutes"] is not None
     assert client.get("/deliveries/timing/summary", headers=t["brgy"]).status_code == 403
+
+
+# --- Team, Nov 4: once CSWS asks DRRMO, only DRRMO manages the delivery -------
+
+def _csws_blocked(client, t, did, rid):
+    """Every CSWS change is refused with a plain reason."""
+    for path, body in ((f"/deliveries/{did}/advance", None),
+                       (f"/deliveries/{did}/reschedule",
+                        {"delivery_date": "2027-01-05T08:00:00+08:00"}),
+                       (f"/deliveries/{did}/cancel", {"reason": "Not needed"}),
+                       (f"/deliveries/{did}/undo", None),
+                       (f"/logistics/requests/{rid}/cancel", {"reason": "Not needed"})):
+        r = client.post(path, headers=t["csws"], json=body)
+        assert r.status_code == 409, (path, r.text)
+        assert "DRRMO" in r.json()["detail"], path
+
+
+def test_csws_changes_nothing_while_drrmo_has_the_delivery(api):
+    client, t = api
+    drrmo2 = _add_user(client, "drrmo2", "DRRMO Logistics Support")
+    did = _delivery(client, t)["delivery_id"]
+    rid = _ask(client, t, did)["request_id"]
+    _csws_blocked(client, t, did, rid)                          # Pending
+
+    ok(client.patch(f"/drrmo/requests/{rid}/accept", headers=t["drrmo"], json=accept_body()))
+    _csws_blocked(client, t, did, rid)                          # Accepted
+    when = {"delivery_date": "2027-01-05T08:00:00+08:00", "reason": "New pickup time"}
+    assert client.post(f"/deliveries/{did}/reschedule", headers=drrmo2, json=when).status_code == 403
+    ok(client.post(f"/deliveries/{did}/reschedule", headers=t["drrmo"], json=when))
+
+    # Back to today so it can leave, then DRRMO picks it up.
+    ok(client.post(f"/deliveries/{did}/reschedule", headers=t["drrmo"],
+                   json={"delivery_date": accept_body()["scheduled_date"]}))
+    ok(client.post(f"/drrmo/requests/{rid}/picked-up", headers=t["drrmo"]))
+    r = client.post(f"/deliveries/{did}/return-to-office", headers=t["csws"],
+                    json={"reason": "Road closed"})
+    assert r.status_code == 409 and "Only DRRMO updates it" in r.json()["detail"]
+    back = ok(client.post(f"/deliveries/{did}/return-to-office", headers=t["drrmo"],
+                          json={"reason": "Road closed"}))
+    assert back["status"] == "Preparing"
+    assert _row(client, t["csws"], rid)["status"] == "Accepted"   # DRRMO picks it up again
+
+    # DRRMO withdraws: the delivery is CSWS's again.
+    ok(client.post(f"/drrmo/requests/{rid}/withdraw", headers=t["drrmo"],
+                   json={"reason": "The truck broke down"}))
+    ok(client.post(f"/deliveries/{did}/reschedule", headers=t["csws"], json=when))
+    assert client.post(f"/deliveries/{did}/reschedule", headers=t["drrmo"],
+                       json=when).status_code == 403            # not DRRMO's any more
+
+
+def test_the_administrator_can_still_step_in(api):
+    """The Administrator can cancel DRRMO's request; then CSWS sends it."""
+    client, t = api
+    did = _delivery(client, t)["delivery_id"]
+    rid = _ask(client, t, did)["request_id"]
+    out = ok(client.post(f"/logistics/requests/{rid}/cancel", headers=t["admin"],
+                         json={"reason": "Found another vehicle"}))
+    assert out["status"] == "Cancelled"
+    assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "In Transit"
