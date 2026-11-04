@@ -20,6 +20,12 @@ DRRMO Logistics Support:
   POST /drrmo/requests/{id}/withdraw      accepted, but can no longer do it;
                                           CSWS is told and can ask again
 
+Team, Nov 4: once CSWS asks DRRMO to carry a delivery (request Pending or
+Accepted), only DRRMO manages it. CSWS cannot reschedule, bring it back,
+cancel it or cancel the request; the DRRMO user who accepted it (or the
+Administrator) changes the date and marks "Truck came back". CSWS gets the
+delivery back when DRRMO declines or withdraws.
+
 Not allowed: changing anything once the goods are Delivered or Confirmed
 (the barangay already has them).
 """
@@ -86,6 +92,23 @@ def _delivery(db: Session, delivery_id: int) -> Delivery:
     return d
 
 
+def _who_manages(db: Session, d: Delivery, user: User) -> None:
+    """Team, Nov 4: with a DRRMO request open, only the DRRMO user who
+    accepted it or the Administrator changes the delivery (same check as
+    moving it, deliveries.check_drrmo_mover). Without one, DRRMO has nothing
+    to change here."""
+    from api.v1.deliveries import check_drrmo_mover   # deliveries imports drrmo_router
+    from api.v1.drrmo_router import open_request_for
+    req = open_request_for(db, d.delivery_id)
+    if req is not None:
+        check_drrmo_mover(db, d, req, user)
+    elif has_role(user, DRRMO) and not has_role(user, "admin"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Delivery #{d.delivery_id} is not with DRRMO, so CSWS Main Office manages it.",
+        )
+
+
 def _not_finished(d: Delivery) -> None:
     if d.status in ("Delivered", "Confirmed"):
         raise HTTPException(
@@ -97,12 +120,14 @@ def _not_finished(d: Delivery) -> None:
 
 
 def _people(db: Session, d: Delivery, exclude: int) -> set:
-    """Barangay rep(s) of the destination, plus DRRMO when it is involved:
-    every DRRMO user while the request waits, then only the one who accepted
-    it (Table 36; drrmo_router.drrmo_to_tell)."""
+    """Barangay rep(s) of the destination, every CSWS Main Office user (Scope
+    7.5; since Nov 4 DRRMO also makes these changes), plus DRRMO when it is
+    involved: every DRRMO user while the request waits, then only the one
+    who accepted it (Table 36; drrmo_router.drrmo_to_tell)."""
     from api.v1.drrmo_router import drrmo_to_tell
     out = set(user_ids_with_role(db, ["Barangay Receiving Representative"],
                                  barangay_id=d.destination_barangay_id))
+    out |= set(user_ids_with_role(db, ["CSWS Main Office"]))
     out |= drrmo_to_tell(db, d.delivery_id)
     out.discard(exclude)
     return out
@@ -166,9 +191,10 @@ def reschedule_delivery(
     delivery_id: int,
     payload: NewDate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(*CSWS)),
+    current_user: User = Depends(require_role(*CSWS, DRRMO)),
 ):
     d = _delivery(db, delivery_id)
+    _who_manages(db, d, current_user)
     _reschedule(db, d, payload.delivery_date, payload.reason, current_user)
     db.commit()
     return {"delivery_id": d.delivery_id, "delivery_date": d.delivery_date, "status": d.status}
@@ -179,13 +205,15 @@ def return_to_office(
     delivery_id: int,
     payload: Reason,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(*CSWS)),
+    current_user: User = Depends(require_role(*CSWS, DRRMO)),
 ):
     """The truck came back with the goods (breakdown, road closed, nobody to
     receive). The delivery is Preparing again, so it can be sent later or
     cancelled. The goods are still counted as out of stock, because they are
-    still loaded for this delivery."""
+    still loaded for this delivery. DRRMO's request stays Accepted, so DRRMO
+    picks it up again (or withdraws)."""
     d = _delivery(db, delivery_id)
+    _who_manages(db, d, current_user)
     _return(db, d, payload.reason, current_user)
     db.commit()
     return {"delivery_id": d.delivery_id, "status": d.status}
@@ -206,6 +234,7 @@ def cancel_delivery(
     if d is None:
         raise HTTPException(status_code=404, detail="Delivery not found")
     _not_finished(d)
+    _who_manages(db, d, current_user)   # with DRRMO: Administrator only
     if d.status == "In Transit":
         raise HTTPException(
             status_code=409,
@@ -254,6 +283,8 @@ def reschedule_trip(
     open_ = [d for d in trip.deliveries if d.status in ("Preparing", "In Transit")]
     if not open_:
         raise HTTPException(status_code=409, detail="Every stop of this trip is already done or cancelled.")
+    for d in open_:
+        _who_manages(db, d, current_user)
     trip.trip_date = payload.delivery_date
     for d in open_:
         _reschedule(db, d, payload.delivery_date, payload.reason, current_user)
@@ -275,6 +306,8 @@ def trip_return_to_office(
     on_road = [d for d in trip.deliveries if d.status == "In Transit"]
     if not on_road:
         raise HTTPException(status_code=409, detail="No stop of this trip is on the road.")
+    for d in on_road:
+        _who_manages(db, d, current_user)
     for d in on_road:
         _return(db, d, payload.reason, current_user)
     log_action(db, current_user, "TRIP RETURNED", "delivery_trips", trip.trip_id,
@@ -309,6 +342,13 @@ def cancel_logistics_request(
             raise HTTPException(status_code=403, detail="You can cancel only your own pickup requests.")
     if req.status not in OPEN_REQUEST:
         raise HTTPException(status_code=409, detail=f"This request is already {req.status}.")
+    # Team, Nov 4: a delivery request is DRRMO's to answer; CSWS gets the
+    # delivery back when DRRMO declines or withdraws. Pickup runs are not
+    # deliveries and stay cancellable by whoever asked.
+    if req.request_type != "Pickup" and not has_role(current_user, "admin"):
+        d = db.get(Delivery, req.delivery_id)
+        from api.v1.deliveries import _drrmo_has_it
+        raise HTTPException(status_code=409, detail=_drrmo_has_it(db, d, req))
     old = req.status
     req.status = "Cancelled"
     who = "Disaster Unit" if req.request_type == "Pickup" else "CSWS"

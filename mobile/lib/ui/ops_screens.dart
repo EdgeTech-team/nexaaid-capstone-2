@@ -36,49 +36,55 @@ class DeliveryStepper extends StatelessWidget {
     final at = _deliverySteps.indexOf(status);
     final on = Theme.of(context).colorScheme.primary;
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (var i = 0; i < _deliverySteps.length; i++) ...[
-          Column(
-            children: [
-              CircleAvatar(
-                radius: 11,
-                backgroundColor: i <= at ? on : Colors.black12,
-                child: i < at || (i == at && i == _deliverySteps.length - 1)
-                    ? const Icon(Icons.check, size: 14, color: Colors.white)
-                    : Text(
-                        '${i + 1}',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: i <= at ? Colors.white : Colors.black54,
+          // Flexible: on a narrow phone or with large text the labels wrap
+          // instead of running off the card.
+          Flexible(
+            flex: 2,
+            child: Column(
+              children: [
+                CircleAvatar(
+                  radius: 11,
+                  backgroundColor: i <= at ? on : Colors.black12,
+                  child: i < at || (i == at && i == _deliverySteps.length - 1)
+                      ? const Icon(Icons.check, size: 14, color: Colors.white)
+                      : Text(
+                          '${i + 1}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: i <= at ? Colors.white : Colors.black54,
+                          ),
                         ),
-                      ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                // "Received by barangay" on two lines so four steps fit.
-                deliveryWord(_deliverySteps[i]).replaceFirst(' by ', ' by\n'),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
                 ),
-              ),
-              if (times?[_deliverySteps[i]] != null)
+                const SizedBox(height: 3),
                 Text(
-                  _short(times![_deliverySteps[i]]),
+                  // "Received by barangay" on two lines so four steps fit.
+                  deliveryWord(_deliverySteps[i]).replaceFirst(' by ', ' by\n'),
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 9,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 10,
+                    fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
                   ),
                 ),
-            ],
+                if (times?[_deliverySteps[i]] != null)
+                  Text(
+                    _short(times![_deliverySteps[i]]),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 9,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
           ),
           if (i < _deliverySteps.length - 1)
             Expanded(
               child: Container(
                 height: 2,
-                margin: const EdgeInsets.only(bottom: 14),
+                margin: const EdgeInsets.only(top: 10), // level with the dots
                 color: i < at ? on : Colors.black12,
               ),
             ),
@@ -1091,8 +1097,11 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                   ),
                 // Unexpected problems: new date, truck came back, cancel,
                 // or no longer need DRRMO (delivery_widgets.dart).
+                // Team, Nov 4: not while DRRMO has it (the Administrator
+                // can still step in).
                 if (!barangay &&
                     !readOnly &&
+                    (!reqOpen || api.role == Roles.admin) &&
                     (status == 'Preparing' || status == 'In Transit'))
                   TextButton.icon(
                     onPressed: () =>
@@ -1133,10 +1142,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                     avatar: const Icon(Icons.fire_truck_outlined, size: 18),
                     label: Text(
                       request['status'] == 'Pending'
-                          ? 'Waiting for DRRMO to accept'
-                          : status == 'Preparing'
-                          ? 'DRRMO marks it On the way at pickup'
-                          : 'DRRMO marks it Arrived at the barangay',
+                          ? 'With DRRMO · waiting for them to accept'
+                          : 'With DRRMO · only DRRMO updates it',
                     ),
                   )
                 else if (drrmo && reqOpen && request['status'] == 'Pending')
@@ -1746,30 +1753,32 @@ Future<void> stepWithUndo(
   required int deliveryId,
   required String success,
 }) async {
-  final screen = Navigator.of(context).context;
+  // The overlay is looked up now: the card that was tapped may be rebuilt
+  // away when the list reloads. (Before Nov 4 it used the navigator's own
+  // context, which sits above the overlay, so no message ever showed and a
+  // refused step looked like a dead button.)
+  final overlay = Overlay.maybeOf(context, rootOverlay: true);
+  String why(ApiResult r) =>
+      r.status == 0 ? 'Cannot reach the server' : r.errorText;
   final r = await call();
-  if (!screen.mounted) return;
+  if (overlay == null || !overlay.mounted) return;
   if (!r.ok) {
-    AppToast.show(
-      screen,
-      r.status == 0 ? 'Cannot reach the server' : r.errorText,
-      kind: ToastKind.error,
-    );
+    AppToast.showOn(overlay, why(r), kind: ToastKind.error);
     return;
   }
-  AppToast.show(
-    screen,
+  AppToast.showOn(
+    overlay,
     success,
     kind: ToastKind.success,
     duration: const Duration(seconds: 10),
-    action: ToastAction('Undo', () {
-      if (screen.mounted) {
-        act(
-          screen,
-          () => api.post('/deliveries/$deliveryId/undo'),
-          success: 'Last step undone',
-        );
-      }
+    action: ToastAction('Undo', () async {
+      final u = await api.post('/deliveries/$deliveryId/undo');
+      if (!overlay.mounted) return;
+      AppToast.showOn(
+        overlay,
+        u.ok ? 'Last step undone' : why(u),
+        kind: u.ok ? ToastKind.success : ToastKind.error,
+      );
     }),
   );
 }
@@ -1964,6 +1973,53 @@ class _DrrmoScreenState extends State<DrrmoScreen>
     );
   }
 
+  /// Team, Nov 4: DRRMO manages the delivery it carries, so DRRMO (not
+  /// CSWS) moves the pickup time. CSWS, the barangay and donors are told.
+  Future<void> _changeTime(Map r) async {
+    final when = await pickDeliveryDateTime(
+      context,
+      current: '${r['scheduled_date'] ?? ''}',
+      help: 'When will DRRMO pick up the goods?',
+    );
+    if (when == null || !mounted) return;
+    await act(
+      context,
+      () => api.post(
+        '/deliveries/${r['delivery_id']}/reschedule',
+        body: {'delivery_date': when, 'reason': 'New pickup time from DRRMO'},
+      ),
+      success: 'Pickup moved to ${niceWhen(when)}. CSWS was told.',
+    );
+  }
+
+  /// The truck came back with the goods: the delivery is Being packed
+  /// again and DRRMO picks it up later (or says it can no longer do it).
+  Future<void> _cameBack(Map r) async {
+    final why = await askReason(
+      context,
+      title: 'Truck came back',
+      message:
+          'Delivery #${r['delivery_id']} goes back to "Being packed". '
+          'You pick it up again later. Why?',
+      choices: const [
+        'The truck broke down',
+        'The road is closed or unsafe',
+        'Nobody was there to receive it',
+        'Bad weather',
+      ],
+      confirm: 'Bring it back',
+    );
+    if (why == null || !mounted) return;
+    await act(
+      context,
+      () => api.post(
+        '/deliveries/${r['delivery_id']}/return-to-office',
+        body: {'reason': why},
+      ),
+      success: 'Delivery #${r['delivery_id']} is back. CSWS was told.',
+    );
+  }
+
   Future<void> _complete(Map r) async {
     final v = await formDialog(
       context,
@@ -2068,10 +2124,7 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                   key: _dashboard,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    PageHeader(
-                      'DRRMO Logistics Support',
-                      subtitle: roleLine(),
-                    ),
+                    PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
                     // Phase 6: new requests, today's pickups, on the way.
                     NeedsActionCard(
                       onOpen: (i) => _show(
@@ -2169,9 +2222,8 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                     child: Text(
                       '${stages[stage] ?? stage}: ${rows.length} '
                       'request${rows.length == 1 ? '' : 's'}',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.labelLarge?.copyWith(color: cs.onSurfaceVariant),
+                      style: Theme.of(context).textTheme.labelLarge
+                          ?.copyWith(color: cs.onSurfaceVariant),
                     ),
                   ),
                   if (rows.isEmpty) const EmptyState('No requests here.'),
@@ -2237,6 +2289,26 @@ class _DrrmoScreenState extends State<DrrmoScreen>
       Chip(
         avatar: const Icon(Icons.person_outline, size: 18),
         label: Text('Accepted by ${r['assigned_to'] ?? 'a teammate'}'),
+      ),
+    // Team, Nov 4: the delivery is DRRMO's now, so DRRMO changes the
+    // pickup time and brings it back if the truck returns (not CSWS).
+    if (r['stage'] == 'Accepted' &&
+        r['request_type'] != 'Pickup' &&
+        r['delivery_status'] == 'Preparing' &&
+        r['mine'] == true)
+      TextButton.icon(
+        onPressed: () => _changeTime(r),
+        icon: const Icon(Icons.event_repeat),
+        label: const Text('Change time'),
+      ),
+    if (r['stage'] == 'In Transit' &&
+        r['request_type'] != 'Pickup' &&
+        r['delivery_status'] == 'In Transit' &&
+        r['mine'] == true)
+      TextButton.icon(
+        onPressed: () => _cameBack(r),
+        icon: const Icon(Icons.u_turn_left),
+        label: const Text('Truck came back'),
       ),
     // Advisor (Oct 24): DRRMO picked the goods up from CSWS.
     if (r['stage'] == 'Accepted' &&

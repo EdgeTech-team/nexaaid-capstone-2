@@ -36,8 +36,21 @@ Map<String, dynamic> _request(int id, String stage) => {
   'can_complete': false,
 };
 
+var _pickupAnswer = 200; // what POST .../picked-up answers
+var _pickedUp = 0;
+
 final _server = MockClient((req) async {
   final path = req.url.path;
+  if (req.method == 'POST' && path == '/drrmo/requests/2/picked-up') {
+    if (_pickupAnswer != 200) {
+      return http.Response(
+        jsonEncode({'detail': 'This delivery is scheduled to leave on Jan 1.'}),
+        _pickupAnswer,
+      );
+    }
+    _pickedUp++;
+    return http.Response(jsonEncode(_request(2, 'In Transit')), 200);
+  }
   if (req.method == 'PATCH' && path == '/drrmo/requests/1/accept') {
     _accepted = true;
     return http.Response(jsonEncode(_request(1, 'Accepted')), 200);
@@ -106,7 +119,51 @@ Future<void> _scrollTo(WidgetTester tester, Finder f) async {
 
 void main() {
   setUpAll(() => AppTheme.useGoogleFonts = false);
-  setUp(() => _accepted = false);
+  setUp(() {
+    _accepted = false;
+    _pickupAnswer = 200;
+    _pickedUp = 0;
+  });
+
+  Future<void> pickUp(WidgetTester tester) async {
+    await _pumpPhone(tester);
+    await tester.tap(find.text('Accepted').first);
+    await tester.pumpAndSettle();
+    final button = find.widgetWithText(
+      FilledButton,
+      'Picked up · mark On the way',
+    );
+    await _scrollTo(tester, button);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(find.text('Picked up delivery #102?'), findsOneWidget);
+    await tester.tap(find.text('Yes, on the way'));
+    // Not pumpAndSettle: the toast's countdown would run until it closes.
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+  }
+
+  testWidgets('Picked up marks the delivery On the way', (tester) async {
+    await http.runWithClient(() async {
+      await pickUp(tester);
+      expect(_pickedUp, 1);
+      expect(find.text('Delivery #102 is on the way'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 15)); // let the toast close
+    }, () => _server);
+  });
+
+  testWidgets('A refused pick-up says why', (tester) async {
+    _pickupAnswer = 409;
+    await http.runWithClient(() async {
+      await pickUp(tester);
+      expect(
+        find.text('This delivery is scheduled to leave on Jan 1.'),
+        findsOneWidget,
+      );
+      await tester.pump(const Duration(seconds: 15));
+    }, () => _server);
+  });
 
   testWidgets('A stat tile scrolls its requests into view', (tester) async {
     await http.runWithClient(() async {
