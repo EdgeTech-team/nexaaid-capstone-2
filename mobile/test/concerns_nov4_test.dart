@@ -1,6 +1,7 @@
 // Concerns Nov 4: the report form fills the needs by itself for every
-// disaster type (no "Use suggested" button), "Other" asks what the disaster
-// is, and "Add need" comes after the list. On the donate form "Add another
+// disaster type, "Other" too (no "Use suggested" button), and "Add need"
+// comes after the list. ("Other" asking what the disaster is: Ivan's
+// disaster_type_other_test.dart.) On the donate form "Add another
 // item" is at the top and new items appear right under it.
 import 'dart:convert';
 
@@ -108,13 +109,13 @@ void main() {
     addTearDown(() => Api.instance.role = null);
     await http.runWithClient(() async {
       await _pump(tester, const Scaffold(body: NewReportScreen()));
-      expect(find.text('What disaster is it?'), findsNothing);
+      expect(find.text('What kind of disaster?'), findsNothing);
       await _choose(
         tester,
         find.widgetWithText(DropdownButtonFormField<String>, 'Disaster type'),
         'Other',
       );
-      expect(find.text('What disaster is it?'), findsOneWidget);
+      expect(find.text('What kind of disaster?'), findsOneWidget);
       expect(find.text('Use suggested'), findsNothing);
 
       await tester.enterText(
@@ -143,17 +144,17 @@ void main() {
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       expect(sent['/reports/'], isNull); // the disaster name is required
-      expect(find.text('Type the disaster'), findsOneWidget);
+      expect(find.text('Required'), findsOneWidget);
 
       await tester.enterText(
-        find.widgetWithText(TextFormField, 'What disaster is it?'),
+        find.widgetWithText(TextFormField, 'What kind of disaster?'),
         'Sinkhole',
       );
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       final body = sent['/reports/']!;
       expect(body['disaster_type_id'], 7);
-      expect(body['other_disaster_type'], 'Sinkhole');
+      expect(body['disaster_type_other'], 'Sinkhole');
       expect(body['needs'], [
         {'item_id': 1, 'quantity': 60},
         {'item_id': 2, 'quantity': 400},

@@ -16,7 +16,7 @@ from models.donation_confirmation_model import DonationConfirmation
 from models.guest_donor_model import GuestDonor
 from models.item_model import Item
 from models.received_goods_model import ReceivedGoods
-from models.report import Barangay, DisasterReport, DisasterType, disaster_name
+from models.report import Barangay, DisasterReport, DisasterType
 from models.user_rbac_model import User
 from services.donation_additions import (
     is_removed, removed_notes, removed_reason, summary as additions_summary, summary_text,
@@ -35,7 +35,7 @@ def _report_labels(db: Session, report_ids) -> dict:
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     brgys = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     return {
-        r.report_id: f"#{r.report_id} {disaster_name(r, types)} - {brgys.get(r.barangay_id, 'Barangay')}"
+        r.report_id: f"#{r.report_id} {r.disaster_label(types)} - {brgys.get(r.barangay_id, 'Barangay')}"
         for r in db.query(DisasterReport).filter(DisasterReport.report_id.in_(report_ids)).all()
     }
 

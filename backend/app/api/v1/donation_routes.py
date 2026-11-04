@@ -32,7 +32,7 @@ from models.item_model import Item
 from models.logistics_request_model import LogisticsRequest
 from models.notification import Notification
 from models.organization_model import Organization
-from models.report import DisasterReport, DisasterType, Barangay, disaster_name
+from models.report import DisasterReport, DisasterType, Barangay
 from models.delivery import Delivery
 from services.delivery_allocation import add_delivery_progress
 from schemas.physical_donation_schema import (
@@ -172,7 +172,7 @@ def _report_label(db: Session, report_id: int) -> Optional[str]:
         return None
     t = db.get(DisasterType, r.disaster_type_id)
     b = db.get(Barangay, r.barangay_id)
-    return f"#{r.report_id} {disaster_name(r, {r.disaster_type_id: t.type_name} if t else {})} - {b.barangay_name if b else 'Barangay'}"
+    return f"#{r.report_id} {r.disaster_type_other or (t.type_name if t else 'Disaster')} - {b.barangay_name if b else 'Barangay'}"
 
 
 def _donor_info(db: Session, d: PhysicalDonation) -> dict:
@@ -1181,8 +1181,8 @@ def my_donations(
         f = r.fulfillment
         return {
             "report_id": r.report_id,
-            "label": f"{disaster_name(r, types)} in {barangays.get(r.barangay_id, 'Barangay')}",
-            "disaster": disaster_name(r, types),
+            "label": f"{r.disaster_label(types)} in {barangays.get(r.barangay_id, 'Barangay')}",
+            "disaster": r.disaster_label(types),
             "barangay": barangays.get(r.barangay_id, "Barangay"),
             "assistance_needed": r.assistance_needed,
             "status": r.status,
@@ -1314,7 +1314,7 @@ def _deliveries_to(db: Session, report_ids: list, types: dict, barangays: dict) 
             "delivery_id": d.delivery_id,
             "report_id": d.report_id,
             "report_label": (
-                f"{disaster_name(r, types)} in "
+                f"{r.disaster_label(types)} in "
                 f"{barangays.get(r.barangay_id, 'Barangay')}" if r else None
             ),
             "barangay": d.destination_barangay.barangay_name if d.destination_barangay else None,
