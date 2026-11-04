@@ -73,10 +73,12 @@ STATUS_WORDS = {"Preparing": "Being packed", "In Transit": "On the way",
                 "Delivered": "Arrived", "Confirmed": "Received by barangay"}
 
 
-def _check_drrmo_mover(db: Session, delivery: Delivery, req: LogisticsRequest, user) -> None:
+def check_drrmo_mover(db: Session, delivery: Delivery, req: LogisticsRequest, user) -> None:
     """Table 36 / Table 37: a delivery travelling with DRRMO is moved by the
     DRRMO user who accepted the request, or by the Administrator (who can
-    step in when that person is away). Everyone else is told who has it."""
+    step in when that person is away). Everyone else is told who has it.
+    Team, Nov 4: the same holds for every other change while the request
+    is open (new date, truck came back, cancel, undo; delivery_problems)."""
     if req.status == "Accepted" and (
             req.assigned_to_user_id == user.user_id or has_role(user, "admin")):
         return
@@ -94,18 +96,19 @@ def _check_drrmo_mover(db: Session, delivery: Delivery, req: LogisticsRequest, u
 
 
 def _drrmo_has_it(db: Session, delivery: Delivery, req: LogisticsRequest) -> str:
-    """UC-CM2 alt 3a: why CSWS can't move this delivery, in plain words."""
-    step = ("In Transit (on the way) when they pick up the goods" if delivery.status == "Preparing"
-            else "Delivered (arrived) when they reach the barangay")
+    """UC-CM2 alt 3a: why CSWS can't change this delivery, in plain words.
+    Team, Nov 4: once CSWS asks DRRMO, only DRRMO manages the delivery;
+    CSWS gets it back when DRRMO declines or withdraws."""
     if req.status == "Pending":
         return (f"Delivery #{delivery.delivery_id} is waiting for DRRMO to accept request "
-                f"#{req.request_id}. After that, DRRMO marks it {step}. "
-                "To send it yourself, cancel the DRRMO request first.")
+                f"#{req.request_id}. Until DRRMO answers, only DRRMO can change it. "
+                "If DRRMO declines, it comes back to you.")
     who = db.get(User, req.assigned_to_user_id) if req.assigned_to_user_id else None
     full = f"{who.first_name or ''} {who.last_name or ''}".strip() if who else ""
     name = f" ({full})" if full else ""
     return (f"Delivery #{delivery.delivery_id} goes with DRRMO{name}, request #{req.request_id}. "
-            f"DRRMO marks it {step}. To send it yourself, cancel the DRRMO request first.")
+            "Only DRRMO updates it now: On the way at pickup, Arrived at the barangay. "
+            "If DRRMO can no longer do it, they withdraw and it comes back to you.")
 
 # Create ? CSWS Main Office Representative creates a delivery + its items
 
@@ -468,7 +471,7 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
     # Main Office moves it as before.
     carrying = open_request_for(db, delivery.delivery_id)
     if carrying is not None:
-        _check_drrmo_mover(db, delivery, carrying, current_user)
+        check_drrmo_mover(db, delivery, carrying, current_user)
 
     # Testing feedback (Oct 20): the truck can't leave before the day it is
     # scheduled for (trips start through here too, so "Arrived" can't come
@@ -541,6 +544,10 @@ def undo_last_step(
                             detail="The barangay already confirmed receipt, so this can't be undone.")
     if d.status == "Cancelled":
         raise HTTPException(status_code=409, detail="This delivery was cancelled.")
+    # Team, Nov 4: while DRRMO has the delivery, CSWS changes nothing.
+    carrying = open_request_for(db, delivery_id)
+    if carrying is not None and not has_role(current_user, DRRMO, "admin"):
+        raise HTTPException(status_code=409, detail=_drrmo_has_it(db, d, carrying))
     last = (db.query(AuditLog)
             .filter(AuditLog.entity_type == "deliveries", AuditLog.entity_id == delivery_id,
                     AuditLog.action.in_(_STEP_ACTIONS))
