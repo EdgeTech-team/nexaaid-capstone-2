@@ -63,6 +63,7 @@ from models.city_model import City  # noqa: F401  (Barangay's FK needs 'cities' 
 from models.disaster_type_model import DisasterType  # noqa: F401
 from models.barangay_model import Barangay  # noqa: F401
 from models.sitio_model import Sitio  # noqa: F401
+from models.barangay_hazard_model import BarangayHazard  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # REAL MODELS — owned by this module (3.4)

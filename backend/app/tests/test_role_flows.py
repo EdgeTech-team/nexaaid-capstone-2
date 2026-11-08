@@ -168,7 +168,7 @@ def test_full_relief_chain_across_all_roles(api):
     
     # dropdown data (public, used by the app instead of typed ids)
     lk = ok(client.get("/lookups"))
-    assert lk["disaster_types"] == [{"id": 1, "name": "Flood"}]
+    assert lk["disaster_types"] == [{"id": 1, "name": "Flood", "is_location_specific": False}]
     assert lk["items"][0]["name"] == "Rice (kg)"
     assert lk["reports"] == []                    # F-01: unvalidated reports are staff only
     assert lk["validated_reports"] == []          # nothing validated yet
