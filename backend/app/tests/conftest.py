@@ -291,7 +291,8 @@ def sent_emails(request, monkeypatch):
         return True
 
     monkeypatch.setattr("core.email.send_email", fake_send_email)
-    return sent
+    monkeypatch.setattr("core.email.email_configured", lambda: True)
+    return sent 
 
 
 @pytest.fixture(autouse=True)

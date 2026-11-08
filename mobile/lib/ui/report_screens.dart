@@ -13,6 +13,7 @@ import 'quantity_units.dart';
 import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
+import 'hazard_barangay_field.dart';
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: number limits. Must match the backend
@@ -891,17 +892,17 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 ),
               ],
               const SizedBox(height: 12),
-              LookupDropdown(
+              HazardBarangayField(
                 key: ValueKey('brgy-$_fills'),
-                list: 'barangays',
-                label: 'Barangay',
-                value: brgyId,
                 names: names,
+                typeId: typeId,
+                value: brgyId,
                 onChanged: (v) => setState(() {
                   brgyId = v;
                   sitioRows = [''];
                 }),
               ),
+
               // Concerns2: the sitio field only appears after a barangay is
               // chosen, lists only that barangay's sitios, and defaults to
               // the whole barangay. problema_napud 2.2: "Add another sitio".

@@ -84,6 +84,28 @@ VALUES
     ('Other',            'Disaster not covered by the listed types; details go in the report description')
 ON CONFLICT (type_name) DO UPDATE SET description = EXCLUDED.description;
 
+-- 2b-1. NF-004: hazard-prone barangays. Same lists as migration
+--       a4d8c2e6f1b9. Barangays missing from this database are skipped.
+UPDATE disaster_types SET is_location_specific = true
+WHERE type_name IN ('Landslide', 'Storm Surge');
+
+INSERT INTO barangay_hazards (barangay_id, disaster_type_id, source)
+SELECT b.barangay_id, t.disaster_type_id, 'Mandaue CDRRMO public statements / city barangay map'
+FROM (VALUES
+    -- Confirmed
+    ('Landslide',   'Casili'),  ('Landslide',   'Tawason'),
+    ('Landslide',   'Cubacub'), ('Landslide',   'Tingub'),
+    ('Storm Surge', 'Paknaan'), ('Storm Surge', 'Umapad'),
+    ('Storm Surge', 'Opao'),    ('Storm Surge', 'Looc'),
+    -- PENDING CDRRMO confirmation
+    ('Storm Surge', 'Subangdaku'), ('Storm Surge', 'Tipolo'),
+    ('Storm Surge', 'Centro'),     ('Storm Surge', 'Labogon')
+) AS v(type_name, barangay_name)
+JOIN disaster_types t ON t.type_name = v.type_name
+JOIN barangays b ON b.barangay_name = v.barangay_name
+ON CONFLICT (barangay_id, disaster_type_id) DO NOTHING;
+
+
 
 -- 2c. audit_logs (manuscript data dictionary) for the activity logs on the
 --     Administrator and CSWS dashboards. Only created if it is missing.
