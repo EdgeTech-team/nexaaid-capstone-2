@@ -84,6 +84,9 @@ class StatCard extends StatelessWidget {
   /// Makes the card a button (e.g. opens the list behind the number).
   final VoidCallback? onTap;
 
+  /// Outlined and tinted: its list is the one showing below.
+  final bool selected;
+
   const StatCard({
     super.key,
     required this.label,
@@ -92,6 +95,7 @@ class StatCard extends StatelessWidget {
     this.color,
     this.note,
     this.onTap,
+    this.selected = false,
   });
 
   @override
@@ -101,12 +105,14 @@ class StatCard extends StatelessWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final c = color ?? cs.primary;
     final iconFg = dark ? Color.lerp(c, Colors.white, 0.35)! : c;
-    return Semantics(
+    final card = Semantics(
       label: '$label: $value${note == null ? '' : ', $note'}',
       button: onTap != null,
+      selected: selected,
       excludeSemantics: true,
       child: AppCard(
         onTap: onTap,
+        color: selected ? Color.alphaBlend(c.withValues(alpha: 0.08), cs.surface) : null,
         // The grid gives each card its full share of the row (Expanded);
         // a minimum height keeps short rows of cards lined up.
         child: ConstrainedBox(
@@ -145,6 +151,15 @@ class StatCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+    if (!selected) return card;
+    return DecoratedBox(
+      position: DecorationPosition.foreground,
+      decoration: BoxDecoration(
+        border: Border.all(color: c, width: 2),
+        borderRadius: BorderRadius.circular(Radii.lg),
+      ),
+      child: card,
     );
   }
 

@@ -27,7 +27,7 @@ import 'widgets.dart';
 // Tapping a row opens the same stop details as tapping a pin.
 // ---------------------------------------------------------------------------
 
-enum PickupGroup { day, planned }
+enum PickupGroup { day, planned, zone }
 
 class PickupListView extends StatefulWidget {
   final PickupPlan plan;
@@ -141,6 +141,25 @@ class _PickupListViewState extends State<PickupListView> {
           ));
         }
         return out;
+      case PickupGroup.zone:
+        // Fixed pickup zones (testing, Oct 31), in the zones' own order;
+        // inside a zone: suggested date, then route order.
+        final order = zoneColors.keys.toList();
+        final names =
+            {for (final s in stops) s.zone ?? 'Zone not found'}.toList()
+              ..sort((a, b) {
+                final ia = order.indexOf(a), ib = order.indexOf(b);
+                return (ia < 0 ? 99 : ia).compareTo(ib < 0 ? 99 : ib);
+              });
+        return [
+          for (final z in names)
+            (
+              z,
+              null,
+              stops.where((s) => (s.zone ?? 'Zone not found') == z).toList()
+                ..sort(_byPlan),
+            ),
+        ];
       case PickupGroup.planned:
         final out = <(String, String?, List<PlanStop>)>[];
         for (final run in widget.plan.runs) {
@@ -216,8 +235,9 @@ class _PickupListViewState extends State<PickupListView> {
                         p.stops.where((s) => s.availableOn(d)).length,
                     allCount: p.stops.length,
                   );
-                  if (v != null)
+                  if (v != null) {
                     setState(() => _homeOn = v == kAllDays ? null : v);
+                  }
                 },
               ),
             ],
@@ -237,6 +257,11 @@ class _PickupListViewState extends State<PickupListView> {
                 value: PickupGroup.planned,
                 icon: Icon(Icons.route_outlined),
                 label: Text('Suggested'),
+              ),
+              ButtonSegment(
+                value: PickupGroup.zone,
+                icon: Icon(Icons.map_outlined),
+                label: Text('Zone'),
               ),
             ],
             selected: {_group},
@@ -439,7 +464,7 @@ class StopRow extends StatelessWidget {
     final t = Theme.of(context).textTheme;
     final s = stop;
     final far = s.far;
-    final color = far ? farGrey : cs.primary;
+    final color = far ? farGrey : zoneColor(s.zone, cs.primary);
     final items = s.items;
     return AnimatedContainer(
       duration: Motion.fast,
@@ -499,6 +524,7 @@ class StopRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                     ),
+                  if (s.zone != null) ...[Gaps.v4, ZoneChip(s.zone!)],
                   if (showBarangay && s.barangay != null)
                     Text(
                       'Brgy. ${s.barangay}',

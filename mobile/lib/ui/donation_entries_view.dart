@@ -63,7 +63,11 @@ String entryReportLabel(Map e) {
 }
 
 String entryTitle(Map e) {
-  final n = e['total_items'] as int? ?? (e['items'] as List).length;
+  // Nov 1: items the donor removed are not counted (not handed over).
+  final items = ((e['items'] as List?) ?? const []).cast<Map>();
+  final n = items.isEmpty
+      ? (e['total_items'] as int? ?? 0)
+      : items.where((i) => i['removed_by_donor'] != true).length;
   return '${e['entry_no'] != null ? 'Donation ${e['entry_no']}' : '${e['batch_reference']}'}'
       ' · $n ${n == 1 ? 'item' : 'items'}';
 }
@@ -506,6 +510,7 @@ class DonationEntryCard extends StatelessWidget {
     final items = (e['items'] as List).cast<Map>();
     final mixed =
         items
+            .where((i) => i['removed_by_donor'] != true)
             .map((i) => donationStatusText('${i['status']}', donor: donor))
             .toSet()
             .length >
@@ -573,10 +578,11 @@ class DonationEntryCard extends StatelessWidget {
             RemovedItemsNote(e),
           ],
           const Divider(height: Space.lg),
-          for (final (i, header) in withBatchHeaders(items)) ...[
-            if (header != null) BatchHeader(header, items: items),
-            _itemRow(context, i, mixed, muted),
-          ],
+          // Nov 1: one list for the whole donation (one QR). Removed items
+          // are in the note above, not in the list.
+          for (final i in items)
+            if (i['removed_by_donor'] != true)
+              _itemRow(context, i, mixed, muted),
           if (footer != null) ...[Gaps.v16, footer!],
         ],
       ),
@@ -586,7 +592,6 @@ class DonationEntryCard extends StatelessWidget {
   Widget _itemRow(BuildContext context, Map i, bool mixed, TextStyle? muted) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final removed = i['removed_by_donor'] == true;
     final action = itemAction?.call(i);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Space.xxs),
@@ -606,10 +611,7 @@ class DonationEntryCard extends StatelessWidget {
                 Text(
                   '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
                       .replaceAll(RegExp(r'\s+'), ' '),
-                  style: t.bodyMedium?.copyWith(
-                    decoration: removed ? TextDecoration.lineThrough : null,
-                    color: removed ? cs.onSurfaceVariant : null,
-                  ),
+                  style: t.bodyMedium,
                 ),
                 Text(
                   [
@@ -621,19 +623,17 @@ class DonationEntryCard extends StatelessWidget {
                 ),
                 if (i['hold_reason'] != null)
                   Text('On hold: ${i['hold_reason']}', style: muted),
-                if (removed)
-                  Text(
-                    'Removed by donor: ${i['removed_reason'] ?? ''}',
-                    style: muted?.copyWith(fontStyle: FontStyle.italic),
+                if (AddedLaterTag.applies(i))
+                  Padding(
+                    padding: const EdgeInsets.only(top: Space.xxs),
+                    child: AddedLaterTag(i),
                   ),
               ],
             ),
           ),
-          if (mixed || i['hold_reason'] != null || removed) ...[
+          if (mixed || i['hold_reason'] != null) ...[
             Gaps.h8,
-            if (removed)
-              const StatusChip('Cancelled', label: 'Removed')
-            else if (isNotBrought(i))
+            if (isNotBrought(i))
               const StatusChip('Cancelled', label: 'Not brought')
             else
               DonationStatusChip(
@@ -648,69 +648,32 @@ class DonationEntryCard extends StatelessWidget {
   }
 }
 
-/// Oct 23: items in order, each with the batch header to show above it
-/// (only when the donation has more than one batch; old donations keep
-/// their plain list).
-List<(T, int?)> withBatchHeaders<T extends Map>(List<T> items) {
-  int no(Map i) => (i['addition_no'] as num?)?.toInt() ?? 1;
-  final sorted = [...items]..sort((a, b) => no(a).compareTo(no(b)));
-  final many = sorted.map(no).toSet().length > 1;
-  int? last;
-  return [
-    for (final i in sorted) (i, many && no(i) != last ? (last = no(i)) : null),
-  ];
-}
+/// Nov 1: a donation is one QR and one list. An item the donor added after
+/// pledging carries this small tag ("Added later · Oct 23") instead of a
+/// separate "Batch 2" section, so nobody mistakes it for a second donation.
+class AddedLaterTag extends StatelessWidget {
+  final Map item;
+  const AddedLaterTag(this.item, {super.key});
 
-/// "Batch 2 · Added later · Oct 23" above a batch's items.
-class BatchHeader extends StatelessWidget {
-  final int number;
-  final List<Map> items;
-  const BatchHeader(this.number, {super.key, required this.items});
+  static bool applies(Map i) => ((i['addition_no'] as num?)?.toInt() ?? 1) > 1;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
-    // where/firstOrNull, not firstWhere(orElse:), so a List<Map<String,
-    // dynamic>> works too.
-    final first = items
-        .where((i) => ((i['addition_no'] as num?)?.toInt() ?? 1) == number)
-        .firstOrNull;
-    final addedAt = first?['added_at'];
-    final later = number > 1;
-    // A Wrap, so on a narrow phone the date and state move to a second line
-    // instead of overflowing.
-    return Padding(
-      padding: const EdgeInsets.only(top: Space.xs, bottom: Space.xxs),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 4,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Text(
-            'Batch $number',
-            style: t.labelLarge?.copyWith(fontWeight: FontWeight.w800),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: later ? cs.tertiaryContainer : cs.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(Radii.pill),
-            ),
-            child: Text(
-              later ? 'Added later' : 'Original pledge',
-              style: t.labelSmall?.copyWith(
-                color: later ? cs.onTertiaryContainer : cs.onSurfaceVariant,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          if (later && addedAt != null)
-            Text(
-              niceDate(addedAt),
-              style: t.labelSmall?.copyWith(color: cs.onSurfaceVariant),
-            ),
-        ],
+    final at = item['added_at'];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: cs.tertiaryContainer,
+        borderRadius: BorderRadius.circular(Radii.pill),
+      ),
+      child: Text(
+        at == null ? 'Added later' : 'Added later · ${niceDate(at)}',
+        style: t.labelSmall?.copyWith(
+          color: cs.onTertiaryContainer,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }

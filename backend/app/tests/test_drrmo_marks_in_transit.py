@@ -1,7 +1,7 @@
 """Advisor (Oct 24): after CSWS asks DRRMO for transport, DRRMO (not CSWS)
 marks the delivery In Transit when it picks the goods up."""
 from tests.test_logistics_needs import _delivery
-from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
+from tests.test_role_flows import accept_body, api, ok  # noqa: F401  (fixture)
 
 
 def test_drrmo_marks_in_transit_once_it_takes_the_request(api):
@@ -13,10 +13,10 @@ def test_drrmo_marks_in_transit_once_it_takes_the_request(api):
 
     # Waiting for DRRMO: CSWS can't send it, DRRMO can't pick up yet.
     r = client.post(f"/deliveries/{did}/advance", headers=t["csws"])
-    assert r.status_code == 409 and "DRRMO marks it In Transit" in r.text
+    assert r.status_code == 409 and "only DRRMO can change it" in r.text
     assert client.post(f"/drrmo/requests/{rid}/picked-up", headers=t["drrmo"]).status_code == 409
 
-    ok(client.patch(f"/drrmo/requests/{rid}/accept", headers=t["drrmo"], json={}))
+    ok(client.patch(f"/drrmo/requests/{rid}/accept", headers=t["drrmo"], json=accept_body()))
     assert client.post(f"/deliveries/{did}/advance", headers=t["csws"]).status_code == 409
     assert client.post(f"/drrmo/requests/{rid}/picked-up", headers=t["csws"]).status_code == 403
 
@@ -26,7 +26,7 @@ def test_drrmo_marks_in_transit_once_it_takes_the_request(api):
 
     # Testing (Oct 27): DRRMO also marks it Delivered; CSWS still waits.
     r = client.post(f"/deliveries/{did}/advance", headers=t["csws"])
-    assert r.status_code == 409 and "DRRMO marks it Delivered" in r.text
+    assert r.status_code == 409 and "Only DRRMO updates it" in r.text
     assert client.post(f"/drrmo/requests/{rid}/delivered", headers=t["csws"]).status_code == 403
     row = ok(client.post(f"/drrmo/requests/{rid}/delivered", headers=t["drrmo"]))
     assert row["delivery_status"] == "Delivered"
@@ -39,11 +39,15 @@ def test_without_a_drrmo_request_csws_still_sends_it(api):
     assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "In Transit"
 
 
-def test_cancelling_the_request_lets_csws_send_it(api):
+def test_csws_gets_the_delivery_back_when_drrmo_declines(api):
+    """Nov 4 (team): CSWS cannot cancel DRRMO's request; once DRRMO
+    declines (or withdraws), CSWS sends the delivery itself."""
     client, t = api
     did = _delivery(client, t)["delivery_id"]
     rid = ok(client.post("/logistics/requests", headers=t["csws"],
                          json={"delivery_id": did, "trucks": 1}), 201)["request_id"]
-    ok(client.post(f"/logistics/requests/{rid}/cancel", headers=t["csws"],
-                   json={"reason": "We found our own truck"}))
+    assert client.post(f"/logistics/requests/{rid}/cancel", headers=t["csws"],
+                       json={"reason": "We found our own truck"}).status_code == 409
+    ok(client.patch(f"/drrmo/requests/{rid}/decline", headers=t["drrmo"],
+                    json={"notes": "No truck today"}))
     assert ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))["status"] == "In Transit"

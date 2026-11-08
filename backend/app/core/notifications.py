@@ -15,6 +15,8 @@ from typing import Iterable, Optional
 
 from sqlalchemy.orm import Session
 
+from core import push
+from core.realtime import queue_push
 from models.notification import Notification
 # event -> (title, message template). Missing {placeholders} render as "".
 EVENTS: dict[str, tuple[str, str]] = {
@@ -55,14 +57,21 @@ EVENTS: dict[str, tuple[str, str]] = {
     "donation_reinstated": ("Donation reopened", "Donation {batch_no} is active again. Please hand it over by {date}."),
     # Logistics
     "logistics_requested": ("Logistics requested", "CSWS requested transport for {title}."),
-    "logistics_accepted": ("Logistics request accepted", "Request for {title} was accepted."),
+    "logistics_accepted": ("Logistics request accepted", "Request for {title} was accepted.{schedule}"),
     "logistics_scheduled": ("Logistics scheduled", "Pickup for {title}: {schedule}."),
-    "logistics_declined": ("Logistics request declined", "{reason}"),
+    "logistics_declined": ("DRRMO declined transport", "DRRMO can't provide transport for {title}: {reason}. Ask DRRMO again or send it yourself."),
     "logistics_cancelled": ("Logistics request cancelled", "CSWS no longer needs transport for {title}: {reason}"),
     "logistics_completed": ("Logistics support completed", "DRRMO completed the support for {title}. {summary}"),
     "logistics_withdrawn": ("DRRMO can no longer help", "Transport for {title} was withdrawn: {reason}. Ask again or arrange another vehicle."),
+    # Reminders (services/delivery_reminders.py, every 5 minutes)
+    "reminder_request_waiting": ("Request waiting for DRRMO", "The transport request for {title} has waited {hours}. Please accept or decline it."),
+    "reminder_request_waiting_csws": ("DRRMO has not answered", "DRRMO has not answered the transport request for {title} in {hours}. Please call DRRMO to accept or decline it."),
+    "reminder_in_transit_long": ("Still on the way", "{title} has been on the way for {hours}. Check with the driver, or use \"Truck came back\" if it returned."),
+    "reminder_pickup_overdue": ("Pickup is late", "DRRMO was due to pick up {title} on {when}, but it is still being packed. Check with DRRMO, or reschedule it."),
+    "reminder_not_confirmed": ("Not received yet", "{title} arrived at {barangay} {hours} ago, but the barangay has not confirmed receipt. Please follow up."),
     # Delivery
     "delivery_status_changed": ("Delivery update", "{title} is now: {status}."),
+    "delivery_step_undone": ("Delivery step undone", "{title} is back to: {status}. {who} took back the last step."),
     "delivery_prepared": ("Aid is being prepared", "{title} for {barangay} is being prepared. Planned date: {date}."),
     "delivery_receipt_confirmed": ("Receipt confirmed", "The barangay confirmed receipt for {title}."),
     "delivery_acknowledged": ("Aid acknowledged", "{barangay} acknowledged {title}. This is the final record of the delivery."),
@@ -105,6 +114,10 @@ def notify(
     )
     db.add(n)
     db.flush()
+    # Live update after the commit (core/realtime.py); never fails the save.
+    queue_push(db, user_id, event, entity_type, entity_id)
+    # Push to the Android app after the commit (core/push.py); same rule.
+    push.queue(db, user_id, event, n.title, n.message, entity_type, entity_id, n.notification_id)
     return n
 
 

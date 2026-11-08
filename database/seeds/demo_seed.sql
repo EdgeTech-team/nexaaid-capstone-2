@@ -20,6 +20,7 @@ SELECT v.item_name, v.category, v.unit
 FROM (VALUES
     ('Rice',            'Food',     'kg'),
     ('Drinking Water',  'Water',    'L'),
+    ('Municipal Water', 'Water',    'L'),
     ('Canned Goods',    'Food',     'cans'),
     ('Noodles',         'Food',     'packs'),
     ('Hygiene Kit',     'Hygiene',  'kits'),
@@ -54,7 +55,11 @@ FROM (VALUES
     ('Drinking Water', '1.5 L bottle',           1.5,      5),
     ('Drinking Water', '2 L bottle',             2,        6),
     ('Drinking Water', '1 gallon container',     3.7854,   7),
-    ('Drinking Water', '5 gallon container',     18.9271,  8)
+    ('Drinking Water', '5 gallon container',     18.9271,  8),
+    ('Municipal Water', '1 gallon container',    3.7854,   1),
+    ('Municipal Water', '5 gallon container',    18.9271,  2),
+    ('Municipal Water', '200 L drum',            200,      3),
+    ('Municipal Water', '1,000 L water tank',    1000,     4)
 ) AS v(item_name, label, amount, sort_order)
 JOIN items i ON lower(i.item_name) = lower(v.item_name) AND i.active
 WHERE NOT EXISTS (
@@ -62,18 +67,44 @@ WHERE NOT EXISTS (
 );
 
 -- 2b. Disaster types for Mandaue City (report form dropdown). Same list as
---     migration d3f8b2a61c47; an existing type keeps its id and gets the
---     current description.
+--     migrations d3f8b2a61c47 and f6a2d9c4b8e1 (no Volcanic Eruption); an
+--     existing type keeps its id and gets the current description.
 INSERT INTO disaster_types (type_name, description)
 VALUES
-    ('Typhoon',     'Tropical cyclone with strong winds and heavy rain'),
-    ('Flood',       'Urban flooding, flash flood, or river overflow'),
-    ('Storm Surge', 'Coastal flooding caused by a typhoon''s storm surge'),
-    ('Earthquake',  'Ground shaking from a seismic event, including damage from aftershocks'),
-    ('Fire',        'Residential, commercial, or industrial fire'),
-    ('Tsunami',     'Coastal flooding caused by a seismic event'),
-    ('Other',       'Disaster not covered by the listed types; details go in the report description')
+    ('Typhoon',          'Tropical cyclone with strong winds and heavy rain'),
+    ('Flood',            'Rising water from heavy rain or overflowing rivers'),
+    ('Flash Flood',      'Sudden flooding within hours of heavy rain'),
+    ('Storm Surge',      'Coastal flooding caused by a typhoon''s storm surge'),
+    ('Earthquake',       'Ground shaking from a seismic event, including damage from aftershocks'),
+    ('Fire',             'Residential, commercial, or industrial fire'),
+    ('Landslide',        'Soil or rock sliding down slopes'),
+    ('Tsunami',          'Coastal flooding caused by a seismic event'),
+    ('Drought',          'Long dry spell affecting water and food supply'),
+    ('Disease Outbreak', 'Epidemic needing medical and hygiene supplies'),
+    ('Other',            'Disaster not covered by the listed types; details go in the report description')
 ON CONFLICT (type_name) DO UPDATE SET description = EXCLUDED.description;
+
+-- 2b-1. NF-004: hazard-prone barangays. Same lists as migration
+--       a4d8c2e6f1b9. Barangays missing from this database are skipped.
+UPDATE disaster_types SET is_location_specific = true
+WHERE type_name IN ('Landslide', 'Storm Surge');
+
+INSERT INTO barangay_hazards (barangay_id, disaster_type_id, source)
+SELECT b.barangay_id, t.disaster_type_id, 'Mandaue CDRRMO public statements / city barangay map'
+FROM (VALUES
+    -- Confirmed
+    ('Landslide',   'Casili'),  ('Landslide',   'Tawason'),
+    ('Landslide',   'Cubacub'), ('Landslide',   'Tingub'),
+    ('Storm Surge', 'Paknaan'), ('Storm Surge', 'Umapad'),
+    ('Storm Surge', 'Opao'),    ('Storm Surge', 'Looc'),
+    -- PENDING CDRRMO confirmation
+    ('Storm Surge', 'Subangdaku'), ('Storm Surge', 'Tipolo'),
+    ('Storm Surge', 'Centro'),     ('Storm Surge', 'Labogon')
+) AS v(type_name, barangay_name)
+JOIN disaster_types t ON t.type_name = v.type_name
+JOIN barangays b ON b.barangay_name = v.barangay_name
+ON CONFLICT (barangay_id, disaster_type_id) DO NOTHING;
+
 
 
 -- 2c. audit_logs (manuscript data dictionary) for the activity logs on the
@@ -123,6 +154,23 @@ WHERE status <> 'Approved' AND organization_id IN (
 UPDATE users
 SET password_hash = (SELECT password_hash FROM users WHERE email = 'csws.test@example.com')
 WHERE email IN ('halberz43@gmail.com', 'maria.santos@helpinghands.org');
+
+-- 5. A second Administrator account for the CSWS Head Office (Nov 4).
+--    Login: headoffice@gmail.com   Password: testpass123 (same hash as
+--    csws.test@example.com). Skipped if the email already exists.
+INSERT INTO users (first_name, last_name, email, password_hash, contact_number,
+                   role_id, is_active, must_change_password)
+SELECT 'Head',
+       'Office',
+       'headoffice@gmail.com',
+       (SELECT password_hash FROM users WHERE email = 'csws.test@example.com'),
+       '09170000000',
+       (SELECT role_id FROM roles
+        WHERE lower(role_name) IN ('administrator', 'admin')
+        ORDER BY role_id LIMIT 1),
+       true,
+       false
+ON CONFLICT (email) DO NOTHING;
 
 -- Check the results:
 SELECT u.email, r.role_name, b.barangay_name

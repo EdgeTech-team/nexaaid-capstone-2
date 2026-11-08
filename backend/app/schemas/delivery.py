@@ -8,6 +8,8 @@ from decimal import Decimal
 from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
+from schemas.logistics_request_schema import TransportNeeds
+
 DeliveryStatus = Literal["Preparing", "In Transit", "Delivered", "Confirmed", "Cancelled"]
 
 # Delivery items
@@ -43,6 +45,15 @@ class DeliveryCreate(BaseModel):
     # Oct 15: the donation entries (batch references) that go, each whole.
     # Left out = every acknowledged entry of the report.
     batch_references: Optional[List[str]] = None
+    # "Needs DRRMO transport?" (UC-CM2 alt 3a): also ask DRRMO, in the same
+    # save. Trucks / volunteers / pushcarts as in POST /logistics/requests.
+    transport: Optional[TransportNeeds] = None
+
+
+class DeliveryBatchAdvance(BaseModel):
+    """Mark several deliveries On the way at once (same rules as one by one;
+    all or nothing)."""
+    delivery_ids: List[int] = Field(..., min_length=1, max_length=50)
 
 class DeliveryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

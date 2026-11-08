@@ -127,7 +127,7 @@ def test_guests_get_the_public_lists_and_empty_internal_lists(api):
     for key in INTERNAL:
         assert lk[key] == [], key
     # Reference data for the guest donate form and the report filters.
-    assert lk["disaster_types"] == [{"id": 1, "name": "Flood"}]
+    assert lk["disaster_types"] == [{"id": 1, "name": "Flood", "is_location_specific": False}]
     assert {b["name"] for b in lk["barangays"]} == {"Barangay Test", "Barangay Two"}
     assert [s["name"] for s in lk["sitios"]] == ["Sitio Test"]
     assert [i["name"] for i in lk["items"]] == ["Rice (kg)"]

@@ -58,3 +58,18 @@ def test_an_item_waiting_for_review_is_never_suggested(api):
     flood = {line["item_name"] for line in templates["Flood"]["items"]}
     assert "Rice" in flood                   # the template itself still works
     assert "Clothing" not in flood           # waiting for review (F-15)
+
+
+def test_no_municipal_water_and_clothing_in_pieces():
+    """NF-006: every type still has a template, none has Municipal Water,
+    and clothing is two piece items with the same amount per family."""
+    from services.need_templates import NEED_TEMPLATES
+    for name in ("Typhoon", "Flood", "Storm Surge", "Earthquake", "Fire", "Tsunami",
+                 "Landslide", "Other"):
+        assert name in NEED_TEMPLATES, name
+    for name, template in NEED_TEMPLATES.items():
+        assert "Municipal Water" not in template, name
+        assert "Clothing" not in template, name
+        assert template.get("Clothing – Upper") == template.get("Clothing – Lower"), name
+    assert NEED_TEMPLATES["Fire"]["Clothing – Upper"] == 2
+

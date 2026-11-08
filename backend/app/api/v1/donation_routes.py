@@ -172,7 +172,7 @@ def _report_label(db: Session, report_id: int) -> Optional[str]:
         return None
     t = db.get(DisasterType, r.disaster_type_id)
     b = db.get(Barangay, r.barangay_id)
-    return f"#{r.report_id} {t.type_name if t else 'Disaster'} - {b.barangay_name if b else 'Barangay'}"
+    return f"#{r.report_id} {r.disaster_type_other or (t.type_name if t else 'Disaster')} - {b.barangay_name if b else 'Barangay'}"
 
 
 def _donor_info(db: Session, d: PhysicalDonation) -> dict:
@@ -856,7 +856,9 @@ def door_to_door_pickups(
             labels[first.report_id] = _report_label(db, first.report_id)
         pending = [l for l in lines if l.status == "Pending"]
         summary = []
-        for l in lines:
+        # Nov 1: one QR, one accurate list: items the donor removed are not
+        # part of what is picked up.
+        for l in (l for l in lines if not is_removed(l)):
             it = items.get(l.item_id)
             unit = it.unit_of_measure if it else ""
             name = it.item_name if it else "Item"
@@ -1098,11 +1100,13 @@ def _out_of_area_message(place: Optional[str]) -> str:
 
 def _check_service_area(payload) -> None:
     """Door to Door only inside the service areas (Mandaue City, Cebu City,
-    Consolacion, Lapu-Lapu City). The landmark decides when given
-    (it carries the map pin); otherwise the typed address."""
+    Consolacion, Lapu-Lapu City). Nov 1: the address decides (the donor
+    picks it from the map suggestions, so it carries the pin); the landmark
+    is free text for the pickup team and only used when there is no
+    address."""
     if payload.handover_method != "Door to Door":
         return
-    where = pin_coverage(payload.pickup_landmark or payload.pickup_address,
+    where = pin_coverage(payload.pickup_address or payload.pickup_landmark,
                          payload.pickup_lat, payload.pickup_lng)
     if not where["covered"]:
         raise HTTPException(status_code=422, detail=_out_of_area_message(where["place"]))
@@ -1177,8 +1181,8 @@ def my_donations(
         f = r.fulfillment
         return {
             "report_id": r.report_id,
-            "label": f"{types.get(r.disaster_type_id, 'Disaster')} in {barangays.get(r.barangay_id, 'Barangay')}",
-            "disaster": types.get(r.disaster_type_id, "Disaster"),
+            "label": f"{r.disaster_label(types)} in {barangays.get(r.barangay_id, 'Barangay')}",
+            "disaster": r.disaster_label(types),
             "barangay": barangays.get(r.barangay_id, "Barangay"),
             "assistance_needed": r.assistance_needed,
             "status": r.status,
@@ -1310,7 +1314,7 @@ def _deliveries_to(db: Session, report_ids: list, types: dict, barangays: dict) 
             "delivery_id": d.delivery_id,
             "report_id": d.report_id,
             "report_label": (
-                f"{types.get(r.disaster_type_id, 'Disaster')} in "
+                f"{r.disaster_label(types)} in "
                 f"{barangays.get(r.barangay_id, 'Barangay')}" if r else None
             ),
             "barangay": d.destination_barangay.barangay_name if d.destination_barangay else None,

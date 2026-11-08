@@ -1,5 +1,8 @@
-"""I4: CSWS picks how many trucks, volunteers and pushcarts. DRRMO just accepts.
+"""I4: CSWS picks how many trucks, volunteers and pushcarts. DRRMO accepts
+with when it comes (UC-DR1 step 5, Nov 2026).
 Appendix H 7.1 (Oct 10 notes): no driver count; each need can be None."""
+from datetime import datetime, timedelta, timezone
+
 from tests.test_manuscript_functions import _validated_report_with_stock
 from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
 
@@ -35,10 +38,25 @@ def test_csws_picks_what_is_needed_and_drrmo_just_accepts(api):
     # An older app that still sends "drivers" is not rejected; it is ignored.
     assert "driver" not in req["notes"]
 
-    acc = ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json={}))
-    # DRRMO only accepts. Testing fix 7.4: the schedule is the delivery date
-    # CSWS Main Office set, not a date DRRMO picks.
-    assert acc["status"] == "Accepted" and acc["scheduled_date"].startswith("2026-10-01")
+    # Nov 2026, UC-DR1 step 5 / Table 36 alt 4a (replaces testing fix 7.4):
+    # nothing is scheduled until DRRMO accepts and says when its truck comes.
+    assert req["scheduled_date"] is None
+    path = f"/drrmo/requests/{req['request_id']}/accept"
+    assert client.patch(path, headers=t["drrmo"], json={}).status_code == 422            # no date
+    assert client.patch(path, headers=t["drrmo"],
+                        json={"scheduled_date": "2020-01-01T08:00:00Z"}).status_code == 422  # passed
+    when = (datetime.now(timezone.utc) + timedelta(days=2)).replace(second=0, microsecond=0)
+    acc = ok(client.patch(path, headers=t["drrmo"], json={
+        "scheduled_date": when.isoformat(), "vehicle": "Truck 2 (ABC-123)", "driver": " "}))
+    assert acc["status"] == "Accepted" and acc["scheduled_date"][:16] == when.isoformat()[:16]
+    row = next(r for r in ok(client.get("/logistics/requests", headers=t["csws"]))
+               if r["request_id"] == req["request_id"])
+    assert row["scheduled_by"] == "DRRMO" and row["scheduled_date"][:16] == when.isoformat()[:16]
+    assert row["vehicle"] == "Truck 2 (ABC-123)" and row["driver"] is None      # blank = not given
+    assert row["needs"] == "Needs 2 trucks, 3 volunteers, 1 pushcart"            # CSWS's ask kept
+    # One date everywhere: the delivery now leaves at DRRMO's time.
+    assert ok(client.get(f"/deliveries/{did}", headers=t["csws"]))["delivery_date"][:16] == \
+        when.isoformat()[:16]
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["scheduled"] == 1
 
 

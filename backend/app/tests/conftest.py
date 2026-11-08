@@ -291,7 +291,16 @@ def sent_emails(request, monkeypatch):
         return True
 
     monkeypatch.setattr("core.email.send_email", fake_send_email)
-    return sent
+    monkeypatch.setattr("core.email.email_configured", lambda: True)
+    return sent 
+
+
+@pytest.fixture(autouse=True)
+def _no_push(monkeypatch):
+    """Android pushes (core/push.py) stay off in tests, even when .env names
+    a Firebase service account. test_push.py turns them on with a fake one."""
+    from core import push
+    monkeypatch.setattr(push, "credentials", lambda: None)
 
 
 @pytest.fixture(autouse=True)

@@ -393,3 +393,41 @@ work in dark mode.
 **Next:** Item 10 donor/org dashboards (stat cards, `StatusTimeline` per
 donation, supported-report progress, optional self-declared financial log),
 then Module 8 delivery screens.
+
+---
+
+## Mariquit — New concerns (Nov 4), on `copy-develop`
+
+**Status:** Built and tested, waiting for team review
+**Last updated:** Nov 4, 2026
+
+**Disaster report form**
+- Every disaster type fills in its needs by itself, "Other" too
+  (`services/need_templates.py`). The "Use suggested" button is gone;
+  "Add need" is now below the list.
+- "Other" last + "What kind of disaster?": Ivan's PR #102
+  (`disaster_reports.disaster_type_other`), merged into `copy-develop`
+  together with this work. Ivan's 4 restored types (Flash Flood, Landslide,
+  Drought, Disease Outbreak) are kept, since they are already on Neon.
+- New item **Municipal Water** (Water, L, 40 L per family in every
+  template), with gallon / 200 L drum / 1,000 L tank sizes.
+
+**DRRMO:** the selected dashboard card is only tinted when it has requests,
+so "New requests: 0" no longer turns orange.
+
+**Donors**
+- The "Hand over by …" line now reads "Bring to the CSWS office by … · N days
+  left" and explains that the donation expires if not handed over (this is
+  the 14-day Drop Off expiry from Oct 9).
+- "Add another item" is at the top; new items appear right under it, so the
+  report's needs stay in view. Items are still numbered in the order added.
+
+**Admin / CSWS:** no more "New items to review". An item a donor types under
+"Something else" is saved on that donation only (CSWS sees it when the goods
+arrive) and never added to anyone's dropdown, so audit finding F-15 stays
+fixed. `GET /items/pending`, `/items/{id}/approve` and `/reject` are removed.
+
+**Schema:** migration `e1c7a4b9d352` (additive, after Ivan's
+`e2b6d4a8c1f9`, which Neon already has): only the Municipal Water item.
+Tested on local Postgres from Neon's state: `alembic upgrade head` runs just
+this one step. Re-running `database/seeds/demo_seed.sql` is optional.

@@ -71,7 +71,7 @@ class _TripsScreenState extends State<TripsScreen> {
 
   Map<String, String> get _query => {
     'sort': sort,
-    if (status != null) 'status': status!,
+    'status': ?status,
     if (search.trim().isNotEmpty) 'q': search.trim(),
   };
 

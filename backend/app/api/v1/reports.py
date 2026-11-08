@@ -57,6 +57,7 @@ from core.database import get_db
 from core.auth import get_current_user, get_current_user_optional, require_role, has_role, barangay_scope, can_view_unvalidated_report
 from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
+from models.disaster_type_model import DisasterType, OTHER_DISASTER_TYPE
 from models.sitio_model import Sitio
 from core.notifications import notify, notify_event_many, user_ids_with_role
 from schemas.report import (
@@ -205,6 +206,18 @@ def _apply_sitios(db: Session, report: DisasterReport, sitio_id, sitio_ids) -> N
     report.sitio_id = ids[0] if ids else None
 
 
+def _apply_type_other(db: Session, report: DisasterReport, other) -> None:
+    """A report of type "Other" says what kind of disaster it was (e.g.
+    "Gas leak"); any other type clears it."""
+    t = db.get(DisasterType, report.disaster_type_id)
+    if t is not None and t.type_name == OTHER_DISASTER_TYPE:
+        if not other:
+            raise HTTPException(status_code=422, detail="Type what kind of disaster it was")
+        report.disaster_type_other = other
+    else:
+        report.disaster_type_other = None
+
+
 def _save_needs(db: Session, report: DisasterReport, needs, estimated_quantity) -> None:
     """Per-item needs (Oct 2026). needs = list from newer apps; without it
     estimated_quantity becomes one "General needs" line (older apps, SMS)."""
@@ -230,6 +243,7 @@ def create_report(
     report = DisasterReport(
         **payload.model_dump(exclude={"sitio_ids", "needs"}), user_id=current_user.user_id
     )
+    _apply_type_other(db, report, payload.disaster_type_other)
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()   # get report.report_id before commit (commit happens in get_db)
@@ -403,6 +417,7 @@ def edit_my_report(
     before["needs"] = _needs_log(report)
     for field, value in payload.model_dump(exclude={"sitio_ids", "needs"}).items():
         setattr(report, field, value)
+    _apply_type_other(db, report, payload.disaster_type_other)
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     _save_needs(db, report, payload.needs, payload.estimated_quantity)
     resubmitted = report.status == "Rejected"
@@ -745,6 +760,7 @@ def ingest_sms_report(
         user_id=sender.user_id if sender else current_user.user_id,
         source="SMS",
     )
+    _apply_type_other(db, report, payload.disaster_type_other)
     _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
     db.add(report)
     db.flush()  # need report.report_id for the metadata FK

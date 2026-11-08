@@ -13,12 +13,13 @@ other caller gets them as empty lists, so the response keeps the same keys.
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from core.auth import get_current_user_optional, has_role
 from core.database import get_db
-from models.report import DisasterReport, DisasterType, Barangay, Sitio
+from models.report import DisasterReport, DisasterType, Barangay, Sitio, BarangayHazard
+from models.disaster_type_model import OTHER_DISASTER_TYPE
 from models.item_model import Item
 from models.physical_donation_model import PhysicalDonation
 from models.delivery import Delivery
@@ -71,12 +72,15 @@ def get_lookups(
     # A deactivated account's token gets 403, as on every other endpoint.
     user: Optional[User] = Depends(get_current_user_optional),
 ):
-    types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
+    type_rows = db.query(DisasterType).all()
+    types = {t.disaster_type_id: t.type_name for t in type_rows}
+    # NF-004: the report form asks /lookups/barangays for these types only.
+    location_specific = {t.disaster_type_id for t in type_rows if t.is_location_specific}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     sitios = db.query(Sitio).order_by(Sitio.barangay_id, Sitio.sitio_id).all()
 
     def label(r):
-        return (f"#{r.report_id} {types.get(r.disaster_type_id, 'Disaster')} - "
+        return (f"#{r.report_id} {r.disaster_label(types)} - "
                 f"{barangays.get(r.barangay_id, 'Barangay')}")
 
     # Public: the validated reports, from their own query, so newer Pending,
@@ -89,7 +93,11 @@ def get_lookups(
     progress = progress_for_reports(db, validated)
 
     out = {
-        "disaster_types": [{"id": i, "name": n} for i, n in sorted(types.items())],
+        # In id order, with Other always last.
+        "disaster_types": [{"id": i, "name": n, "is_location_specific": i in location_specific}
+                           for i, n in sorted(
+            types.items(), key=lambda t: (t[1] == OTHER_DISASTER_TYPE, t[0]))],
+
         "barangays": [{"id": i, "name": n} for i, n in sorted(barangays.items(), key=lambda x: x[1])],
         "sitios": [
             {"id": s.sitio_id, "name": s.sitio_name, "barangay_id": s.barangay_id}
@@ -117,7 +125,7 @@ def get_lookups(
                 "name": f"{label(r)} - {r.priority_level or 'No priority'}",
                 # Public summary for donor cards (UC-D2 step 2: needs,
                 # priority guidance and fulfillment status).
-                "disaster": types.get(r.disaster_type_id, "Disaster"),
+                "disaster": r.disaster_label(types),
                 "barangay": barangays.get(r.barangay_id, "Barangay"),
                 "barangay_id": r.barangay_id,
                 "sitio": ", ".join(r.sitio_names) or None,
@@ -204,3 +212,23 @@ def get_lookups(
 
     return out
 
+@router.get("/barangays")
+def get_barangays(disaster_type_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """NF-004: every barangay, with is_hazard_prone for the given disaster
+    type. For a location-specific type (Landslide, Storm Surge) the prone
+    barangays come first; a general type, or no type, flags none and lists
+    them A-Z. Public like the other reference lists.
+
+    A suggestion only: POST /reports still accepts any barangay."""
+    prone = set()
+    if disaster_type_id is not None:
+        disaster_type = db.get(DisasterType, disaster_type_id)
+        if disaster_type is None:
+            raise HTTPException(status_code=404, detail="Disaster type not found.")
+        if disaster_type.is_location_specific:
+            prone = {h.barangay_id for h in db.query(BarangayHazard)
+                     .filter(BarangayHazard.disaster_type_id == disaster_type_id)}
+    rows = sorted(db.query(Barangay).all(),
+                  key=lambda b: (b.barangay_id not in prone, b.barangay_name))
+    return [{"id": b.barangay_id, "name": b.barangay_name,
+             "is_hazard_prone": b.barangay_id in prone} for b in rows]

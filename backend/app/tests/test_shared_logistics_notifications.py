@@ -6,7 +6,7 @@ from core.auth import hash_password
 from models.user_rbac_model import User
 from tests.test_logistics_needs import _delivery
 from tests.test_pickup_days_and_runs import _activate_everyone
-from tests.test_role_flows import PASSWORD, ROLES, api, ok  # noqa: F401  (fixture)
+from tests.test_role_flows import PASSWORD, ROLES, accept_body, api, ok  # noqa: F401  (fixture)
 
 
 def _add_user(client, key, role_name):
@@ -42,19 +42,18 @@ def test_both_teams_hear_every_logistics_step(api):
     assert "logistics_requested" in _events(client, csws2)
     assert "logistics_requested" not in _events(client, t["csws"])
 
-    ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json={}))
+    ok(client.patch(f"/drrmo/requests/{req['request_id']}/accept", headers=t["drrmo"], json=accept_body()))
     # Accepted: the requester, the other CSWS staff and the other DRRMO staff.
     assert "logistics_accepted" in _events(client, t["csws"])
     assert "logistics_accepted" in _events(client, csws2)
     assert "logistics_accepted" in _events(client, drrmo2)
     assert "logistics_accepted" not in _events(client, t["drrmo"])
 
-    # 7.5: completed only after the trip and the barangay's receipt.
+    # Nov 2026 (Table 36): DRRMO's "Delivered" completes the support; both
+    # teams hear it, except the DRRMO user who did it.
     ok(client.post(f"/drrmo/requests/{req['request_id']}/picked-up", headers=t["drrmo"]))
     ok(client.post(f"/drrmo/requests/{req['request_id']}/delivered", headers=t["drrmo"]))
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
-    ok(client.patch(f"/drrmo/requests/{req['request_id']}/complete", headers=drrmo2,
-                    json={"summary": "Truck 2, one trip"}))
     assert "logistics_completed" in _events(client, csws2)
-    assert "logistics_completed" in _events(client, t["drrmo"])
-    assert "logistics_completed" not in _events(client, drrmo2)
+    assert "logistics_completed" in _events(client, t["csws"])
+    assert "logistics_completed" in _events(client, drrmo2)
+    assert "logistics_completed" not in _events(client, t["drrmo"])
