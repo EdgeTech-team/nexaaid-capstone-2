@@ -33,3 +33,14 @@ def test_access_log_hides_query_strings():
 def test_the_app_installs_the_filter():
     filters = logging.getLogger("uvicorn.access").filters
     assert any(isinstance(f, HideQueryStrings) for f in filters)
+
+
+def test_websocket_lines_hide_the_login_token():
+    """GET /ws?token=...: uvicorn logs the handshake on uvicorn.error."""
+    from core.log_privacy import HideWebSocketQuery
+    for msg, args in (('%s - "WebSocket %s" %d', ("203.0.113.7:0", "/ws?token=eyJsecret", 403)),
+                      ('%s - "WebSocket %s" [accepted]', ("203.0.113.7:0", "/ws?token=eyJsecret"))):
+        record = logging.LogRecord("uvicorn.error", logging.INFO, __file__, 1, msg, args, None)
+        assert HideWebSocketQuery().filter(record) is True
+        assert "eyJsecret" not in record.getMessage() and "/ws?[hidden]" in record.getMessage()
+    assert any(isinstance(f, HideWebSocketQuery) for f in logging.getLogger("uvicorn.error").filters)

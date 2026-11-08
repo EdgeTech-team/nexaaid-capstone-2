@@ -18,17 +18,32 @@ from sqlalchemy.orm import Session
 from models.item_model import Item
 from models.report import DisasterType
 
+# NF-006 (Nov 2026): Municipal Water is out (CSWS does not receive it), and
+# clothing is counted in pieces with no set logic: n sets per family is
+# n Upper + n Lower.
 _FOOD = {"Rice": 6, "Canned Goods": 8, "Noodles": 4, "Drinking Water": 20}
 _SHELTER = {"Hygiene Kit": 1, "Blanket": 2, "Sleeping Mat": 1}
 
+
+def _clothing(sets) -> dict:
+    return {"Clothing – Upper": sets, "Clothing – Lower": sets}
+
+
 NEED_TEMPLATES = {
-    "Flood": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
-    "Typhoon": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
-    "Storm Surge": {**_FOOD, **_SHELTER, "Clothing": 1, "Medicine Kit": 0.1},
-    "Tsunami": {**_FOOD, **_SHELTER, "Clothing": 2, "Medicine Kit": 0.2},
+    "Flood": {**_FOOD, **_SHELTER, 
+    **_clothing(1), "Medicine Kit": 0.1},
+    "Flash Flood": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
+    "Typhoon": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
+    "Storm Surge": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
+    "Tsunami": {**_FOOD, **_SHELTER, **_clothing(2), "Medicine Kit": 0.2},
     # Families lose the house and everything in it.
-    "Fire": {**_FOOD, **_SHELTER, "Clothing": 2},
+    "Fire": {**_FOOD, **_SHELTER,**_clothing(2)},
     "Earthquake": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
+    "Landslide": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
+    "Drought": {**_FOOD, "Drinking Water": 40},
+    "Disease Outbreak": {**_FOOD, "Hygiene Kit": 1, "Medicine Kit": 0.5},
+    # Any other disaster: the basic relief pack; the reporter adjusts it.
+    "Other": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
 }
 
 

@@ -18,6 +18,8 @@ from models.city_model import City
 from models.barangay_model import Barangay
 from models.disaster_type_model import DisasterType
 from models.sitio_model import Sitio
+from models.barangay_hazard_model import BarangayHazard
+
 from models.guest_donor_model import GuestDonor
 from models.upload_model import Upload
 from models.donation_info_model import BarangayDonationInfo, ReportDonationInfo

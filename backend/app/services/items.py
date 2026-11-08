@@ -7,12 +7,12 @@ with category "Other". Its unit becomes its base unit (services/units.py).
 Retired items (items.active = false, e.g. the old gallons water) can no
 longer be picked for anything new.
 
-F-15: an item typed in on a donation (donor or guest) is added with
-pending_review = true. The donation records it, but it is in no dropdown
-until CSWS Main Office or the Administrator approves it
-(api/v1/item_routes.py). Items the Disaster Unit adds to a report are
-staff-created and added at once; if one matches a waiting item, that item
-is approved with it.
+F-15 / Concerns Nov 4: an item typed in on a donation (donor or guest) is
+added with pending_review = true, which now means "typed by a donor": the
+donation records it and CSWS sees it when the goods arrive, but it is in no
+dropdown. There is no review step (the manuscript has none). Items the
+Disaster Unit adds to a report are staff-created and listed at once; if one
+matches a donor-typed item, that item is listed with it.
 """
 from fastapi import HTTPException
 from sqlalchemy import func

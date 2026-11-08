@@ -76,14 +76,15 @@ def test_door_to_door_outside_the_service_area_is_refused(api, monkeypatch):
     client, t = api
     _fake_map(monkeypatch, city="Carcar")
     rid = _report(client, t)
-    body = _dated(rid, [_next(1)], landmark="Carcar Diversion Road, Dapdap, Carcar, Cebu",
+    body = _dated(rid, [_next(1)], landmark="Beside the chapel",
                   lat=10.1060, lng=123.6400)
-    body["pickup_address"] = "CarCar"
+    body["pickup_address"] = "Carcar Diversion Road, Dapdap, Carcar, Cebu"
     r = client.post("/donations/batch", headers=t["donor"], json=body)
     assert r.status_code == 422
     assert "Sorry" in r.text and "Carcar" in r.text and "Drop Off" in r.text
-    # Typing "Mandaue" in the address does not override the landmark's place.
-    body["pickup_address"] = "Mandaue City"
+    # Nov 1: the address decides. Typing "Mandaue" in the landmark (free
+    # text) does not override the address's place.
+    body["pickup_landmark"] = "Near Mandaue City Hall"
     assert client.post("/donations/batch", headers=t["donor"], json=body).status_code == 422
 
 

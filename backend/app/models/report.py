@@ -63,6 +63,7 @@ from models.city_model import City  # noqa: F401  (Barangay's FK needs 'cities' 
 from models.disaster_type_model import DisasterType  # noqa: F401
 from models.barangay_model import Barangay  # noqa: F401
 from models.sitio_model import Sitio  # noqa: F401
+from models.barangay_hazard_model import BarangayHazard  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # REAL MODELS — owned by this module (3.4)
@@ -107,6 +108,9 @@ class DisasterReport(Base):
     sitio_id = Column(
         Integer, ForeignKey("sitios.sitio_id", ondelete="SET NULL"), nullable=True
     )
+    # What kind of disaster, typed by the reporter when the type is "Other"
+    # (e.g. "Gas leak"). NULL for every other type. Migration e2b6d4a8c1f9.
+    disaster_type_other = Column(String(100), nullable=True)
 
     description = Column(Text, nullable=True)
     affected_families = Column(Integer, nullable=True)
@@ -200,7 +204,15 @@ class DisasterReport(Base):
     # only if the response schema declares them (see DisasterReportResponse).
     @property
     def disaster_type_name(self):
+        if self.disaster_type_other:
+            return self.disaster_type_other
         return self.disaster_type.type_name if self.disaster_type else None
+
+    def disaster_label(self, types: dict, default="Disaster"):
+        """The disaster type as the screens show it: the name typed for
+        "Other" (e.g. "Gas leak"), else the type's name from `types`
+        ({disaster_type_id: type_name})."""
+        return self.disaster_type_other or types.get(self.disaster_type_id, default)
 
     @property
     def barangay_name(self):

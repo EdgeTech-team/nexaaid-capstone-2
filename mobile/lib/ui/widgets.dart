@@ -180,6 +180,9 @@ class StatTile extends StatelessWidget {
 
   /// 5.1: opens the details behind the number. Null = not clickable.
   final VoidCallback? onTap;
+
+  /// Its list is the one showing (e.g. DRRMO's stage).
+  final bool selected;
   const StatTile(
     this.label,
     this.value,
@@ -188,6 +191,7 @@ class StatTile extends StatelessWidget {
     this.color,
     this.note,
     this.onTap,
+    this.selected = false,
   });
 
   @override
@@ -200,6 +204,7 @@ class StatTile extends StatelessWidget {
     // StatCard is the button itself (with its ripple), so the tile fills
     // the width it is given instead of shrinking to its text.
     onTap: onTap,
+    selected: selected,
   );
 }
 
@@ -254,7 +259,17 @@ class EmptyState extends StatelessWidget {
 class Loader extends StatefulWidget {
   final List<Future<ApiResult> Function()> load;
   final Widget Function(BuildContext context, List<dynamic> data) builder;
-  const Loader({super.key, required this.load, required this.builder});
+
+  /// Also reload when this fires, e.g. Realtime.instance.logistics when a
+  /// delivery or logistics request changed (live updates). The data on
+  /// screen stays until the new data arrives.
+  final Listenable? refresh;
+  const Loader({
+    super.key,
+    required this.load,
+    required this.builder,
+    this.refresh,
+  });
 
   @override
   State<Loader> createState() => _LoaderState();
@@ -276,11 +291,22 @@ class _LoaderState extends State<Loader> {
   void initState() {
     super.initState();
     api.addListener(_reload); // e.g. after an action elsewhere
+    widget.refresh?.addListener(_reload);
+  }
+
+  @override
+  void didUpdateWidget(Loader old) {
+    super.didUpdateWidget(old);
+    if (old.refresh != widget.refresh) {
+      old.refresh?.removeListener(_reload);
+      widget.refresh?.addListener(_reload);
+    }
   }
 
   @override
   void dispose() {
     api.removeListener(_reload);
+    widget.refresh?.removeListener(_reload);
     super.dispose();
   }
 
@@ -523,6 +549,14 @@ class Names {
     for (final r in (raw[list] as List? ?? const []))
       Map<String, dynamic>.from(r as Map),
   ];
+}
+
+/// A report's disaster type as the screens show it: what was typed for
+/// Other (`disaster_type_other`, e.g. "Gas leak"), else the type's name.
+String disasterLabel(Map r, Names names, {String fallback = '?'}) {
+  final other = '${r['disaster_type_other'] ?? ''}'.trim();
+  if (other.isNotEmpty) return other;
+  return names.of('disaster_types', r['disaster_type_id'], fallback: fallback);
 }
 
 /// Dropdown bound to a /lookups list, used inside forms.

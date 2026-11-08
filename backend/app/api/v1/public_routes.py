@@ -46,7 +46,7 @@ def public_reports(db: Session = Depends(get_db)):
         out.append({
             "id": r.report_id,
             "report_id": r.report_id,
-            "disaster": types.get(r.disaster_type_id, "Disaster"),
+            "disaster": r.disaster_label(types),
             "barangay": barangays.get(r.barangay_id, "Barangay"),
             "sitio": ", ".join(r.sitio_names) or None,
             "sitios": r.sitio_names,

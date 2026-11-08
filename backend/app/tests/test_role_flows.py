@@ -121,6 +121,14 @@ def ok(r, code=200):
     return r.json() if r.content else None
 
 
+def accept_body(**extra):
+    """UC-DR1 step 5 / Table 36 alt 4a (Nov 2026): DRRMO accepts a delivery
+    request with when its truck comes. "Now", so the tests can pick the goods
+    up right away (the delivery date follows DRRMO's time)."""
+    from datetime import datetime, timezone
+    return {"scheduled_date": datetime.now(timezone.utc).isoformat(), **extra}
+
+
 def test_login_reports_real_role_name(api):
     client, t = api
     for key, (_, role_id) in ACCOUNTS.items():
@@ -160,7 +168,7 @@ def test_full_relief_chain_across_all_roles(api):
     
     # dropdown data (public, used by the app instead of typed ids)
     lk = ok(client.get("/lookups"))
-    assert lk["disaster_types"] == [{"id": 1, "name": "Flood"}]
+    assert lk["disaster_types"] == [{"id": 1, "name": "Flood", "is_location_specific": False}]
     assert lk["items"][0]["name"] == "Rice (kg)"
     assert lk["reports"] == []                    # F-01: unvalidated reports are staff only
     assert lk["validated_reports"] == []          # nothing validated yet
@@ -271,7 +279,7 @@ def test_full_relief_chain_across_all_roles(api):
                           json={"notes": "No truck available"}))
     assert dec["status"] == "Declined"
     lr2 = ok(client.post("/logistics/requests", headers=t["csws"], json=req), 201)  # ask again
-    acc = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/accept", headers=t["drrmo"], json={}))
+    acc = ok(client.patch(f"/drrmo/requests/{lr2['request_id']}/accept", headers=t["drrmo"], json=accept_body()))
     assert acc["status"] == "Accepted"
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["scheduled"] == 1
 
@@ -327,10 +335,8 @@ def test_donor_dashboard_and_other_item(api):
     again = ok(client.post("/donations/", headers=t["donor"], json={
         **base, "other_item_name": "face masks", "quantity": 2}))
     assert other["item_id"] == again["item_id"] != 1
-        # F-15: a typed-in item waits for CSWS review before it is in the list.
+    # F-15 / Concerns Nov 4: a typed-in item stays on the donation only.
     assert "Face Masks (boxes)" not in [i["name"] for i in ok(client.get("/lookups"))["items"]]
-    ok(client.post(f"/items/{other['item_id']}/approve", headers=t["csws"], json={}))
-    assert "Face Masks (boxes)" in [i["name"] for i in ok(client.get("/lookups"))["items"]]
 
     assert client.post("/donations/", headers=t["donor"], json={**base, "quantity": 1}).status_code == 422
 

@@ -120,10 +120,18 @@ class AddressAutocompleteField extends StatefulWidget {
 
   @override
   State<AddressAutocompleteField> createState() =>
-      _AddressAutocompleteFieldState();
+      AddressAutocompleteFieldState();
 }
 
-class _AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
+class AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
+  /// Put [text] in the box and show its map suggestions, e.g. the donor's
+  /// registered address, so they only tap the matching place.
+  void searchFor(String text) {
+    widget.controller.text = text;
+    widget.controller.selection = TextSelection.collapsed(offset: text.length);
+    _onTyped(text);
+  }
+
   List<Map<String, dynamic>> _suggestions = [];
   Timer? _debounce;
   bool _loading = false;
@@ -590,7 +598,7 @@ class _DropOffCardState extends State<DropOffCard> {
         return Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-           color: cs.surfaceContainerHighest,
+            color: cs.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
@@ -673,7 +681,7 @@ class _DropOffCardState extends State<DropOffCard> {
                 ],
               ),
               const SizedBox(height: 8),
-               Text(
+              Text(
                 note,
                 style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),

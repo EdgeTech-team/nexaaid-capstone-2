@@ -236,25 +236,25 @@ class _DonateScreenState extends State<DonateScreen> {
   final _scroll = ScrollController();
   final lines = <_Line>[_Line()];
   String handover = 'Drop Off';
-  bool useSavedAddress = true;
   String? savedAddress; // organization address, if the account has one
-  // Door to Door pickup details:
-  //   address   -> typed by the donor, no suggestions
-  //   landmark  -> box with map suggestions (also gives the pin for CSWS)
+  // Door to Door pickup details (Nov 1: address and landmark swapped roles):
+  //   address   -> box with map suggestions (also gives the pin for CSWS)
+  //   landmark  -> typed by the donor, to help the pickup team find them
   //   dates     -> pickupDates: the dates the donor is home (calendar)
   //   notes     -> free text for the pickup team
   final pickupLandmark = TextEditingController();
   final pickupAddress = TextEditingController();
   final pickupNotes = TextEditingController();
-  PickedAddress? picked; // set when the donor taps a landmark suggestion
+  final _addressField = GlobalKey<AddressAutocompleteFieldState>();
+  PickedAddress? picked; // set when the donor taps an address suggestion
   Set<DateTime> pickupDates = {}; // Door to Door: dates the donor is home
-  // Map check of the picked landmark (GET /donations/location/coverage):
+  // Map check of the picked address (GET /donations/location/coverage):
   // null = not checked yet. False locks the rest of the pickup details and
   // offers Drop Off instead.
   bool? _covered;
   String? _coveragePlace;
   bool _checkingCoverage = false;
-  int _coverageSeq = 0; // ignores answers for a landmark that was replaced
+  int _coverageSeq = 0; // ignores answers for an address that was replaced
   PickupRules pickupRules = const PickupRules();
   final guestName = TextEditingController();
   final guestPhone = TextEditingController();
@@ -278,7 +278,7 @@ class _DonateScreenState extends State<DonateScreen> {
       if (value != null) {
         l.value.text = ThousandsFormatter.format('${value.round()}');
       }
-      lines.add(l);
+      lines.insert(0, l); // newest on top, as on a new donation
     }
     if (lines.isEmpty) lines.add(_Line());
     handover = '${e['handover_method'] ?? 'Drop Off'}';
@@ -290,9 +290,8 @@ class _DonateScreenState extends State<DonateScreen> {
     final lat = (e['pickup_lat'] as num?)?.toDouble();
     final lng = (e['pickup_lng'] as num?)?.toDouble();
     picked = lat != null && lng != null
-        ? PickedAddress(pickupLandmark.text, lat: lat, lng: lng)
+        ? PickedAddress(pickupAddress.text, lat: lat, lng: lng)
         : null;
-    useSavedAddress = false; // show the address that was given
   }
 
   /// One saved item back into the form. Newer donations kept their
@@ -304,7 +303,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final packs = i['pack_count'] ?? i['quantity'];
     l.packs.text = packs == null ? '' : '$packs';
     if (info == null && i['item_pending'] == true) {
-      // F-15: an item still waiting for CSWS review is in no dropdown:
+      // F-15: an item the donor typed in is in no dropdown:
       // open it as "Something else" with its name and unit filled in.
       l
         ..itemId = _otherItem
@@ -496,7 +495,7 @@ class _DonateScreenState extends State<DonateScreen> {
     }
     if (_editing) {
       _fillFromEntry(widget.edit!);
-      // A Door to Door entry being changed: check its landmark's area too.
+      // A Door to Door entry being changed: check its address's area too.
       final p = picked;
       if (p != null && handover == 'Door to Door') {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -515,10 +514,7 @@ class _DonateScreenState extends State<DonateScreen> {
         if (!mounted) return;
         String? a;
         if (r.ok) a = r.json['profile']?['address'] as String?;
-        setState(() {
-          savedAddress = (a ?? '').trim().isEmpty ? null : a;
-          useSavedAddress = savedAddress != null && !_editing;
-        });
+        setState(() => savedAddress = (a ?? '').trim().isEmpty ? null : a);
       });
     }
   }
@@ -571,16 +567,16 @@ class _DonateScreenState extends State<DonateScreen> {
     field.didChange(chosen);
   }
 
-  /// The landmark is inside a Door to Door service area: the map check when
-  /// it answered, otherwise the landmark text (same rule as the server).
+  /// The address is inside a Door to Door service area: the map check when
+  /// it answered, otherwise the address text (same rule as the server).
   bool get _inServiceArea =>
-      _covered ?? pickupRules.inServiceArea(pickupLandmark.text);
+      _covered ?? pickupRules.inServiceArea(pickupAddress.text);
 
-  /// The map found the landmark outside the service areas.
+  /// The map found the address outside the service areas.
   bool get _outsideArea =>
       handover == 'Door to Door' && picked != null && _covered == false;
 
-  /// Asks the map where the landmark's pin is, right after it is picked.
+  /// Asks the map where the address's pin is, right after it is picked.
   Future<void> _checkCoverage(PickedAddress p) async {
     final seq = ++_coverageSeq;
     setState(() {
@@ -602,7 +598,7 @@ class _DonateScreenState extends State<DonateScreen> {
         _covered = r.json['covered'] == true;
         _coveragePlace = r.json['place'] as String?;
       } else {
-        // No answer from the server: the landmark text decides; the
+        // No answer from the server: the address text decides; the
         // server checks again on submit.
         _covered = pickupRules.inServiceArea(p.address);
         _coveragePlace = placeIn(p.address);
@@ -610,7 +606,7 @@ class _DonateScreenState extends State<DonateScreen> {
     });
   }
 
-  void _onLandmarkChanged(PickedAddress p) {
+  void _onAddressChanged(PickedAddress p) {
     final pinned = p.lat != null;
     picked = pinned ? p : null;
     if (pinned) {
@@ -633,17 +629,17 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  void _chooseAnotherLandmark() {
+  void _chooseAnotherAddress() {
     _coverageSeq++;
     setState(() {
-      pickupLandmark.clear();
+      pickupAddress.clear();
       picked = null;
       _covered = null;
       _checkingCoverage = false;
     });
   }
 
-  /// Faded and not tappable while the landmark is outside the areas.
+  /// Faded and not tappable while the address is outside the areas.
   Widget _lockedWhenOutside(Widget child) => IgnorePointer(
     ignoring: _outsideArea,
     child: AnimatedOpacity(
@@ -653,17 +649,12 @@ class _DonateScreenState extends State<DonateScreen> {
     ),
   );
 
+  /// Concerns Nov 4: a new item goes at the top, right under the button
+  /// and the report's needs, and the earlier items move down. The donor
+  /// can still read what the report needs while filling it in.
   void _addItem() {
-    setState(() => lines.add(_Line()));
-    // Bring the new item into view.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      _scroll.animateTo(
-        math.min(_scroll.offset + 360, _scroll.position.maxScrollExtent),
-        duration: Motion.normal,
-        curve: Motion.curve,
-      );
-    });
+    setState(() => lines.insert(0, _Line()));
+    _saveDraft();
   }
 
   /// Oct 23: send only the new items; they join the same donation and QR.
@@ -673,7 +664,8 @@ class _DonateScreenState extends State<DonateScreen> {
     final r = await api.post(
       '/donations/entries/${Uri.encodeComponent(ref)}/items',
       body: {
-        'items': [for (final l in lines) l.toJson(_infoOf(l)!)],
+        // Newest is on top: send them in the order they were added.
+        'items': [for (final l in lines.reversed) l.toJson(_infoOf(l)!)],
       },
     );
     if (!mounted) return;
@@ -705,25 +697,24 @@ class _DonateScreenState extends State<DonateScreen> {
     }
 
     final door = handover == 'Door to Door';
-    final useSaved = door && useSavedAddress && savedAddress != null;
-    final typedAddress = pickupAddress.text.trim();
+    final addressText = pickupAddress.text.trim();
     final landmarkText = pickupLandmark.text.trim();
     // Pin coordinates only when the box still holds the suggestion that was
     // tapped. If the donor edited the text afterwards, send the text only.
-    final landmark = picked != null && picked!.address == landmarkText
+    final place = picked != null && picked!.address == addressText
         ? picked!
-        : PickedAddress(landmarkText);
+        : PickedAddress(addressText);
     setState(() => busy = true);
     final body = <String, dynamic>{
       if (!_editing) 'report_id': widget.report['id'],
       'handover_method': handover,
       if (door) ...{
-        'pickup_address': useSaved ? savedAddress : typedAddress,
-        if (landmarkText.isNotEmpty) ...{
-          'pickup_landmark': landmarkText,
-          'pickup_lat': landmark.lat,
-          'pickup_lng': landmark.lng,
+        'pickup_address': addressText,
+        if (place.lat != null && place.lng != null) ...{
+          'pickup_lat': place.lat,
+          'pickup_lng': place.lng,
         },
+        if (landmarkText.isNotEmpty) 'pickup_landmark': landmarkText,
         'pickup_dates': [
           for (final d in sortedDates(pickupDates)) pickupDateIso(d),
         ],
@@ -735,7 +726,7 @@ class _DonateScreenState extends State<DonateScreen> {
         if (pickupNotes.text.trim().isNotEmpty)
           'pickup_notes': pickupNotes.text.trim(),
       },
-      'items': [for (final l in lines) l.toJson(_infoOf(l)!)],
+      'items': [for (final l in lines.reversed) l.toJson(_infoOf(l)!)],
       if (!api.loggedIn && !_editing)
         'guest_donor': {
           'full_name': guestName.text.trim(),
@@ -861,7 +852,10 @@ class _DonateScreenState extends State<DonateScreen> {
               children: [
                 Icon(Icons.inventory_2_outlined, size: 20, color: cs.primary),
                 Gaps.h8,
-                Expanded(child: Text('Item ${i + 1}', style: t.titleMedium)),
+                // Newest on top: the first item added stays "Item 1".
+                Expanded(
+                  child: Text('Item ${lines.length - i}', style: t.titleMedium),
+                ),
                 if (lines.length > 1)
                   TextButton.icon(
                     onPressed: () {
@@ -1234,8 +1228,9 @@ class _DonateScreenState extends State<DonateScreen> {
   }
 
   /// UC-D2 alt 7c: Door to Door pickup details.
-  /// Order: Address (typed), Landmark (with suggestions), the dates the donor
-  /// is home (calendar pop-out), notes for the pickup team.
+  /// Order (Nov 1): Address (map suggestions, gives the pin), Landmark
+  /// (typed, for clarity), the dates the donor is home (calendar pop-out),
+  /// notes for the pickup team.
   Widget _doorToDoorCard() {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
@@ -1253,74 +1248,34 @@ class _DonateScreenState extends State<DonateScreen> {
           // Where Door to Door is offered (one list with the server's check).
           ServiceAreaCard(pickupRules.serviceAreas),
           Gaps.v12,
-          if (savedAddress != null) ...[
-            RadioGroup<bool>(
-              groupValue: useSavedAddress,
-              onChanged: (v) => setState(() => useSavedAddress = v!),
-              child: Column(
-                children: [
-                  RadioListTile<bool>(
-                    value: true,
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Use my registered address'),
-                    subtitle: Text(savedAddress!),
-                  ),
-                  const RadioListTile<bool>(
-                    value: false,
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('Use a different address'),
-                  ),
-                ],
+          // 1. Address: suggestions appear as the donor types. Picking one
+          //    saves the map pin, so CSWS can navigate there, and places
+          //    outside the Door to Door service areas are greyed out (the
+          //    server checks the address again).
+          if (savedAddress != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () =>
+                    _addressField.currentState?.searchFor(savedAddress!),
+                icon: const Icon(Icons.home_work_outlined, size: 18),
+                label: const Text('Use my registered address'),
               ),
             ),
-            Gaps.v8,
-          ],
-          // 1. Address: plain typed text, no suggestions.
-          if (savedAddress == null || !useSavedAddress) ...[
-            TextFormField(
-              controller: pickupAddress,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                labelText: 'Address',
-                hintText: 'House no., street, barangay, city',
-                prefixIcon: Icon(Icons.home_outlined),
-              ),
-              validator: (v) {
-                if (handover != 'Door to Door' ||
-                    (savedAddress != null && useSavedAddress)) {
-                  return null;
-                }
-                final text = (v ?? '').trim();
-                if (text.isEmpty) return 'Enter the pickup address';
-                if (text.length < 5) {
-                  return 'Add the street and barangay, e.g. 135 Manalili St., Poblacion';
-                }
-                return null;
-              },
-            ),
-            Gaps.v16,
-          ],
-          // 2. Landmark: suggestions appear as the donor types. Picking one
-          //    also saves the map pin so CSWS can navigate.
-          // Required, and picked from the suggestions (Oct 11): that gives
-          // the pin on the CSWS pickup map, and suggestions only come from
-          // the pickup area (Cebu province). Address + landmark must name a
-          // Door to Door service area (Mandaue, Cebu City,
-          // Consolacion, Lapu-Lapu); the server checks it again.
           AddressAutocompleteField(
-            controller: pickupLandmark,
-            label: 'Landmark',
-            hint: 'Start typing a nearby landmark, e.g. church, school, store',
-            icon: Icons.place_outlined,
-            // Suggestions outside the service areas are greyed out.
+            key: _addressField,
+            controller: pickupAddress,
+            label: 'Address',
+            hint: 'Start typing your street, barangay or building',
+            icon: Icons.home_outlined,
             pickupAreaOnly: true,
-            onChanged: _onLandmarkChanged,
+            onChanged: _onAddressChanged,
             validator: (v) {
               if (handover != 'Door to Door') return null;
               final text = (v ?? '').trim();
-              if (text.isEmpty) return 'Enter a landmark near your address';
+              if (text.isEmpty) return 'Enter the pickup address';
               if (picked == null || picked!.address != text) {
-                return 'Choose your landmark from the suggestions, so CSWS '
+                return 'Choose your address from the suggestions, so CSWS '
                     'can find you on the map';
               }
               if (!_inServiceArea) {
@@ -1341,12 +1296,34 @@ class _DonateScreenState extends State<DonateScreen> {
               place: _coveragePlace,
               areas: pickupRules.serviceAreas,
               onDropOff: _switchToDropOff,
-              onChangeLandmark: _chooseAnotherLandmark,
+              onChangeAddress: _chooseAnotherAddress,
             ),
           ],
           Gaps.v16,
+          // 2. Landmark: typed by the donor, to help the pickup team.
+          _lockedWhenOutside(
+            TextFormField(
+              controller: pickupLandmark,
+              maxLength: 300,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Landmark',
+                hintText: 'e.g. Beside St. Joseph Church, blue gate',
+                prefixIcon: Icon(Icons.place_outlined),
+              ),
+              validator: (v) {
+                if (handover != 'Door to Door' || _outsideArea) return null;
+                if ((v ?? '').trim().length < 3) {
+                  return 'Enter a landmark near your address, so CSWS can '
+                      'find you';
+                }
+                return null;
+              },
+            ),
+          ),
+          Gaps.v16,
           // 3. Pickup dates: a calendar pop-out; tap one or more dates.
-          // Locked (with notes) while the landmark is outside the areas.
+          // Locked (with notes) while the address is outside the areas.
           _lockedWhenOutside(
             FormField<Set<DateTime>>(
               validator: (_) {
@@ -1417,7 +1394,7 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-   Widget _guestCard() {
+  Widget _guestCard() {
     // UI review (F-09): the consent box comes after all the details, just
     // before Submit, and only names the address when there is one.
     final door = handover == 'Door to Door';
@@ -1560,7 +1537,8 @@ class _DonateScreenState extends State<DonateScreen> {
                       ? 'These items join your donation as a new batch.'
                       : 'Add every item you are giving. They all share one QR code.',
                 ),
-                for (var i = 0; i < lines.length; i++) _lineCard(i),
+                // Concerns Nov 4: the button is at the top and new items
+                // appear right under it (newest first).
                 AppButton(
                   'Add another item',
                   icon: Icons.add,
@@ -1568,6 +1546,8 @@ class _DonateScreenState extends State<DonateScreen> {
                   expand: true,
                   onPressed: _addItem,
                 ),
+                Gaps.v12,
+                for (var i = 0; i < lines.length; i++) _lineCard(i),
 
                 // Adding to a donation: only the items. Handover, pickup
                 // and donor details stay as they are.
@@ -2140,7 +2120,13 @@ class _DonationReceiptState extends State<DonationReceipt> {
                   padding: EdgeInsets.zero,
                   child: Column(
                     children: [
+                      ListTile(
+                        leading: Icon(Icons.home_outlined, color: cs.primary),
+                        title: const Text('Address'),
+                        subtitle: Text('${batch['pickup_address']}'),
+                      ),
                       if (batch['pickup_landmark'] != null) ...[
+                        const Divider(height: 1),
                         ListTile(
                           leading: Icon(
                             Icons.place_outlined,
@@ -2149,13 +2135,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
                           title: const Text('Landmark'),
                           subtitle: Text('${batch['pickup_landmark']}'),
                         ),
-                        const Divider(height: 1),
                       ],
-                      ListTile(
-                        leading: Icon(Icons.home_outlined, color: cs.primary),
-                        title: const Text('Address'),
-                        subtitle: Text('${batch['pickup_address']}'),
-                      ),
                       if (pickupDays.isNotEmpty) ...[
                         const Divider(height: 1),
                         ListTile(

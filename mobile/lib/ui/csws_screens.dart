@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
-import 'pending_items.dart';
+import '../realtime.dart';
+import 'needs_action.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'home_nav.dart';
 import 'widgets.dart';
@@ -608,6 +609,8 @@ class CswsMainDashboard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Loader(
+      // Live: a delivery or DRRMO request changed (Realtime).
+      refresh: Realtime.instance.logistics,
       load: [
         () => api.get('/dashboard/csws-main'),
         // Testing #19: deliveries that have not arrived yet.
@@ -622,8 +625,19 @@ class CswsMainDashboard extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const PendingItemsCard(), // F-15
             PageHeader('CSWS Main Office Dashboard', subtitle: roleLine()),
+            // Phase 6: what Main Office should do next with deliveries.
+            NeedsActionCard(
+              onOpen: (i) => HomeNav.go(
+                context,
+                HomeTarget(
+                  'Deliveries',
+                  view: i['view'] as String?,
+                  id: ((i['ids'] as List?) ?? const []).firstOrNull as int?,
+                ),
+              ),
+            ),
+            const ResponseTimesCard(), // Phase 7
             StatGrid([
               // Tiles open the tab that lists what they count.
               StatTile(
@@ -646,11 +660,13 @@ class CswsMainDashboard extends StatelessWidget {
                 'Entries received',
                 '${m['entries_received']}',
                 Icons.move_to_inbox_outlined,
+                onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
               ),
               StatTile(
                 'Total quantity received',
                 '${m['total_quantity_received']}',
                 Icons.inventory_2_outlined,
+                onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
               ),
               StatTile(
                 'Deliveries made',
@@ -664,6 +680,11 @@ class CswsMainDashboard extends StatelessWidget {
                 '${m['total_quantity_distributed']}',
                 Icons.outbox_outlined,
                 color: const Color(0xFF2E7D32),
+                // What the barangays received (Confirmed deliveries).
+                onTap: () => HomeNav.go(
+                  context,
+                  const HomeTarget('Deliveries', view: 'Confirmed'),
+                ),
               ),
             ]),
             ScheduledDeliveriesCard(

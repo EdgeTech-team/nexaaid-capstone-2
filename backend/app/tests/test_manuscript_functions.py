@@ -3,7 +3,7 @@ Checks the functions added to match the manuscript use cases
 (UC-A1/A2/A4, UC-CM1/CM2, UC-C1/C2, UC-DR1/DR2, UC-B1/B2, section 7
 dashboards). Uses the same real-auth fixture as test_role_flows.
 """
-from tests.test_role_flows import api, ok, PASSWORD  # noqa: F401  (fixture)
+from tests.test_role_flows import accept_body, api, ok, PASSWORD  # noqa: F401  (fixture)
 from tests.reg_helpers import STRONG_PASSWORD, org_payload
 
 
@@ -155,7 +155,7 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     rid_ = req["request_id"]
     assert client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                         json={"summary": "done"}).status_code == 400   # not accepted yet
-    ok(client.patch(f"/drrmo/requests/{rid_}/accept", headers=t["drrmo"], json={}))
+    ok(client.patch(f"/drrmo/requests/{rid_}/accept", headers=t["drrmo"], json=accept_body()))
     ok(client.post(f"/drrmo/requests/{rid_}/picked-up", headers=t["drrmo"]))   # advisor, Oct 24
     dash = ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))
     assert (dash["scheduled"], dash["in_transit"]) == (0, 1)
@@ -165,13 +165,12 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     r = client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
                      json={"summary": "Delivered by truck 2"})
     assert r.status_code == 409 and "Mark it Delivered" in r.json()["detail"]
-    # ... only after the barangay representative confirms receipt (8.2).
-    ok(client.post(f"/drrmo/requests/{rid_}/delivered", headers=t["drrmo"]))   # testing, Oct 27
+    # ... Nov 2026 (Table 36): marking it Delivered completes the support
+    # with a summary of goods, destination and time.
+    done = ok(client.post(f"/drrmo/requests/{rid_}/delivered", headers=t["drrmo"]))
+    assert done["status"] == "Completed" and "30 kg Rice" in done["notes"]
     ok(client.post(f"/deliveries/{delivery['delivery_id']}/confirm-receipt",
                    headers=t["brgy"], json={}), 201)
-    done = ok(client.patch(f"/drrmo/requests/{rid_}/complete", headers=t["drrmo"],
-                           json={"summary": "Delivered by truck 2"}))
-    assert done["status"] == "Completed" and "30 kg Rice" in done["notes"]
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["completed"] == 1
     # CSWS sees the request's status
     assert ok(client.get("/logistics/requests", headers=t["csws"]))[0]["status"] == "Completed"

@@ -275,7 +275,7 @@ def test_the_plan_gives_each_stop_its_barangay(api):
     client, t = api
     rid = _report(client, t)
     body = _door(rid, [1, 3])
-    body["pickup_address"] = "12 A. Del Rosario St., Banilad"
+    body["pickup_address"] = "12 A. Del Rosario St., Banilad, Mandaue City"
     b = ok(client.post("/donations/batch", headers=t["donor"], json=body), 201)
     s = _stop(ok(client.get("/donations/pickup-plan", headers=t["csws"])), b["batch_reference"])
     assert s["barangay"] == "Banilad" and s["donations"][0]["barangay"] == "Banilad"
