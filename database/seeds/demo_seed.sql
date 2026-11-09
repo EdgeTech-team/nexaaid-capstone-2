@@ -18,16 +18,18 @@ WHERE NOT EXISTS (
 INSERT INTO items (item_name, category, unit_of_measure)
 SELECT v.item_name, v.category, v.unit
 FROM (VALUES
-    ('Rice',            'Food',     'kg'),
-    ('Drinking Water',  'Water',    'L'),
-    ('Municipal Water', 'Water',    'L'),
-    ('Canned Goods',    'Food',     'cans'),
-    ('Noodles',         'Food',     'packs'),
-    ('Hygiene Kit',     'Hygiene',  'kits'),
-    ('Blanket',         'Shelter',  'pcs'),
-    ('Sleeping Mat',    'Shelter',  'pcs'),
-    ('Medicine Kit',    'Medical',  'boxes'),
-    ('Clothing',        'Clothing', 'packs')
+    ('Rice',             'Food',     'kg'),
+    ('Drinking Water',   'Water',    'L'),
+    ('Canned Goods',     'Food',     'cans'),
+    ('Noodles',          'Food',     'packs'),
+    ('Hygiene Kit',      'Hygiene',  'kits'),
+    ('Blanket',          'Shelter',  'pcs'),
+    ('Sleeping Mat',     'Shelter',  'pcs'),
+    ('Medicine Kit',     'Medical',  'boxes'),
+    -- NF-006: clothing is counted in pieces (migration b5e1f7a3c8d2).
+    -- Municipal Water and Clothing (packs) are no longer in the catalog.
+    ('Clothing – Upper', 'Clothing', 'pcs'),
+    ('Clothing – Lower', 'Clothing', 'pcs')
 ) AS v(item_name, category, unit)
 WHERE NOT EXISTS (SELECT 1 FROM items i WHERE lower(i.item_name) = lower(v.item_name));
 
@@ -55,11 +57,7 @@ FROM (VALUES
     ('Drinking Water', '1.5 L bottle',           1.5,      5),
     ('Drinking Water', '2 L bottle',             2,        6),
     ('Drinking Water', '1 gallon container',     3.7854,   7),
-    ('Drinking Water', '5 gallon container',     18.9271,  8),
-    ('Municipal Water', '1 gallon container',    3.7854,   1),
-    ('Municipal Water', '5 gallon container',    18.9271,  2),
-    ('Municipal Water', '200 L drum',            200,      3),
-    ('Municipal Water', '1,000 L water tank',    1000,     4)
+    ('Drinking Water', '5 gallon container',     18.9271,  8)
 ) AS v(item_name, label, amount, sort_order)
 JOIN items i ON lower(i.item_name) = lower(v.item_name) AND i.active
 WHERE NOT EXISTS (
