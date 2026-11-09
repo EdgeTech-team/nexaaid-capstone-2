@@ -36,8 +36,10 @@ NEED_TEMPLATES = {
     "Typhoon": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
     "Storm Surge": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
     "Tsunami": {**_FOOD, **_SHELTER, **_clothing(2), "Medicine Kit": 0.2},
-    # Families lose the house and everything in it.
-    "Fire": {**_FOOD, **_SHELTER,**_clothing(2)},
+    # Families lose the house and everything in it, kitchen included
+    # (Kitchen Set: UAT post-meeting, Nov 2026; one set per family is the
+    # team's assumption until CSWS gives its standard).
+    "Fire": {**_FOOD, **_SHELTER, **_clothing(2), "Kitchen Set": 1},
     "Earthquake": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
     "Landslide": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
     "Drought": {**_FOOD, "Drinking Water": 40},

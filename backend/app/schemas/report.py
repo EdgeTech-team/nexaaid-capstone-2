@@ -131,6 +131,48 @@ class DisasterReportCreate(BaseModel):
         return canonical_source(v)
 
 
+# ---------------------------------------------------------------------------
+# NF-003 (Nov 2026): one form for several barangays. The app computes each
+# barangay's whole-number quantities (families x per-family amount, rounded
+# up) and sends them; the server saves one report per barangay.
+# ---------------------------------------------------------------------------
+MAX_EVENT_BARANGAYS = 27   # Mandaue City's barangays
+
+
+class EventBarangayIn(BaseModel):
+    barangay_id: int
+    sitio_ids: Optional[List[int]] = None     # empty = the whole barangay
+    affected_families: int = Field(ge=1, le=MAX_AFFECTED_FAMILIES)
+    needs: List[ReportNeedIn] = Field(min_length=1, max_length=30)
+
+
+class DisasterEventCreate(BaseModel):
+    disaster_type_id: int
+    disaster_type_other: DisasterTypeOther = None
+    description: Optional[str] = None
+    # Blank = "<Disaster type> - <date>".
+    event_name: Optional[str] = Field(default=None, max_length=150)
+    barangays: List[EventBarangayIn] = Field(min_length=2, max_length=MAX_EVENT_BARANGAYS)
+    source: SourceType = "Mobile"
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def _canonical_source(cls, v):
+        return canonical_source(v)
+
+    @field_validator("event_name", mode="after")
+    @classmethod
+    def _clean_name(cls, v):
+        return None if v is None or not v.strip() else clean_text(v, "Event name", 2, 150)
+
+    @model_validator(mode="after")
+    def _one_row_per_barangay(self):
+        ids = [b.barangay_id for b in self.barangays]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Each barangay can only be listed once")
+        return self
+
+
 class DisasterReportEdit(BaseModel):
     """The reporter (CSWS Disaster Unit) corrects their own report before the
     Administrator validates it (Oct 11 notes). Same fields as a new report;
@@ -217,6 +259,10 @@ class DisasterReportResponse(BaseModel):
     updated_at: datetime
     disaster_type_name: Optional[str] = None
     barangay_name: Optional[str] = None
+    # NF-003: the multi-barangay event the report belongs to (None = a
+    # single-barangay report).
+    event_id: Optional[int] = None
+    event_name: Optional[str] = None
     priority_guidance: Optional[str] = None
     needs: List[ReportNeedOut] = []
 
@@ -288,3 +334,19 @@ class ReportMonitoringResponse(DisasterReportResponse):
     fulfillment_percentage: Optional[Decimal] = None
     total_items_needed: Optional[int] = None
     total_items_delivered: Optional[int] = None
+
+
+class DisasterEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    event_id: int
+    event_name: str
+    disaster_type_id: int
+    disaster_type_other: Optional[str] = None
+    created_by_user_id: int
+    created_at: datetime
+
+
+class DisasterEventCreated(BaseModel):
+    event: DisasterEventOut
+    reports: List[DisasterReportResponse]
