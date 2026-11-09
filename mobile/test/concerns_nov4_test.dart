@@ -145,6 +145,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(sent['/reports/'], isNull); // the disaster name is required
       expect(find.text('Required'), findsOneWidget);
+      // UAT #6: a pop-up says what is missing.
+      expect(find.text('Please complete the form'), findsOneWidget);
+      expect(find.text('What kind of disaster'), findsOneWidget);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
 
       await tester.enterText(
         find.widgetWithText(TextFormField, 'What kind of disaster?'),
