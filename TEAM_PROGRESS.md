@@ -431,3 +431,22 @@ fixed. `GET /items/pending`, `/items/{id}/approve` and `/reject` are removed.
 `e2b6d4a8c1f9`, which Neon already has): only the Municipal Water item.
 Tested on local Postgres from Neon's state: `alembic upgrade head` runs just
 this one step. Re-running `database/seeds/demo_seed.sql` is optional.
+
+---
+
+## Mariquit — UAT post-meeting: multi-barangay events, Kitchen Set, form pop-up (Nov 9)
+
+**Status:** On branch `mariquit/nf003-multi-barangay` (based on PR #111), waiting for review
+**Last updated:** Nov 9, 2026
+
+1. **NF-003 multi-barangay events** (UAT concern 1): one form, one report
+   per barangay, grouped as one event; donors get one card and pick the
+   barangay. Details: `docs/architecture/multi-barangay-events.md`.
+   Migration `e4f1a9c3b7d2`.
+2. **Kitchen Set** (concern 5): new item (Kitchen, sets) in the migration and
+   `demo_seed.sql`; the Fire preset suggests 1 per family (team assumption).
+3. **"Please complete the form" pop-up** (concern 6): submitting a report
+   with something missing lists what, e.g. "Enter a quantity for Rice".
+
+Cross-module review: M3 `need_templates.py` (Castillo), M4 donate form and
+donor feed (Hoyohoy), M9 dashboard cards (Fernandez).
