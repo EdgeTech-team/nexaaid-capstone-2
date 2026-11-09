@@ -64,6 +64,7 @@ from models.disaster_type_model import DisasterType  # noqa: F401
 from models.barangay_model import Barangay  # noqa: F401
 from models.sitio_model import Sitio  # noqa: F401
 from models.barangay_hazard_model import BarangayHazard  # noqa: F401
+from models.disaster_event_model import DisasterEvent  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # REAL MODELS — owned by this module (3.4)
@@ -111,6 +112,17 @@ class DisasterReport(Base):
     # What kind of disaster, typed by the reporter when the type is "Other"
     # (e.g. "Gas leak"). NULL for every other type. Migration e2b6d4a8c1f9.
     disaster_type_other = Column(String(100), nullable=True)
+
+    # NF-003: the multi-barangay event this report belongs to (one report
+    # per barangay, created together). NULL for a single-barangay report.
+    # Migration e4f1a9c3b7d2.
+    event_id = Column(
+        Integer,
+        ForeignKey("disaster_events.event_id", ondelete="SET NULL",
+                   name="fk_disaster_reports_event_id"),
+        nullable=True,
+        index=True,
+    )
 
     description = Column(Text, nullable=True)
     affected_families = Column(Integer, nullable=True)
@@ -166,6 +178,7 @@ class DisasterReport(Base):
     disaster_type = relationship("DisasterType")
     barangay = relationship("Barangay")
     sitio = relationship("Sitio")
+    event = relationship("DisasterEvent")
     # Every sitio the report names (empty = the whole barangay).
     sitios = relationship(
         "Sitio", secondary=report_sitios, order_by="Sitio.sitio_id", lazy="selectin"
@@ -213,6 +226,10 @@ class DisasterReport(Base):
         "Other" (e.g. "Gas leak"), else the type's name from `types`
         ({disaster_type_id: type_name})."""
         return self.disaster_type_other or types.get(self.disaster_type_id, default)
+
+    @property
+    def event_name(self):
+        return self.event.event_name if self.event else None
 
     @property
     def barangay_name(self):

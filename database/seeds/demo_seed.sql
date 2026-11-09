@@ -29,7 +29,10 @@ FROM (VALUES
     -- NF-006: clothing is counted in pieces (migration b5e1f7a3c8d2).
     -- Municipal Water and Clothing (packs) are no longer in the catalog.
     ('Clothing – Upper', 'Clothing', 'pcs'),
-    ('Clothing – Lower', 'Clothing', 'pcs')
+    ('Clothing – Lower', 'Clothing', 'pcs'),
+    -- UAT post-meeting (Nov 2026): CSWS also receives kitchen sets
+    -- (migration e4f1a9c3b7d2).
+    ('Kitchen Set',      'Kitchen',  'sets')
 ) AS v(item_name, category, unit)
 WHERE NOT EXISTS (SELECT 1 FROM items i WHERE lower(i.item_name) = lower(v.item_name));
 
