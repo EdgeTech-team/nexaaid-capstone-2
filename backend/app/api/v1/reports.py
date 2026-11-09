@@ -48,7 +48,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from core.priority_engine import apply_priority
 from services.fulfillment import progress as needs_progress, recalculate as recalculate_fulfillment, set_needs
 from services.items import resolve_item_id
@@ -59,6 +59,9 @@ from core.audit import log_action  # see note above
 from models.report import DisasterReport, SmsReportMetadata, ReportFulfillment, canonical_source
 from models.disaster_type_model import DisasterType, OTHER_DISASTER_TYPE
 from models.sitio_model import Sitio
+from models.barangay_model import Barangay
+from models.disaster_event_model import DisasterEvent
+from services.disaster_events import event_view
 from core.notifications import notify, notify_event_many, user_ids_with_role
 from schemas.report import (
     DisasterReportCreate,
@@ -72,6 +75,9 @@ from schemas.report import (
     ReportMonitoringResponse,
     DisasterReportEdit,
     ReportWithdraw,
+    DisasterEventCreate,
+    DisasterEventCreated,
+    MAX_TOTAL_QUANTITY,
 )
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -229,6 +235,22 @@ def _needs_log(report: DisasterReport) -> list:
     return [{"item_id": n.item_id, "quantity": n.quantity} for n in report.needs]
 
 
+def _new_report(db: Session, user, fields: dict, sitio_id, sitio_ids, needs,
+                estimated_quantity) -> DisasterReport:
+    """Saves one disaster report with its sitios and needs. Shared by POST
+    /reports (one barangay) and POST /reports/batch (NF-003, one report per
+    barangay), so both check and store a report the same way. The caller
+    sends the notifications."""
+    report = DisasterReport(**fields, user_id=user.user_id)
+    _apply_type_other(db, report, fields.get("disaster_type_other"))
+    _apply_sitios(db, report, sitio_id, sitio_ids)
+    db.add(report)
+    db.flush()   # get report.report_id before commit (commit happens in get_db)
+    _save_needs(db, report, needs, estimated_quantity)
+    db.refresh(report)
+    return report
+
+
 # ---------------------------------------------------------------------------
 # Create — any authenticated reporter (citizen / barangay official / staff)
 # ---------------------------------------------------------------------------
@@ -240,18 +262,112 @@ def create_report(
     # (Oct 17 run-through: any logged-in account could before).
     current_user=Depends(require_role("csws_disaster_unit")),
 ):
-    report = DisasterReport(
-        **payload.model_dump(exclude={"sitio_ids", "needs"}), user_id=current_user.user_id
+    report = _new_report(
+        db, current_user, payload.model_dump(exclude={"sitio_ids", "needs"}),
+        payload.sitio_id, payload.sitio_ids, payload.needs, payload.estimated_quantity,
     )
-    _apply_type_other(db, report, payload.disaster_type_other)
-    _apply_sitios(db, report, payload.sitio_id, payload.sitio_ids)
-    db.add(report)
-    db.flush()   # get report.report_id before commit (commit happens in get_db)
-    _save_needs(db, report, payload.needs, payload.estimated_quantity)
-    db.refresh(report)
-
     _notify_new_report(db, report, current_user.user_id)
     return report
+
+
+# ---------------------------------------------------------------------------
+# NF-003 (Nov 2026): one form, several barangays (e.g. an earthquake). Saves
+# ONE report per barangay, each with its own families, needs, validation,
+# priority, deliveries and fulfillment, grouped by a disaster_events row.
+# All or nothing: if one barangay is wrong, nothing is saved and the error
+# names that barangay. The Administrator still validates each report on its
+# own (UC-A3); nothing about validation changes.
+# ---------------------------------------------------------------------------
+_MANILA = timezone(timedelta(hours=8))
+
+
+def _default_event_name(label: str) -> str:
+    now = datetime.now(_MANILA)
+    return f"{label} – {now:%b} {now.day}, {now.year}"
+
+
+@router.post("/batch", response_model=DisasterEventCreated, status_code=status.HTTP_201_CREATED)
+def create_event_reports(
+    payload: DisasterEventCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_disaster_unit")),   # same as POST /reports
+):
+    disaster_type = db.get(DisasterType, payload.disaster_type_id)
+    if disaster_type is None:
+        raise HTTPException(status_code=422, detail="Choose a disaster type from the list")
+    is_other = disaster_type.type_name == OTHER_DISASTER_TYPE
+    if is_other and not payload.disaster_type_other:
+        raise HTTPException(status_code=422, detail="Type what kind of disaster it was")
+    other = payload.disaster_type_other if is_other else None
+
+    ids = [b.barangay_id for b in payload.barangays]
+    names = {b.barangay_id: b.barangay_name
+             for b in db.query(Barangay).filter(Barangay.barangay_id.in_(ids)).all()}
+    unknown = [str(i) for i in ids if i not in names]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown barangay: {', '.join(unknown)}")
+
+    event = DisasterEvent(
+        event_name=payload.event_name or _default_event_name(other or disaster_type.type_name),
+        disaster_type_id=disaster_type.disaster_type_id,
+        disaster_type_other=other,
+        created_by_user_id=current_user.user_id,
+    )
+    db.add(event)
+    db.flush()
+
+    reports = []
+    for row in payload.barangays:
+        total = sum(n.quantity for n in row.needs)
+        try:
+            if total > MAX_TOTAL_QUANTITY:
+                raise HTTPException(status_code=422,
+                                    detail="all needs together are more than can be saved")
+            report = _new_report(
+                db, current_user,
+                {"disaster_type_id": disaster_type.disaster_type_id,
+                 "disaster_type_other": other,
+                 "barangay_id": row.barangay_id,
+                 "description": payload.description,
+                 "affected_families": row.affected_families,
+                 "estimated_quantity": total,
+                 "source": payload.source,
+                 "event_id": event.event_id},
+                None, row.sitio_ids or [], row.needs, total,
+            )
+        except HTTPException as e:
+            raise HTTPException(status_code=e.status_code,
+                                detail=f"Barangay {names[row.barangay_id]}: {e.detail}")
+        # set_needs wrote the readable summary ("Rice: 720 kg, ...").
+        reports.append(report)
+
+    db.flush()
+    log_action(db, current_user, "SUBMIT DISASTER EVENT", "disaster_events", event.event_id,
+               new={"event_id": event.event_id, "event_name": event.event_name,
+                    "report_ids": [r.report_id for r in reports]})
+    # One notification per report, as for single reports (one per event is
+    # a possible follow-up, after the Mandaue visit).
+    for report in reports:
+        _notify_new_report(db, report, current_user.user_id)
+    db.flush()
+    return {"event": event, "reports": reports}
+
+
+# ---------------------------------------------------------------------------
+# NF-003: the event page. Public like /reports/{id}/needs and /lookups:
+# guests may open it. Unvalidated reports are only placeholders for anyone
+# who may not open them (services/disaster_events.py).
+# ---------------------------------------------------------------------------
+@router.get("/events/{event_id}")
+def get_event(
+    event_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_optional),
+):
+    event = db.get(DisasterEvent, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return event_view(db, event, current_user)
 
 
 # ---------------------------------------------------------------------------

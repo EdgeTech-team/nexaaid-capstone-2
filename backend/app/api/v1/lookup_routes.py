@@ -86,7 +86,8 @@ def get_lookups(
     # Public: the validated reports, from their own query, so newer Pending,
     # Rejected or Cancelled reports can never push them out of the limit.
     # Deleted reports (testing 2.3, soft delete) stay out of every list.
-    validated = (db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment))
+    validated = (db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment),
+                                                  joinedload(DisasterReport.event))
                  .filter(DisasterReport.status == "Validated",
                          DisasterReport.deleted_at.is_(None))
                  .order_by(DisasterReport.report_id.desc()).limit(LIMIT).all())
@@ -128,6 +129,10 @@ def get_lookups(
                 "disaster": r.disaster_label(types),
                 "barangay": barangays.get(r.barangay_id, "Barangay"),
                 "barangay_id": r.barangay_id,
+                # NF-003: reports created together for several barangays
+                # share an event; the donor screens show them as one card.
+                "event_id": r.event_id,
+                "event_name": r.event_name,
                 "sitio": ", ".join(r.sitio_names) or None,
                 "sitios": r.sitio_names,
                 "priority_level": r.priority_level,
