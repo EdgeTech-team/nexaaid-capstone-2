@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'widgets.dart';
+
 /// NF-004: the report form's barangay field. For a location-specific
 /// disaster type (Landslide, Storm Surge) the barangays known to be prone
 /// to it come first with a `Prone to <type>` tag; any other barangay can
@@ -89,6 +90,12 @@ class _HazardBarangayFieldState extends State<HazardBarangayField> {
         return pa != pb ? pa - pb : '${a['name']}'.compareTo('${b['name']}');
       });
     final picked = widget.value;
+    // The picked barangay is not tagged for this type: picked after
+    // "Continue", or the type changed afterwards. Only a note under the
+    // field: the pick is kept and the form can still be submitted.
+    final note = picked != null && !prone.contains(picked)
+        ? '${widget.names.of('barangays', picked)} is not tagged as prone to $_typeName.'
+        : null;
     return DropdownButtonFormField<String>(
       key: ValueKey('hazard-${widget.typeId}-$_rev'),
       initialValue: picked,
@@ -112,9 +119,7 @@ class _HazardBarangayFieldState extends State<HazardBarangayField> {
       validator: (v) => v == null || v.isEmpty ? 'Please choose one' : null,
       decoration: InputDecoration(
         labelText: 'Barangay',
-        helperText: picked != null && !prone.contains(picked)
-            ? 'Not tagged as prone to $_typeName.'
-            : 'Barangays prone to $_typeName are listed first.',
+        helperText: note ?? 'Barangays prone to $_typeName are listed first.',
         helperMaxLines: 2,
       ),
     );
