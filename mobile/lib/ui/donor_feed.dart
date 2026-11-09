@@ -86,27 +86,43 @@ class _DonorFeedState extends State<DonorFeed> {
     );
   }
 
+  /// Keeps the first report of each event (NF-003).
+  static Iterable<Map<String, dynamic>> _onePerEvent(
+    List<Map<String, dynamic>> reports,
+  ) {
+    final seen = <String>{};
+    return reports.where(
+      (r) => r['event_id'] == null || seen.add('${r['event_id']}'),
+    );
+  }
+
   List<_Post> _posts(List<Map> arrived) {
     DateTime? at(Object? iso) => DateTime.tryParse('${iso ?? ''}');
     final dated = <_Post>[
-      // The 2 newest validated reports that still need help.
-      for (final r
-          in (widget.validated
-                  .where(
-                    (r) => ((r['fulfillment_percentage'] as num?) ?? 0) < 100,
-                  )
-                  .toList()
-                ..sort(
-                  (a, b) => (at(b['created_at']) ?? DateTime(0)).compareTo(
-                    at(a['created_at']) ?? DateTime(0),
-                  ),
-                ))
-              .take(2))
+      // The 2 newest validated reports that still need help. NF-003: the
+      // barangays of one event are one post.
+      for (final r in _onePerEvent(
+        widget.validated
+            .where((r) => ((r['fulfillment_percentage'] as num?) ?? 0) < 100)
+            .toList()
+          ..sort(
+            (a, b) => (at(b['created_at']) ?? DateTime(0)).compareTo(
+              at(a['created_at']) ?? DateTime(0),
+            ),
+          ),
+      ).take(2))
         (
           at(r['created_at']),
           ReportPost(
             report: r,
-            donateLabel: widget.donateLabel,
+            donateLabel: r['event_id'] != null
+                ? 'Choose a barangay'
+                : widget.donateLabel,
+            eventBarangays: r['event_id'] == null
+                ? null
+                : widget.validated
+                      .where((v) => '${v['event_id']}' == '${r['event_id']}')
+                      .length,
             onDonate: () => widget.onDonate(r),
           ),
         ),
@@ -219,11 +235,16 @@ class ReportPost extends StatelessWidget {
   final Map<String, dynamic> report;
   final String donateLabel;
   final VoidCallback onDonate;
+
+  /// NF-003: how many validated barangays the report's event has (null =
+  /// a single-barangay report).
+  final int? eventBarangays;
   const ReportPost({
     super.key,
     required this.report,
     required this.donateLabel,
     required this.onDonate,
+    this.eventBarangays,
   });
 
   @override
@@ -254,12 +275,16 @@ class ReportPost extends StatelessWidget {
           TextSpan(
             children: [
               TextSpan(
-                text:
-                    '${r['disaster'] ?? 'Disaster'} in Barangay '
-                    '${r['barangay'] ?? '-'}. ',
+                text: eventBarangays != null
+                    ? '${r['event_name'] ?? r['disaster']}: '
+                          '$eventBarangays barangays need help. '
+                    : '${r['disaster'] ?? 'Disaster'} in Barangay '
+                          '${r['barangay'] ?? '-'}. ',
                 style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-              if (who.isNotEmpty || needs.isNotEmpty)
+              if (eventBarangays != null)
+                const TextSpan(text: 'Choose the barangay you want to help.')
+              else if (who.isNotEmpty || needs.isNotEmpty)
                 TextSpan(
                   text:
                       '${[if (who.isNotEmpty) who, if (needs.isNotEmpty) 'need $needs'].join(' ')}.',

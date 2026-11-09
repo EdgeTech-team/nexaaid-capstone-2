@@ -14,6 +14,7 @@ import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
 import 'hazard_barangay_field.dart';
+import 'multi_report.dart';
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: number limits. Must match the backend
@@ -150,6 +151,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
   final needs = <_Need>[_Need()];
   bool busy = false;
 
+  /// NF-003: "Several barangays" (one report per barangay, one event).
+  /// Only for a new report typed in the app, not SMS or a correction.
+  bool multi = false;
+  final BarangayRows multiRows = {};
+  final eventName = TextEditingController();
+  bool get _canMulti => !editing && !sms;
+
   /// true when encoding a report that arrived by SMS (UC-A3 8a).
   late final bool sms = widget.smsEncode;
   bool get editing => widget.edit != null;
@@ -189,6 +197,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
     'families': families.text,
     'sms_sender': smsSender.text,
     'sms_text': smsText.text,
+    'multi': multi,
+    'multi_rows': {for (final e in multiRows.entries) e.key: e.value.text},
+    'event_name': eventName.text,
     'needs': [
       for (final n in needs)
         {
@@ -231,6 +242,16 @@ class _NewReportScreenState extends State<NewReportScreen> {
     families.text = d.str('families');
     smsSender.text = d.str('sms_sender');
     smsText.text = d.str('sms_text');
+    multi = _canMulti && d['multi'] == true;
+    multiRows.clear();
+    if (d['multi_rows'] is Map) {
+      for (final e in (d['multi_rows'] as Map).entries) {
+        if (known('barangays', '${e.key}')) {
+          multiRows['${e.key}'] = TextEditingController(text: '${e.value}');
+        }
+      }
+    }
+    eventName.text = d.str('event_name');
     _smsLen = smsText.text.length; // a restored SMS is not a new paste
     final restored = <_Need>[];
     for (final m in d.maps('needs')) {
@@ -274,6 +295,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
       typeId = brgyId = null;
       sitioRows = [''];
       _fillNotes = const [];
+      multiRows.clear();
+      eventName.clear();
       _fills++;
     });
   }
@@ -376,7 +399,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
         for (final line in (t['items'] as List).cast<Map>())
           _Need()
             ..itemId = '${line['item_id']}'
-            ..qty.text = fams > 0
+            // NF-003: several barangays take the amounts per family; each
+            // barangay's total is worked out when submitting.
+            ..qty.text = multi
+                ? formatPerFamily(line['per_family'] as num)
+                : fams > 0
                 ? '${((line['per_family'] as num) * fams).ceil().clamp(1, maxEstimatedQuantity)}'
                 : '',
       ]);
@@ -549,8 +576,130 @@ class _NewReportScreenState extends State<NewReportScreen> {
     return null;
   }
 
+  /// Barangays of "Several barangays" with families typed (above 0).
+  List<MapEntry<String, int>> get _multiFamilies => [
+    for (final e in multiRows.entries)
+      if ((int.tryParse(e.value.text.trim()) ?? 0) > 0)
+        MapEntry(e.key, int.parse(e.value.text.trim())),
+  ];
+
+  int get _multiCount => _multiFamilies.length;
+
+  /// Switches between one and several barangays. The amounts change meaning
+  /// (total vs per family): suggested ones are filled in again, typed ones
+  /// are cleared so nothing is sent with the wrong meaning.
+  void _setMulti(bool value, Names names) {
+    if (value == multi) return;
+    final untouched = _needsUntouched;
+    setState(() {
+      multi = value;
+      if (untouched && _templateFor(names) != null) {
+        _applyTemplate(names);
+      } else {
+        for (final n in needs) {
+          n.qty.clear();
+        }
+      }
+    });
+    _saveDraft();
+    if (!untouched) {
+      AppToast.info(
+        context,
+        value
+            ? 'Amounts are now per family. Type them again.'
+            : 'Amounts are now totals. Type them again.',
+      );
+    }
+  }
+
+  /// UAT post-meeting #6: when something is missing, say what in a pop-up
+  /// (the red text under a field can be far up the form).
+  List<String> _missing(Names names) {
+    final out = <String>[];
+    if (sms) {
+      if (smsSender.text.trim().isEmpty) out.add('Sender number');
+      if (smsText.text.trim().isEmpty) out.add('SMS text');
+    }
+    if (typeId == null) out.add('Disaster type');
+    if (_typeIsOther(names) && typeOther.text.trim().length < 2) {
+      out.add('What kind of disaster');
+    }
+    if (multi) {
+      if (_multiCount < 2) {
+        out.add('At least 2 barangays with affected families');
+      }
+    } else {
+      if (brgyId == null) out.add('Barangay');
+      if (_wholeNumber(maxAffectedFamilies)(families.text) != null) {
+        out.add('Affected families');
+      }
+    }
+    if (desc.text.trim().isEmpty) out.add('Short incident description');
+    for (var i = 0; i < needs.length; i++) {
+      final n = needs[i];
+      final name = _needName(n, names);
+      if (n.itemId == null || (n.itemId == _other && name.isEmpty)) {
+        out.add('Need ${i + 1}: choose an item');
+        continue;
+      }
+      final bad = multi
+          ? perFamilyError(n.qty.text) != null
+          : _wholeNumber(maxEstimatedQuantity)(n.qty.text) != null;
+      if (bad) {
+        out.add(
+          multi
+              ? 'Enter how many $name per family'
+              : 'Enter a quantity for $name',
+        );
+      }
+    }
+    return out;
+  }
+
+  Future<void> _showMissing(Names names) async {
+    final missing = _missing(names);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.error_outline),
+        title: const Text('Please complete the form'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (missing.isEmpty)
+              const Text('Check the fields marked in red.')
+            else
+              for (final m in missing)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('•  '),
+                      Expanded(child: Text(m)),
+                    ],
+                  ),
+                ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _submit(Names names) async {
-    if (!_form.currentState!.validate()) return;
+    final valid = _form.currentState!.validate();
+    if (!valid || (multi && _multiCount < 2)) {
+      await _showMissing(names);
+      return;
+    }
+    if (multi) return _submitMulti(names);
     final total = needs.fold<int>(
       0,
       (a, n) => a + int.parse(n.qty.text.trim()),
@@ -656,6 +805,125 @@ class _NewReportScreenState extends State<NewReportScreen> {
     if (r.ok) _draft?.clear(); // submitted: the draft is no longer needed
   }
 
+  /// NF-003: each barangay's amounts, families x per family, rounded up.
+  List<Map<String, dynamic>> _multiNeeds(int families, Names names) => [
+    for (final n in needs)
+      {
+        if (n.itemId == _other) ...{
+          'other_item_name': n.otherName.text.trim(),
+          'other_item_unit': _needUnit(n, names),
+        } else
+          'item_id': int.parse(n.itemId!),
+        'quantity': barangayQuantity(
+          families,
+          perFamilyHundredths(n.qty.text)!,
+        ),
+      },
+  ];
+
+  Future<void> _submitMulti(Names names) async {
+    final rows = _multiFamilies;
+    final label = _typeIsOther(names)
+        ? typeOther.text.trim()
+        : names.of('disaster_types', typeId);
+    final name = eventName.text.trim().isEmpty
+        ? defaultEventName(label, DateTime.now())
+        : eventName.text.trim();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Submit ${rows.length} reports?'),
+        content: SizedBox(
+          width: 420,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Text(
+                '$name. One report per barangay; the Administrator '
+                'validates each one.',
+              ),
+              const SizedBox(height: 12),
+              for (final r in rows) ...[
+                Text(
+                  '${names.of('barangays', r.key)} · ${r.value} families',
+                  style: Theme.of(ctx).textTheme.titleSmall,
+                ),
+                Text(
+                  [
+                    for (final n in needs)
+                      '${_needName(n, names)}: ${barangayQuantity(r.value, perFamilyHundredths(n.qty.text)!)} ${_needUnit(n, names)}'
+                          .trim(),
+                  ].join(', '),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Submit ${rows.length} reports'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => busy = true);
+    final r = await act(
+      context,
+      () => api.post(
+        '/reports/batch',
+        body: {
+          'disaster_type_id': int.parse(typeId!),
+          'disaster_type_other': _typeIsOther(names)
+              ? typeOther.text.trim()
+              : null,
+          'description': desc.text.trim(),
+          'event_name': eventName.text.trim().isEmpty
+              ? null
+              : eventName.text.trim(),
+          'source': 'Mobile',
+          'barangays': [
+            for (final row in rows)
+              {
+                'barangay_id': int.parse(row.key),
+                'affected_families': row.value,
+                'needs': _multiNeeds(row.value, names),
+              },
+          ],
+        },
+      ),
+      success:
+          '${rows.length} reports submitted as one event. Each is pending '
+          'admin validation.',
+    );
+    if (!mounted) return;
+    setState(() {
+      busy = false;
+      if (r.ok) {
+        _form.currentState!.reset();
+        typeOther.clear();
+        desc.clear();
+        eventName.clear();
+        for (final c in multiRows.values) {
+          c.dispose();
+        }
+        multiRows.clear();
+        needs
+          ..clear()
+          ..add(_Need());
+        typeId = null;
+        _fills++;
+      }
+    });
+    if (r.ok) _draft?.clear();
+  }
+
   Widget _needRow(int i, Names names) {
     final n = needs[i];
     final unit = _needUnit(n, names);
@@ -734,14 +1002,26 @@ class _NewReportScreenState extends State<NewReportScreen> {
             ],
             const SizedBox(height: 10),
             TextFormField(
+              key: ValueKey('qty-$multi'),
               controller: n.qty,
-              keyboardType: TextInputType.number,
-              inputFormatters: _quantityInput,
+              keyboardType: multi
+                  ? const TextInputType.numberWithOptions(decimal: true)
+                  : TextInputType.number,
+              inputFormatters: multi ? perFamilyInput : _quantityInput,
               decoration: InputDecoration(
-                labelText: 'How many?',
-                suffixText: unit.isEmpty ? null : unit,
+                labelText: multi ? 'How many per family?' : 'How many?',
+                suffixText: unit.isEmpty
+                    ? null
+                    : multi
+                    ? '$unit / family'
+                    : unit,
+                helperText: multi
+                    ? 'e.g. 6, or 0.2 for 1 per 5 families'
+                    : null,
               ),
-              validator: _wholeNumber(maxEstimatedQuantity),
+              validator: multi
+                  ? perFamilyError
+                  : _wholeNumber(maxEstimatedQuantity),
             ),
           ],
         ),
@@ -891,22 +1171,81 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   },
                 ),
               ],
+              // NF-003: one disaster, several barangays (e.g. an earthquake):
+              // one form, one report per barangay.
+              if (_canMulti) ...[
+                const SizedBox(height: 12),
+                SegmentedButton<bool>(
+                  key: const ValueKey('report-mode'),
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      icon: Icon(Icons.place_outlined),
+                      label: Text('One barangay'),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      icon: Icon(Icons.share_location_outlined),
+                      label: Text('Several barangays'),
+                    ),
+                  ],
+                  selected: {multi},
+                  onSelectionChanged: (v) => _setMulti(v.first, names),
+                ),
+              ],
               const SizedBox(height: 12),
-              HazardBarangayField(
-                key: ValueKey('brgy-$_fills'),
-                names: names,
-                typeId: typeId,
-                value: brgyId,
-                onChanged: (v) => setState(() {
-                  brgyId = v;
-                  sitioRows = [''];
-                }),
-              ),
+              if (multi) ...[
+                MultiBarangayPicker(
+                  key: ValueKey('multi-$_fills'),
+                  names: names,
+                  typeId: typeId,
+                  rows: multiRows,
+                  maxFamilies: maxAffectedFamilies,
+                  onChanged: () {
+                    setState(() {});
+                    _saveDraft();
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: eventName,
+                  decoration: InputDecoration(
+                    labelText: 'Event name (optional)',
+                    hintText: typeId == null
+                        ? 'e.g. Earthquake – Nov 9, 2026'
+                        : defaultEventName(
+                            _typeIsOther(names) &&
+                                    typeOther.text.trim().isNotEmpty
+                                ? typeOther.text.trim()
+                                : names.of('disaster_types', typeId),
+                            DateTime.now(),
+                          ),
+                    helperText:
+                        'Donors see the barangays together under this name.',
+                  ),
+                  validator: (v) {
+                    final t = (v ?? '').trim();
+                    return t.isNotEmpty && (t.length < 2 || t.length > 150)
+                        ? 'Use 2 to 150 characters'
+                        : null;
+                  },
+                ),
+              ] else
+                HazardBarangayField(
+                  key: ValueKey('brgy-$_fills'),
+                  names: names,
+                  typeId: typeId,
+                  value: brgyId,
+                  onChanged: (v) => setState(() {
+                    brgyId = v;
+                    sitioRows = [''];
+                  }),
+                ),
 
               // Concerns2: the sitio field only appears after a barangay is
               // chosen, lists only that barangay's sitios, and defaults to
               // the whole barangay. problema_napud 2.2: "Add another sitio".
-              if (brgyId != null) ...[
+              if (!multi && brgyId != null) ...[
                 const SizedBox(height: 12),
                 SitioPicker(
                   key: ValueKey('sitios-$brgyId-$_fills'),
@@ -917,8 +1256,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   onChanged: (rows) => setState(() => sitioRows = rows),
                 ),
               ],
-              const SectionTitle('Donation info'),
-              NewReportDonationInfo(barangayId: brgyId),
+              if (!multi) ...[
+                const SectionTitle('Donation info'),
+                NewReportDonationInfo(barangayId: brgyId),
+              ],
               const SectionTitle('Situation (DROMIC)'),
               TextFormField(
                 controller: desc,
@@ -928,24 +1269,26 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 ),
                 validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
               ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: families,
-                keyboardType: TextInputType.number,
-                inputFormatters: _wholeNumberInput,
-                decoration: InputDecoration(
-                  labelText: 'Affected families',
-                  helperText:
-                      'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
+              if (!multi) ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: families,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: _wholeNumberInput,
+                  decoration: InputDecoration(
+                    labelText: 'Affected families',
+                    helperText:
+                        'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
+                  ),
+                  validator: _wholeNumber(maxAffectedFamilies),
+                  onChanged: (_) {
+                    if (_templateSnapshot != null &&
+                        _needsSnapshot == _templateSnapshot) {
+                      setState(() => _applyTemplate(names));
+                    }
+                  },
                 ),
-                validator: _wholeNumber(maxAffectedFamilies),
-                onChanged: (_) {
-                  if (_templateSnapshot != null &&
-                      _needsSnapshot == _templateSnapshot) {
-                    setState(() => _applyTemplate(names));
-                  }
-                },
-              ),
+              ],
               const SectionTitle('Assistance needed'),
               // Concerns Nov 4: the needs fill in by themselves from the
               // disaster type and the families, so there is no "Use
@@ -998,6 +1341,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       ? 'Save changes'
                       : sms
                       ? 'Encode SMS report'
+                      : multi
+                      ? 'Submit ${_multiCount < 2 ? '' : '$_multiCount '}reports'
                       : 'Submit report',
                 ),
               ),
