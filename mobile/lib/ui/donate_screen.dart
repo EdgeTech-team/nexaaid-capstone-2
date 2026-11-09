@@ -232,6 +232,10 @@ class DonateScreen extends StatefulWidget {
 }
 
 class _DonateScreenState extends State<DonateScreen> {
+  /// The report this donation goes to. NF-003: the donor can switch to
+  /// another barangay of the same event ("Donating to").
+  late Map<String, dynamic> _report = widget.report;
+
   final _form = GlobalKey<FormState>();
   final _scroll = ScrollController();
   final lines = <_Line>[_Line()];
@@ -358,13 +362,32 @@ class _DonateScreenState extends State<DonateScreen> {
 
   /// The report's per-item needs (from /lookups or /public/reports), or
   /// empty for an older report with only "General needs".
-  late final List<Map> _reportNeeds = () {
+  List<Map> get _reportNeeds {
     final rows = [
-      for (final n in (widget.report['needs'] as List? ?? const []))
+      for (final n in (_report['needs'] as List? ?? const []))
         if (n is Map) n,
     ];
     return rows.any((n) => n['item_id'] == null) ? <Map>[] : rows;
-  }();
+  }
+
+  /// NF-003: the event's other barangays that still take donations, for
+  /// "Donating to". Empty for a single-barangay report, or when changing a
+  /// donation already made.
+  List<Map<String, dynamic>> get _eventChoices {
+    final event = widget.report['event_id'];
+    if (event == null || _editing || _adding) return const [];
+    return [
+      for (final r in widget.names.rows('validated_reports'))
+        if ('${r['event_id']}' == '$event' &&
+            (((r['fulfillment_percentage'] as num?) ?? 0) < 100 ||
+                '${r['id']}' == '${widget.report['id']}'))
+          r,
+    ]..sort(
+      (a, b) => ((a['fulfillment_percentage'] as num?) ?? 0).compareTo(
+        (b['fulfillment_percentage'] as num?) ?? 0,
+      ),
+    );
+  }
 
   /// What is still missing of a need: needed minus what donors pledged.
   static int _stillNeeded(Map n) => math.max(
@@ -706,7 +729,7 @@ class _DonateScreenState extends State<DonateScreen> {
         : PickedAddress(addressText);
     setState(() => busy = true);
     final body = <String, dynamic>{
-      if (!_editing) 'report_id': widget.report['id'],
+      if (!_editing) 'report_id': _report['id'],
       'handover_method': handover,
       if (door) ...{
         'pickup_address': addressText,
@@ -759,8 +782,7 @@ class _DonateScreenState extends State<DonateScreen> {
       MaterialPageRoute(
         builder: (_) => DonationReceipt(
           batch: Map<String, dynamic>.from(r.json as Map),
-          reportTitle:
-              '${widget.report['disaster']} in ${widget.report['barangay']}',
+          reportTitle: '${_report['disaster']} in ${_report['barangay']}',
         ),
       ),
     );
@@ -771,7 +793,8 @@ class _DonateScreenState extends State<DonateScreen> {
   // -------------------------------------------------------------------------
 
   Widget _reportSummary() {
-    final r = widget.report;
+    final r = _report;
+    final choices = _eventChoices;
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final needs = '${r['assistance_needed'] ?? ''}'.trim();
@@ -798,10 +821,42 @@ class _DonateScreenState extends State<DonateScreen> {
                   style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
                 Gaps.v4,
-                Text(
-                  '${r['disaster']} in Barangay ${r['barangay']}',
-                  style: t.titleMedium,
-                ),
+                if (choices.length > 1) ...[
+                  Text(
+                    '${r['event_name'] ?? r['disaster']}',
+                    style: t.titleMedium,
+                  ),
+                  Gaps.v8,
+                  DropdownButtonFormField<String>(
+                    key: const ValueKey('donating-to'),
+                    initialValue: '${r['id']}',
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Donating to',
+                      helperText: 'Change to another barangay of this disaster',
+                    ),
+                    items: [
+                      for (final c in choices)
+                        DropdownMenuItem(
+                          value: '${c['id']}',
+                          child: Text(
+                            'Barangay ${c['barangay']} · '
+                            '${((c['fulfillment_percentage'] as num?) ?? 0).round()}% supplied',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) => setState(
+                      () => _report = choices.firstWhere(
+                        (c) => '${c['id']}' == v,
+                      ),
+                    ),
+                  ),
+                ] else
+                  Text(
+                    '${r['disaster']} in Barangay ${r['barangay']}',
+                    style: t.titleMedium,
+                  ),
                 // Per-item fulfillment: what nobody has pledged yet, so
                 // donors give what is missing ("Water is covered").
                 if (_reportNeeds.isNotEmpty) ...[
@@ -1652,7 +1707,10 @@ class _DonateScreenState extends State<DonateScreen> {
   List<Widget> _handoverSections(bool door) => [
     // 4.1: the items come first; the monetary donation info is
     // shown below them (adviser item 7 / UC-D2, display only).
-    ReportDonationInfo(reportId: widget.report['id'] as int),
+    ReportDonationInfo(
+      key: ValueKey('donation-info-${_report['id']}'),
+      reportId: _report['id'] as int,
+    ),
 
     const _StepHeader(number: 2, title: 'How will you hand it over?'),
     _ChoiceTile(
