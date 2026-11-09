@@ -32,3 +32,15 @@ def test_the_seed_adds_clothing_upper_and_lower_once():
         assert items.count(f"('{name}', 'Clothing', 'pcs')") == 1, name
     # Insert-if-missing, so running the seed twice adds nothing.
     assert "WHERE NOT EXISTS (SELECT 1 FROM items i WHERE lower(i.item_name) = lower(v.item_name))" in items
+
+
+
+def test_the_seed_mirrors_the_hazard_migrations():
+    hazards = _section("-- 2b-1. NF-004", "-- 2c.")
+    assert "'Landslide', 'Storm Surge', 'Tsunami'" in hazards
+    for barangay in ("Paknaan", "Umapad", "Opao", "Looc"):
+        assert re.search(rf"\('Tsunami',\s+'{barangay}',\s+'Mandaue CDRRMO", hazards), barangay
+    for type_name in ("Storm Surge", "Tsunami"):
+        for barangay in ("Subangdaku", "Tipolo", "Centro", "Labogon"):
+            assert re.search(rf"\('{type_name}',\s+'{barangay}',\s+'PENDING CDRRMO confirmation'\)",
+                             hazards), (type_name, barangay)
