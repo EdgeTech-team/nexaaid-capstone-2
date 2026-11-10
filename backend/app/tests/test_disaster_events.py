@@ -231,3 +231,55 @@ def test_a_donation_counts_only_for_its_own_report(ev):
         "handover_method": "Drop Off"}))
     pledged = {rid: ok(client.get(f"/reports/{rid}/needs"))["needs"][0]["pledged"] for rid in ids}
     assert pledged == {ids[0]: 0, ids[1]: 60, ids[2]: 0}
+
+
+def test_donors_are_notified_once_per_event(ev):
+    """An earthquake can be 27 reports: donors get one "needs help" notice
+    when the first barangay is validated, not one per barangay."""
+    from models.notification import Notification
+    from models.user_rbac_model import User
+    client, t = ev
+    # SQLite keeps the server default "true" as text; make the donor active
+    # the way Postgres stores it, so user_ids_with_role finds them.
+    db = database.SessionLocal()
+    try:
+        db.query(User).update({User.is_active: True})
+        db.commit()
+    finally:
+        db.close()
+    ids = [r["report_id"] for r in three(client, t)["reports"]]
+    for rid in ids:
+        ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
+    # A single-barangay report still notifies on its own.
+    single = ok(client.post("/reports/", headers=t["unit"], json={
+        "disaster_type_id": FLOOD, "barangay_id": B1, "affected_families": 3,
+        "needs": [{"item_id": 1, "quantity": 18}]}), 201)["report_id"]
+    ok(client.post(f"/reports/{single}/validate", headers=t["admin"], json={}))
+
+    db = database.SessionLocal()
+    try:
+        donor = db.query(User).filter_by(email="donor.test@example.com").one().user_id
+        notes = (db.query(Notification)
+                 .filter_by(user_id=donor, type="report_open_for_donations")
+                 .order_by(Notification.notification_id).all())
+        assert [n.entity_id for n in notes] == [ids[0], single]
+        assert notes[0].title == "New disaster needs help"
+        assert "Flood" in notes[0].message and "Choose the barangay" in notes[0].message
+    finally:
+        db.close()
+
+
+def test_lookups_send_the_per_family_amount_of_each_item(ev):
+    client, _ = ev
+    db = database.SessionLocal()
+    try:
+        from models.item_model import Item
+        db.add(Item(item_name="Kitchen Set", category="Kitchen", unit_of_measure="sets"))
+        db.add(Item(item_name="Tarpaulin", category="Shelter", unit_of_measure="pcs"))
+        db.commit()
+    finally:
+        db.close()
+    items = {i["item_name"]: i for i in ok(client.get("/lookups"))["items"]}
+    assert items["Rice"]["per_family"] == 6
+    assert items["Kitchen Set"]["per_family"] == 1
+    assert items["Tarpaulin"]["per_family"] is None     # no standard: the form suggests 1

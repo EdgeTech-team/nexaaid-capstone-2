@@ -37,7 +37,8 @@ final _lookups = <String, dynamic>{
   'items': [
     _item(1, 'Rice', 'kg'),
     _item(2, 'Municipal Water', 'L'),
-    _item(3, 'Canned Goods', 'cans'),
+    {..._item(3, 'Canned Goods', 'cans'), 'per_family': 8},
+    _item(4, 'Tarpaulin', 'pcs'), // no standard: 1 per family
   ],
   'need_templates': [
     {
@@ -198,6 +199,55 @@ void main() {
       expect(find.text('Please complete the form'), findsOneWidget);
       expect(find.text('Need 3: choose an item'), findsOneWidget);
       expect(sent['/reports/'], isNull);
+    }, () => _server);
+  });
+
+  testWidgets('UAT Nov 10: an added need fills in too, follows the '
+      'families, and keeps an amount the reporter typed', (tester) async {
+    Api.instance.role = Roles.cswsUnit;
+    addTearDown(() => Api.instance.role = null);
+    await http.runWithClient(() async {
+      await _pump(tester, const Scaffold(body: NewReportScreen()));
+      await _choose(
+        tester,
+        find.widgetWithText(DropdownButtonFormField<String>, 'Disaster type'),
+        'Other',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Affected families'),
+        '10',
+      );
+      await tester.pump();
+      await tester.tap(find.text('Add need'));
+      await tester.pumpAndSettle();
+      await _choose(
+        tester,
+        find.widgetWithText(DropdownButtonFormField<String>, 'Need 3'),
+        'Canned Goods',
+      );
+      // Not in the preset: the item's own standard, 8 cans x 10 families.
+      expect(find.widgetWithText(TextFormField, '80'), findsOneWidget);
+      await tester.tap(find.text('Add need'));
+      await tester.pumpAndSettle();
+      await _choose(
+        tester,
+        find.widgetWithText(DropdownButtonFormField<String>, 'Need 4'),
+        'Tarpaulin',
+      );
+      // No standard: 1 per family.
+      expect(find.widgetWithText(TextFormField, '10'), findsNWidgets(2));
+
+      // The reporter types Rice; more families: the rest follows, Rice stays.
+      await tester.enterText(find.widgetWithText(TextFormField, '60'), '50');
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Affected families'),
+        '41',
+      );
+      await tester.pump();
+      expect(find.widgetWithText(TextFormField, '50'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '1640'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '328'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '41'), findsNWidgets(2));
     }, () => _server);
   });
 

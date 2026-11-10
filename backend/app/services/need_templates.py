@@ -50,6 +50,22 @@ NEED_TEMPLATES = {
 
 
 
+# Per-family amount of an item when the disaster type's template does not
+# list it (Nov 2026, UAT: a need the reporter adds is filled in too). The
+# report form uses: the template's amount for the chosen disaster type,
+# else this, else 1 per family. Team assumptions, like the templates above.
+ITEM_PER_FAMILY = {
+    **_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1, "Kitchen Set": 1,
+}
+_ITEM_PER_FAMILY = {name.lower(): amount for name, amount in ITEM_PER_FAMILY.items()}
+
+
+def item_per_family(item_name: str):
+    """The general per-family amount of an item, or None (the app then
+    suggests 1 per family)."""
+    return _ITEM_PER_FAMILY.get((item_name or "").lower())
+
+
 def need_templates(db: Session) -> list:
     """[{id: disaster_type_id, name, items: [{item_id, item_name, unit, per_family}]}]
     for the disaster types that have a template, as /lookups sends it."""
