@@ -166,7 +166,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
                       if (r['event_id'] != null)
                         EventNeedCard(
                           report: r,
-                          onOpen: () => openEvent(context, r, names),
+                          onOpen: () => openEvent(context, r),
                         )
                       else
                         NeedCard(
@@ -194,7 +194,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
                     donateLabel: donateLabel,
                     // NF-003: an event's Donate opens its barangay list.
                     onDonate: (r) => r['event_id'] != null
-                        ? openEvent(context, r, names)
+                        ? openEvent(context, r)
                         : _donate(r, names),
                   ),
 

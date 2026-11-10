@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'disaster_art.dart';
 import 'donor_screens.dart' show DonateScreen;
+import 'notifications_screen.dart' show showReportSheet;
 import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 
@@ -54,16 +55,52 @@ List<Map<String, dynamic>> foldEvents(
   ];
 }
 
-/// Opens the event page.
-void openEvent(BuildContext context, Map report, Names names) =>
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => EventScreen(
-          eventId: (report['event_id'] as num).toInt(),
-          names: names,
-        ),
+/// Opens the event page of a report that belongs to an event.
+void openEvent(BuildContext context, Map report) => Navigator.of(context).push(
+  MaterialPageRoute(
+    builder: (_) => EventScreen(eventId: (report['event_id'] as num).toInt()),
+  ),
+);
+
+/// "1 barangay", "3 barangays".
+String barangaysText(int n) => n == 1 ? '1 barangay' : '$n barangays';
+
+/// Under a report that is part of an event (report lists, details,
+/// notifications, the guest pop-out): the event's name and a way to see
+/// every barangay of the same disaster. Nothing for a single report.
+class EventLink extends StatelessWidget {
+  final Map report;
+  const EventLink(this.report, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    if (report['event_id'] == null) return const SizedBox.shrink();
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: Space.xxs),
+      child: Row(
+        children: [
+          Icon(Icons.share_location_outlined, size: 16, color: cs.primary),
+          Gaps.h4,
+          Expanded(
+            child: Text(
+              'Part of ${report['event_name'] ?? 'a disaster in several barangays'}',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: t.bodySmall,
+            ),
+          ),
+          TextButton(
+            key: ValueKey('see-event-${report['event_id']}'),
+            onPressed: () => openEvent(context, report),
+            child: const Text('See all barangays'),
+          ),
+        ],
       ),
     );
+  }
+}
 
 /// One card for a whole event: name, barangays, families, event progress,
 /// and "Choose a barangay" (yellow: it leads to Donate).
@@ -123,7 +160,7 @@ class EventNeedCard extends StatelessWidget {
                       style: t.titleMedium,
                     ),
                     Text(
-                      '${reports.length} barangays · $families families',
+                      '${barangaysText(reports.length)} · $families families',
                       style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                     ),
                     Gaps.v8,
@@ -134,7 +171,9 @@ class EventNeedCard extends StatelessWidget {
                     ),
                     Gaps.v8,
                     Text(
-                      open == 1
+                      open == 0
+                          ? 'Every barangay has what it needs'
+                          : open == 1
                           ? '1 barangay still needs help'
                           : '$open barangays still need help',
                       style: t.bodySmall,
@@ -164,10 +203,9 @@ class EventNeedCard extends StatelessWidget {
 /// with no details.
 class EventScreen extends StatelessWidget {
   final int eventId;
-  final Names names;
-  const EventScreen({super.key, required this.eventId, required this.names});
+  const EventScreen({super.key, required this.eventId});
 
-  void _donate(BuildContext context, Map row) {
+  void _donate(BuildContext context, Map row, Names names) {
     final report = names
         .rows('validated_reports')
         .where((r) => '${r['id']}' == '${row['report_id']}')
@@ -188,17 +226,42 @@ class EventScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Choose a barangay')),
       body: Loader(
-        load: [() => api.get('/reports/events/$eventId')],
+        load: [() => api.get('/reports/events/$eventId'), api.lookupsResult],
         builder: (context, data) {
           final e = Map<String, dynamic>.from(data[0] as Map);
+          final names = Names(Map<String, dynamic>.from(data[1] as Map));
           final rows = (e['reports'] as List).cast<Map>();
+          final donatable = rows.where((r) => r['donatable'] == true).toList();
+          final validated = rows.where((r) => r['status'] == 'Validated');
           return ListView(
             padding: Space.page,
             children: [
               _EventHeader(event: e),
               Gaps.v16,
-              SectionHeader(
-                'Barangays',
+              // Not sure where to give? The barangay with the least (rows
+              // come lowest % first from the server).
+              if (donatable.isNotEmpty)
+                AppButton(
+                  'Donate where it\'s needed most: ${donatable.first['barangay']}',
+                  key: const ValueKey('donate-most-needed'),
+                  icon: Icons.volunteer_activism_outlined,
+                  variant: AppButtonVariant.donate,
+                  large: true,
+                  expand: true,
+                  onPressed: () => _donate(context, donatable.first, names),
+                )
+              else if (validated.isNotEmpty)
+                const AppCard(
+                  child: EmptyView(
+                    compact: true,
+                    icon: Icons.verified_outlined,
+                    title: 'Every barangay has what it needs',
+                    message: 'Thank you to everyone who gave.',
+                  ),
+                ),
+              Gaps.v16,
+              const SectionHeader(
+                'Or choose a barangay',
                 subtitle:
                     'Least supplied first. Your donation goes to the '
                     'barangay you choose.',
@@ -207,7 +270,14 @@ class EventScreen extends StatelessWidget {
                 _BarangayRow(
                   row: r,
                   onDonate: r['donatable'] == true
-                      ? () => _donate(context, r)
+                      ? () => _donate(context, r, names)
+                      : null,
+                  // Logged-in users can open the whole report.
+                  onDetails: api.loggedIn && r['report_id'] != null
+                      ? () => showReportSheet(
+                          context,
+                          (r['report_id'] as num).toInt(),
+                        )
                       : null,
                 ),
                 Gaps.v8,
@@ -249,7 +319,7 @@ class _EventHeader extends StatelessWidget {
                 Text('${e['event_name']}', style: t.titleLarge),
                 Gaps.v4,
                 Text(
-                  '${e['barangay_count']} barangays · '
+                  '${barangaysText((e['barangay_count'] as num?)?.toInt() ?? 0)} · '
                   '${e['total_families']} families'
                   '${awaiting > 0 ? ' · $awaiting awaiting validation' : ''}',
                   style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
@@ -273,7 +343,12 @@ class _EventHeader extends StatelessWidget {
 class _BarangayRow extends StatelessWidget {
   final Map row;
   final VoidCallback? onDonate;
-  const _BarangayRow({required this.row, required this.onDonate});
+  final VoidCallback? onDetails;
+  const _BarangayRow({
+    required this.row,
+    required this.onDonate,
+    this.onDetails,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -338,20 +413,35 @@ class _BarangayRow extends StatelessWidget {
               ]),
             ],
             Gaps.v12,
-            if (onDonate != null)
-              AppButton(
-                'Donate to ${r['barangay']}',
-                key: ValueKey('donate-${r['report_id']}'),
-                variant: AppButtonVariant.donate,
-                icon: Icons.volunteer_activism_outlined,
-                expand: true,
-                onPressed: onDonate,
-              )
-            else
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: StatusChip('Fulfilled'),
-              ),
+            Row(
+              children: [
+                if (onDetails != null) ...[
+                  OutlinedButton(
+                    onPressed: onDetails,
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    child: const Text('Details'),
+                  ),
+                  Gaps.h8,
+                ],
+                Expanded(
+                  child: onDonate != null
+                      ? AppButton(
+                          'Donate to ${r['barangay']}',
+                          key: ValueKey('donate-${r['report_id']}'),
+                          variant: AppButtonVariant.donate,
+                          icon: Icons.volunteer_activism_outlined,
+                          expand: true,
+                          onPressed: onDonate,
+                        )
+                      : const Align(
+                          alignment: Alignment.centerLeft,
+                          child: StatusChip('Fulfilled'),
+                        ),
+                ),
+              ],
+            ),
           ],
         ],
       ),
