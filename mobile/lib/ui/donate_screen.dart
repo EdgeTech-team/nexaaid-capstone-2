@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'disaster_art.dart';
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
 import 'form_draft.dart';
@@ -745,12 +746,17 @@ class _DonateScreenState extends State<DonateScreen> {
     final name = '${n['item_name']}';
     final at = _lineWith(id);
     if (at >= 0) {
-      AppToast.info(
-        context,
-        '$name is already in your donation (Item ${lines.length - at}). '
-        'Just change its amount there.',
+      // Shown after the cursor moves: main.dart closes messages when a text
+      // field gets focus, so showing it first would hide it at once.
+      final item = lines.length - at;
+      _reveal(
+        lines[at],
+        then: () => AppToast.info(
+          context,
+          '$name is already in your donation (Item $item). '
+          'Just change its amount there.',
+        ),
       );
-      _reveal(lines[at]);
       return;
     }
     final item = widget.names
@@ -786,8 +792,9 @@ class _DonateScreenState extends State<DonateScreen> {
     _reveal(line);
   }
 
-  /// Scrolls to an item card and puts the cursor in its quantity.
-  void _reveal(_Line l) {
+  /// Scrolls to an item card and puts the cursor in its quantity, then
+  /// runs [then] (e.g. a message, which must come after the focus).
+  void _reveal(_Line l, {VoidCallback? then}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final ctx = l.key.currentContext;
       if (ctx == null || !mounted) return;
@@ -797,7 +804,15 @@ class _DonateScreenState extends State<DonateScreen> {
         curve: Motion.curve,
         alignment: 0.1,
       ).then((_) {
-        if (mounted) l.packsFocus.requestFocus();
+        if (!mounted) return;
+        l.packsFocus.requestFocus();
+        // The focus change (and main.dart's listener) runs in a
+        // microtask; a Future runs after it.
+        if (then != null) {
+          Future(() {
+            if (mounted) then();
+          });
+        }
       });
     });
   }
@@ -932,14 +947,12 @@ class _DonateScreenState extends State<DonateScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
+          // The report's own disaster (was always a flood icon).
+          DisasterArt(
+            disasterKind(r['disaster']),
             width: 48,
             height: 48,
-            decoration: BoxDecoration(
-              color: cs.primaryContainer,
-              borderRadius: BorderRadius.circular(Radii.md),
-            ),
-            child: Icon(Icons.flood_outlined, color: cs.onPrimaryContainer),
+            borderRadius: BorderRadius.circular(Radii.md),
           ),
           Gaps.h12,
           Expanded(
@@ -972,7 +985,7 @@ class _DonateScreenState extends State<DonateScreen> {
                         DropdownMenuItem(
                           value: '${c['id']}',
                           child: Text(
-                            'Barangay ${c['barangay']} · '
+                            '${c['barangay']} · '
                             '${((c['fulfillment_percentage'] as num?) ?? 0).round()}% supplied',
                             overflow: TextOverflow.ellipsis,
                           ),

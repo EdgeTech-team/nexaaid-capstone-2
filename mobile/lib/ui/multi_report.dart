@@ -243,29 +243,38 @@ class _MultiBarangayPickerState extends State<MultiBarangayPicker> {
       builder: (field) => Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          InkWell(
-            key: const ValueKey('barangay-dropdown'),
-            borderRadius: BorderRadius.circular(Radii.md),
-            onTap: () => _open(prone),
-            child: InputDecorator(
-              isEmpty: count == 0,
-              decoration: InputDecoration(
-                labelText: 'Affected barangays',
-                hintText: 'Tap to choose barangays',
-                helperText: _locationSpecific && prone.isNotEmpty
-                    ? 'Barangays prone to $_typeName are listed first.'
-                    : 'Each barangay becomes its own report.',
-                errorText: field.errorText,
-                suffixIcon: const Icon(Icons.arrow_drop_down),
+          // A button for screen readers too ("Affected barangays, 3
+          // barangays selected").
+          Semantics(
+            button: true,
+            label: count == 0
+                ? 'Affected barangays'
+                : 'Affected barangays, ${count == 1 ? picked.first['name'] : '$count barangays selected'}',
+            excludeSemantics: true,
+            child: InkWell(
+              key: const ValueKey('barangay-dropdown'),
+              borderRadius: BorderRadius.circular(Radii.md),
+              onTap: () => _open(prone),
+              child: InputDecorator(
+                isEmpty: count == 0,
+                decoration: InputDecoration(
+                  labelText: 'Affected barangays',
+                  hintText: 'Tap to choose barangays',
+                  helperText: _locationSpecific && prone.isNotEmpty
+                      ? 'Barangays prone to $_typeName are listed first.'
+                      : 'Each barangay becomes its own report.',
+                  errorText: field.errorText,
+                  suffixIcon: const Icon(Icons.arrow_drop_down),
+                ),
+                child: count == 0
+                    ? null
+                    : Text(
+                        count == 1
+                            ? '${picked.first['name']}'
+                            : '$count barangays selected',
+                        style: t.bodyLarge,
+                      ),
               ),
-              child: count == 0
-                  ? null
-                  : Text(
-                      count == 1
-                          ? '${picked.first['name']}'
-                          : '$count barangays selected',
-                      style: t.bodyLarge,
-                    ),
             ),
           ),
           if (picked.isNotEmpty) ...[

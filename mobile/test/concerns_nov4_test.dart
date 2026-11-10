@@ -335,14 +335,32 @@ void main() {
       );
 
       // Already in the donation: not added again, and the donor is told.
+      // Same rule as main.dart: messages close when a text field gets
+      // focus, so the message must come after the cursor moves.
+      void hideOnFocus() {
+        final ctx = FocusManager.instance.primaryFocus?.context;
+        if (ctx?.findAncestorStateOfType<EditableTextState>() != null) {
+          AppToast.dismissWhere((kind) => kind != ToastKind.error);
+        }
+      }
+
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pumpAndSettle();
+      FocusManager.instance.addListener(hideOnFocus);
+      addTearDown(() => FocusManager.instance.removeListener(hideOnFocus));
       await tester.tap(find.byKey(const ValueKey('need-chip-3')));
-      await tester.pump();
+      // Scroll (250 ms), focus, then the message (not pumpAndSettle: that
+      // would also run out the message's own time on screen).
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
       expect(
-        find.textContaining(
-          'Canned Goods is already in your donation (Item 1)',
-        ),
+        find
+            .textContaining('Canned Goods is already in your donation (Item 1)')
+            .hitTestable(),
         findsOneWidget,
       );
+      AppToast.dismissAll();
       await tester.pumpAndSettle();
       expect(find.text('Item 3'), findsNothing);
 
@@ -395,9 +413,9 @@ void main() {
       await _choose(
         tester,
         find.byKey(const ValueKey('donating-to-1')),
-        'Barangay Looc · 0% supplied',
+        'Looc · 0% supplied',
       );
-      expect(find.text('Barangay Done · 100% supplied'), findsNothing);
+      expect(find.text('Done · 100% supplied'), findsNothing);
       expect(find.byKey(const ValueKey('need-chip-1')), findsNothing);
       await tester.tap(find.byKey(const ValueKey('need-chip-3')));
       await tester.pumpAndSettle();
