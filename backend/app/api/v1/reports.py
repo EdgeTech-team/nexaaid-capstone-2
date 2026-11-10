@@ -62,7 +62,7 @@ from models.sitio_model import Sitio
 from models.barangay_model import Barangay
 from models.disaster_event_model import DisasterEvent
 from services.disaster_events import event_view
-from core.notifications import notify, notify_event_many, user_ids_with_role
+from core.notifications import notify, notify_event_many, notify_many, user_ids_with_role
 from schemas.report import (
     DisasterReportCreate,
     DisasterReportUpdate,
@@ -137,11 +137,34 @@ def _notify_report_validated(db: Session, report: DisasterReport, validator_id: 
         db, officials | brgy_reps, "report_validated",
         "report", report.report_id, title=title,
     )
-    notify_event_many(
-        db, donors, "report_open_for_donations",
-        "report", report.report_id, title=title,
-    )
+    if report.event_id is None:
+        notify_event_many(
+            db, donors, "report_open_for_donations",
+            "report", report.report_id, title=title,
+        )
+    elif not _event_already_open(db, report):
+        # NF-003: donors hear about a multi-barangay disaster ONCE, when its
+        # first barangay is validated, not once per barangay (an earthquake
+        # can be 27 reports). The barangays validated later show up on the
+        # event page they already have.
+        notify_many(
+            db, donors, "report_open_for_donations",
+            "New disaster needs help",
+            f"{report.event_name}: barangays are now accepting donations. "
+            "Choose the barangay you want to help.",
+            "report", report.report_id,
+        )
     return officials | brgy_reps | donors
+
+
+def _event_already_open(db: Session, report: DisasterReport) -> bool:
+    """True when another report of the same event was validated before."""
+    return db.query(DisasterReport.report_id).filter(
+        DisasterReport.event_id == report.event_id,
+        DisasterReport.report_id != report.report_id,
+        DisasterReport.status == "Validated",
+        DisasterReport.deleted_at.is_(None),
+    ).first() is not None
 
 
 # Every role in the roles table (Scope 1). Used for Scope 2.4: "All

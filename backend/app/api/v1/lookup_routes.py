@@ -26,7 +26,7 @@ from models.delivery import Delivery
 from models.logistics_request_model import LogisticsRequest
 from models.user_rbac_model import User
 from services.fulfillment import progress_for_reports
-from services.need_templates import need_templates
+from services.need_templates import item_per_family, need_templates
 from services.units import dimension, units_for
 
 router = APIRouter(prefix="/lookups", tags=["lookups"])
@@ -110,6 +110,9 @@ def get_lookups(
             {"id": i.item_id, "name": f"{i.item_name} ({i.unit_of_measure})",
              "item_name": i.item_name, "unit": i.unit_of_measure,
              "kind": dimension(i.unit_of_measure),
+             # Suggested amount per affected family for a need the reporter
+             # adds (None = no standard yet; the form suggests 1).
+             "per_family": item_per_family(i.item_name),
              "size_units": units_for(i.unit_of_measure),
              "sizes": [{"id": z.size_id, "label": z.label, "amount": float(z.amount)}
                        for z in i.sizes]}

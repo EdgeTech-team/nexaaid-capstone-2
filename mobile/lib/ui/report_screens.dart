@@ -124,6 +124,10 @@ class NewReportScreen extends StatefulWidget {
 /// One line of the needs list: an item (or "Other"), how many, and the unit.
 class _Need {
   String? itemId; // items.item_id, or _other
+
+  /// UAT Nov 10: the amount was filled in by the app (not typed), so it
+  /// follows the families and the disaster type. Typing turns it off.
+  bool auto = false;
   final qty = TextEditingController();
   final otherName = TextEditingController();
   final otherUnit = TextEditingController();
@@ -206,6 +210,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
         {
           'item_id': n.itemId,
           'qty': n.qty.text,
+          'auto': n.auto,
           'other_name': n.otherName.text,
           'other_unit': n.otherUnit.text,
         },
@@ -260,6 +265,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
       final need = _Need()
         ..itemId = id == _other || known('items', id) ? id : null;
       need.qty.text = m.str('qty');
+      need.auto = m['auto'] == true;
       need.otherName.text = m.str('other_name');
       need.otherUnit.text = m.str('other_unit');
       restored.add(need);
@@ -393,41 +399,61 @@ class _NewReportScreenState extends State<NewReportScreen> {
   void _applyTemplate(Names names) {
     final t = _templateFor(names);
     if (t == null) return;
-    final fams = int.tryParse(families.text.trim()) ?? 0;
     needs
       ..clear()
       ..addAll([
         for (final line in (t['items'] as List).cast<Map>())
-          _Need()
-            ..itemId = '${line['item_id']}'
-            // NF-003: several barangays take the amounts per family; each
-            // barangay's total is worked out when submitting.
-            ..qty.text = multi
-                ? formatPerFamily(line['per_family'] as num)
-                : fams > 0
-                ? '${((line['per_family'] as num) * fams).ceil().clamp(1, maxEstimatedQuantity)}'
-                : '',
+          _Need()..itemId = '${line['item_id']}',
       ]);
+    for (final n in needs) {
+      _autoFill(n, names);
+    }
     _templateSnapshot = _needsSnapshot;
   }
 
-  /// UAT post-meeting #6: every preset item gets an amount. Needs of the
-  /// disaster type's preset that still have no amount are filled in (per
-  /// family x affected families, rounded up); amounts the reporter typed
-  /// are never changed.
-  void _fillBlankAmounts(Names names) {
+  /// How much of an item one affected family gets, in hundredths (600 = 6,
+  /// 10 = 0.1): the disaster type's preset amount, else the item's general
+  /// amount (/lookups items.per_family), else 1 per family.
+  int _perFamily(_Need n, Names names) {
+    if (n.itemId == null || n.itemId == _other) return 100;
     final t = _templateFor(names);
-    final fams = int.tryParse(families.text.trim()) ?? 0;
-    if (t == null || fams <= 0 || multi) return;
-    final perFamily = {
-      for (final line in (t['items'] as List).cast<Map>())
-        '${line['item_id']}': line['per_family'] as num,
-    };
-    for (final n in needs) {
-      final amount = perFamily[n.itemId];
-      if (amount != null && n.qty.text.trim().isEmpty) {
-        n.qty.text = '${(amount * fams).ceil().clamp(1, maxEstimatedQuantity)}';
+    for (final line in (t?['items'] as List? ?? const []).cast<Map>()) {
+      if ('${line['item_id']}' == n.itemId) {
+        return hundredthsOf(line['per_family'] as num);
       }
+    }
+    for (final it in names.rows('items')) {
+      if ('${it['id']}' == n.itemId && it['per_family'] is num) {
+        return hundredthsOf(it['per_family'] as num);
+      }
+    }
+    return 100;
+  }
+
+  /// UAT Nov 10: fills a need's amount by itself.
+  ///   One barangay:      ceil(affected families x per family)
+  ///   Several barangays: the per-family amount; each barangay's total is
+  ///                      ceil(its families x per family) (see _multiNeeds).
+  /// Only for a need with an item and an amount the reporter did not type.
+  void _autoFill(_Need n, Names names) {
+    if (n.itemId == null) return;
+    if (!n.auto && n.qty.text.trim().isNotEmpty) return; // typed: keep it
+    final pf = _perFamily(n, names);
+    if (multi) {
+      n.qty.text = formatPerFamily(pf / 100);
+    } else {
+      final fams = int.tryParse(families.text.trim()) ?? 0;
+      n.qty.text = fams > 0
+          ? '${barangayQuantity(fams, pf).clamp(1, maxEstimatedQuantity)}'
+          : '';
+    }
+    n.auto = true;
+  }
+
+  /// Every amount the app filled follows the new families / type.
+  void _refillAuto(Names names) {
+    for (final n in needs) {
+      _autoFill(n, names);
     }
   }
 
@@ -611,26 +637,76 @@ class _NewReportScreenState extends State<NewReportScreen> {
   /// are cleared so nothing is sent with the wrong meaning.
   void _setMulti(bool value, Names names) {
     if (value == multi) return;
-    final untouched = _needsUntouched;
+    // A typed amount means something else in the other mode (a total vs
+    // per family), so every amount is suggested again from the per-family
+    // standard; the reporter is told when typed ones were replaced.
+    final typed = needs.any((n) => !n.auto && n.qty.text.trim().isNotEmpty);
     setState(() {
       multi = value;
-      if (untouched && _templateFor(names) != null) {
-        _applyTemplate(names);
-      } else {
-        for (final n in needs) {
-          n.qty.clear();
-        }
+      for (final n in needs) {
+        n.auto = true;
       }
+      _refillAuto(names);
     });
     _saveDraft();
-    if (!untouched) {
+    if (typed) {
       AppToast.info(
         context,
         value
-            ? 'Amounts are now per family. Type them again.'
-            : 'Amounts are now totals. Type them again.',
+            ? 'Amounts are now per family and were filled in again. '
+                  'Check them.'
+            : 'Amounts are now totals and were filled in again. Check them.',
       );
     }
+  }
+
+  /// "Several barangays": one barangay's totals, e.g. "Rice 720 kg ·
+  /// Drinking Water 2,400 L" (families x per family, rounded up).
+  String? _barangayPreview(int families, Names names) {
+    final parts = [
+      for (final n in needs)
+        if (n.itemId != null && perFamilyHundredths(n.qty.text) != null)
+          '${_needName(n, names)} '
+                  '${withCommas(barangayQuantity(families, perFamilyHundredths(n.qty.text)!))} '
+                  '${_needUnit(n, names)}'
+              .trim(),
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  /// "Several barangays": under a need, its total for all the barangays
+  /// and the equation, e.g. "Total 1,440 kg = 120 × 6 + 80 × 6 + 40 × 6".
+  Widget _multiTotalLine(_Need n, Names names) {
+    final pf = perFamilyHundredths(n.qty.text);
+    final rows = _multiFamilies;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    if (pf == null || rows.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(
+          'Each barangay gets its families × this amount, rounded up.',
+          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+      );
+    }
+    final unit = _needUnit(n, names);
+    final total = rows.fold<int>(
+      0,
+      (a, r) => a + barangayQuantity(r.value, pf),
+    );
+    final each = formatPerFamily(pf / 100);
+    final equation = rows.length <= 4
+        ? rows.map((r) => '${r.value} × $each').join(' + ')
+        : '${rows.length} barangays × their families × $each';
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Text(
+        'Total ${withCommas(total)} $unit = $equation'.trim(),
+        key: ValueKey('need-total-${n.itemId}'),
+        style: t.bodySmall?.copyWith(color: cs.primary),
+      ),
+    );
   }
 
   /// UAT post-meeting #6: when something is missing, say what in a pop-up
@@ -973,7 +1049,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                         child: Text('Other…'),
                       ),
                     ],
-                    onChanged: (v) => setState(() => n.itemId = v),
+                    onChanged: (v) => setState(() {
+                      n.itemId = v;
+                      _autoFill(n, names);
+                    }),
                     validator: (v) {
                       if (v == null) return 'Choose an item';
                       if (v == _other) return null; // checked on the name
@@ -1043,7 +1122,14 @@ class _NewReportScreenState extends State<NewReportScreen> {
               validator: multi
                   ? perFamilyError
                   : _wholeNumber(maxEstimatedQuantity),
+              // Typed by the reporter: no longer follows the families.
+              // Cleared: filled in again by the app.
+              onChanged: (v) => setState(() {
+                n.auto = v.trim().isEmpty;
+                if (n.auto) _autoFill(n, names);
+              }),
             ),
+            if (multi && n.itemId != null) _multiTotalLine(n, names),
           ],
         ),
       ),
@@ -1171,7 +1257,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 onChanged: (v) => setState(() {
                   final untouched = _needsUntouched;
                   typeId = v;
-                  if (untouched) _applyTemplate(names);
+                  if (untouched) {
+                    _applyTemplate(names);
+                  } else {
+                    // Changed list: kept, but amounts the app filled follow
+                    // the new type's per-family standard.
+                    _refillAuto(names);
+                  }
                 }),
               ),
               if (_typeIsOther(names)) ...[
@@ -1222,6 +1314,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   typeId: typeId,
                   rows: multiRows,
                   maxFamilies: maxAffectedFamilies,
+                  preview: (families) => _barangayPreview(families, names),
                   onChanged: () {
                     setState(() {});
                     _saveDraft();
@@ -1302,16 +1395,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
                         'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
                   ),
                   validator: _wholeNumber(maxAffectedFamilies),
-                  onChanged: (_) {
-                    if (_templateSnapshot != null &&
-                        _needsSnapshot == _templateSnapshot) {
-                      setState(() => _applyTemplate(names));
-                    } else {
-                      // UAT #6: the reporter changed some needs, so the
-                      // list is kept; only amounts still blank are filled.
-                      setState(() => _fillBlankAmounts(names));
-                    }
-                  },
+                  // UAT Nov 10: every need the app filled (preset or added)
+                  // follows the families; typed amounts stay.
+                  onChanged: (_) => setState(() => _refillAuto(names)),
                 ),
               ],
               const SectionTitle('Assistance needed'),

@@ -43,7 +43,8 @@ final _server = MockClient((req) async {
 
 class _Harness extends StatefulWidget {
   final String typeId;
-  const _Harness(this.typeId);
+  final BarangayPreview? preview;
+  const _Harness(this.typeId, {this.preview});
 
   @override
   State<_Harness> createState() => _HarnessState();
@@ -60,6 +61,7 @@ class _HarnessState extends State<_Harness> {
         typeId: widget.typeId,
         rows: rows,
         maxFamilies: 20000,
+        preview: widget.preview,
         onChanged: () => setState(() {}),
       ),
     ),
@@ -148,25 +150,56 @@ void main() {
     });
   });
 
-  testWidgets('"All barangays" adds a families field for each barangay', (
-    tester,
-  ) async {
+  testWidgets('the barangay dropdown opens a checklist; "Select all" adds a '
+      'families field for each, with that barangay\'s totals', (tester) async {
     await tester.pumpWidget(
-      MaterialApp(theme: AppTheme.light(), home: const _Harness('1')),
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: _Harness(
+          '1',
+          preview: (families) => 'Rice ${barangayQuantity(families, 600)} kg',
+        ),
+      ),
     );
-    await tester.tap(find.text('All barangays'));
+    await tester.tap(find.byKey(const ValueKey('barangay-dropdown')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Select all barangays'));
+    await tester.pump();
+    await tester.tap(find.text('Done (3 selected)'));
     await tester.pumpAndSettle();
     final state = tester.state<_HarnessState>(find.byType(_Harness));
     expect(state.rows.keys, unorderedEquals(['10', '11', '12']));
+    expect(find.text('3 barangays selected'), findsOneWidget);
     expect(find.widgetWithText(TextFormField, 'Families'), findsNWidgets(3));
+
+    // Typing the families shows that barangay's totals right away.
+    await tester.enterText(find.byKey(const ValueKey('families-10')), '120');
+    await tester.pump();
+    expect(find.text('Rice 720 kg'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Remove Looc'));
     await tester.pumpAndSettle();
     expect(state.rows.keys, unorderedEquals(['10', '12']));
+
+    // Search narrows the checklist; unticking removes, what was typed stays.
+    await tester.tap(find.byKey(const ValueKey('barangay-dropdown')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('barangay-search')),
+      'taw',
+    );
+    await tester.pump();
+    expect(find.byKey(const ValueKey('check-10')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('check-12')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('add-barangays')));
+    await tester.pumpAndSettle();
+    expect(state.rows.keys, ['10']);
+    expect(state.rows['10']!.text, '120');
   });
 
-  testWidgets('for a location-specific type: "All prone barangays", and a '
-      'soft warning for any other one', (tester) async {
+  testWidgets('for a location-specific type: "Select all prone barangays", '
+      'and one "Continue?" for the barangays not tagged', (tester) async {
     await http.runWithClient(() async {
       await tester.pumpWidget(
         MaterialApp(theme: AppTheme.light(), home: const _Harness('2')),
@@ -174,17 +207,32 @@ void main() {
       await tester.pumpAndSettle();
       final state = tester.state<_HarnessState>(find.byType(_Harness));
 
-      await tester.tap(find.text('All prone barangays'));
+      await tester.tap(find.byKey(const ValueKey('barangay-dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Select all prone barangays'));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('add-barangays')));
       await tester.pumpAndSettle();
       expect(state.rows.keys, unorderedEquals(['10', '12']));
+      expect(find.text('Barangay not tagged'), findsNothing);
 
-      // Looc is not prone: the dialog asks, and "Continue" adds it.
-      await tester.tap(find.text('Looc'));
+      // Looc is not prone: one question; "Choose again" goes back, then
+      // "Continue" adds it. Never blocked.
+      await tester.tap(find.byKey(const ValueKey('barangay-dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('check-11')));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('add-barangays')));
       await tester.pumpAndSettle();
       expect(find.text('Barangay not tagged'), findsOneWidget);
+      expect(
+        find.text('Looc is not tagged as prone to Landslide. Continue?'),
+        findsOneWidget,
+      );
       await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
       expect(state.rows.keys, contains('11'));
+      expect(find.text('Not tagged as prone to Landslide'), findsOneWidget);
     }, () => _server);
   });
 }

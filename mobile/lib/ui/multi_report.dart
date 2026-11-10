@@ -48,6 +48,13 @@ int? perFamilyHundredths(String text) {
 int barangayQuantity(int families, int hundredths) =>
     (families * hundredths + 99) ~/ 100;
 
+/// A per-family amount from the server (6, 0.1, 0.25) in hundredths.
+int hundredthsOf(num value) => (value * 100).round();
+
+/// "1,440" (thousands separators for the totals).
+String withCommas(int n) =>
+    n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
+
 /// 6 -> "6", 0.1 -> "0.1", 0.25 -> "0.25" (template amounts in the form).
 String formatPerFamily(num value) {
   final hundredths = (value * 100).round();
@@ -77,17 +84,26 @@ final perFamilyInput = <TextInputFormatter>[
 /// barangay id -> affected families field.
 typedef BarangayRows = Map<String, TextEditingController>;
 
-/// The barangay part of the form in "Several barangays" mode: chips to pick
-/// barangays (prone ones first and tagged for a location-specific type,
-/// NF-004 soft warning kept), an "All barangays" shortcut, and one
-/// "Affected families" field per picked barangay. A barangay left blank or
-/// at 0 is not submitted.
+/// One barangay's totals as a short line, e.g. "Rice 720 kg · Water 2,400 L"
+/// (null = nothing to show yet). Given by the report form.
+typedef BarangayPreview = String? Function(int families);
+
+/// The barangay part of the form in "Several barangays" mode.
+///
+/// "Affected barangays" looks like a dropdown; tapping it opens a checklist
+/// with a search box and "Select all" ("Select all prone" for a
+/// location-specific type, prone barangays first and tagged). The picked
+/// barangays come back as rows with an "Affected families" field and, once
+/// the families are typed, that barangay's totals. A barangay left blank or
+/// at 0 is not submitted. A barangay not tagged as prone is never blocked:
+/// one "Continue?" asks about all of them together (NF-004 soft warning).
 class MultiBarangayPicker extends StatefulWidget {
   final Names names;
   final String? typeId;
   final BarangayRows rows;
   final VoidCallback onChanged;
   final int maxFamilies;
+  final BarangayPreview? preview;
   const MultiBarangayPicker({
     super.key,
     required this.names,
@@ -95,6 +111,7 @@ class MultiBarangayPicker extends StatefulWidget {
     required this.rows,
     required this.onChanged,
     required this.maxFamilies,
+    this.preview,
   });
 
   @override
@@ -131,55 +148,76 @@ class _MultiBarangayPickerState extends State<MultiBarangayPicker> {
         };
       });
 
-  void _add(String id) {
-    widget.rows.putIfAbsent(id, TextEditingController.new);
-    widget.onChanged();
-  }
+  List<Map<String, dynamic>> _sorted(Set<String> prone) =>
+      widget.names.rows('barangays')..sort((a, b) {
+        final pa = prone.contains('${a['id']}') ? 0 : 1;
+        final pb = prone.contains('${b['id']}') ? 0 : 1;
+        return pa != pb ? pa - pb : '${a['name']}'.compareTo('${b['name']}');
+      });
 
   void _remove(String id) {
     widget.rows.remove(id)?.dispose();
     widget.onChanged();
   }
 
-  void _addAll(Iterable<String> ids) {
-    for (final id in ids) {
+  /// Keeps what was typed for barangays that stay picked.
+  void _apply(Set<String> picked) {
+    for (final id in widget.rows.keys.toList()) {
+      if (!picked.contains(id)) widget.rows.remove(id)?.dispose();
+    }
+    for (final id in picked) {
       widget.rows.putIfAbsent(id, TextEditingController.new);
     }
     widget.onChanged();
   }
 
-  void _clear() {
-    for (final c in widget.rows.values) {
-      c.dispose();
-    }
-    widget.rows.clear();
-    widget.onChanged();
-  }
-
-  Future<void> _pick(String id, Set<String> prone) async {
-    if (!_locationSpecific || prone.isEmpty || prone.contains(id)) {
-      _add(id);
-      return;
-    }
-    final name = widget.names.of('barangays', id);
-    final ok = await showDialog<bool>(
+  Future<void> _open(Set<String> prone) async {
+    final tagged = _locationSpecific && prone.isNotEmpty;
+    final all = _sorted(prone);
+    final picked = await showDialog<Set<String>>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Barangay not tagged'),
-        content: Text('$name is not tagged as prone to $_typeName. Continue?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Choose another'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Continue'),
-          ),
-        ],
+      builder: (ctx) => _BarangayChecklist(
+        barangays: all,
+        prone: tagged ? prone : const {},
+        typeName: _typeName,
+        initial: widget.rows.keys.toSet(),
       ),
     );
-    if (ok == true && mounted) _add(id);
+    if (picked == null || !mounted) return;
+    final untagged = [
+      for (final b in all)
+        if (tagged &&
+            picked.contains('${b['id']}') &&
+            !widget.rows.containsKey('${b['id']}') &&
+            !prone.contains('${b['id']}'))
+          '${b['name']}',
+    ];
+    if (untagged.isNotEmpty) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Barangay not tagged'),
+          content: Text(
+            '${untagged.join(', ')} '
+            '${untagged.length == 1 ? 'is' : 'are'} not tagged as prone to '
+            '$_typeName. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Choose again'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (ok != true) return _open(prone);
+    }
+    _apply(picked);
   }
 
   @override
@@ -194,119 +232,260 @@ class _MultiBarangayPickerState extends State<MultiBarangayPicker> {
   Widget _body(Set<String> prone) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final all = widget.names.rows('barangays')
-      ..sort((a, b) {
-        final pa = prone.contains('${a['id']}') ? 0 : 1;
-        final pb = prone.contains('${b['id']}') ? 0 : 1;
-        return pa != pb ? pa - pb : '${a['name']}'.compareTo('${b['name']}');
-      });
-    final tagged = _locationSpecific && prone.isNotEmpty;
     final picked = [
-      for (final b in all)
+      for (final b in _sorted(prone))
         if (widget.rows.containsKey('${b['id']}')) b,
     ];
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          tagged
-              ? 'Affected barangays. Barangays prone to $_typeName come first.'
-              : 'Affected barangays',
-          style: t.titleSmall,
-        ),
-        Gaps.v8,
-        Wrap(
-          spacing: Space.xs,
-          runSpacing: Space.xs,
-          children: [
-            ActionChip(
-              key: const ValueKey('all-barangays'),
-              avatar: const Icon(Icons.select_all, size: 18),
-              label: Text(tagged ? 'All prone barangays' : 'All barangays'),
-              onPressed: () => _addAll([
-                for (final b in all)
-                  if (!tagged || prone.contains('${b['id']}')) '${b['id']}',
-              ]),
-            ),
-            if (widget.rows.isNotEmpty)
-              ActionChip(
-                avatar: const Icon(Icons.clear_all, size: 18),
-                label: const Text('Clear'),
-                onPressed: _clear,
+    final count = picked.length;
+    return FormField<int>(
+      // Re-checked on submit: at least 2 barangays with families.
+      validator: (_) => count == 0 ? 'Choose the affected barangays' : null,
+      builder: (field) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            key: const ValueKey('barangay-dropdown'),
+            borderRadius: BorderRadius.circular(Radii.md),
+            onTap: () => _open(prone),
+            child: InputDecorator(
+              isEmpty: count == 0,
+              decoration: InputDecoration(
+                labelText: 'Affected barangays',
+                hintText: 'Tap to choose barangays',
+                helperText: _locationSpecific && prone.isNotEmpty
+                    ? 'Barangays prone to $_typeName are listed first.'
+                    : 'Each barangay becomes its own report.',
+                errorText: field.errorText,
+                suffixIcon: const Icon(Icons.arrow_drop_down),
               ),
-          ],
-        ),
-        Gaps.v8,
-        Wrap(
-          spacing: Space.xs,
-          runSpacing: Space.xs,
-          children: [
-            for (final b in all)
-              FilterChip(
-                key: ValueKey('brgy-chip-${b['id']}'),
-                label: Text(
-                  tagged && prone.contains('${b['id']}')
-                      ? '${b['name']} · prone'
-                      : '${b['name']}',
-                ),
-                selected: widget.rows.containsKey('${b['id']}'),
-                onSelected: (on) =>
-                    on ? _pick('${b['id']}', prone) : _remove('${b['id']}'),
-              ),
-          ],
-        ),
-        if (picked.isNotEmpty) ...[
-          Gaps.v16,
-          Text('Affected families per barangay', style: t.titleSmall),
-          Text(
-            'Leave a barangay blank to skip it. Each one becomes its own '
-            'report.',
-            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-          ),
-          Gaps.v8,
-          for (final b in picked)
-            Padding(
-              key: ValueKey('fam-row-${b['id']}'),
-              padding: const EdgeInsets.only(bottom: Space.xs),
-              child: Row(
-                children: [
-                  Expanded(
-                    flex: 3,
-                    child: Text('${b['name']}', style: t.bodyLarge),
-                  ),
-                  Expanded(
-                    flex: 2,
-                    child: TextFormField(
-                      key: ValueKey('families-${b['id']}'),
-                      controller: widget.rows['${b['id']}'],
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(6),
-                      ],
-                      decoration: const InputDecoration(
-                        labelText: 'Families',
-                        isDense: true,
-                      ),
-                      onChanged: (_) => widget.onChanged(),
-                      validator: (v) {
-                        final n = int.tryParse((v ?? '').trim());
-                        if (n == null || n == 0) return null; // skipped
-                        return n > widget.maxFamilies
-                            ? 'Max ${widget.maxFamilies}'
-                            : null;
-                      },
+              child: count == 0
+                  ? null
+                  : Text(
+                      count == 1
+                          ? '${picked.first['name']}'
+                          : '$count barangays selected',
+                      style: t.bodyLarge,
                     ),
+            ),
+          ),
+          if (picked.isNotEmpty) ...[
+            Gaps.v16,
+            Text('Affected families per barangay', style: t.titleSmall),
+            Text(
+              'Leave a barangay blank to skip it.',
+              style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            Gaps.v8,
+            for (final b in picked) _row(b, prone),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _row(Map b, Set<String> prone) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final id = '${b['id']}';
+    final controller = widget.rows[id]!;
+    final families = int.tryParse(controller.text.trim()) ?? 0;
+    final preview = families > 0 ? widget.preview?.call(families) : null;
+    final untagged =
+        _locationSpecific && prone.isNotEmpty && !prone.contains(id);
+    return Padding(
+      key: ValueKey('fam-row-$id'),
+      padding: const EdgeInsets.only(bottom: Space.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${b['name']}', style: t.bodyLarge),
+                    if (untagged)
+                      Text(
+                        'Not tagged as prone to $_typeName',
+                        style: t.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: TextFormField(
+                  key: ValueKey('families-$id'),
+                  controller: controller,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(6),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Families',
+                    isDense: true,
                   ),
-                  IconButton(
-                    tooltip: 'Remove ${b['name']}',
-                    onPressed: () => _remove('${b['id']}'),
-                    icon: const Icon(Icons.close),
-                  ),
-                ],
+                  onChanged: (_) => widget.onChanged(),
+                  validator: (v) {
+                    final n = int.tryParse((v ?? '').trim());
+                    if (n == null || n == 0) return null; // skipped
+                    return n > widget.maxFamilies
+                        ? 'Max ${widget.maxFamilies}'
+                        : null;
+                  },
+                ),
+              ),
+              IconButton(
+                tooltip: 'Remove ${b['name']}',
+                onPressed: () => _remove(id),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+          if (preview != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2, right: 48),
+              child: Text(
+                preview,
+                key: ValueKey('preview-$id'),
+                style: t.bodySmall?.copyWith(color: cs.primary),
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// The checklist behind "Affected barangays": search, select all (or all
+/// prone), one checkbox per barangay. Returns the picked ids, or null.
+class _BarangayChecklist extends StatefulWidget {
+  final List<Map<String, dynamic>> barangays;
+  final Set<String> prone; // empty = general type, no tags
+  final String typeName;
+  final Set<String> initial;
+  const _BarangayChecklist({
+    required this.barangays,
+    required this.prone,
+    required this.typeName,
+    required this.initial,
+  });
+
+  @override
+  State<_BarangayChecklist> createState() => _BarangayChecklistState();
+}
+
+class _BarangayChecklistState extends State<_BarangayChecklist> {
+  late final Set<String> picked = {...widget.initial};
+  String query = '';
+
+  bool get _tagged => widget.prone.isNotEmpty;
+
+  /// What "Select all" picks: every barangay, or every prone one.
+  Set<String> get _allIds => {
+    for (final b in widget.barangays)
+      if (!_tagged || widget.prone.contains('${b['id']}')) '${b['id']}',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final shown = [
+      for (final b in widget.barangays)
+        if ('${b['name']}'.toLowerCase().contains(query.toLowerCase())) b,
+    ];
+    final allIds = _allIds;
+    final allOn = allIds.isNotEmpty && picked.containsAll(allIds);
+    return AlertDialog(
+      title: const Text('Affected barangays'),
+      contentPadding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      content: SizedBox(
+        width: 420,
+        height: MediaQuery.sizeOf(context).height * 0.6,
+        child: Column(
+          children: [
+            TextField(
+              key: const ValueKey('barangay-search'),
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Search barangay',
+                isDense: true,
+              ),
+              onChanged: (v) => setState(() => query = v.trim()),
+            ),
+            CheckboxListTile(
+              key: const ValueKey('select-all'),
+              value: allOn,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: Text(
+                _tagged ? 'Select all prone barangays' : 'Select all barangays',
+                style: t.titleSmall,
+              ),
+              subtitle: Text('${allIds.length} barangays'),
+              onChanged: (on) => setState(() {
+                if (on == true) {
+                  picked.addAll(allIds);
+                } else {
+                  picked.removeAll(allIds);
+                }
+              }),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final b in shown)
+                    CheckboxListTile(
+                      key: ValueKey('check-${b['id']}'),
+                      dense: true,
+                      value: picked.contains('${b['id']}'),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: Text('${b['name']}'),
+                      subtitle: !_tagged
+                          ? null
+                          : widget.prone.contains('${b['id']}')
+                          ? Text(
+                              'Prone to ${widget.typeName}',
+                              style: TextStyle(color: cs.primary),
+                            )
+                          : const Text('Not tagged'),
+                      onChanged: (on) => setState(() {
+                        if (on == true) {
+                          picked.add('${b['id']}');
+                        } else {
+                          picked.remove('${b['id']}');
+                        }
+                      }),
+                    ),
+                  if (shown.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.all(Space.md),
+                      child: Text('No barangay matches.'),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const ValueKey('add-barangays'),
+          onPressed: () => Navigator.pop(context, picked),
+          child: Text(
+            picked.isEmpty ? 'Done' : 'Done (${picked.length} selected)',
+          ),
+        ),
       ],
     );
   }
