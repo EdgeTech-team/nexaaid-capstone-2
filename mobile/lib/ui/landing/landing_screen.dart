@@ -219,7 +219,7 @@ class _LandingScreenState extends State<LandingScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                           // Oct 26 redesign: teal hero with the most urgent
+                          // Oct 26 redesign: teal hero with the most urgent
                           // reports, About with photos, four trust cards.
                           LandingHeroBanner(
                             reports: data?.reports ?? const [],
@@ -390,6 +390,7 @@ class _LandingScreenState extends State<LandingScreen> {
       barangay: '${r['barangay'] ?? '-'}',
       status: 'Validated',
       priority: r['priority_level'] as String?,
+      eventName: r['event_name'] as String?,
       affectedFamilies: (r['affected_families'] as num?)?.toInt(),
       assistanceNeeded: needs.isEmpty ? null : needs,
       description: description.isEmpty ? null : description,

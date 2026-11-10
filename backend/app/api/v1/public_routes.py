@@ -31,6 +31,7 @@ def public_reports(db: Session = Depends(get_db)):
         .options(
             joinedload(DisasterReport.fulfillment),
             joinedload(DisasterReport.disaster_type),
+            joinedload(DisasterReport.event),
         )
         .filter(DisasterReport.status == "Validated")
         .order_by(DisasterReport.report_id.desc())
@@ -48,6 +49,10 @@ def public_reports(db: Session = Depends(get_db)):
             "report_id": r.report_id,
             "disaster": r.disaster_label(types),
             "barangay": barangays.get(r.barangay_id, "Barangay"),
+            # NF-003: the multi-barangay event, so a guest can switch to
+            # another barangay of the same disaster on the donate form.
+            "event_id": r.event_id,
+            "event_name": r.event_name,
             "sitio": ", ".join(r.sitio_names) or None,
             "sitios": r.sitio_names,
             "priority_level": r.priority_level,

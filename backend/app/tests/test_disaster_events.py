@@ -215,6 +215,10 @@ def test_lookups_publish_the_event_of_each_validated_report(ev):
     published = {r["id"]: r for r in ok(client.get("/lookups"))["validated_reports"]}
     assert published[rid]["event_id"] == out["event"]["event_id"]
     assert published[rid]["event_name"] == out["event"]["event_name"]
+    # The guest landing page gets it too (GET /public/reports).
+    public = {r["id"]: r for r in ok(client.get("/public/reports"))}
+    assert public[rid]["event_id"] == out["event"]["event_id"]
+    assert public[rid]["event_name"] == out["event"]["event_name"]
 
 
 def test_a_donation_counts_only_for_its_own_report(ev):
