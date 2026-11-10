@@ -40,18 +40,38 @@ sets), from the same UAT meeting.
 
 - "One barangay" / "Several barangays" switch under the disaster type
   (new reports only; not SMS encoding or corrections).
-- Several barangays: tap barangay chips, or **All barangays** (general
-  types) / **All prone barangays** (location-specific types, NF-004). A
-  non-prone barangay still asks "not tagged as prone… Continue?" and is
-  never blocked.
-- One "Families" field per picked barangay. Blank or 0 = skipped.
-- The needs are entered once, **per family** (up to 2 decimals, e.g. 0.2 =
-  1 per 5 families). The preset fills them from `need_templates`.
-- Each barangay's amount = ceil(families × per family), worked out in the
-  app; the server only receives whole numbers.
-- A review dialog lists every barangay's totals; the button reads
-  "Submit N reports". The event name defaults to "<Type> – <date>" and can
-  be typed.
+- Several barangays: the **Affected barangays** field looks like a
+  dropdown; it opens a checklist with a search box and **Select all
+  barangays** (general types) or **Select all prone barangays**
+  (location-specific types, NF-004; prone ones first and tagged). Picking a
+  barangay not tagged as prone asks one "…not tagged as prone… Continue?"
+  for all of them together and is never blocked.
+- One "Families" field per picked barangay. Blank or 0 = skipped. Under
+  each one, that barangay's totals appear as soon as the families are
+  typed (e.g. "Rice 720 kg · Drinking Water 2,400 L").
+
+### How amounts fill in (UAT Nov 10)
+
+Every need fills itself, the preset ones and the ones the reporter adds:
+
+| | Per-family amount used |
+|---|---|
+| 1st | the disaster type's preset (`services/need_templates.py`) |
+| 2nd | the item's own standard, `/lookups` `items[].per_family` (`ITEM_PER_FAMILY`) |
+| 3rd | 1 per family (no standard yet, or an "Other" item) |
+
+- **One barangay:** amount = ceil(affected families × per family).
+- **Several barangays:** the field holds the per-family amount (up to 2
+  decimals); each barangay's amount = ceil(its families × per family),
+  rounded up per barangay. Under each need: the total for all barangays
+  and the equation, e.g. "Total 1,440 kg = 120 × 6 + 80 × 6 + 40 × 6".
+- An amount the app filled follows the families and the disaster type.
+  Once the reporter types an amount it is kept; clearing it fills it in
+  again. Switching between one and several barangays fills every amount
+  again in the new meaning (total vs per family) and says so.
+- The app sends whole numbers; the server never multiplies.
+- The review dialog lists each barangay's totals; the button reads
+  "Submit N reports". The event name defaults to "<Type> – <date>".
 
 ## API
 
@@ -76,6 +96,17 @@ sets), from the same UAT meeting.
   `/lookups` `validated_reports`.
 
 ## Donor side
+
+- Donors get **one** notification per event ("New disaster needs help:
+  <event>: barangays are now accepting donations"), when its first
+  barangay is validated; barangays validated later appear on the event
+  page. Single-barangay reports notify as before.
+- The event page opens with **Donate where it's needed most: <barangay>**
+  (the lowest fulfillment), then every barangay with its own Donate,
+  Details (logged-in), "Fulfilled", or "Awaiting validation".
+- Every place that shows one report of an event says **Part of <event>**
+  with **See all barangays**: donor Reports tab cards and details, the
+  report sheet opened from a notification, and the guest pop-out.
 
 - Dashboard "Barangays that need help" and the newsfeed show an event as
   **one card** ("Earthquake – Nov 9, 2026 · 3 barangays · 240 families")

@@ -9,6 +9,7 @@ import 'donor_dashboard.dart';
 import 'home_nav.dart';
 import 'ops_screens.dart' show NewDeliveryScreen, showCmoEntryPopout;
 import 'report_summary_card.dart' show NeedChips;
+import 'event_screen.dart' show EventLink;
 import 'widgets.dart';
 
 /// Where each notification opens (Oct 11 notes, Jenises): always the page
@@ -320,6 +321,8 @@ class ReportSheet extends StatelessWidget {
             'Report #${report['report_id']} · reported ${niceDate(report['created_at'])}',
             style: t.bodyMedium?.copyWith(color: Brand.muted),
           ),
+          // NF-003: e.g. from the "New disaster needs help" notice.
+          if (status == 'Validated') EventLink(report),
           const SizedBox(height: 16),
 
           // Status in plain words.

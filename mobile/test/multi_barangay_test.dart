@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/event_screen.dart';
 import 'package:mobile/ui/multi_report.dart';
@@ -234,5 +235,84 @@ void main() {
       expect(state.rows.keys, contains('11'));
       expect(find.text('Not tagged as prone to Landslide'), findsOneWidget);
     }, () => _server);
+  });
+
+  testWidgets('event page: donate where it is needed most, every barangay '
+      'with its own Donate, and no details for one not validated yet', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final server = MockClient((req) async {
+      final body = switch (req.url.path) {
+        '/reports/events/7' => {
+          'event_id': 7,
+          'event_name': 'Earthquake – Nov 10, 2026',
+          'disaster': 'Earthquake',
+          'barangay_count': 2,
+          'total_families': 200,
+          'fulfillment_percentage': 60.0,
+          'priority_level': 'High',
+          'awaiting_count': 1,
+          'reports': [
+            {
+              'report_id': 2,
+              'barangay': 'Looc',
+              'status': 'Validated',
+              'affected_families': 80,
+              'fulfillment_percentage': 0,
+              'top_needs': [
+                {'item_name': 'Rice', 'unit': 'kg', 'still_needed': 480},
+              ],
+              'donatable': true,
+            },
+            {
+              'report_id': 1,
+              'barangay': 'Casili',
+              'status': 'Validated',
+              'affected_families': 120,
+              'fulfillment_percentage': 100,
+              'top_needs': <Object>[],
+              'donatable': false,
+            },
+            {'barangay': 'Tawason', 'status': 'Awaiting validation'},
+          ],
+        },
+        '/lookups' => {
+          'validated_reports': [
+            {'id': 1, 'barangay': 'Casili', 'event_id': 7},
+            {'id': 2, 'barangay': 'Looc', 'event_id': 7},
+          ],
+        },
+        _ => null,
+      };
+      return body == null
+          ? http.Response(jsonEncode({'detail': 'not mocked'}), 404)
+          : http.Response(
+              jsonEncode(body),
+              200,
+              // The event name has an en dash: UTF-8, not Latin-1.
+              headers: {'content-type': 'application/json; charset=utf-8'},
+            );
+    });
+    await http.runWithClient(() async {
+      Api.instance.refreshLookups();
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: const EventScreen(eventId: 7),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Earthquake – Nov 10, 2026'), findsOneWidget);
+      expect(find.text("Donate where it's needed most: Looc"), findsOneWidget);
+      expect(find.text('Donate to Looc'), findsOneWidget);
+      expect(find.text('Donate to Casili'), findsNothing); // fulfilled
+      expect(find.text('Rice: 480 kg'), findsOneWidget);
+      expect(find.text('Barangay Tawason'), findsOneWidget);
+      expect(find.textContaining('Awaiting validation'), findsOneWidget);
+      expect(find.text('Details'), findsNothing); // guest
+    }, () => server);
   });
 }

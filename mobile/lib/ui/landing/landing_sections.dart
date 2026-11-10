@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../design/design.dart';
 import '../needs_progress.dart';
 import '../report_summary_card.dart' show NeedChips;
+import '../event_screen.dart' show EventLink;
 import '../theme_toggle.dart';
 import '../widgets.dart' show api;
 import 'landing_extras.dart' show kImpactImage;
@@ -817,7 +818,7 @@ class LandingImpactSection extends StatelessWidget {
 
     // Reloads with the rest of the page (pull to refresh).
     final recent = _RecentDeliveriesCard(key: ValueKey(asOf));
-     // Oct 26 redesign: "Why donors trust it" moved to the four trust cards
+    // Oct 26 redesign: "Why donors trust it" moved to the four trust cards
     // (LandingTrustCards in landing_v2.dart), so only recent deliveries here.
     final cards = recent;
 
@@ -1101,6 +1102,7 @@ class _RecentDeliveriesCardState extends State<_RecentDeliveriesCard> {
     );
   }
 }
+
 // Oct 26 redesign: replaced by LandingTrustCards; kept for now.
 // ignore: unused_element
 class _WhyTrustCard extends StatelessWidget {
@@ -1725,6 +1727,8 @@ class LandingReportDetails extends StatelessWidget {
                     '${r['barangay'] ?? '-'}',
                     style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                   ),
+                  // NF-003: guests can see every barangay of the disaster.
+                  EventLink(r),
                 ],
               ),
             ),
