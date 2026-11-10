@@ -107,6 +107,11 @@ class _ItemInfo {
 class _Line {
   String? itemId;
 
+  /// To scroll to this item and put the cursor in its quantity (a tapped
+  /// "Still needed" item, or one that is already in the donation).
+  final key = GlobalKey();
+  final packsFocus = FocusNode();
+
   /// One of the item's sizes (its id), [_customSize], or null.
   String? sizeId;
   String? sizeUnit; // unit of a custom size
@@ -190,6 +195,7 @@ class _Line {
 
   void dispose() {
     packs.dispose();
+    packsFocus.dispose();
     perPackOther.dispose();
     sizeAmount.dispose();
     value.dispose();
@@ -425,11 +431,19 @@ class _DonateScreenState extends State<DonateScreen> {
     'dates': [for (final d in sortedDates(pickupDates)) pickupDateIso(d)],
     'guest_name': guestName.text,
     'guest_phone': guestPhone.text,
+    // NF-003: the barangay picked in "Donating to".
+    'report_id': _report['id'],
   };
 
   void _saveDraft() => _draft?.save(_snapshot);
 
   void _restoreDraft(Map<String, dynamic> d) {
+    // NF-003: back on the barangay the donor switched to, if it still
+    // takes donations.
+    final picked = _eventChoices
+        .where((c) => '${c['id']}' == '${d['report_id']}')
+        .firstOrNull;
+    if (picked != null) _report = picked;
     final restored = <_Line>[];
     for (final m in d.maps('lines')) {
       final l = _Line()..itemId = m.strOrNull('item_id');
@@ -672,6 +686,122 @@ class _DonateScreenState extends State<DonateScreen> {
     ),
   );
 
+  /// Nov 10: the report's needs can be tapped to add them (the item list
+  /// still works). Not while changing a donation already made.
+  bool get _pickable => !_editing;
+
+  /// The line that already has this item, or -1.
+  int _lineWith(String itemId) => lines.indexWhere((l) => l.itemId == itemId);
+
+  /// "Still needed": one chip per need. Tapping adds the item to the
+  /// donation (an empty item card is used first), scrolls to it and puts
+  /// the cursor in "How many?". An item already in the donation is not
+  /// added twice: the app says so and shows where it is.
+  Widget _needPicker() {
+    final cs = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: Space.xs,
+      runSpacing: Space.xs,
+      children: [
+        for (final n in _reportNeeds)
+          Builder(
+            builder: (context) {
+              final id = '${n['item_id']}';
+              final inDonation = _lineWith(id) >= 0;
+              final still = _stillNeeded(n);
+              final unit = '${n['unit'] ?? ''}'.trim();
+              return ActionChip(
+                key: ValueKey('need-chip-$id'),
+                avatar: Icon(
+                  inDonation ? Icons.check_circle : Icons.add_circle_outline,
+                  size: 18,
+                  color: inDonation ? cs.primary : cs.onSecondaryContainer,
+                ),
+                backgroundColor: inDonation
+                    ? cs.primaryContainer
+                    : cs.secondaryContainer,
+                side: BorderSide.none,
+                label: Text(
+                  inDonation
+                      ? '${n['item_name']}: in your donation'
+                      : still > 0
+                      ? '${n['item_name']}: $still of ${n['needed']} $unit'
+                            .trim()
+                      : '${n['item_name']}: fully pledged',
+                ),
+                tooltip: inDonation
+                    ? '${n['item_name']} is already in your donation'
+                    : 'Add ${n['item_name']}',
+                onPressed: () => _pickNeed(n),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  void _pickNeed(Map n) {
+    final id = '${n['item_id']}';
+    final name = '${n['item_name']}';
+    final at = _lineWith(id);
+    if (at >= 0) {
+      AppToast.info(
+        context,
+        '$name is already in your donation (Item ${lines.length - at}). '
+        'Just change its amount there.',
+      );
+      _reveal(lines[at]);
+      return;
+    }
+    final item = widget.names
+        .rows('items')
+        .where((it) => '${it['id']}' == id)
+        .firstOrNull;
+    if (item == null) {
+      // Retired or still under review: not in the item list right now.
+      AppToast.info(
+        context,
+        '$name can\'t be picked right now. Choose an item from the list, '
+        'or "Something else…".',
+      );
+      return;
+    }
+    final info = _ItemInfo.fromLookup(item);
+    // An empty item card is used first, so the form never has a blank one.
+    final empty = lines.indexWhere(
+      (l) => l.itemId == null && l.packs.text.trim().isEmpty,
+    );
+    final line = empty >= 0 ? lines[empty] : _Line();
+    setState(() {
+      line
+        ..itemId = id
+        // Only one size: chosen already. Several: the donor picks one.
+        ..sizeId = !info.counted && info.sizes.length == 1
+            ? '${info.sizes.first['id']}'
+            : null
+        ..sizeUnit = null;
+      if (empty < 0) lines.insert(0, line); // newest on top
+    });
+    _saveDraft();
+    _reveal(line);
+  }
+
+  /// Scrolls to an item card and puts the cursor in its quantity.
+  void _reveal(_Line l) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = l.key.currentContext;
+      if (ctx == null || !mounted) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: Motion.normal,
+        curve: Motion.curve,
+        alignment: 0.1,
+      ).then((_) {
+        if (mounted) l.packsFocus.requestFocus();
+      });
+    });
+  }
+
   /// Concerns Nov 4: a new item goes at the top, right under the button
   /// and the report's needs, and the earlier items move down. The donor
   /// can still read what the report needs while filling it in.
@@ -828,7 +958,9 @@ class _DonateScreenState extends State<DonateScreen> {
                   ),
                   Gaps.v8,
                   DropdownButtonFormField<String>(
-                    key: const ValueKey('donating-to'),
+                    key: ValueKey(
+                      'donating-to-${r['id']}',
+                    ), // follows a restored draft
                     initialValue: '${r['id']}',
                     isExpanded: true,
                     decoration: const InputDecoration(
@@ -846,11 +978,14 @@ class _DonateScreenState extends State<DonateScreen> {
                           ),
                         ),
                     ],
-                    onChanged: (v) => setState(
-                      () => _report = choices.firstWhere(
-                        (c) => '${c['id']}' == v,
-                      ),
-                    ),
+                    onChanged: (v) {
+                      setState(
+                        () => _report = choices.firstWhere(
+                          (c) => '${c['id']}' == v,
+                        ),
+                      );
+                      _saveDraft();
+                    },
                   ),
                 ] else
                   Text(
@@ -862,18 +997,24 @@ class _DonateScreenState extends State<DonateScreen> {
                 if (_reportNeeds.isNotEmpty) ...[
                   Gaps.v8,
                   Text(
-                    'Still needed',
+                    // Nov 10: tap a need to add it; only the amount is left.
+                    _pickable
+                        ? 'Still needed · tap an item to add it'
+                        : 'Still needed',
                     style: t.labelMedium?.copyWith(color: cs.onSurfaceVariant),
                   ),
                   Gaps.v4,
-                  // Highlighted like the needs on the report cards.
-                  NeedChips([
-                    for (final n in _reportNeeds)
-                      _stillNeeded(n) > 0
-                          ? '${n['item_name']}: ${_stillNeeded(n)} of '
-                                '${n['needed']} ${n['unit'] ?? ''}'
-                          : '${n['item_name']}: fully pledged',
-                  ]),
+                  if (_pickable)
+                    _needPicker()
+                  else
+                    // Highlighted like the needs on the report cards.
+                    NeedChips([
+                      for (final n in _reportNeeds)
+                        _stillNeeded(n) > 0
+                            ? '${n['item_name']}: ${_stillNeeded(n)} of '
+                                  '${n['needed']} ${n['unit'] ?? ''}'
+                            : '${n['item_name']}: fully pledged',
+                    ]),
                 ] else if (needs.isNotEmpty) ...[
                   Gaps.v8,
                   NeedChips(NeedChips.split(needs)),
@@ -897,7 +1038,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final items = widget.names.rows('items');
     final info = _infoOf(l);
     return Padding(
-      key: ObjectKey(l),
+      key: l.key,
       padding: const EdgeInsets.only(bottom: Space.sm),
       child: AppCard(
         child: Column(
@@ -924,6 +1065,8 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v12,
             DropdownButtonFormField<String>(
+              // Rebuilt when a tapped "Still needed" item fills this line.
+              key: ValueKey('item-${l.itemId}'),
               initialValue: l.itemId,
               isExpanded: true,
               decoration: const InputDecoration(
@@ -987,6 +1130,7 @@ class _DonateScreenState extends State<DonateScreen> {
               Gaps.v12,
               TextFormField(
                 controller: l.packs,
+                focusNode: l.packsFocus,
                 keyboardType: TextInputType.number,
                 inputFormatters: [
                   FilteringTextInputFormatter.digitsOnly,
@@ -1060,6 +1204,18 @@ class _DonateScreenState extends State<DonateScreen> {
             ? 'This report still needs $still ${need['unit'] ?? ''}.'
             : 'This item is already fully pledged. Other needs of this '
                   'report may be more urgent.';
+      }
+    }
+    // The same item twice is allowed (e.g. rice in 25 kg sacks and in
+    // 5 kg packs), but the donor is told, in case it was a mistake.
+    if (l.itemId != _otherItem) {
+      final mine = lines.indexOf(l);
+      final other = lines.indexWhere((o) => o != l && o.itemId == l.itemId);
+      if (other >= 0 && mine >= 0) {
+        final also =
+            'Also in Item ${lines.length - other}. Use it only for another '
+            'size; otherwise change the amount there.';
+        text = text == null ? also : '$text $also';
       }
     }
     if (text == null) return const SizedBox.shrink();

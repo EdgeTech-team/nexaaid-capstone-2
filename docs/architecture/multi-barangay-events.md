@@ -104,6 +104,16 @@ Every need fills itself, the preset ones and the ones the reporter adds:
 - The event page opens with **Donate where it's needed most: <barangay>**
   (the lowest fulfillment), then every barangay with its own Donate,
   Details (logged-in), "Fulfilled", or "Awaiting validation".
+- The "New disaster needs help" notification opens the event page; any
+  other report notification opens the report pop-up, which has **Donate**
+  for donors when the report still needs help.
+- Donate form: the **Still needed** items can be tapped. A tap adds that
+  item (an empty item card is used first), scrolls to it and puts the
+  cursor in "How many?", so the donor only types the amount. An item
+  already in the donation is not added again: "Rice is already in your
+  donation (Item 2). Just change its amount there." The item list still
+  works; picking the same item twice from it (e.g. two sizes of rice) is
+  allowed but noted. "Donating to" is kept in the saved draft.
 - Every place that shows one report of an event says **Part of <event>**
   with **See all barangays**: donor Reports tab cards and details, the
   report sheet opened from a notification, and the guest pop-out.

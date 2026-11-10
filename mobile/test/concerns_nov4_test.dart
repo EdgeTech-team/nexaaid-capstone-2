@@ -274,4 +274,134 @@ void main() {
       expect(item2, lessThan(item1));
     }, () => _server);
   });
+
+  testWidgets('Nov 10: tapping a "Still needed" item adds it; tapping it '
+      'again says it is already there', (tester) async {
+    final report = <String, dynamic>{
+      'id': 7,
+      'disaster': 'Flood',
+      'barangay': 'Looc',
+      'needs': [
+        {
+          'item_id': 1,
+          'item_name': 'Rice',
+          'unit': 'kg',
+          'needed': 100,
+          'pledged': 40,
+        },
+        {
+          'item_id': 3,
+          'item_name': 'Canned Goods',
+          'unit': 'cans',
+          'needed': 50,
+          'pledged': 0,
+        },
+      ],
+    };
+    await http.runWithClient(() async {
+      await _pump(tester, DonateScreen(report: report, names: Names(_lookups)));
+      expect(find.text('Still needed · tap an item to add it'), findsOneWidget);
+      expect(find.text('Rice: 60 of 100 kg'), findsOneWidget);
+
+      // The empty Item 1 is used first: still one item card.
+      await tester.tap(find.byKey(const ValueKey('need-chip-3')));
+      await tester.pumpAndSettle();
+      expect(find.text('Item 2'), findsNothing);
+      expect(
+        find.widgetWithText(DropdownButtonFormField<String>, 'Canned Goods'),
+        findsOneWidget,
+      );
+      expect(find.text('Canned Goods: in your donation'), findsOneWidget);
+      // Only the amount is left to type, and the cursor is already there.
+      final focused = FocusManager.instance.primaryFocus;
+      expect(focused, isNotNull);
+      expect(
+        find.descendant(
+          of: find.widgetWithText(TextFormField, 'How many?'),
+          matching: find.byWidgetPredicate(
+            (w) => w is EditableText && w.focusNode == focused,
+          ),
+        ),
+        findsOneWidget,
+      );
+
+      // A second need becomes a new item on top.
+      await tester.tap(find.byKey(const ValueKey('need-chip-1')));
+      await tester.pumpAndSettle();
+      expect(find.text('Item 2'), findsOneWidget);
+      expect(
+        find.widgetWithText(DropdownButtonFormField<String>, 'Rice'),
+        findsOneWidget,
+      );
+
+      // Already in the donation: not added again, and the donor is told.
+      await tester.tap(find.byKey(const ValueKey('need-chip-3')));
+      await tester.pump();
+      expect(
+        find.textContaining(
+          'Canned Goods is already in your donation (Item 1)',
+        ),
+        findsOneWidget,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Item 3'), findsNothing);
+
+      // Removing it makes the chip addable again.
+      await tester.tap(find.text('Remove').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Canned Goods: in your donation'), findsNothing);
+      expect(find.text('Canned Goods: 50 of 50 cans'), findsOneWidget);
+    }, () => _server);
+  });
+
+  testWidgets('NF-003: "Donating to" switches barangay; the tappable needs '
+      'follow the barangay chosen', (tester) async {
+    Map<String, dynamic> row(
+      int id,
+      String brgy,
+      num pct,
+      String item,
+      int itemId,
+    ) => {
+      'id': id,
+      'disaster': 'Earthquake',
+      'barangay': brgy,
+      'event_id': 9,
+      'event_name': 'Earthquake - Nov 10',
+      'fulfillment_percentage': pct,
+      'needs': [
+        {
+          'item_id': itemId,
+          'item_name': item,
+          'unit': 'kg',
+          'needed': 100,
+          'pledged': 0,
+        },
+      ],
+    };
+    final casili = row(1, 'Casili', 10, 'Rice', 1);
+    final looc = row(2, 'Looc', 0, 'Canned Goods', 3);
+    final names = Names({
+      ..._lookups,
+      'validated_reports': [
+        casili,
+        looc,
+        row(3, 'Done', 100, 'Rice', 1), // fulfilled: not offered
+      ],
+    });
+    await http.runWithClient(() async {
+      await _pump(tester, DonateScreen(report: casili, names: names));
+      expect(find.byKey(const ValueKey('need-chip-1')), findsOneWidget);
+      await _choose(
+        tester,
+        find.byKey(const ValueKey('donating-to-1')),
+        'Barangay Looc · 0% supplied',
+      );
+      expect(find.text('Barangay Done · 100% supplied'), findsNothing);
+      expect(find.byKey(const ValueKey('need-chip-1')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('need-chip-3')));
+      await tester.pumpAndSettle();
+      expect(find.text('Canned Goods: in your donation'), findsOneWidget);
+    }, () => _server);
+  });
 }
