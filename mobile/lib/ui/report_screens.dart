@@ -682,7 +682,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     if (pf == null || rows.isEmpty) {
-      return Padding(
+      return Container(
+        alignment: Alignment.centerLeft,
         padding: const EdgeInsets.only(top: 6),
         child: Text(
           'Each barangay gets its families × this amount, rounded up.',
@@ -699,7 +700,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
     final equation = rows.length <= 4
         ? rows.map((r) => '${r.value} × $each').join(' + ')
         : '${rows.length} barangays × their families × $each';
-    return Padding(
+    return Container(
+      alignment: Alignment.centerLeft,
       padding: const EdgeInsets.only(top: 6),
       child: Text(
         'Total ${withCommas(total)} $unit = $equation'.trim(),
