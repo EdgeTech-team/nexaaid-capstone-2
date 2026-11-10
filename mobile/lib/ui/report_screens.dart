@@ -80,6 +80,7 @@ class ReportCard extends StatelessWidget {
       barangay: names.of('barangays', r['barangay_id']),
       status: r['status'] as String?,
       priority: r['priority_level'] as String?,
+      eventName: r['event_name'] as String?,
       affectedFamilies: (r['affected_families'] as num?)?.toInt(),
       assistanceNeeded: r['assistance_needed']?.toString(),
       description: r['description']?.toString(),
@@ -408,6 +409,26 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 : '',
       ]);
     _templateSnapshot = _needsSnapshot;
+  }
+
+  /// UAT post-meeting #6: every preset item gets an amount. Needs of the
+  /// disaster type's preset that still have no amount are filled in (per
+  /// family x affected families, rounded up); amounts the reporter typed
+  /// are never changed.
+  void _fillBlankAmounts(Names names) {
+    final t = _templateFor(names);
+    final fams = int.tryParse(families.text.trim()) ?? 0;
+    if (t == null || fams <= 0 || multi) return;
+    final perFamily = {
+      for (final line in (t['items'] as List).cast<Map>())
+        '${line['item_id']}': line['per_family'] as num,
+    };
+    for (final n in needs) {
+      final amount = perFamily[n.itemId];
+      if (amount != null && n.qty.text.trim().isEmpty) {
+        n.qty.text = '${(amount * fams).ceil().clamp(1, maxEstimatedQuantity)}';
+      }
+    }
   }
 
   /// Bumped after "Fill from SMS" so the dropdowns rebuild with the new values.
@@ -1285,6 +1306,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                     if (_templateSnapshot != null &&
                         _needsSnapshot == _templateSnapshot) {
                       setState(() => _applyTemplate(names));
+                    } else {
+                      // UAT #6: the reporter changed some needs, so the
+                      // list is kept; only amounts still blank are filled.
+                      setState(() => _fillBlankAmounts(names));
                     }
                   },
                 ),

@@ -167,6 +167,40 @@ void main() {
     }, () => _server);
   });
 
+  testWidgets('UAT #6: preset amounts still blank fill in once the families '
+      'are typed, even after the list was changed', (tester) async {
+    Api.instance.role = Roles.cswsUnit;
+    addTearDown(() => Api.instance.role = null);
+    await http.runWithClient(() async {
+      await _pump(tester, const Scaffold(body: NewReportScreen()));
+      await _choose(
+        tester,
+        find.widgetWithText(DropdownButtonFormField<String>, 'Disaster type'),
+        'Other',
+      );
+      // No families yet: the preset items are listed without amounts.
+      expect(find.widgetWithText(TextFormField, '60'), findsNothing);
+
+      // The reporter changes the list (one more need), then types families.
+      await tester.tap(find.text('Add need'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Affected families'),
+        '10',
+      );
+      await tester.pump();
+      expect(find.widgetWithText(TextFormField, '60'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
+
+      // The empty extra need is reported in the pop-up, nothing is sent.
+      await tester.tap(find.text('Submit report'));
+      await tester.pumpAndSettle();
+      expect(find.text('Please complete the form'), findsOneWidget);
+      expect(find.text('Need 3: choose an item'), findsOneWidget);
+      expect(sent['/reports/'], isNull);
+    }, () => _server);
+  });
+
   testWidgets('Add another item is at the top; new items go under it', (
     tester,
   ) async {
