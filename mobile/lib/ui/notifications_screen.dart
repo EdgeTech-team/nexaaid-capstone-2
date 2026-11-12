@@ -8,6 +8,8 @@ import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
 import 'home_nav.dart';
 import 'ops_screens.dart' show NewDeliveryScreen, showCmoEntryPopout;
+import 'report_filters.dart' show reportStatuses;
+
 import 'report_summary_card.dart' show NeedChips;
 import 'donor_screens.dart' show DonateScreen;
 import 'event_screen.dart' show EventLink, openEvent;
@@ -46,12 +48,23 @@ final Map<String, EntityOpener> notificationDestinations = {
         }
         if (c.mounted) _go(c, 'Validate', view: view, id: id);
       case Roles.cswsUnit:
-        _go(
-          c,
-          'Reports',
-          view: 'status',
-          then: (ctx) => showReportSheet(ctx, id),
-        );
+        // UAT Nov 2026 (M2.5): Report Status opens on the list the report is
+        // in now (Rejected after a rejection; Pending again once it was
+        // fixed and resent), with that report first and outlined, then its
+        // pop-up.
+        final r = await api.get('/reports/$id');
+        final status = r.ok && r.json is Map
+            ? '${(r.json as Map)['status']}'
+            : null;
+        if (c.mounted) {
+          _go(
+            c,
+            'Reports',
+            view: reportStatuses.contains(status) ? status : 'status',
+            id: id,
+            then: (ctx) => showReportSheet(ctx, id),
+          );
+        }
       case Roles.donor:
       case Roles.org:
         // NF-003: "New disaster needs help" opens the event page (every
