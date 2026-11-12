@@ -1467,46 +1467,6 @@ class _NewReportScreenState extends State<NewReportScreen> {
   }
 }
 
-/// Appendix H 3.3 Priority-based report filtering.
-class PriorityChips extends StatelessWidget {
-  final String value;
-  final ValueChanged<String> onChanged;
-  const PriorityChips({
-    super.key,
-    required this.value,
-    required this.onChanged,
-  });
-
-  static const levels = [
-    '',
-    'Critical',
-    'High',
-    'Medium',
-    'Low',
-    'Needs Review',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (final p in levels)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: ChoiceChip(
-                label: Text(p.isEmpty ? 'All priorities' : p),
-                selected: value == p,
-                onSelected: (_) => onChanged(p),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Appendix H 2.4 View validated reports (every role), with 3.3
 // priority-based filtering for the roles that have it.
@@ -1527,19 +1487,24 @@ class ValidatedReportsScreen extends StatefulWidget {
 }
 
 class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
-  String priority = '';
-  String? progress; // fulfillment status, null = any (Ivan's note)
-  ReportSort sort = ReportSort.urgent;
+  // Kept while the app is open (UAT Nov 2026, option A).
+  static const _list = 'validated';
+  late ReportView view = ReportViewMemory.read(_list, const ReportView());
+
+  void _show(ReportView v) {
+    ReportViewMemory.write(_list, v);
+    setState(() => view = v);
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Roles without 3.3 priority filtering never send a priority.
+    final priority = widget.filter ? view.priority : null;
     return Loader(
       key: ValueKey(priority),
       load: [
-        () => api.get(
-          '/reports/validated',
-          query: {if (priority.isNotEmpty) 'priority_level': priority},
-        ),
+        () =>
+            api.get('/reports/validated', query: {'priority_level': ?priority}),
         api.lookupsResult,
       ],
       builder: (context, data) {
@@ -1547,8 +1512,8 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         final rows = sortAndFilterReports(
           all,
-          fulfillment: progress,
-          sort: sort,
+          fulfillment: view.fulfillment,
+          sort: view.sort,
         );
         return ListView(
           padding: const EdgeInsets.all(20),
@@ -1559,29 +1524,23 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
                 subtitle:
                     'Reports approved by the Administrator • ${roleLine()}',
               ),
-            if (widget.filter) ...[
-              PriorityChips(
-                value: priority,
-                onChanged: (p) => setState(() => priority = p),
-              ),
-              const SizedBox(height: 8),
-            ],
-            // Fulfillment status filter and sort for every role, also the
-            // ones without priority filtering (Ivan's note: "for every user
-            // that has this dashboard"; fulfilled reports are found with the
-            // Fulfilled chip, there is no separate Done section).
-            FulfillmentChips(
+            // One Filter button and a compact sort (UAT Nov 2026).
+            // Fulfillment status and sort for every role (Ivan's note:
+            // fulfilled reports are found with the Fulfilled filter, there is
+            // no separate Done section); priorities only for 3.3 roles.
+            ReportFilterBar(
+              value: view,
+              onChanged: _show,
+              priorities: widget.filter,
               rows: all,
-              value: progress,
-              onChanged: (v) => setState(() => progress = v),
             ),
             const SizedBox(height: 12),
-            ReportSortField(
-              value: sort,
-              onChanged: (v) => setState(() => sort = v),
-            ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty) const EmptyState('No validated reports to show.'),
+            if (rows.isEmpty)
+              ReportListEmpty(
+                'No validated reports to show.',
+                filtered: activeFilters(view) > 0,
+                onClear: () => _show(view.withFilters()),
+              ),
             for (final r in rows) ReportCard(r, names),
           ],
         );
@@ -1603,14 +1562,25 @@ class _ReportsHubState extends State<ReportsHub>
     with HomeTargetListener<ReportsHub> {
   bool monitor = false;
 
+  // A notification about one report (UAT Nov 2026, M2.5): Status opens on
+  // the list the report is in now, with that report first and outlined.
+  String? _focusStatus;
+  int? _focusId;
+  int _focus = 0;
+
   // A notification about a report opens Reports > Validated or Status.
   @override
   String get homeTab => 'Reports';
 
   @override
   void applyHomeTarget(HomeTarget target) {
-    if (target.view == 'status') monitor = true;
     if (target.view == 'validated') monitor = false;
+    if (target.view == 'status' || reportStatuses.contains(target.view)) {
+      monitor = true;
+      _focusStatus = reportStatuses.contains(target.view) ? target.view : null;
+      _focusId = target.id;
+      _focus++;
+    }
   }
 
   @override
@@ -1633,12 +1603,21 @@ class _ReportsHubState extends State<ReportsHub>
               ),
             ],
             selected: {monitor},
-            onSelectionChanged: (v) => setState(() => monitor = v.first),
+            onSelectionChanged: (v) => setState(() {
+              monitor = v.first;
+              // From now on the user's own filters, not the notification's.
+              _focusStatus = null;
+              _focusId = null;
+            }),
           ),
         ),
         Expanded(
           child: monitor
-              ? const MonitoringScreen()
+              ? MonitoringScreen(
+                  key: ValueKey(_focus),
+                  focusStatus: _focusStatus,
+                  focusId: _focusId,
+                )
               : const ValidatedReportsScreen(filter: true),
         ),
       ],
@@ -1651,22 +1630,40 @@ class _ReportsHubState extends State<ReportsHub>
 // CSWS Disaster Unit): every report with its fulfillment progress.
 // ---------------------------------------------------------------------------
 class MonitoringScreen extends StatefulWidget {
-  const MonitoringScreen({super.key});
+  /// Opened from a notification about one report: show this status (the
+  /// list the report is in now) and put [focusId] first, outlined.
+  final String? focusStatus;
+  final int? focusId;
+  const MonitoringScreen({super.key, this.focusStatus, this.focusId});
 
   @override
   State<MonitoringScreen> createState() => _MonitoringScreenState();
 }
 
 class _MonitoringScreenState extends State<MonitoringScreen> {
-  String priority = '';
-  String? progress; // fulfillment status, null = any (Ivan's note)
-  ReportSort sort = ReportSort.urgent;
-  bool onlyMine = false;
+  // Kept while the app is open (UAT Nov 2026, option A).
+  static const _list = 'monitoring';
+  late ReportView view = _initialView();
   int _loads = 0;
 
   // Oct 11 (Daniel): the CSWS Disaster Unit edits or withdraws its own
   // reports here until the Administrator validates them.
   bool get _reporter => api.role == Roles.cswsUnit;
+
+  ReportView _initialView() {
+    final saved = ReportViewMemory.read(_list, const ReportView());
+    if (widget.focusStatus == null && widget.focusId == null) return saved;
+    // A notification: only that status, no other filter that could hide
+    // the report.
+    final v = saved.withFilters(status: widget.focusStatus);
+    ReportViewMemory.write(_list, v);
+    return v;
+  }
+
+  void _show(ReportView v) {
+    ReportViewMemory.write(_list, v);
+    setState(() => view = v);
+  }
 
   Future<void> _edit(Map<String, dynamic> r) async {
     final saved = await Navigator.of(context).push<bool>(
@@ -1713,11 +1710,17 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey('$priority/$_loads'),
+      key: ValueKey('${view.status}/${view.priority}/$_loads'),
       load: [
+        // Status and priority are filtered by the server. Up to 200 reports:
+        // the default page is 50, so older reports never showed.
         () => api.get(
           '/reports/monitoring',
-          query: {if (priority.isNotEmpty) 'priority_level': priority},
+          query: {
+            if (view.status != null) 'status': view.status!,
+            if (view.priority != null) 'priority_level': view.priority!,
+            'limit': '200',
+          },
         ),
         api.lookupsResult,
         if (_reporter) () => api.get('/reports/mine'),
@@ -1735,16 +1738,19 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
             mine.contains(r['report_id']) &&
             (r['status'] == 'Pending' || r['status'] == 'Rejected');
         final sorted = sortAndFilterReports(
-          onlyMine
+          view.onlyMine
               ? all.where((r) => mine.contains(r['report_id'])).toList()
               : all,
-          fulfillment: progress,
-          sort: sort,
+          fulfillment: view.fulfillment,
+          sort: view.sort,
         );
         // My own reports that can still be edited come first.
-        final rows = onlyMine
+        final rows = view.onlyMine
             ? [...sorted.where(editable), ...sorted.where((r) => !editable(r))]
             : sorted;
+        // The report a notification pointed at comes first, outlined.
+        final hi = rows.indexWhere((r) => r['report_id'] == widget.focusId);
+        if (hi > 0) rows.insert(0, rows.removeAt(hi));
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -1754,39 +1760,36 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
                   'Fulfillment progress of every report, active and done • '
                   '${roleLine()}',
             ),
-            PriorityChips(
-              value: priority,
-              onChanged: (p) => setState(() => priority = p),
-            ),
-            const SizedBox(height: 8),
-            FulfillmentChips(
+            // UAT Nov 2026 (M2.5): one Filter button with Validation Status
+            // (Rejected reports no longer sink to the bottom), Priorities and
+            // Fulfillment Status, and a compact sort.
+            ReportFilterBar(
+              value: view,
+              onChanged: _show,
+              statuses: reportStatuses,
               rows: all,
-              value: progress,
-              onChanged: (v) => setState(() => progress = v),
+              trailing: [
+                if (_reporter)
+                  FilterChip(
+                    avatar: const Icon(Icons.person_outline, size: 18),
+                    label: Text('Only my reports (${mine.length})'),
+                    selected: view.onlyMine,
+                    onSelected: (v) => _show(view.withOnlyMine(v)),
+                  ),
+              ],
             ),
             const SizedBox(height: 12),
-            ReportSortField(
-              value: sort,
-              onChanged: (v) => setState(() => sort = v),
-            ),
-            if (_reporter) ...[
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilterChip(
-                  avatar: const Icon(Icons.person_outline, size: 18),
-                  label: Text('Only my reports (${mine.length})'),
-                  selected: onlyMine,
-                  onSelected: (v) => setState(() => onlyMine = v),
-                ),
+            if (rows.isEmpty)
+              ReportListEmpty(
+                'No reports to show.',
+                filtered: activeFilters(view) > 0 || view.onlyMine,
+                onClear: () => _show(ReportView(sort: view.sort)),
               ),
-            ],
-            const SizedBox(height: 12),
-            if (rows.isEmpty) const EmptyState('No reports to show.'),
             for (final r in rows)
               ReportCard(
                 r,
                 names,
+                highlighted: r['report_id'] == widget.focusId,
                 actions: editable(r)
                     ? [
                         TextButton.icon(
@@ -1828,10 +1831,12 @@ class AdminReportsScreen extends StatefulWidget {
 
 class _AdminReportsScreenState extends State<AdminReportsScreen>
     with HomeTargetListener<AdminReportsScreen> {
-  String status = 'Pending';
-  String priority = '';
-  String? progress; // fulfillment status in the Validated view
-  ReportSort sort = ReportSort.urgent;
+  // Kept while the app is open (UAT Nov 2026, option A). Report Validation
+  // always shows one status; Pending is the validation queue.
+  static const _list = 'validation';
+  static const _defaults = ReportView(status: 'Pending');
+  static const _statuses = ['Pending', 'Validated', 'Rejected'];
+  late ReportView view = ReportViewMemory.read(_list, _defaults);
   int _loads = 0;
   int? _highlight; // report the notification is about, shown first
 
@@ -1840,11 +1845,18 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   @override
   void applyHomeTarget(HomeTarget target) {
-    if (const ['Pending', 'Validated', 'Rejected'].contains(target.view)) {
-      status = target.view!;
+    if (_statuses.contains(target.view)) {
+      // Only that status, no other filter that could hide the report.
+      view = view.withFilters(status: target.view);
+      ReportViewMemory.write(_list, view);
     }
     _highlight = target.id;
     _loads++;
+  }
+
+  void _show(ReportView v) {
+    ReportViewMemory.write(_list, v);
+    setState(() => view = v);
   }
 
   Future<void> _reject(Map<String, dynamic> r) async {
@@ -1900,23 +1912,31 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   @override
   Widget build(BuildContext context) {
+    final status = view.status ?? 'Pending';
+    final validated = status == 'Validated';
     return Loader(
-      key: ValueKey('$status/$priority/$_loads'),
+      key: ValueKey('$status/${view.priority}/$_loads'),
       load: [
         // Validated reports come with their fulfillment progress, for the
-        // fulfillment chips and sort (Ivan's note).
-        () => status == 'Validated'
+        // fulfillment filter and sort (Ivan's note).
+        () => validated
             ? api.get(
                 '/reports/validated',
-                query: {if (priority.isNotEmpty) 'priority_level': priority},
+                query: {
+                  if (view.priority != null) 'priority_level': view.priority!,
+                },
               )
             : api.get('/reports/', query: {'status': status}),
         api.lookupsResult,
       ],
       builder: (context, data) {
         final all = (data[0] as List).cast<Map<String, dynamic>>();
-        final rows = status == 'Validated'
-            ? sortAndFilterReports(all, fulfillment: progress, sort: sort)
+        final rows = validated
+            ? sortAndFilterReports(
+                all,
+                fulfillment: view.fulfillment,
+                sort: view.sort,
+              )
             : all;
         // The report a notification pointed at comes first, outlined.
         final hi = rows.indexWhere((r) => r['report_id'] == _highlight);
@@ -1926,35 +1946,27 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
           padding: const EdgeInsets.all(20),
           children: [
             PageHeader('Report Validation', subtitle: roleLine()),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'Pending', label: Text('Pending')),
-                ButtonSegment(value: 'Validated', label: Text('Validated')),
-                ButtonSegment(value: 'Rejected', label: Text('Rejected')),
-              ],
-              selected: {status},
-              onSelectionChanged: (s) => setState(() => status = s.first),
+            // UAT Nov 2026 (M2.3, M3.3): one Filter button instead of the
+            // Pending / Validated / Rejected switch and two chip rows.
+            // Priorities, fulfillment and sort are for validated reports, as
+            // before.
+            ReportFilterBar(
+              value: view,
+              defaults: _defaults,
+              onChanged: _show,
+              statuses: _statuses,
+              anyStatus: false,
+              rows: all,
+              detailsOnlyFor: 'Validated',
+              showSort: validated,
             ),
             const SizedBox(height: 12),
-            if (status == 'Validated') ...[
-              PriorityChips(
-                value: priority,
-                onChanged: (p) => setState(() => priority = p),
+            if (rows.isEmpty)
+              ReportListEmpty(
+                'No ${status.toLowerCase()} reports.',
+                filtered: view.priority != null || view.fulfillment != null,
+                onClear: () => _show(view.withFilters(status: status)),
               ),
-              const SizedBox(height: 8),
-              FulfillmentChips(
-                rows: all,
-                value: progress,
-                onChanged: (v) => setState(() => progress = v),
-              ),
-              const SizedBox(height: 12),
-              ReportSortField(
-                value: sort,
-                onChanged: (v) => setState(() => sort = v),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (rows.isEmpty) EmptyState('No ${status.toLowerCase()} reports.'),
             for (final r in rows)
               ReportCard(
                 r,
