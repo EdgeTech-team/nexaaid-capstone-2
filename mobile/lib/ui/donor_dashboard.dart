@@ -6,6 +6,7 @@ import '../api.dart' show ApiResult;
 import 'disaster_art.dart';
 import 'donation_entries_view.dart';
 import 'donor_feed.dart';
+import 'event_screen.dart';
 import 'landing/about_section.dart';
 import 'landing/landing_screen.dart' show HowItWorksSteps;
 import 'landing/mission_section.dart';
@@ -105,7 +106,8 @@ class _DonorDashboardState extends State<DonorDashboard> {
         final validated = names.rows('validated_reports');
 
         // Barangays that need help: most urgent first, fully supplied hidden.
-        final open = needsHelp(validated);
+        // NF-003: the barangays of one event are one card.
+        final open = foldEvents(needsHelp(validated), validated);
 
         // Supported reports joined with /lookups for families and barangay.
         final byId = {for (final r in validated) '${r['id']}': r};
@@ -161,11 +163,17 @@ class _DonorDashboardState extends State<DonorDashboard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     for (final r in open.take(10)) ...[
-                      NeedCard(
-                        report: r,
-                        donateLabel: donateLabel,
-                        onDonate: () => _donate(r, names),
-                      ),
+                      if (r['event_id'] != null)
+                        EventNeedCard(
+                          report: r,
+                          onOpen: () => openEvent(context, r),
+                        )
+                      else
+                        NeedCard(
+                          report: r,
+                          donateLabel: donateLabel,
+                          onDonate: () => _donate(r, names),
+                        ),
                       Gaps.h12,
                     ],
                   ],
@@ -184,7 +192,10 @@ class _DonorDashboardState extends State<DonorDashboard> {
                     validated: validated,
                     supported: helped,
                     donateLabel: donateLabel,
-                    onDonate: (r) => _donate(r, names),
+                    // NF-003: an event's Donate opens its barangay list.
+                    onDonate: (r) => r['event_id'] != null
+                        ? openEvent(context, r)
+                        : _donate(r, names),
                   ),
 
                   // ---- About NexaAid, like the landing page -------------

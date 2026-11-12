@@ -5,6 +5,7 @@ import 'report_filters.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 import 'donate_screen.dart';
+import 'event_screen.dart' show EventLink;
 export 'donate_screen.dart' show DonateScreen, DonationReceipt;
 import 'needs_progress.dart';
 
@@ -486,6 +487,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 ),
                 Gaps.v12,
                 row(Icons.place_outlined, _place(r)),
+                EventLink(r),
                 if (r['affected_families'] != null)
                   row(
                     Icons.groups_outlined,
@@ -501,7 +503,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 Gaps.v8,
                 NeedChips(NeedChips.split(r['assistance_needed'])),
                 Gaps.v16,
-                                Progress(
+                Progress(
                   delivered: r['total_items_delivered'] as num? ?? 0,
                   needed: r['total_items_needed'] as num? ?? 0,
                   percent: fulfillmentPercent(r),
@@ -613,6 +615,8 @@ class _ReportListCard extends StatelessWidget {
                       style: t.titleSmall,
                     ),
                     meta(Icons.place_outlined, _place(r)),
+                    // NF-003: the other barangays of the same disaster.
+                    EventLink(r),
                     if (r['affected_families'] != null)
                       meta(
                         Icons.groups_outlined,

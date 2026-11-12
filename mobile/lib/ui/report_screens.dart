@@ -14,6 +14,7 @@ import 'sms_report_format.dart';
 import 'widgets.dart';
 import 'home_nav.dart';
 import 'hazard_barangay_field.dart';
+import 'multi_report.dart';
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: number limits. Must match the backend
@@ -79,6 +80,7 @@ class ReportCard extends StatelessWidget {
       barangay: names.of('barangays', r['barangay_id']),
       status: r['status'] as String?,
       priority: r['priority_level'] as String?,
+      eventName: r['event_name'] as String?,
       affectedFamilies: (r['affected_families'] as num?)?.toInt(),
       assistanceNeeded: r['assistance_needed']?.toString(),
       description: r['description']?.toString(),
@@ -122,6 +124,10 @@ class NewReportScreen extends StatefulWidget {
 /// One line of the needs list: an item (or "Other"), how many, and the unit.
 class _Need {
   String? itemId; // items.item_id, or _other
+
+  /// UAT Nov 10: the amount was filled in by the app (not typed), so it
+  /// follows the families and the disaster type. Typing turns it off.
+  bool auto = false;
   final qty = TextEditingController();
   final otherName = TextEditingController();
   final otherUnit = TextEditingController();
@@ -149,6 +155,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
   final smsText = TextEditingController();
   final needs = <_Need>[_Need()];
   bool busy = false;
+
+  /// NF-003: "Several barangays" (one report per barangay, one event).
+  /// Only for a new report typed in the app, not SMS or a correction.
+  bool multi = false;
+  final BarangayRows multiRows = {};
+  final eventName = TextEditingController();
+  bool get _canMulti => !editing && !sms;
 
   /// true when encoding a report that arrived by SMS (UC-A3 8a).
   late final bool sms = widget.smsEncode;
@@ -189,11 +202,15 @@ class _NewReportScreenState extends State<NewReportScreen> {
     'families': families.text,
     'sms_sender': smsSender.text,
     'sms_text': smsText.text,
+    'multi': multi,
+    'multi_rows': {for (final e in multiRows.entries) e.key: e.value.text},
+    'event_name': eventName.text,
     'needs': [
       for (final n in needs)
         {
           'item_id': n.itemId,
           'qty': n.qty.text,
+          'auto': n.auto,
           'other_name': n.otherName.text,
           'other_unit': n.otherUnit.text,
         },
@@ -231,6 +248,16 @@ class _NewReportScreenState extends State<NewReportScreen> {
     families.text = d.str('families');
     smsSender.text = d.str('sms_sender');
     smsText.text = d.str('sms_text');
+    multi = _canMulti && d['multi'] == true;
+    multiRows.clear();
+    if (d['multi_rows'] is Map) {
+      for (final e in (d['multi_rows'] as Map).entries) {
+        if (known('barangays', '${e.key}')) {
+          multiRows['${e.key}'] = TextEditingController(text: '${e.value}');
+        }
+      }
+    }
+    eventName.text = d.str('event_name');
     _smsLen = smsText.text.length; // a restored SMS is not a new paste
     final restored = <_Need>[];
     for (final m in d.maps('needs')) {
@@ -238,6 +265,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
       final need = _Need()
         ..itemId = id == _other || known('items', id) ? id : null;
       need.qty.text = m.str('qty');
+      need.auto = m['auto'] == true;
       need.otherName.text = m.str('other_name');
       need.otherUnit.text = m.str('other_unit');
       restored.add(need);
@@ -274,6 +302,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
       typeId = brgyId = null;
       sitioRows = [''];
       _fillNotes = const [];
+      multiRows.clear();
+      eventName.clear();
       _fills++;
     });
   }
@@ -369,18 +399,62 @@ class _NewReportScreenState extends State<NewReportScreen> {
   void _applyTemplate(Names names) {
     final t = _templateFor(names);
     if (t == null) return;
-    final fams = int.tryParse(families.text.trim()) ?? 0;
     needs
       ..clear()
       ..addAll([
         for (final line in (t['items'] as List).cast<Map>())
-          _Need()
-            ..itemId = '${line['item_id']}'
-            ..qty.text = fams > 0
-                ? '${((line['per_family'] as num) * fams).ceil().clamp(1, maxEstimatedQuantity)}'
-                : '',
+          _Need()..itemId = '${line['item_id']}',
       ]);
+    for (final n in needs) {
+      _autoFill(n, names);
+    }
     _templateSnapshot = _needsSnapshot;
+  }
+
+  /// How much of an item one affected family gets, in hundredths (600 = 6,
+  /// 10 = 0.1): the disaster type's preset amount, else the item's general
+  /// amount (/lookups items.per_family), else 1 per family.
+  int _perFamily(_Need n, Names names) {
+    if (n.itemId == null || n.itemId == _other) return 100;
+    final t = _templateFor(names);
+    for (final line in (t?['items'] as List? ?? const []).cast<Map>()) {
+      if ('${line['item_id']}' == n.itemId) {
+        return hundredthsOf(line['per_family'] as num);
+      }
+    }
+    for (final it in names.rows('items')) {
+      if ('${it['id']}' == n.itemId && it['per_family'] is num) {
+        return hundredthsOf(it['per_family'] as num);
+      }
+    }
+    return 100;
+  }
+
+  /// UAT Nov 10: fills a need's amount by itself.
+  ///   One barangay:      ceil(affected families x per family)
+  ///   Several barangays: the per-family amount; each barangay's total is
+  ///                      ceil(its families x per family) (see _multiNeeds).
+  /// Only for a need with an item and an amount the reporter did not type.
+  void _autoFill(_Need n, Names names) {
+    if (n.itemId == null) return;
+    if (!n.auto && n.qty.text.trim().isNotEmpty) return; // typed: keep it
+    final pf = _perFamily(n, names);
+    if (multi) {
+      n.qty.text = formatPerFamily(pf / 100);
+    } else {
+      final fams = int.tryParse(families.text.trim()) ?? 0;
+      n.qty.text = fams > 0
+          ? '${barangayQuantity(fams, pf).clamp(1, maxEstimatedQuantity)}'
+          : '';
+    }
+    n.auto = true;
+  }
+
+  /// Every amount the app filled follows the new families / type.
+  void _refillAuto(Names names) {
+    for (final n in needs) {
+      _autoFill(n, names);
+    }
   }
 
   /// Bumped after "Fill from SMS" so the dropdowns rebuild with the new values.
@@ -549,8 +623,182 @@ class _NewReportScreenState extends State<NewReportScreen> {
     return null;
   }
 
+  /// Barangays of "Several barangays" with families typed (above 0).
+  List<MapEntry<String, int>> get _multiFamilies => [
+    for (final e in multiRows.entries)
+      if ((int.tryParse(e.value.text.trim()) ?? 0) > 0)
+        MapEntry(e.key, int.parse(e.value.text.trim())),
+  ];
+
+  int get _multiCount => _multiFamilies.length;
+
+  /// Switches between one and several barangays. The amounts change meaning
+  /// (total vs per family): suggested ones are filled in again, typed ones
+  /// are cleared so nothing is sent with the wrong meaning.
+  void _setMulti(bool value, Names names) {
+    if (value == multi) return;
+    // A typed amount means something else in the other mode (a total vs
+    // per family), so every amount is suggested again from the per-family
+    // standard; the reporter is told when typed ones were replaced.
+    final typed = needs.any((n) => !n.auto && n.qty.text.trim().isNotEmpty);
+    setState(() {
+      multi = value;
+      for (final n in needs) {
+        n.auto = true;
+      }
+      _refillAuto(names);
+    });
+    _saveDraft();
+    if (typed) {
+      AppToast.info(
+        context,
+        value
+            ? 'Amounts are now per family and were filled in again. '
+                  'Check them.'
+            : 'Amounts are now totals and were filled in again. Check them.',
+      );
+    }
+  }
+
+  /// "Several barangays": one barangay's totals, e.g. "Rice 720 kg ·
+  /// Drinking Water 2,400 L" (families x per family, rounded up).
+  String? _barangayPreview(int families, Names names) {
+    final parts = [
+      for (final n in needs)
+        if (n.itemId != null && perFamilyHundredths(n.qty.text) != null)
+          '${_needName(n, names)} '
+                  '${withCommas(barangayQuantity(families, perFamilyHundredths(n.qty.text)!))} '
+                  '${_needUnit(n, names)}'
+              .trim(),
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  /// "Several barangays": under a need, its total for all the barangays
+  /// and the equation, e.g. "Total 1,440 kg = 120 × 6 + 80 × 6 + 40 × 6".
+  Widget _multiTotalLine(_Need n, Names names) {
+    final pf = perFamilyHundredths(n.qty.text);
+    final rows = _multiFamilies;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    if (pf == null || rows.isEmpty) {
+      return Container(
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(
+          'Each barangay gets its families × this amount, rounded up.',
+          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+      );
+    }
+    final unit = _needUnit(n, names);
+    final total = rows.fold<int>(
+      0,
+      (a, r) => a + barangayQuantity(r.value, pf),
+    );
+    final each = formatPerFamily(pf / 100);
+    final equation = rows.length <= 4
+        ? rows.map((r) => '${r.value} × $each').join(' + ')
+        : '${rows.length} barangays × their families × $each';
+    return Container(
+      alignment: Alignment.centerLeft,
+      padding: const EdgeInsets.only(top: 6),
+      child: Text(
+        'Total ${withCommas(total)} $unit = $equation'.trim(),
+        key: ValueKey('need-total-${n.itemId}'),
+        style: t.bodySmall?.copyWith(color: cs.primary),
+      ),
+    );
+  }
+
+  /// UAT post-meeting #6: when something is missing, say what in a pop-up
+  /// (the red text under a field can be far up the form).
+  List<String> _missing(Names names) {
+    final out = <String>[];
+    if (sms) {
+      if (smsSender.text.trim().isEmpty) out.add('Sender number');
+      if (smsText.text.trim().isEmpty) out.add('SMS text');
+    }
+    if (typeId == null) out.add('Disaster type');
+    if (_typeIsOther(names) && typeOther.text.trim().length < 2) {
+      out.add('What kind of disaster');
+    }
+    if (multi) {
+      if (_multiCount < 2) {
+        out.add('At least 2 barangays with affected families');
+      }
+    } else {
+      if (brgyId == null) out.add('Barangay');
+      if (_wholeNumber(maxAffectedFamilies)(families.text) != null) {
+        out.add('Affected families');
+      }
+    }
+    if (desc.text.trim().isEmpty) out.add('Short incident description');
+    for (var i = 0; i < needs.length; i++) {
+      final n = needs[i];
+      final name = _needName(n, names);
+      if (n.itemId == null || (n.itemId == _other && name.isEmpty)) {
+        out.add('Need ${i + 1}: choose an item');
+        continue;
+      }
+      final bad = multi
+          ? perFamilyError(n.qty.text) != null
+          : _wholeNumber(maxEstimatedQuantity)(n.qty.text) != null;
+      if (bad) {
+        out.add(
+          multi
+              ? 'Enter how many $name per family'
+              : 'Enter a quantity for $name',
+        );
+      }
+    }
+    return out;
+  }
+
+  Future<void> _showMissing(Names names) async {
+    final missing = _missing(names);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.error_outline),
+        title: const Text('Please complete the form'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (missing.isEmpty)
+              const Text('Check the fields marked in red.')
+            else
+              for (final m in missing)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('•  '),
+                      Expanded(child: Text(m)),
+                    ],
+                  ),
+                ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _submit(Names names) async {
-    if (!_form.currentState!.validate()) return;
+    final valid = _form.currentState!.validate();
+    if (!valid || (multi && _multiCount < 2)) {
+      await _showMissing(names);
+      return;
+    }
+    if (multi) return _submitMulti(names);
     final total = needs.fold<int>(
       0,
       (a, n) => a + int.parse(n.qty.text.trim()),
@@ -656,6 +904,125 @@ class _NewReportScreenState extends State<NewReportScreen> {
     if (r.ok) _draft?.clear(); // submitted: the draft is no longer needed
   }
 
+  /// NF-003: each barangay's amounts, families x per family, rounded up.
+  List<Map<String, dynamic>> _multiNeeds(int families, Names names) => [
+    for (final n in needs)
+      {
+        if (n.itemId == _other) ...{
+          'other_item_name': n.otherName.text.trim(),
+          'other_item_unit': _needUnit(n, names),
+        } else
+          'item_id': int.parse(n.itemId!),
+        'quantity': barangayQuantity(
+          families,
+          perFamilyHundredths(n.qty.text)!,
+        ),
+      },
+  ];
+
+  Future<void> _submitMulti(Names names) async {
+    final rows = _multiFamilies;
+    final label = _typeIsOther(names)
+        ? typeOther.text.trim()
+        : names.of('disaster_types', typeId);
+    final name = eventName.text.trim().isEmpty
+        ? defaultEventName(label, DateTime.now())
+        : eventName.text.trim();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Submit ${rows.length} reports?'),
+        content: SizedBox(
+          width: 420,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Text(
+                '$name. One report per barangay; the Administrator '
+                'validates each one.',
+              ),
+              const SizedBox(height: 12),
+              for (final r in rows) ...[
+                Text(
+                  '${names.of('barangays', r.key)} · ${r.value} families',
+                  style: Theme.of(ctx).textTheme.titleSmall,
+                ),
+                Text(
+                  [
+                    for (final n in needs)
+                      '${_needName(n, names)}: ${barangayQuantity(r.value, perFamilyHundredths(n.qty.text)!)} ${_needUnit(n, names)}'
+                          .trim(),
+                  ].join(', '),
+                ),
+                const SizedBox(height: 8),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text('Submit ${rows.length} reports'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    setState(() => busy = true);
+    final r = await act(
+      context,
+      () => api.post(
+        '/reports/batch',
+        body: {
+          'disaster_type_id': int.parse(typeId!),
+          'disaster_type_other': _typeIsOther(names)
+              ? typeOther.text.trim()
+              : null,
+          'description': desc.text.trim(),
+          'event_name': eventName.text.trim().isEmpty
+              ? null
+              : eventName.text.trim(),
+          'source': 'Mobile',
+          'barangays': [
+            for (final row in rows)
+              {
+                'barangay_id': int.parse(row.key),
+                'affected_families': row.value,
+                'needs': _multiNeeds(row.value, names),
+              },
+          ],
+        },
+      ),
+      success:
+          '${rows.length} reports submitted as one event. Each is pending '
+          'admin validation.',
+    );
+    if (!mounted) return;
+    setState(() {
+      busy = false;
+      if (r.ok) {
+        _form.currentState!.reset();
+        typeOther.clear();
+        desc.clear();
+        eventName.clear();
+        for (final c in multiRows.values) {
+          c.dispose();
+        }
+        multiRows.clear();
+        needs
+          ..clear()
+          ..add(_Need());
+        typeId = null;
+        _fills++;
+      }
+    });
+    if (r.ok) _draft?.clear();
+  }
+
   Widget _needRow(int i, Names names) {
     final n = needs[i];
     final unit = _needUnit(n, names);
@@ -684,7 +1051,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                         child: Text('Other…'),
                       ),
                     ],
-                    onChanged: (v) => setState(() => n.itemId = v),
+                    onChanged: (v) => setState(() {
+                      n.itemId = v;
+                      _autoFill(n, names);
+                    }),
                     validator: (v) {
                       if (v == null) return 'Choose an item';
                       if (v == _other) return null; // checked on the name
@@ -734,15 +1104,34 @@ class _NewReportScreenState extends State<NewReportScreen> {
             ],
             const SizedBox(height: 10),
             TextFormField(
+              key: ValueKey('qty-$multi'),
               controller: n.qty,
-              keyboardType: TextInputType.number,
-              inputFormatters: _quantityInput,
+              keyboardType: multi
+                  ? const TextInputType.numberWithOptions(decimal: true)
+                  : TextInputType.number,
+              inputFormatters: multi ? perFamilyInput : _quantityInput,
               decoration: InputDecoration(
-                labelText: 'How many?',
-                suffixText: unit.isEmpty ? null : unit,
+                labelText: multi ? 'How many per family?' : 'How many?',
+                suffixText: unit.isEmpty
+                    ? null
+                    : multi
+                    ? '$unit / family'
+                    : unit,
+                helperText: multi
+                    ? 'e.g. 6, or 0.2 for 1 per 5 families'
+                    : null,
               ),
-              validator: _wholeNumber(maxEstimatedQuantity),
+              validator: multi
+                  ? perFamilyError
+                  : _wholeNumber(maxEstimatedQuantity),
+              // Typed by the reporter: no longer follows the families.
+              // Cleared: filled in again by the app.
+              onChanged: (v) => setState(() {
+                n.auto = v.trim().isEmpty;
+                if (n.auto) _autoFill(n, names);
+              }),
             ),
+            if (multi && n.itemId != null) _multiTotalLine(n, names),
           ],
         ),
       ),
@@ -870,7 +1259,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 onChanged: (v) => setState(() {
                   final untouched = _needsUntouched;
                   typeId = v;
-                  if (untouched) _applyTemplate(names);
+                  if (untouched) {
+                    _applyTemplate(names);
+                  } else {
+                    // Changed list: kept, but amounts the app filled follow
+                    // the new type's per-family standard.
+                    _refillAuto(names);
+                  }
                 }),
               ),
               if (_typeIsOther(names)) ...[
@@ -891,22 +1286,82 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   },
                 ),
               ],
+              // NF-003: one disaster, several barangays (e.g. an earthquake):
+              // one form, one report per barangay.
+              if (_canMulti) ...[
+                const SizedBox(height: 12),
+                SegmentedButton<bool>(
+                  key: const ValueKey('report-mode'),
+                  segments: const [
+                    ButtonSegment(
+                      value: false,
+                      icon: Icon(Icons.place_outlined),
+                      label: Text('One barangay'),
+                    ),
+                    ButtonSegment(
+                      value: true,
+                      icon: Icon(Icons.share_location_outlined),
+                      label: Text('Several barangays'),
+                    ),
+                  ],
+                  selected: {multi},
+                  onSelectionChanged: (v) => _setMulti(v.first, names),
+                ),
+              ],
               const SizedBox(height: 12),
-              HazardBarangayField(
-                key: ValueKey('brgy-$_fills'),
-                names: names,
-                typeId: typeId,
-                value: brgyId,
-                onChanged: (v) => setState(() {
-                  brgyId = v;
-                  sitioRows = [''];
-                }),
-              ),
+              if (multi) ...[
+                MultiBarangayPicker(
+                  key: ValueKey('multi-$_fills'),
+                  names: names,
+                  typeId: typeId,
+                  rows: multiRows,
+                  maxFamilies: maxAffectedFamilies,
+                  preview: (families) => _barangayPreview(families, names),
+                  onChanged: () {
+                    setState(() {});
+                    _saveDraft();
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: eventName,
+                  decoration: InputDecoration(
+                    labelText: 'Event name (optional)',
+                    hintText: typeId == null
+                        ? 'e.g. Earthquake – Nov 9, 2026'
+                        : defaultEventName(
+                            _typeIsOther(names) &&
+                                    typeOther.text.trim().isNotEmpty
+                                ? typeOther.text.trim()
+                                : names.of('disaster_types', typeId),
+                            DateTime.now(),
+                          ),
+                    helperText:
+                        'Donors see the barangays together under this name.',
+                  ),
+                  validator: (v) {
+                    final t = (v ?? '').trim();
+                    return t.isNotEmpty && (t.length < 2 || t.length > 150)
+                        ? 'Use 2 to 150 characters'
+                        : null;
+                  },
+                ),
+              ] else
+                HazardBarangayField(
+                  key: ValueKey('brgy-$_fills'),
+                  names: names,
+                  typeId: typeId,
+                  value: brgyId,
+                  onChanged: (v) => setState(() {
+                    brgyId = v;
+                    sitioRows = [''];
+                  }),
+                ),
 
               // Concerns2: the sitio field only appears after a barangay is
               // chosen, lists only that barangay's sitios, and defaults to
               // the whole barangay. problema_napud 2.2: "Add another sitio".
-              if (brgyId != null) ...[
+              if (!multi && brgyId != null) ...[
                 const SizedBox(height: 12),
                 SitioPicker(
                   key: ValueKey('sitios-$brgyId-$_fills'),
@@ -917,8 +1372,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   onChanged: (rows) => setState(() => sitioRows = rows),
                 ),
               ],
-              const SectionTitle('Donation info'),
-              NewReportDonationInfo(barangayId: brgyId),
+              if (!multi) ...[
+                const SectionTitle('Donation info'),
+                NewReportDonationInfo(barangayId: brgyId),
+              ],
               const SectionTitle('Situation (DROMIC)'),
               TextFormField(
                 controller: desc,
@@ -928,24 +1385,23 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 ),
                 validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
               ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: families,
-                keyboardType: TextInputType.number,
-                inputFormatters: _wholeNumberInput,
-                decoration: InputDecoration(
-                  labelText: 'Affected families',
-                  helperText:
-                      'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
+              if (!multi) ...[
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: families,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: _wholeNumberInput,
+                  decoration: InputDecoration(
+                    labelText: 'Affected families',
+                    helperText:
+                        'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
+                  ),
+                  validator: _wholeNumber(maxAffectedFamilies),
+                  // UAT Nov 10: every need the app filled (preset or added)
+                  // follows the families; typed amounts stay.
+                  onChanged: (_) => setState(() => _refillAuto(names)),
                 ),
-                validator: _wholeNumber(maxAffectedFamilies),
-                onChanged: (_) {
-                  if (_templateSnapshot != null &&
-                      _needsSnapshot == _templateSnapshot) {
-                    setState(() => _applyTemplate(names));
-                  }
-                },
-              ),
+              ],
               const SectionTitle('Assistance needed'),
               // Concerns Nov 4: the needs fill in by themselves from the
               // disaster type and the families, so there is no "Use
@@ -998,6 +1454,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       ? 'Save changes'
                       : sms
                       ? 'Encode SMS report'
+                      : multi
+                      ? 'Submit ${_multiCount < 2 ? '' : '$_multiCount '}reports'
                       : 'Submit report',
                 ),
               ),
@@ -1005,46 +1463,6 @@ class _NewReportScreenState extends State<NewReportScreen> {
           ),
         );
       },
-    );
-  }
-}
-
-/// Appendix H 3.3 Priority-based report filtering.
-class PriorityChips extends StatelessWidget {
-  final String value;
-  final ValueChanged<String> onChanged;
-  const PriorityChips({
-    super.key,
-    required this.value,
-    required this.onChanged,
-  });
-
-  static const levels = [
-    '',
-    'Critical',
-    'High',
-    'Medium',
-    'Low',
-    'Needs Review',
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (final p in levels)
-            Padding(
-              padding: const EdgeInsets.only(right: 6),
-              child: ChoiceChip(
-                label: Text(p.isEmpty ? 'All priorities' : p),
-                selected: value == p,
-                onSelected: (_) => onChanged(p),
-              ),
-            ),
-        ],
-      ),
     );
   }
 }
@@ -1069,19 +1487,24 @@ class ValidatedReportsScreen extends StatefulWidget {
 }
 
 class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
-  String priority = '';
-  String? progress; // fulfillment status, null = any (Ivan's note)
-  ReportSort sort = ReportSort.urgent;
+  // Kept while the app is open (UAT Nov 2026, option A).
+  static const _list = 'validated';
+  late ReportView view = ReportViewMemory.read(_list, const ReportView());
+
+  void _show(ReportView v) {
+    ReportViewMemory.write(_list, v);
+    setState(() => view = v);
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Roles without 3.3 priority filtering never send a priority.
+    final priority = widget.filter ? view.priority : null;
     return Loader(
       key: ValueKey(priority),
       load: [
-        () => api.get(
-          '/reports/validated',
-          query: {if (priority.isNotEmpty) 'priority_level': priority},
-        ),
+        () =>
+            api.get('/reports/validated', query: {'priority_level': ?priority}),
         api.lookupsResult,
       ],
       builder: (context, data) {
@@ -1089,8 +1512,8 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
         final names = Names(Map<String, dynamic>.from(data[1] as Map));
         final rows = sortAndFilterReports(
           all,
-          fulfillment: progress,
-          sort: sort,
+          fulfillment: view.fulfillment,
+          sort: view.sort,
         );
         return ListView(
           padding: const EdgeInsets.all(20),
@@ -1101,29 +1524,23 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
                 subtitle:
                     'Reports approved by the Administrator • ${roleLine()}',
               ),
-            if (widget.filter) ...[
-              PriorityChips(
-                value: priority,
-                onChanged: (p) => setState(() => priority = p),
-              ),
-              const SizedBox(height: 8),
-            ],
-            // Fulfillment status filter and sort for every role, also the
-            // ones without priority filtering (Ivan's note: "for every user
-            // that has this dashboard"; fulfilled reports are found with the
-            // Fulfilled chip, there is no separate Done section).
-            FulfillmentChips(
+            // One Filter button and a compact sort (UAT Nov 2026).
+            // Fulfillment status and sort for every role (Ivan's note:
+            // fulfilled reports are found with the Fulfilled filter, there is
+            // no separate Done section); priorities only for 3.3 roles.
+            ReportFilterBar(
+              value: view,
+              onChanged: _show,
+              priorities: widget.filter,
               rows: all,
-              value: progress,
-              onChanged: (v) => setState(() => progress = v),
             ),
             const SizedBox(height: 12),
-            ReportSortField(
-              value: sort,
-              onChanged: (v) => setState(() => sort = v),
-            ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty) const EmptyState('No validated reports to show.'),
+            if (rows.isEmpty)
+              ReportListEmpty(
+                'No validated reports to show.',
+                filtered: activeFilters(view) > 0,
+                onClear: () => _show(view.withFilters()),
+              ),
             for (final r in rows) ReportCard(r, names),
           ],
         );
@@ -1145,14 +1562,25 @@ class _ReportsHubState extends State<ReportsHub>
     with HomeTargetListener<ReportsHub> {
   bool monitor = false;
 
+  // A notification about one report (UAT Nov 2026, M2.5): Status opens on
+  // the list the report is in now, with that report first and outlined.
+  String? _focusStatus;
+  int? _focusId;
+  int _focus = 0;
+
   // A notification about a report opens Reports > Validated or Status.
   @override
   String get homeTab => 'Reports';
 
   @override
   void applyHomeTarget(HomeTarget target) {
-    if (target.view == 'status') monitor = true;
     if (target.view == 'validated') monitor = false;
+    if (target.view == 'status' || reportStatuses.contains(target.view)) {
+      monitor = true;
+      _focusStatus = reportStatuses.contains(target.view) ? target.view : null;
+      _focusId = target.id;
+      _focus++;
+    }
   }
 
   @override
@@ -1175,12 +1603,21 @@ class _ReportsHubState extends State<ReportsHub>
               ),
             ],
             selected: {monitor},
-            onSelectionChanged: (v) => setState(() => monitor = v.first),
+            onSelectionChanged: (v) => setState(() {
+              monitor = v.first;
+              // From now on the user's own filters, not the notification's.
+              _focusStatus = null;
+              _focusId = null;
+            }),
           ),
         ),
         Expanded(
           child: monitor
-              ? const MonitoringScreen()
+              ? MonitoringScreen(
+                  key: ValueKey(_focus),
+                  focusStatus: _focusStatus,
+                  focusId: _focusId,
+                )
               : const ValidatedReportsScreen(filter: true),
         ),
       ],
@@ -1193,22 +1630,40 @@ class _ReportsHubState extends State<ReportsHub>
 // CSWS Disaster Unit): every report with its fulfillment progress.
 // ---------------------------------------------------------------------------
 class MonitoringScreen extends StatefulWidget {
-  const MonitoringScreen({super.key});
+  /// Opened from a notification about one report: show this status (the
+  /// list the report is in now) and put [focusId] first, outlined.
+  final String? focusStatus;
+  final int? focusId;
+  const MonitoringScreen({super.key, this.focusStatus, this.focusId});
 
   @override
   State<MonitoringScreen> createState() => _MonitoringScreenState();
 }
 
 class _MonitoringScreenState extends State<MonitoringScreen> {
-  String priority = '';
-  String? progress; // fulfillment status, null = any (Ivan's note)
-  ReportSort sort = ReportSort.urgent;
-  bool onlyMine = false;
+  // Kept while the app is open (UAT Nov 2026, option A).
+  static const _list = 'monitoring';
+  late ReportView view = _initialView();
   int _loads = 0;
 
   // Oct 11 (Daniel): the CSWS Disaster Unit edits or withdraws its own
   // reports here until the Administrator validates them.
   bool get _reporter => api.role == Roles.cswsUnit;
+
+  ReportView _initialView() {
+    final saved = ReportViewMemory.read(_list, const ReportView());
+    if (widget.focusStatus == null && widget.focusId == null) return saved;
+    // A notification: only that status, no other filter that could hide
+    // the report.
+    final v = saved.withFilters(status: widget.focusStatus);
+    ReportViewMemory.write(_list, v);
+    return v;
+  }
+
+  void _show(ReportView v) {
+    ReportViewMemory.write(_list, v);
+    setState(() => view = v);
+  }
 
   Future<void> _edit(Map<String, dynamic> r) async {
     final saved = await Navigator.of(context).push<bool>(
@@ -1255,11 +1710,17 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
   @override
   Widget build(BuildContext context) {
     return Loader(
-      key: ValueKey('$priority/$_loads'),
+      key: ValueKey('${view.status}/${view.priority}/$_loads'),
       load: [
+        // Status and priority are filtered by the server. Up to 200 reports:
+        // the default page is 50, so older reports never showed.
         () => api.get(
           '/reports/monitoring',
-          query: {if (priority.isNotEmpty) 'priority_level': priority},
+          query: {
+            if (view.status != null) 'status': view.status!,
+            if (view.priority != null) 'priority_level': view.priority!,
+            'limit': '200',
+          },
         ),
         api.lookupsResult,
         if (_reporter) () => api.get('/reports/mine'),
@@ -1277,16 +1738,19 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
             mine.contains(r['report_id']) &&
             (r['status'] == 'Pending' || r['status'] == 'Rejected');
         final sorted = sortAndFilterReports(
-          onlyMine
+          view.onlyMine
               ? all.where((r) => mine.contains(r['report_id'])).toList()
               : all,
-          fulfillment: progress,
-          sort: sort,
+          fulfillment: view.fulfillment,
+          sort: view.sort,
         );
         // My own reports that can still be edited come first.
-        final rows = onlyMine
+        final rows = view.onlyMine
             ? [...sorted.where(editable), ...sorted.where((r) => !editable(r))]
             : sorted;
+        // The report a notification pointed at comes first, outlined.
+        final hi = rows.indexWhere((r) => r['report_id'] == widget.focusId);
+        if (hi > 0) rows.insert(0, rows.removeAt(hi));
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -1296,39 +1760,36 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
                   'Fulfillment progress of every report, active and done • '
                   '${roleLine()}',
             ),
-            PriorityChips(
-              value: priority,
-              onChanged: (p) => setState(() => priority = p),
-            ),
-            const SizedBox(height: 8),
-            FulfillmentChips(
+            // UAT Nov 2026 (M2.5): one Filter button with Validation Status
+            // (Rejected reports no longer sink to the bottom), Priorities and
+            // Fulfillment Status, and a compact sort.
+            ReportFilterBar(
+              value: view,
+              onChanged: _show,
+              statuses: reportStatuses,
               rows: all,
-              value: progress,
-              onChanged: (v) => setState(() => progress = v),
+              trailing: [
+                if (_reporter)
+                  FilterChip(
+                    avatar: const Icon(Icons.person_outline, size: 18),
+                    label: Text('Only my reports (${mine.length})'),
+                    selected: view.onlyMine,
+                    onSelected: (v) => _show(view.withOnlyMine(v)),
+                  ),
+              ],
             ),
             const SizedBox(height: 12),
-            ReportSortField(
-              value: sort,
-              onChanged: (v) => setState(() => sort = v),
-            ),
-            if (_reporter) ...[
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilterChip(
-                  avatar: const Icon(Icons.person_outline, size: 18),
-                  label: Text('Only my reports (${mine.length})'),
-                  selected: onlyMine,
-                  onSelected: (v) => setState(() => onlyMine = v),
-                ),
+            if (rows.isEmpty)
+              ReportListEmpty(
+                'No reports to show.',
+                filtered: activeFilters(view) > 0 || view.onlyMine,
+                onClear: () => _show(ReportView(sort: view.sort)),
               ),
-            ],
-            const SizedBox(height: 12),
-            if (rows.isEmpty) const EmptyState('No reports to show.'),
             for (final r in rows)
               ReportCard(
                 r,
                 names,
+                highlighted: r['report_id'] == widget.focusId,
                 actions: editable(r)
                     ? [
                         TextButton.icon(
@@ -1370,10 +1831,12 @@ class AdminReportsScreen extends StatefulWidget {
 
 class _AdminReportsScreenState extends State<AdminReportsScreen>
     with HomeTargetListener<AdminReportsScreen> {
-  String status = 'Pending';
-  String priority = '';
-  String? progress; // fulfillment status in the Validated view
-  ReportSort sort = ReportSort.urgent;
+  // Kept while the app is open (UAT Nov 2026, option A). Report Validation
+  // always shows one status; Pending is the validation queue.
+  static const _list = 'validation';
+  static const _defaults = ReportView(status: 'Pending');
+  static const _statuses = ['Pending', 'Validated', 'Rejected'];
+  late ReportView view = ReportViewMemory.read(_list, _defaults);
   int _loads = 0;
   int? _highlight; // report the notification is about, shown first
 
@@ -1382,11 +1845,18 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   @override
   void applyHomeTarget(HomeTarget target) {
-    if (const ['Pending', 'Validated', 'Rejected'].contains(target.view)) {
-      status = target.view!;
+    if (_statuses.contains(target.view)) {
+      // Only that status, no other filter that could hide the report.
+      view = view.withFilters(status: target.view);
+      ReportViewMemory.write(_list, view);
     }
     _highlight = target.id;
     _loads++;
+  }
+
+  void _show(ReportView v) {
+    ReportViewMemory.write(_list, v);
+    setState(() => view = v);
   }
 
   Future<void> _reject(Map<String, dynamic> r) async {
@@ -1442,23 +1912,31 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
 
   @override
   Widget build(BuildContext context) {
+    final status = view.status ?? 'Pending';
+    final validated = status == 'Validated';
     return Loader(
-      key: ValueKey('$status/$priority/$_loads'),
+      key: ValueKey('$status/${view.priority}/$_loads'),
       load: [
         // Validated reports come with their fulfillment progress, for the
-        // fulfillment chips and sort (Ivan's note).
-        () => status == 'Validated'
+        // fulfillment filter and sort (Ivan's note).
+        () => validated
             ? api.get(
                 '/reports/validated',
-                query: {if (priority.isNotEmpty) 'priority_level': priority},
+                query: {
+                  if (view.priority != null) 'priority_level': view.priority!,
+                },
               )
             : api.get('/reports/', query: {'status': status}),
         api.lookupsResult,
       ],
       builder: (context, data) {
         final all = (data[0] as List).cast<Map<String, dynamic>>();
-        final rows = status == 'Validated'
-            ? sortAndFilterReports(all, fulfillment: progress, sort: sort)
+        final rows = validated
+            ? sortAndFilterReports(
+                all,
+                fulfillment: view.fulfillment,
+                sort: view.sort,
+              )
             : all;
         // The report a notification pointed at comes first, outlined.
         final hi = rows.indexWhere((r) => r['report_id'] == _highlight);
@@ -1468,35 +1946,27 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
           padding: const EdgeInsets.all(20),
           children: [
             PageHeader('Report Validation', subtitle: roleLine()),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(value: 'Pending', label: Text('Pending')),
-                ButtonSegment(value: 'Validated', label: Text('Validated')),
-                ButtonSegment(value: 'Rejected', label: Text('Rejected')),
-              ],
-              selected: {status},
-              onSelectionChanged: (s) => setState(() => status = s.first),
+            // UAT Nov 2026 (M2.3, M3.3): one Filter button instead of the
+            // Pending / Validated / Rejected switch and two chip rows.
+            // Priorities, fulfillment and sort are for validated reports, as
+            // before.
+            ReportFilterBar(
+              value: view,
+              defaults: _defaults,
+              onChanged: _show,
+              statuses: _statuses,
+              anyStatus: false,
+              rows: all,
+              detailsOnlyFor: 'Validated',
+              showSort: validated,
             ),
             const SizedBox(height: 12),
-            if (status == 'Validated') ...[
-              PriorityChips(
-                value: priority,
-                onChanged: (p) => setState(() => priority = p),
+            if (rows.isEmpty)
+              ReportListEmpty(
+                'No ${status.toLowerCase()} reports.',
+                filtered: view.priority != null || view.fulfillment != null,
+                onClear: () => _show(view.withFilters(status: status)),
               ),
-              const SizedBox(height: 8),
-              FulfillmentChips(
-                rows: all,
-                value: progress,
-                onChanged: (v) => setState(() => progress = v),
-              ),
-              const SizedBox(height: 12),
-              ReportSortField(
-                value: sort,
-                onChanged: (v) => setState(() => sort = v),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (rows.isEmpty) EmptyState('No ${status.toLowerCase()} reports.'),
             for (final r in rows)
               ReportCard(
                 r,

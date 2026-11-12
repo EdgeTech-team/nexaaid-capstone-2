@@ -8,7 +8,11 @@ import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
 import 'home_nav.dart';
 import 'ops_screens.dart' show NewDeliveryScreen, showCmoEntryPopout;
+import 'report_filters.dart' show reportStatuses;
+
 import 'report_summary_card.dart' show NeedChips;
+import 'donor_screens.dart' show DonateScreen;
+import 'event_screen.dart' show EventLink, openEvent;
 import 'widgets.dart';
 
 /// Where each notification opens (Oct 11 notes, Jenises): always the page
@@ -44,11 +48,32 @@ final Map<String, EntityOpener> notificationDestinations = {
         }
         if (c.mounted) _go(c, 'Validate', view: view, id: id);
       case Roles.cswsUnit:
+        // UAT Nov 2026 (M2.5): Report Status opens on the list the report is
+        // in now (Rejected after a rejection; Pending again once it was
+        // fixed and resent), with that report first and outlined, then its
+        // pop-up.
+        final r = await api.get('/reports/$id');
+        final status = r.ok && r.json is Map
+            ? '${(r.json as Map)['status']}'
+            : null;
+        if (c.mounted) {
+          _go(
+            c,
+            'Reports',
+            view: reportStatuses.contains(status) ? status : 'status',
+            id: id,
+            then: (ctx) => showReportSheet(ctx, id),
+          );
+        }
+      case Roles.donor:
+      case Roles.org:
+        // NF-003: "New disaster needs help" opens the event page (every
+        // barangay, Donate on each); any other report opens its pop-up.
         _go(
           c,
           'Reports',
-          view: 'status',
-          then: (ctx) => showReportSheet(ctx, id),
+          view: 'validated',
+          then: (ctx) => _openForDonor(ctx, id),
         );
       default:
         _go(
@@ -177,6 +202,21 @@ Future<void> _openDonation(BuildContext c, int donationId) async {
   }
 }
 
+/// Donors: a report of a multi-barangay event opens the event page, any
+/// other report its pop-up (with Donate).
+Future<void> _openForDonor(BuildContext c, int id) async {
+  final r = await api.get('/reports/$id');
+  if (!c.mounted) return;
+  final report = r.ok && r.json is Map ? r.json as Map : null;
+  if (report != null &&
+      report['event_id'] != null &&
+      report['status'] == 'Validated') {
+    openEvent(c, report);
+  } else {
+    await showReportSheet(c, id);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: report pop-up for non-technical users.
 // Loads GET /reports/{id} (report + fulfillment progress) and shows it in
@@ -232,6 +272,27 @@ Future<void> showReportSheet(BuildContext c, int id) async {
 }
 
 class ReportSheet extends StatelessWidget {
+  /// The donate form takes the report as /lookups validated_reports lists it.
+  Future<void> _donateFromSheet(BuildContext context) async {
+    final nav = Navigator.of(context);
+    final lookups = names ?? Names(await api.lookups());
+    final row = lookups
+        .rows('validated_reports')
+        .where((r) => '${r['id']}' == '${report['report_id']}')
+        .firstOrNull;
+    if (!context.mounted) return;
+    if (row == null) {
+      AppToast.info(context, 'Pull down to refresh, then try again.');
+      return;
+    }
+    nav.pop(); // close the pop-out first
+    nav.push(
+      MaterialPageRoute(
+        builder: (_) => DonateScreen(report: row, names: lookups),
+      ),
+    );
+  }
+
   final Map<String, dynamic> report;
   final Names? names;
   const ReportSheet({super.key, required this.report, this.names});
@@ -320,6 +381,8 @@ class ReportSheet extends StatelessWidget {
             'Report #${report['report_id']} · reported ${niceDate(report['created_at'])}',
             style: t.bodyMedium?.copyWith(color: Brand.muted),
           ),
+          // NF-003: e.g. from the "New disaster needs help" notice.
+          if (status == 'Validated') EventLink(report),
           const SizedBox(height: 16),
 
           // Status in plain words.
@@ -398,6 +461,22 @@ class ReportSheet extends StatelessWidget {
               child: Text(
                 '$reason',
                 style: t.bodyLarge?.copyWith(color: const Color(0xFFC62828)),
+              ),
+            ),
+
+          // Donors opening a report from a notification can give right away.
+          if ((api.role == Roles.donor || api.role == Roles.org) &&
+              status == 'Validated' &&
+              (num.tryParse('${report['fulfillment_percentage']}') ?? 0) < 100)
+            Padding(
+              padding: const EdgeInsets.only(top: 20),
+              child: AppButton(
+                'Donate',
+                key: const ValueKey('sheet-donate'),
+                icon: Icons.volunteer_activism_outlined,
+                variant: AppButtonVariant.donate,
+                expand: true,
+                onPressed: () => _donateFromSheet(context),
               ),
             ),
 

@@ -16,6 +16,10 @@ class ReportSummaryCard extends StatelessWidget {
   final String? status;
   final String? priority;
 
+  /// NF-003: the multi-barangay event the report belongs to, e.g.
+  /// "Earthquake – Nov 9, 2026" (null = a single-barangay report).
+  final String? eventName;
+
   final int? affectedFamilies;
   final String? assistanceNeeded;
   final String? description;
@@ -48,6 +52,7 @@ class ReportSummaryCard extends StatelessWidget {
     required this.barangay,
     this.status,
     this.priority,
+    this.eventName,
     this.affectedFamilies,
     this.assistanceNeeded,
     this.description,
@@ -86,6 +91,26 @@ class ReportSummaryCard extends StatelessWidget {
               StatusChip(status),
             ],
           ),
+          if (eventName != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.share_location_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      'Part of $eventName',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           const SizedBox(height: 6),
           Wrap(
             spacing: 6,

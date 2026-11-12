@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'disaster_art.dart';
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
 import 'form_draft.dart';
@@ -107,6 +108,11 @@ class _ItemInfo {
 class _Line {
   String? itemId;
 
+  /// To scroll to this item and put the cursor in its quantity (a tapped
+  /// "Still needed" item, or one that is already in the donation).
+  final key = GlobalKey();
+  final packsFocus = FocusNode();
+
   /// One of the item's sizes (its id), [_customSize], or null.
   String? sizeId;
   String? sizeUnit; // unit of a custom size
@@ -190,6 +196,7 @@ class _Line {
 
   void dispose() {
     packs.dispose();
+    packsFocus.dispose();
     perPackOther.dispose();
     sizeAmount.dispose();
     value.dispose();
@@ -232,6 +239,10 @@ class DonateScreen extends StatefulWidget {
 }
 
 class _DonateScreenState extends State<DonateScreen> {
+  /// The report this donation goes to. NF-003: the donor can switch to
+  /// another barangay of the same event ("Donating to").
+  late Map<String, dynamic> _report = widget.report;
+
   final _form = GlobalKey<FormState>();
   final _scroll = ScrollController();
   final lines = <_Line>[_Line()];
@@ -358,13 +369,32 @@ class _DonateScreenState extends State<DonateScreen> {
 
   /// The report's per-item needs (from /lookups or /public/reports), or
   /// empty for an older report with only "General needs".
-  late final List<Map> _reportNeeds = () {
+  List<Map> get _reportNeeds {
     final rows = [
-      for (final n in (widget.report['needs'] as List? ?? const []))
+      for (final n in (_report['needs'] as List? ?? const []))
         if (n is Map) n,
     ];
     return rows.any((n) => n['item_id'] == null) ? <Map>[] : rows;
-  }();
+  }
+
+  /// NF-003: the event's other barangays that still take donations, for
+  /// "Donating to". Empty for a single-barangay report, or when changing a
+  /// donation already made.
+  List<Map<String, dynamic>> get _eventChoices {
+    final event = widget.report['event_id'];
+    if (event == null || _editing || _adding) return const [];
+    return [
+      for (final r in widget.names.rows('validated_reports'))
+        if ('${r['event_id']}' == '$event' &&
+            (((r['fulfillment_percentage'] as num?) ?? 0) < 100 ||
+                '${r['id']}' == '${widget.report['id']}'))
+          r,
+    ]..sort(
+      (a, b) => ((a['fulfillment_percentage'] as num?) ?? 0).compareTo(
+        (b['fulfillment_percentage'] as num?) ?? 0,
+      ),
+    );
+  }
 
   /// What is still missing of a need: needed minus what donors pledged.
   static int _stillNeeded(Map n) => math.max(
@@ -402,11 +432,19 @@ class _DonateScreenState extends State<DonateScreen> {
     'dates': [for (final d in sortedDates(pickupDates)) pickupDateIso(d)],
     'guest_name': guestName.text,
     'guest_phone': guestPhone.text,
+    // NF-003: the barangay picked in "Donating to".
+    'report_id': _report['id'],
   };
 
   void _saveDraft() => _draft?.save(_snapshot);
 
   void _restoreDraft(Map<String, dynamic> d) {
+    // NF-003: back on the barangay the donor switched to, if it still
+    // takes donations.
+    final picked = _eventChoices
+        .where((c) => '${c['id']}' == '${d['report_id']}')
+        .firstOrNull;
+    if (picked != null) _report = picked;
     final restored = <_Line>[];
     for (final m in d.maps('lines')) {
       final l = _Line()..itemId = m.strOrNull('item_id');
@@ -649,6 +687,136 @@ class _DonateScreenState extends State<DonateScreen> {
     ),
   );
 
+  /// Nov 10: the report's needs can be tapped to add them (the item list
+  /// still works). Not while changing a donation already made.
+  bool get _pickable => !_editing;
+
+  /// The line that already has this item, or -1.
+  int _lineWith(String itemId) => lines.indexWhere((l) => l.itemId == itemId);
+
+  /// "Still needed": one chip per need. Tapping adds the item to the
+  /// donation (an empty item card is used first), scrolls to it and puts
+  /// the cursor in "How many?". An item already in the donation is not
+  /// added twice: the app says so and shows where it is.
+  Widget _needPicker() {
+    final cs = Theme.of(context).colorScheme;
+    return Wrap(
+      spacing: Space.xs,
+      runSpacing: Space.xs,
+      children: [
+        for (final n in _reportNeeds)
+          Builder(
+            builder: (context) {
+              final id = '${n['item_id']}';
+              final inDonation = _lineWith(id) >= 0;
+              final still = _stillNeeded(n);
+              final unit = '${n['unit'] ?? ''}'.trim();
+              return ActionChip(
+                key: ValueKey('need-chip-$id'),
+                avatar: Icon(
+                  inDonation ? Icons.check_circle : Icons.add_circle_outline,
+                  size: 18,
+                  color: inDonation ? cs.primary : cs.onSecondaryContainer,
+                ),
+                backgroundColor: inDonation
+                    ? cs.primaryContainer
+                    : cs.secondaryContainer,
+                side: BorderSide.none,
+                label: Text(
+                  inDonation
+                      ? '${n['item_name']}: in your donation'
+                      : still > 0
+                      ? '${n['item_name']}: $still of ${n['needed']} $unit'
+                            .trim()
+                      : '${n['item_name']}: fully pledged',
+                ),
+                tooltip: inDonation
+                    ? '${n['item_name']} is already in your donation'
+                    : 'Add ${n['item_name']}',
+                onPressed: () => _pickNeed(n),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  void _pickNeed(Map n) {
+    final id = '${n['item_id']}';
+    final name = '${n['item_name']}';
+    final at = _lineWith(id);
+    if (at >= 0) {
+      // Shown after the cursor moves: main.dart closes messages when a text
+      // field gets focus, so showing it first would hide it at once.
+      final item = lines.length - at;
+      _reveal(
+        lines[at],
+        then: () => AppToast.info(
+          context,
+          '$name is already in your donation (Item $item). '
+          'Just change its amount there.',
+        ),
+      );
+      return;
+    }
+    final item = widget.names
+        .rows('items')
+        .where((it) => '${it['id']}' == id)
+        .firstOrNull;
+    if (item == null) {
+      // Retired or still under review: not in the item list right now.
+      AppToast.info(
+        context,
+        '$name can\'t be picked right now. Choose an item from the list, '
+        'or "Something else…".',
+      );
+      return;
+    }
+    final info = _ItemInfo.fromLookup(item);
+    // An empty item card is used first, so the form never has a blank one.
+    final empty = lines.indexWhere(
+      (l) => l.itemId == null && l.packs.text.trim().isEmpty,
+    );
+    final line = empty >= 0 ? lines[empty] : _Line();
+    setState(() {
+      line
+        ..itemId = id
+        // Only one size: chosen already. Several: the donor picks one.
+        ..sizeId = !info.counted && info.sizes.length == 1
+            ? '${info.sizes.first['id']}'
+            : null
+        ..sizeUnit = null;
+      if (empty < 0) lines.insert(0, line); // newest on top
+    });
+    _saveDraft();
+    _reveal(line);
+  }
+
+  /// Scrolls to an item card and puts the cursor in its quantity, then
+  /// runs [then] (e.g. a message, which must come after the focus).
+  void _reveal(_Line l, {VoidCallback? then}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = l.key.currentContext;
+      if (ctx == null || !mounted) return;
+      Scrollable.ensureVisible(
+        ctx,
+        duration: Motion.normal,
+        curve: Motion.curve,
+        alignment: 0.1,
+      ).then((_) {
+        if (!mounted) return;
+        l.packsFocus.requestFocus();
+        // The focus change (and main.dart's listener) runs in a
+        // microtask; a Future runs after it.
+        if (then != null) {
+          Future(() {
+            if (mounted) then();
+          });
+        }
+      });
+    });
+  }
+
   /// Concerns Nov 4: a new item goes at the top, right under the button
   /// and the report's needs, and the earlier items move down. The donor
   /// can still read what the report needs while filling it in.
@@ -706,7 +874,7 @@ class _DonateScreenState extends State<DonateScreen> {
         : PickedAddress(addressText);
     setState(() => busy = true);
     final body = <String, dynamic>{
-      if (!_editing) 'report_id': widget.report['id'],
+      if (!_editing) 'report_id': _report['id'],
       'handover_method': handover,
       if (door) ...{
         'pickup_address': addressText,
@@ -759,8 +927,7 @@ class _DonateScreenState extends State<DonateScreen> {
       MaterialPageRoute(
         builder: (_) => DonationReceipt(
           batch: Map<String, dynamic>.from(r.json as Map),
-          reportTitle:
-              '${widget.report['disaster']} in ${widget.report['barangay']}',
+          reportTitle: '${_report['disaster']} in ${_report['barangay']}',
         ),
       ),
     );
@@ -771,7 +938,8 @@ class _DonateScreenState extends State<DonateScreen> {
   // -------------------------------------------------------------------------
 
   Widget _reportSummary() {
-    final r = widget.report;
+    final r = _report;
+    final choices = _eventChoices;
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final needs = '${r['assistance_needed'] ?? ''}'.trim();
@@ -779,14 +947,12 @@ class _DonateScreenState extends State<DonateScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
+          // The report's own disaster (was always a flood icon).
+          DisasterArt(
+            disasterKind(r['disaster']),
             width: 48,
             height: 48,
-            decoration: BoxDecoration(
-              color: cs.primaryContainer,
-              borderRadius: BorderRadius.circular(Radii.md),
-            ),
-            child: Icon(Icons.flood_outlined, color: cs.onPrimaryContainer),
+            borderRadius: BorderRadius.circular(Radii.md),
           ),
           Gaps.h12,
           Expanded(
@@ -798,27 +964,70 @@ class _DonateScreenState extends State<DonateScreen> {
                   style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                 ),
                 Gaps.v4,
-                Text(
-                  '${r['disaster']} in Barangay ${r['barangay']}',
-                  style: t.titleMedium,
-                ),
+                if (choices.length > 1) ...[
+                  Text(
+                    '${r['event_name'] ?? r['disaster']}',
+                    style: t.titleMedium,
+                  ),
+                  Gaps.v8,
+                  DropdownButtonFormField<String>(
+                    key: ValueKey(
+                      'donating-to-${r['id']}',
+                    ), // follows a restored draft
+                    initialValue: '${r['id']}',
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Donating to',
+                      helperText: 'Change to another barangay of this disaster',
+                    ),
+                    items: [
+                      for (final c in choices)
+                        DropdownMenuItem(
+                          value: '${c['id']}',
+                          child: Text(
+                            '${c['barangay']} · '
+                            '${((c['fulfillment_percentage'] as num?) ?? 0).round()}% supplied',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (v) {
+                      setState(
+                        () => _report = choices.firstWhere(
+                          (c) => '${c['id']}' == v,
+                        ),
+                      );
+                      _saveDraft();
+                    },
+                  ),
+                ] else
+                  Text(
+                    '${r['disaster']} in Barangay ${r['barangay']}',
+                    style: t.titleMedium,
+                  ),
                 // Per-item fulfillment: what nobody has pledged yet, so
                 // donors give what is missing ("Water is covered").
                 if (_reportNeeds.isNotEmpty) ...[
                   Gaps.v8,
                   Text(
-                    'Still needed',
+                    // Nov 10: tap a need to add it; only the amount is left.
+                    _pickable
+                        ? 'Still needed · tap an item to add it'
+                        : 'Still needed',
                     style: t.labelMedium?.copyWith(color: cs.onSurfaceVariant),
                   ),
                   Gaps.v4,
-                  // Highlighted like the needs on the report cards.
-                  NeedChips([
-                    for (final n in _reportNeeds)
-                      _stillNeeded(n) > 0
-                          ? '${n['item_name']}: ${_stillNeeded(n)} of '
-                                '${n['needed']} ${n['unit'] ?? ''}'
-                          : '${n['item_name']}: fully pledged',
-                  ]),
+                  if (_pickable)
+                    _needPicker()
+                  else
+                    // Highlighted like the needs on the report cards.
+                    NeedChips([
+                      for (final n in _reportNeeds)
+                        _stillNeeded(n) > 0
+                            ? '${n['item_name']}: ${_stillNeeded(n)} of '
+                                  '${n['needed']} ${n['unit'] ?? ''}'
+                            : '${n['item_name']}: fully pledged',
+                    ]),
                 ] else if (needs.isNotEmpty) ...[
                   Gaps.v8,
                   NeedChips(NeedChips.split(needs)),
@@ -842,7 +1051,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final items = widget.names.rows('items');
     final info = _infoOf(l);
     return Padding(
-      key: ObjectKey(l),
+      key: l.key,
       padding: const EdgeInsets.only(bottom: Space.sm),
       child: AppCard(
         child: Column(
@@ -869,6 +1078,8 @@ class _DonateScreenState extends State<DonateScreen> {
             ),
             Gaps.v12,
             DropdownButtonFormField<String>(
+              // Rebuilt when a tapped "Still needed" item fills this line.
+              key: ValueKey('item-${l.itemId}'),
               initialValue: l.itemId,
               isExpanded: true,
               decoration: const InputDecoration(
@@ -932,6 +1143,7 @@ class _DonateScreenState extends State<DonateScreen> {
               Gaps.v12,
               TextFormField(
                 controller: l.packs,
+                focusNode: l.packsFocus,
                 keyboardType: TextInputType.number,
                 inputFormatters: [
                   FilteringTextInputFormatter.digitsOnly,
@@ -1005,6 +1217,18 @@ class _DonateScreenState extends State<DonateScreen> {
             ? 'This report still needs $still ${need['unit'] ?? ''}.'
             : 'This item is already fully pledged. Other needs of this '
                   'report may be more urgent.';
+      }
+    }
+    // The same item twice is allowed (e.g. rice in 25 kg sacks and in
+    // 5 kg packs), but the donor is told, in case it was a mistake.
+    if (l.itemId != _otherItem) {
+      final mine = lines.indexOf(l);
+      final other = lines.indexWhere((o) => o != l && o.itemId == l.itemId);
+      if (other >= 0 && mine >= 0) {
+        final also =
+            'Also in Item ${lines.length - other}. Use it only for another '
+            'size; otherwise change the amount there.';
+        text = text == null ? also : '$text $also';
       }
     }
     if (text == null) return const SizedBox.shrink();
@@ -1652,7 +1876,10 @@ class _DonateScreenState extends State<DonateScreen> {
   List<Widget> _handoverSections(bool door) => [
     // 4.1: the items come first; the monetary donation info is
     // shown below them (adviser item 7 / UC-D2, display only).
-    ReportDonationInfo(reportId: widget.report['id'] as int),
+    ReportDonationInfo(
+      key: ValueKey('donation-info-${_report['id']}'),
+      reportId: _report['id'] as int,
+    ),
 
     const _StepHeader(number: 2, title: 'How will you hand it over?'),
     _ChoiceTile(

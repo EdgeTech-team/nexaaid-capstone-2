@@ -36,8 +36,10 @@ NEED_TEMPLATES = {
     "Typhoon": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
     "Storm Surge": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
     "Tsunami": {**_FOOD, **_SHELTER, **_clothing(2), "Medicine Kit": 0.2},
-    # Families lose the house and everything in it.
-    "Fire": {**_FOOD, **_SHELTER,**_clothing(2)},
+    # Families lose the house and everything in it, kitchen included
+    # (Kitchen Set: UAT post-meeting, Nov 2026; one set per family is the
+    # team's assumption until CSWS gives its standard).
+    "Fire": {**_FOOD, **_SHELTER, **_clothing(2), "Kitchen Set": 1},
     "Earthquake": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
     "Landslide": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
     "Drought": {**_FOOD, "Drinking Water": 40},
@@ -46,6 +48,22 @@ NEED_TEMPLATES = {
     "Other": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
 }
 
+
+
+# Per-family amount of an item when the disaster type's template does not
+# list it (Nov 2026, UAT: a need the reporter adds is filled in too). The
+# report form uses: the template's amount for the chosen disaster type,
+# else this, else 1 per family. Team assumptions, like the templates above.
+ITEM_PER_FAMILY = {
+    **_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1, "Kitchen Set": 1,
+}
+_ITEM_PER_FAMILY = {name.lower(): amount for name, amount in ITEM_PER_FAMILY.items()}
+
+
+def item_per_family(item_name: str):
+    """The general per-family amount of an item, or None (the app then
+    suggests 1 per family)."""
+    return _ITEM_PER_FAMILY.get((item_name or "").lower())
 
 
 def need_templates(db: Session) -> list:

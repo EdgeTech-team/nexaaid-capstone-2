@@ -150,6 +150,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(sent, isEmpty); // the kind is required
       expect(find.text('Required'), findsOneWidget);
+      // UAT #6: a pop-up says what is missing.
+      expect(find.text('Please complete the form'), findsOneWidget);
+      expect(find.text('What kind of disaster'), findsOneWidget);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
 
       await tester.enterText(_kindField, ' Gas leak ');
       await tester.tap(find.text('Submit report'));
