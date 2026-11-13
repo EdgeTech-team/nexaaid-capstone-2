@@ -214,3 +214,26 @@ def test_only_the_admin_changes_status_or_priority_directly(admin_client, report
         "affected_families": 5}).json()["report_id"]
     assert reporter_client.patch(f"/reports/{rid}", json={"status": "Validated"}).status_code == 403
     assert admin_client.patch(f"/reports/{rid}", json={"description": "Fixed"}).status_code == 200
+
+
+
+def test_monitoring_filters_by_status_and_keeps_the_rejection_reason(unit_client, seed, db_session):
+    """UAT Nov 2026 (M2.5): the Disaster Unit's Report Status filter sends
+    /reports/monitoring?status=... . A rejected row carries its reason, and
+    without a status every report still comes back (backward compatible)."""
+    for status, reason in [("Pending", None), ("Validated", None),
+                           ("Rejected", "Wrong barangay"), ("Cancelled", None)]:
+        db_session.add(DisasterReport(
+            user_id=seed["reporter_id"], disaster_type_id=seed["disaster_type_id"],
+            barangay_id=seed["barangay_id"], source="web", status=status,
+            rejection_reason=reason,
+        ))
+    db_session.commit()
+
+    rejected = unit_client.get("/reports/monitoring", params={"status": "Rejected"})
+    assert rejected.status_code == 200
+    assert [r["status"] for r in rejected.json()] == ["Rejected"]
+    assert rejected.json()[0]["rejection_reason"] == "Wrong barangay"
+
+    every = unit_client.get("/reports/monitoring", params={"limit": 200}).json()
+    assert sorted(r["status"] for r in every) == ["Cancelled", "Pending", "Rejected", "Validated"]

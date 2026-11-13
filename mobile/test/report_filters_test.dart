@@ -1,6 +1,6 @@
 // Ivan's note: fulfillment status must be in the sorting of every dashboard
 // that lists reports (donor Reports tab, and the staff Validated Reports and
-// Report Status screens).
+// Report Status screens). UAT Nov 2026: the filters are in one Filter panel.
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -70,7 +70,10 @@ Future<void> _pump(WidgetTester tester, Widget body) async {
 
 void main() {
   setUpAll(() => AppTheme.useGoogleFonts = false);
-  tearDown(() => Api.instance.token = null);
+  tearDown(() {
+    Api.instance.token = null;
+    ReportViewMemory.clear();
+  });
 
   test('Percent sent as text or as a number gives the same status', () {
     expect(
@@ -104,25 +107,28 @@ void main() {
   for (final (name, screen) in [
     ('Report Status', const MonitoringScreen()),
     ('Validated Reports', const ValidatedReportsScreen(filter: true)),
-    // CMO, DRRMO and Barangay Rep: no priority chips, same fulfillment
+    // CMO, DRRMO and Barangay Rep: no priority section, same fulfillment
     // filter and sort.
     ('Validated Reports (no priority filter)', const ValidatedReportsScreen()),
   ]) {
-    testWidgets('$name: Fulfilled chip shows only fulfilled reports', (
+    testWidgets('$name: Fulfilled filter shows only fulfilled reports', (
       tester,
     ) async {
       Api.instance.token = 'test-token';
       await http.runWithClient(() async {
         await _pump(tester, screen);
-        expect(find.text('Sort by'), findsOneWidget);
+        expect(find.text('Sort: Most urgent'), findsOneWidget);
         expect(find.text('#1  Flood in Tipolo'), findsOneWidget);
         expect(find.text('#2  Flood in Banilad'), findsOneWidget);
         expect(find.text('#3  Flood in Looc'), findsOneWidget);
 
-        await tester.ensureVisible(find.textContaining('Fulfilled ('));
+        await tester.tap(find.text('Filter'));
         await tester.pumpAndSettle();
-        await tester.tap(find.textContaining('Fulfilled ('));
+        await tester.tap(find.text('Fulfilled (1)'));
         await tester.pumpAndSettle();
+        await tester.tap(find.text('Apply'));
+        await tester.pumpAndSettle();
+        expect(find.widgetWithText(InputChip, 'Fulfilled'), findsOneWidget);
         expect(find.text('#3  Flood in Looc'), findsOneWidget);
         expect(find.text('#1  Flood in Tipolo'), findsNothing);
         expect(find.text('#2  Flood in Banilad'), findsNothing);
