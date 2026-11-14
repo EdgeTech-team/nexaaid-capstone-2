@@ -300,14 +300,56 @@ def receive_entry(
 # CSWS receiving ends at status "Received".
 
 
+# ---------------------------------------------------------------------------
+# Module 4.4 / 4.5 donation records (Hoyohoy). NF-003 paging lives only in
+# this block; the CSWS receiving / inventory endpoints above are untouched.
+# ---------------------------------------------------------------------------
+from fastapi import Response  # noqa: E402  (NF-003: kept with this block)
+from core.pagination import PageParams, set_total_header  # noqa: E402
+from services.entry_paging import entry_counts, page_entries, report_groups  # noqa: E402
+
+# Not an entry status: an entry with an item the CMO put on hold. The app's
+# "Needs attention" card filters on it, so the paged list must too.
+ON_HOLD = "On Hold"
+
+
+def _scoped_entries(db: Session, current_user: User, report_id: Optional[int] = None,
+                    disaster_type_id: Optional[int] = None) -> list:
+    """Every entry the caller may see, numbered per report (Donation 1, 2 ...)
+    on the FULL list, so a later page still shows the right numbers.
+    disaster_type_id (NF-001) keeps whole reports, so numbers do not change."""
+    expire_overdue(db)
+    own_barangay = barangay_scope(current_user)
+    query = db.query(PhysicalDonation)
+    if own_barangay is not None or disaster_type_id is not None:
+        query = query.join(DisasterReport, DisasterReport.report_id == PhysicalDonation.report_id)
+    if own_barangay is not None:
+        query = query.filter(DisasterReport.barangay_id == own_barangay)
+    if disaster_type_id is not None:
+        query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
+    if report_id is not None:
+        query = query.filter(PhysicalDonation.report_id == report_id)
+    staff = own_barangay is None
+    entries = build_entries(db, query.all(), include_donor=staff, include_cmo=staff)
+    group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
+    return entries
+
+
+def _is_on_hold(status: Optional[str]) -> bool:
+    return bool(status) and status.strip().lower() == ON_HOLD.lower()
+
+
 @router.get("/records")
 def donation_records(
+    response: Response,
     status: Optional[str] = None,
     report_id: Optional[int] = None,
     handover_method: Optional[str] = None,
     q: Optional[str] = None,
     sort: str = Query("newest", pattern="^(" + "|".join(ENTRY_SORTS) + ")$"),
     include_closed: bool = False,
+    disaster_type_id: Optional[int] = None,
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(
         "Administrator", "CSWS Main Office", "CMO Representative", "barangay_receiving_rep",
@@ -322,26 +364,95 @@ def donation_records(
     notes: it follows what is coming for its barangay, not who gave it.
 
     One record per donation entry (one QR / batch_reference) with its items.
-    Filters: status (entry status), report_id, handover_method, q (QR
-    reference, donor or item). sort: newest, oldest, most_items, fewest_items,
-    due_soonest.
+    Filters: status (entry status, or "On Hold" = has an item the CMO put on
+    hold), report_id, handover_method, q (QR reference, donor or item).
+    sort: newest, oldest, most_items, fewest_items, due_soonest; every sort
+    ends on the entry's first donation_id, so the order is always the same.
 
     Expired / Cancelled entries are hidden unless status asks for them
     (status=Expired, Cancelled or Closed) or include_closed=true, so the
     everyday list only shows donations that still need work.
+
+    NF-001: optional disaster_type_id (the report's type); an unknown id
+    gives an empty list. NF-003: optional limit / offset. With limit the database groups,
+    filters, sorts and pages the entries (services/entry_paging.py) and only
+    the page's entries are built; X-Total-Count holds the total. Without
+    limit the answer is exactly as before (installed APKs send no limit).
     """
-    expire_overdue(db)
-    own_barangay = barangay_scope(current_user)
-    query = db.query(PhysicalDonation)
-    if own_barangay is not None:
-        query = query.join(
-            DisasterReport, DisasterReport.report_id == PhysicalDonation.report_id
-        ).filter(DisasterReport.barangay_id == own_barangay)
-    if report_id is not None:
-        query = query.filter(PhysicalDonation.report_id == report_id)
-    staff = own_barangay is None
-    entries = build_entries(db, query.all(), include_donor=staff, include_cmo=staff)
-    group_by_report(entries)  # numbers each report's entries (Donation 1, 2 ...)
+    if page.requested:
+        expire_overdue(db)
+        rows, total = page_entries(
+            db, current_user, offset=page.offset, limit=page.limit,
+            status=status, report_id=report_id, handover_method=handover_method,
+            search=q, sort=sort, include_closed=include_closed,
+            disaster_type_id=disaster_type_id,
+        )
+        set_total_header(response, page, total)
+        return rows
+
+    entries = _scoped_entries(db, current_user, report_id, disaster_type_id)
     if not status and not include_closed:
         entries = [e for e in entries if e["status"] not in CLOSED]
+    if _is_on_hold(status):
+        entries = [e for e in entries if (e.get("on_hold_items") or 0) > 0]
+        status = None
     return filter_and_sort(entries, status=status, handover_method=handover_method, search=q, sort=sort)
+
+
+@router.get("/records/counts")
+def donation_record_counts(
+    report_id: Optional[int] = None,
+    handover_method: Optional[str] = None,
+    q: Optional[str] = None,
+    include_closed: bool = False,
+    disaster_type_id: Optional[int] = None,
+    status: Optional[str] = None,  # accepted so the app can send the list's filters as they are
+    sort: Optional[str] = None,    # same; counting does not depend on the order
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(
+        "Administrator", "CSWS Main Office", "CMO Representative", "barangay_receiving_rep",
+    )),
+):
+    """NF-003: the numbers for the records screen's status chips and "Needs
+    attention" card, now that the list arrives one page at a time.
+
+    Takes the same filters as GET /donations/records (report_id,
+    handover_method, q, include_closed). status is ignored on purpose: each
+    chip counts the entries it would show when picked. Same role scope as the
+    list (a Barangay Receiving Representative counts only its own barangay).
+
+    all:       what the list shows with no status picked
+    by_status: entries per status, plus "On Hold"
+    reports:   the reports that have entries in the caller's scope, newest
+               first, for the Report dropdown
+    """
+    expire_overdue(db)
+    return entry_counts(
+        db, current_user, report_id=report_id, handover_method=handover_method,
+        search=q, include_closed=include_closed, disaster_type_id=disaster_type_id,
+    )
+
+
+@router.get("/records/per-report")
+def donation_records_per_report(
+    response: Response,
+    disaster_type_id: Optional[int] = None,
+    include_closed: bool = True,
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(
+        "Administrator", "CSWS Main Office", "CMO Representative", "barangay_receiving_rep",
+    )),
+):
+    """NF-001 / NF-003: the records screen's "Per report" view (Module 4.4).
+    One row per report with entries in the caller's scope, newest first:
+    {report_id, report_label, total_entries, by_status}. Grouped in SQL and
+    paged with limit / offset (X-Total-Count), filtered by disaster type.
+    Same roles and barangay scope as GET /donations/records."""
+    expire_overdue(db)
+    rows, total = report_groups(
+        db, current_user, offset=page.offset, limit=page.limit,
+        disaster_type_id=disaster_type_id, include_closed=include_closed,
+    )
+    set_total_header(response, page, total)
+    return rows

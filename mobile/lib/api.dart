@@ -23,9 +23,21 @@ class ApiResult {
   final dynamic json; // decoded body, or null if not JSON
   final String raw;
 
-  ApiResult(this.status, this.json, this.raw);
+  /// Response headers. Empty for a network error.
+  final Map<String, String> headers;
+
+  ApiResult(this.status, this.json, this.raw, [this.headers = const {}]);
 
   bool get ok => status >= 200 && status < 300;
+
+  /// NF-003: how many rows match a paged list request (X-Total-Count), or
+  /// null when the server did not send it (no limit, or an older backend).
+  int? get total {
+    for (final h in headers.entries) {
+      if (h.key.toLowerCase() == 'x-total-count') return int.tryParse(h.value);
+    }
+    return null;
+  }
 
   String get pretty {
     if (json != null) {
@@ -297,7 +309,7 @@ class Api extends ChangeNotifier {
         logout();
       }
 
-      return ApiResult(res.statusCode, decoded, res.body);
+      return ApiResult(res.statusCode, decoded, res.body, res.headers);
     } catch (e) {
       return ApiResult(
         0,

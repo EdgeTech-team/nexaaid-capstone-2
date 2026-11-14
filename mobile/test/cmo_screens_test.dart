@@ -52,11 +52,19 @@ void main() {
           'needs_review_entries': 1,
           'acknowledged_today_entries': 11,
           'acknowledged_entries': 148, // all-time: not shown on the home
+          'on_hold_entries': 1,
           'per_report': [],
         },
+        // NF-003: the server leaves on-hold entries out of the queue
+        // (on_hold=false), as the real one does.
         '/cmo/entries/pending' => [
-          _entry('DON-8F4A'),
-          _entry('DON-HOLD', decision: 'On Hold', reason: 'Missing documents'),
+          if (req.url.queryParameters['on_hold'] != 'false')
+            _entry(
+              'DON-HOLD',
+              decision: 'On Hold',
+              reason: 'Missing documents',
+            ),
+          if (req.url.queryParameters['on_hold'] != 'true') _entry('DON-8F4A'),
         ],
         _ => <String, dynamic>{},
       };
@@ -116,8 +124,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(posts, 1);
+      // UAT (Nov 14): the same page stays open, now marked acknowledged,
+      // with only Close left (no second Acknowledge, no Hold).
       expect(find.text('Donation acknowledged'), findsOneWidget);
-      expect(find.text('Back to list'), findsOneWidget);
+      expect(find.byKey(const ValueKey('cmo-review-close')), findsOneWidget);
+      expect(find.text('Close'), findsOneWidget);
+      expect(find.text('Hold'), findsNothing);
+      expect(find.text('Juan Dela Cruz'), findsOneWidget);
     }, () => server);
   });
 

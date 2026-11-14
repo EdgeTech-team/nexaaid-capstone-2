@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -256,6 +257,48 @@ class EmptyState extends StatelessWidget {
 
 /// Loads data from the API and rebuilds with it. Pull down to refresh.
 /// Reloads automatically when the session or data changes.
+/// UAT (Nov 14/15): screens of tabs that are not showing stay alive
+/// (home.dart, kept_views.dart). [shown] says whether this one is on screen;
+/// [onShownAgain] runs when it comes back. It listens instead of depending
+/// on TickerMode, so showing or hiding a tab never rebuilds its screens
+/// (that rebuild made switching tabs lag).
+mixin ShownState<T extends StatefulWidget> on State<T> {
+  ValueListenable<TickerModeData>? _mode;
+
+  bool get shown => _mode?.value.enabled ?? true;
+
+  void onShownAgain();
+
+  void _modeChanged() {
+    if (mounted && shown) onShownAgain();
+  }
+
+  void _watchMode() {
+    final m = TickerMode.getValuesNotifier(context);
+    if (identical(m, _mode)) return;
+    _mode?.removeListener(_modeChanged);
+    _mode = m..addListener(_modeChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _watchMode();
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    _watchMode();
+  }
+
+  @override
+  void dispose() {
+    _mode?.removeListener(_modeChanged);
+    super.dispose();
+  }
+}
+
 class Loader extends StatefulWidget {
   final List<Future<ApiResult> Function()> load;
   final Widget Function(BuildContext context, List<dynamic> data) builder;
@@ -275,8 +318,14 @@ class Loader extends StatefulWidget {
   State<Loader> createState() => _LoaderState();
 }
 
-class _LoaderState extends State<Loader> {
+class _LoaderState extends State<Loader> with ShownState<Loader> {
   late Future<List<ApiResult>> _future = _fetch();
+
+  // UAT (Nov 14): screens of other tabs stay alive (home.dart). While this
+  // one is hidden (another tab, or a page on top) a change is only noted,
+  // and the data reloads when it shows again. The old data stays on screen
+  // until the new data arrives.
+  bool _stale = false;
 
   Future<List<ApiResult>> _fetch() => Future.wait(widget.load.map((f) => f()));
 
@@ -287,26 +336,42 @@ class _LoaderState extends State<Loader> {
     });
   }
 
+  void _changed() {
+    if (!mounted) return;
+    if (!shown) {
+      _stale = true;
+      return;
+    }
+    _reload();
+  }
+
+  @override
+  void onShownAgain() {
+    if (!_stale) return;
+    _stale = false;
+    _reload();
+  }
+
   @override
   void initState() {
     super.initState();
-    api.addListener(_reload); // e.g. after an action elsewhere
-    widget.refresh?.addListener(_reload);
+    api.addListener(_changed); // e.g. after an action elsewhere
+    widget.refresh?.addListener(_changed);
   }
 
   @override
   void didUpdateWidget(Loader old) {
     super.didUpdateWidget(old);
     if (old.refresh != widget.refresh) {
-      old.refresh?.removeListener(_reload);
-      widget.refresh?.addListener(_reload);
+      old.refresh?.removeListener(_changed);
+      widget.refresh?.addListener(_changed);
     }
   }
 
   @override
   void dispose() {
-    api.removeListener(_reload);
-    widget.refresh?.removeListener(_reload);
+    api.removeListener(_changed);
+    widget.refresh?.removeListener(_changed);
     super.dispose();
   }
 

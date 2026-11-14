@@ -1,6 +1,12 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import exists, func, literal, or_
+from core.pagination import PageParams, paginate_query, set_total_header
+from models.report import DisasterReport
+from services.logistics_stage import stage_is
 from core.audit import log_action
 from sqlalchemy.orm import Session
 from core.database import get_db
@@ -175,14 +181,44 @@ def submit_pickup_request(
 
 @router.get("/requests")
 def list_my_requests(
+    response: Response,
+    stage: Optional[str] = None,
+    disaster_type_id: Optional[int] = None,
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("CSWS Main Office", "Administrator", DISASTER_UNIT)),
 ):
     """CSWS sees whether DRRMO accepted, declined or completed each request
     (the "system notifies CSWS" steps of UC-DR1). The Disaster Unit sees its
-    Door to Door pickup runs."""
+    Door to Door pickup runs.
+
+    Appendix H 7.5 (records screen), all optional and filtered in SQL:
+    stage (Pending, Accepted, In Transit, Declined, Completed: the same
+    "stage" the rows carry), disaster_type_id (NF-001: a delivery's report,
+    or for a pickup run any of its donations' reports) and limit / offset
+    (NF-003, X-Total-Count). Without them the answer is as before."""
     from api.v1.drrmo_router import request_rows
     query = db.query(LogisticsRequest)
     if has_role(current_user, DISASTER_UNIT):
         query = query.filter(LogisticsRequest.request_type == "Pickup")
-    return request_rows(db, query.order_by(LogisticsRequest.request_id.desc()).all())
+    if stage:
+        query = query.filter(stage_is(stage.strip()))
+    if disaster_type_id is not None:
+        query = query.filter(_of_disaster_type(disaster_type_id))
+    rows, total = paginate_query(query, page, LogisticsRequest.request_id.desc())
+    set_total_header(response, page, total)
+    return request_rows(db, rows)
+
+
+def _of_disaster_type(disaster_type_id: int):
+    """A delivery request: its delivery's report. A pickup run: any of the
+    donations it collects (pickup_batches is a comma list of QR batches)."""
+    of_type = DisasterReport.disaster_type_id == disaster_type_id
+    by_delivery = exists().where(
+        Delivery.delivery_id == LogisticsRequest.delivery_id,
+        DisasterReport.report_id == Delivery.report_id, of_type)
+    batches = literal(",") + func.coalesce(LogisticsRequest.pickup_batches, "") + literal(",")
+    by_pickup = exists().where(
+        DisasterReport.report_id == PhysicalDonation.report_id, of_type,
+        batches.like(literal("%,") + PhysicalDonation.batch_reference + literal(",%")))
+    return or_(by_delivery, by_pickup)

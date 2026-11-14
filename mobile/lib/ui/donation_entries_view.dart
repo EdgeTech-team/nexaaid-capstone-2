@@ -404,21 +404,37 @@ class _AttentionCard extends StatelessWidget {
 /// Status summary on top of a report's donation records (Reminder 4.4):
 /// how many entries there are and how many are at each status.
 class EntryStatusSummary extends StatelessWidget {
-  final List<Map> entries;
-  const EntryStatusSummary(this.entries, {super.key});
+  final int entryCount;
+  final int items;
+
+  /// Entries per status (entryStatuses order), only the ones above 0.
+  final Map<String, int> counts;
+
+  EntryStatusSummary(List<Map> entries, {super.key})
+    : entryCount = entries.length,
+      items = entries.fold<int>(
+        0,
+        (n, e) => n + ((e['total_items'] as num?)?.toInt() ?? 0),
+      ),
+      counts = {
+        for (final s in entryStatuses)
+          s: entries.where((e) => e['status'] == s).length,
+      }..removeWhere((_, n) => n == 0);
+
+  /// NF-003: the same summary from GET /donations/records/counts, when the
+  /// entries arrive a page at a time.
+  EntryStatusSummary.fromCounts(Map serverCounts, {super.key})
+    : entryCount = (serverCounts['all'] as num?)?.toInt() ?? 0,
+      items = (serverCounts['items'] as num?)?.toInt() ?? 0,
+      counts = {
+        for (final s in entryStatuses)
+          s: ((serverCounts['by_status'] as Map?)?[s] as num?)?.toInt() ?? 0,
+      }..removeWhere((_, n) => n == 0);
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
-    final counts = {
-      for (final s in entryStatuses)
-        s: entries.where((e) => e['status'] == s).length,
-    }..removeWhere((_, n) => n == 0);
-    final items = entries.fold<int>(
-      0,
-      (n, e) => n + ((e['total_items'] as num?)?.toInt() ?? 0),
-    );
     return AppCard(
       key: const ValueKey('entry-status-summary'),
       child: Column(
@@ -427,7 +443,7 @@ class EntryStatusSummary extends StatelessWidget {
           Text('Status summary', style: t.titleMedium),
           Gaps.v4,
           Text(
-            '${entries.length} ${entries.length == 1 ? 'entry' : 'entries'}'
+            '$entryCount ${entryCount == 1 ? 'entry' : 'entries'}'
             ' · $items ${items == 1 ? 'item' : 'items'}',
             style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
           ),
@@ -751,4 +767,16 @@ class _Meta extends StatelessWidget {
       ],
     );
   }
+}
+
+/// NF-003: the "Needs attention" card for the paged staff records list
+/// (paged_donation_entries.dart). Same card, public name; nothing above changes.
+class EntryAttentionCard extends _AttentionCard {
+  // _AttentionCard takes no key, and it stays as it is.
+  // ignore: use_key_in_widget_constructors
+  const EntryAttentionCard({
+    required super.counts,
+    required super.selected,
+    required super.onSelect,
+  });
 }

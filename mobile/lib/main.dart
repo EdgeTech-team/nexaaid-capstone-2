@@ -2,17 +2,21 @@ import 'dart:async';
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 
 import 'api.dart';
 import 'app_navigator.dart';
+import 'app_router.dart';
+import 'app_routes.dart';
 import 'push.dart';
 import 'realtime.dart';
 import 'design/design.dart';
-import 'ui/home.dart';
-import 'ui/landing/landing_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // NF-002: web addresses without '#' (/admin/records). Netlify sends
+  // every path to index.html (web/_redirects). Does nothing on the APK.
+  usePathUrlStrategy();
   // Debug run with `uvicorn` going on this laptop: use that backend.
   await Api.instance.useLocalBackendIfRunning();
   // Restore the saved login so closing the app or refreshing the page does
@@ -80,7 +84,12 @@ class _NexaAidAppState extends State<NexaAidApp> {
     if (k == _session) return;
     _session = k;
     appNavigator.currentState?.popUntil((r) => r.isFirst);
+    // NF-002: signing out (or a guest leaving) goes back to the landing
+    // page's address, not to the login of the page that was open.
+    if (k == 'out') AppRoutes.instance.go('/', replace: true);
   }
+
+  final _router = AppRouterDelegate();
 
   @override
   void initState() {
@@ -94,6 +103,7 @@ class _NexaAidAppState extends State<NexaAidApp> {
   void dispose() {
     Api.instance.removeListener(_onSession);
     FocusManager.instance.removeListener(_onFocus);
+    _router.dispose();
     super.dispose();
   }
 
@@ -101,8 +111,12 @@ class _NexaAidAppState extends State<NexaAidApp> {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: AppTheme.mode,
-      builder: (context, mode, _) => MaterialApp(
-        navigatorKey: appNavigator, // also used by push.dart
+      builder: (context, mode, _) => MaterialApp.router(
+        // NF-002: signed out, the landing page (adviser item 8); signed in
+        // or guest, the role's home screen; one web address per tab
+        // (app_router.dart). appNavigator (push.dart) is its navigator.
+        routerDelegate: _router,
+        routeInformationParser: const AppRouteParser(),
         scaffoldMessengerKey: _messenger,
         title: 'NexaAid',
         debugShowCheckedModeBanner: false,
@@ -110,17 +124,6 @@ class _NexaAidAppState extends State<NexaAidApp> {
         darkTheme: AppTheme.dark(),
         themeMode: mode,
         scrollBehavior: const AppScrollBehavior(),
-        // Signed out: landing page (adviser item 8). Signed in or guest:
-        // the role's home screen.
-        home: ListenableBuilder(
-          listenable: Api.instance,
-          builder: (context, _) {
-            final api = Api.instance;
-            return api.loggedIn || api.guest
-                ? RoleHome(key: ValueKey(api.role ?? 'guest'))
-                : const LandingScreen();
-          },
-        ),
       ),
     );
   }

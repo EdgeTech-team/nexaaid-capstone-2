@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'kept_views.dart';
+import '../app_routes.dart';
 import '../api.dart';
 import 'account_detail_screen.dart';
 import 'account_form.dart' show AccountsScreen;
@@ -34,7 +36,6 @@ class AdminDashboard extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-
             PageHeader('Administrator Dashboard', subtitle: roleLine()),
             StatGrid([
               StatTile(
@@ -169,23 +170,34 @@ class _AccountsHubState extends State<AccountsHub>
               ButtonSegment(value: 'new', label: Text('New account')),
             ],
             selected: {view},
-            onSelectionChanged: (s) => setState(() {
-              view = s.first;
-              _focus = null;
-            }),
+            onSelectionChanged: (s) {
+              setState(() {
+                view = s.first;
+                _focus = null;
+              });
+              // NF-002: /admin/accounts/registrations, ...
+              AppRoutes.instance.viewChanged(homeTab, view);
+            },
           ),
         ),
+        // UAT (Nov 14): sections opened once stay loaded when switching.
         Expanded(
-          child: switch (view) {
-            'registrations' => RegistrationsScreen(
-              key: ValueKey('registrations-$_focusSeq'),
-              focusType: _focus?.$1,
-              focusId: _focus?.$2,
-            ),
-            'donation' => const BarangayDonationInfoScreen(),
-            'new' => const AccountsScreen(),
-            _ => UsersScreen(key: ValueKey('accounts-$status'), status: status),
-          },
+          child: KeptViews(
+            current: view,
+            builder: (context, v) => switch (v) {
+              'registrations' => RegistrationsScreen(
+                key: ValueKey('registrations-$_focusSeq'),
+                focusType: _focus?.$1,
+                focusId: _focus?.$2,
+              ),
+              'donation' => const BarangayDonationInfoScreen(),
+              'new' => const AccountsScreen(),
+              _ => UsersScreen(
+                key: ValueKey('accounts-$status'),
+                status: status,
+              ),
+            },
+          ),
         ),
       ],
     );
