@@ -34,6 +34,7 @@ from sqlalchemy import (
     ForeignKey,
     CheckConstraint,
     UniqueConstraint,
+    Index,
     func,
 )
 from sqlalchemy.orm import relationship, validates
@@ -171,6 +172,8 @@ class DisasterReport(Base):
             "status IN ('Cancelled', 'Pending', 'Rejected', 'Validated')",
             name="chk_disaster_reports_status",
         ),
+        # NF-001: the records screens filter by disaster type. Migration e2a7c4d9f5b1.
+        Index("idx_disaster_reports_disaster_type", "disaster_type_id"),
     )
 
     # Relationships

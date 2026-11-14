@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'kept_views.dart';
+import '../app_routes.dart';
 import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
 import 'form_draft.dart';
@@ -1603,22 +1605,33 @@ class _ReportsHubState extends State<ReportsHub>
               ),
             ],
             selected: {monitor},
-            onSelectionChanged: (v) => setState(() {
-              monitor = v.first;
-              // From now on the user's own filters, not the notification's.
-              _focusStatus = null;
-              _focusId = null;
-            }),
+            onSelectionChanged: (v) {
+              setState(() {
+                monitor = v.first;
+                // From now on the user's own filters, not the notification's.
+                _focusStatus = null;
+                _focusId = null;
+              });
+              // NF-002: /csws/reports/status.
+              AppRoutes.instance.viewChanged(
+                homeTab,
+                monitor ? 'status' : 'validated',
+              );
+            },
           ),
         ),
         Expanded(
-          child: monitor
-              ? MonitoringScreen(
-                  key: ValueKey(_focus),
-                  focusStatus: _focusStatus,
-                  focusId: _focusId,
-                )
-              : const ValidatedReportsScreen(filter: true),
+          // UAT (Nov 14): Validated and Status stay loaded when switching.
+          child: KeptViews(
+            current: monitor ? 'status' : 'validated',
+            builder: (context, v) => v == 'status'
+                ? MonitoringScreen(
+                    key: ValueKey(_focus),
+                    focusStatus: _focusStatus,
+                    focusId: _focusId,
+                  )
+                : const ValidatedReportsScreen(filter: true),
+          ),
         ),
       ],
     );

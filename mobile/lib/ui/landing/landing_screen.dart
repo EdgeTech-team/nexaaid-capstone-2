@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../app_routes.dart';
 import '../../design/design.dart';
 import '../donate_screen.dart' show reopenUnsavedGuestReceipt;
 import '../donor_screens.dart' show DonateScreen;
@@ -46,11 +47,54 @@ class _LandingScreenState extends State<LandingScreen> {
     // their donation QR gets that receipt back.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) reopenUnsavedGuestReceipt(context);
+      _fromAddress();
     });
+    AppRoutes.instance.addListener(_fromAddress);
+  }
+
+  // NF-002: /login and /register open their pop-up over this page (a
+  // typed or bookmarked address, Forward in the browser, or a protected
+  // address while signed out: /login?redirect=...).
+  bool _popupOpen = false;
+
+  void _fromAddress() {
+    if (!mounted || _popupOpen) return;
+    switch (AppRoutes.instance.location.path) {
+      case '/login':
+        _withAddress(null, () => showLoginPopup(context));
+      case '/register':
+        _withAddress(null, _chooseAccount);
+      case '/register/donor':
+        _withAddress(null, () => showRegisterPopup(context, org: false));
+      case '/register/organization':
+        _withAddress(null, () => showRegisterPopup(context, org: true));
+    }
+  }
+
+  /// Shows [path] in the address bar while [popup] is open (null: it is
+  /// already there). Closing it goes back to the landing page's address,
+  /// unless the pop-up signed someone in (app_router.dart sends them on).
+  Future<void> _withAddress(String? path, Future<void> Function() popup) async {
+    if (_popupOpen) return;
+    _popupOpen = true;
+
+    if (path != null) AppRoutes.instance.go(path);
+    try {
+      await popup();
+    } finally {
+      _popupOpen = false;
+    }
+    if (!mounted || api.loggedIn || api.guest) return;
+    // Still on a pop-up's address (e.g. /register/donor after choosing).
+    final now = AppRoutes.instance.location.path;
+    if (now != '/' && AppRoutes.publicPaths.contains(now)) {
+      AppRoutes.instance.go('/', replace: true);
+    }
   }
 
   @override
   void dispose() {
+    AppRoutes.instance.removeListener(_fromAddress);
     _scroll.dispose();
     super.dispose();
   }
@@ -103,18 +147,25 @@ class _LandingScreenState extends State<LandingScreen> {
     _reload();
   }
 
-  void _logIn() => showLoginPopup(context);
+  void _logIn() => _withAddress('/login', () => showLoginPopup(context));
 
   /// "Register as donor or organization": a formatted pop-out (over the
   /// blurred landing page) to choose which kind of donor account.
-  Future<void> _createAccount() async {
+  void _createAccount() => _withAddress('/register', _chooseAccount);
+
+  Future<void> _chooseAccount() async {
     final org = await showBlurPopup<bool>(
       context,
       label: 'Close',
       child: const _DonorTypeChooser(),
     );
     if (org == null || !mounted) return;
-    showRegisterPopup(context, org: org);
+    // NF-002: the address names the kind of account being made.
+    AppRoutes.instance.go(
+      org ? '/register/organization' : '/register/donor',
+      replace: true,
+    );
+    await showRegisterPopup(context, org: org);
   }
 
   Future<void> _donate(Map<String, dynamic> report) async {

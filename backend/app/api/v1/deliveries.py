@@ -17,8 +17,11 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status 
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status 
+from sqlalchemy import select as db_select
 from sqlalchemy.orm import Session, joinedload
+
+from core.pagination import TOTAL_HEADER
 
 from core.database import get_db
 from core.notifications import notify_event_many, user_ids_with_role
@@ -198,8 +201,19 @@ def ready_to_send(
 _LIST_ROLES = ("csws_main_office", "admin", "barangay_receiving_rep", "drrmo logistics support")
 
 
+def _of_disaster_type(query, disaster_type_id: Optional[int]):
+    """NF-001: only deliveries whose report is of this disaster type (an
+    unknown id matches nothing)."""
+    if disaster_type_id is None:
+        return query
+    return query.filter(Delivery.report_id.in_(
+        db_select(DisasterReport.report_id).where(DisasterReport.disaster_type_id == disaster_type_id)
+    ))
+
+
 @router.get("/",response_model=List[DeliveryResponse])
 def list_deliveries(
+  response: Response,
   status_filter: Optional[str] = Query(default=None, alias="status"),
   barangay_id: Optional[int]  = Query(default=None),
   report_id: Optional[int] = Query(default=None),
@@ -210,30 +224,42 @@ def list_deliveries(
   sort: str = Query(default="newest", pattern="^(" + "|".join(DELIVERY_SORTS) + ")$"),
   skip: int = Query(default=0, ge=0),
   limit: int =Query(default=50, ge=1, le=200),
+  # NF-003: the shared paged list sends offset; skip still works for older apps.
+  offset: Optional[int] = Query(default=None, ge=0),
+  disaster_type_id: Optional[int] = Query(default=None),
   db: Session = Depends(get_db),
   current_user=Depends(require_role(*_LIST_ROLES)),
 
 ):
-    query = (db.query(Delivery).options(joinedload(Delivery.items))
-             .filter(Delivery.deleted_at.is_(None)))
-    own_barangay = barangay_scope(current_user)
-    if own_barangay is not None:
-       query = query.filter(Delivery.destination_barangay_id == own_barangay)
-    query = apply_delivery_filters(
-       db, query, status=status_filter, barangay_id=barangay_id, report_id=report_id,
-       trip_id=trip_id, date_from=date_from, date_to=date_to, q=q, sort=sort)
-    return delivery_views(db, query.offset(skip).limit(limit).all())
+    """NF-001 / NF-003: also filters by disaster_type_id and sends the number
+    of matching deliveries in X-Total-Count. The body is unchanged."""
+    def scoped(query):
+        query = query.filter(Delivery.deleted_at.is_(None))
+        own_barangay = barangay_scope(current_user)
+        if own_barangay is not None:
+           query = query.filter(Delivery.destination_barangay_id == own_barangay)
+        query = _of_disaster_type(query, disaster_type_id)
+        return apply_delivery_filters(
+           db, query, status=status_filter, barangay_id=barangay_id, report_id=report_id,
+           trip_id=trip_id, date_from=date_from, date_to=date_to, q=q, sort=sort)
+
+    query = scoped(db.query(Delivery).options(joinedload(Delivery.items)))
+    response.headers[TOTAL_HEADER] = str(scoped(db.query(Delivery)).order_by(None).count())
+    start = offset if offset is not None else skip
+    return delivery_views(db, query.offset(start).limit(limit).all())
 
 
 @router.get("/counts")
 def delivery_counts(
   barangay_id: Optional[int] = Query(default=None),
   report_id: Optional[int] = Query(default=None),
+  disaster_type_id: Optional[int] = Query(default=None),
   db: Session = Depends(get_db),
   current_user=Depends(require_role(*_LIST_ROLES)),
 ):
     """How many deliveries are in each status, for the filter chips
-    ("In Transit (3)"). Same barangay scope as the list."""
+    ("In Transit (3)"). Same barangay scope as the list. NF-001: optional
+    disaster_type_id, as on the list."""
     query = db.query(Delivery).filter(Delivery.deleted_at.is_(None))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
@@ -242,6 +268,7 @@ def delivery_counts(
        query = query.filter(Delivery.destination_barangay_id == barangay_id)
     if report_id:
        query = query.filter(Delivery.report_id == report_id)
+    query = _of_disaster_type(query, disaster_type_id)
     return status_counts(query)
 
 # "Needs your action" (Phase 6, Table 36 / 37): what CSWS Main Office or

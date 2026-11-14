@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'kept_views.dart';
+import '../app_routes.dart';
 import '../api.dart' show Roles;
 import 'batch_sheet.dart' show openDonationByQr;
 import 'csws_screens.dart' show ScannerPage;
@@ -7,6 +9,8 @@ import 'donation_entries_view.dart';
 import 'expiry_widgets.dart';
 import 'home_nav.dart';
 import 'ops_screens.dart' show DeliveriesScreen;
+import 'paged_donation_entries.dart';
+import 'paginated_list.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -18,7 +22,16 @@ import 'widgets.dart';
 // ---------------------------------------------------------------------------
 class DonationRecordsScreen extends StatefulWidget {
   final bool header;
-  const DonationRecordsScreen({super.key, this.header = true});
+
+  /// NF-001: the Administrator's disaster type filter (records screen).
+  final int? disasterTypeId;
+  final String? disasterTypeName;
+  const DonationRecordsScreen({
+    super.key,
+    this.header = true,
+    this.disasterTypeId,
+    this.disasterTypeName,
+  });
 
   @override
   State<DonationRecordsScreen> createState() => _DonationRecordsScreenState();
@@ -45,66 +58,165 @@ class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
   @override
   Widget build(BuildContext context) {
     final barangay = api.role == Roles.barangay;
-    return Loader(
-      key: ValueKey(_loads),
-      // include_closed: Expired / Cancelled donations get their own chips.
-      // A Barangay Rep only gets its own barangay's (backend enforced).
-      load: [
-        () => api.get('/donations/records', query: {'include_closed': 'true'}),
+    final top = <Widget>[
+      if (widget.header)
+        PageHeader(
+          'Donation Records',
+          subtitle: barangay
+              ? "Donations for your barangay's reports and where each "
+                    'one is in the process.'
+              : 'Every donation entry and where it is in the process.',
+        ),
+      // CSWS Main Office scans on its Receive tab.
+      if (api.role == Roles.admin) ...[
+        AppButton(
+          'Scan QR code',
+          icon: Icons.qr_code_scanner,
+          expand: true,
+          onPressed: _scan,
+        ),
+        Gaps.v12,
       ],
-      builder: (context, data) {
-        final entries = (data[0] as List).cast<Map>();
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (widget.header)
-              PageHeader(
-                'Donation Records',
-                subtitle: barangay
-                    ? "Donations for your barangay's reports and where each "
-                          'one is in the process.'
-                    : 'Every donation entry and where it is in the process.',
-              ),
-            // CSWS Main Office scans on its Receive tab.
-            if (api.role == Roles.admin) ...[
-              AppButton(
-                'Scan QR code',
-                icon: Icons.qr_code_scanner,
-                expand: true,
-                onPressed: _scan,
-              ),
-              Gaps.v12,
-            ],
-            SegmentedButton<bool>(
-              showSelectedIcon: false,
-              segments: const [
-                ButtonSegment(
-                  value: false,
-                  icon: Icon(Icons.qr_code_2),
-                  label: Text('Entries'),
-                ),
-                ButtonSegment(
-                  value: true,
-                  icon: Icon(Icons.article_outlined),
-                  label: Text('Per report'),
-                ),
-              ],
-              selected: {perReport},
-              onSelectionChanged: (v) => setState(() => perReport = v.first),
+      SegmentedButton<bool>(
+        showSelectedIcon: false,
+        segments: const [
+          ButtonSegment(
+            value: false,
+            icon: Icon(Icons.qr_code_2),
+            label: Text('Entries'),
+          ),
+          ButtonSegment(
+            value: true,
+            icon: Icon(Icons.article_outlined),
+            label: Text('Per report'),
+          ),
+        ],
+        selected: {perReport},
+        onSelectionChanged: (v) => setState(() => perReport = v.first),
+      ),
+      Gaps.v16,
+    ];
+    // UAT (Nov 14): Entries and Per report stay loaded when switching.
+    return KeptViews(
+      current: perReport ? 'reports' : 'entries',
+      resetKey: _loads,
+      builder: (context, v) => v == 'reports'
+          // NF-001: reports grouped and paged in SQL, with Expired /
+          // Cancelled entries counted. A Barangay Rep only gets its own.
+          ? PagedReportRecords(
+              header: top,
+              disasterTypeId: widget.disasterTypeId,
+              disasterTypeName: widget.disasterTypeName,
+            )
+          // NF-003: entries load 20 at a time; filters, sort and counts come
+          // from the server. A Barangay Rep only gets its own (backend).
+          : PagedDonationEntries(
+              header: top,
+              disasterTypeId: widget.disasterTypeId,
+              disasterTypeName: widget.disasterTypeName,
+              footer: _canManageRecords ? (e) => _EntryActions(e) : null,
+              emptyTitle: 'No donations to show.',
+              emptyMessage: barangay
+                  ? "Donations for your barangay's reports appear here."
+                  : 'Donation entries appear here once donors submit them.',
             ),
-            Gaps.v16,
-            if (perReport)
-              ReportRecordsList(entries)
-            else
-              DonationEntriesView(
-                entries: entries,
-                footer: _canManageRecords ? (e) => _EntryActions(e) : null,
-                emptyTitle: 'No donations to show.',
-                emptyMessage: barangay
-                    ? "Donations for your barangay's reports appear here."
-                    : 'Donation entries appear here once donors submit them.',
-              ),
-          ],
+    );
+  }
+}
+
+/// NF-001 / NF-003: "Per report" one page at a time
+/// (GET /donations/records/per-report): one card per report with its entry
+/// count and status mix, newest report first. Tap a report to open its
+/// records.
+class PagedReportRecords extends StatefulWidget {
+  final List<Widget> header;
+  final int? disasterTypeId;
+  final String? disasterTypeName;
+  const PagedReportRecords({
+    super.key,
+    this.header = const [],
+    this.disasterTypeId,
+    this.disasterTypeName,
+  });
+
+  @override
+  State<PagedReportRecords> createState() => _PagedReportRecordsState();
+}
+
+class _PagedReportRecordsState extends State<PagedReportRecords> {
+  late final controller = PagedController(
+    fetch: (offset, limit) => api.get(
+      '/donations/records/per-report',
+      query: {
+        if (widget.disasterTypeId != null)
+          'disaster_type_id': '${widget.disasterTypeId}',
+        'limit': '$limit',
+        'offset': '$offset',
+      },
+    ),
+  );
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  /// "3 entries · 2 Pending · 1 Received".
+  static String statusLine(Map r) {
+    final n = (r['total_entries'] as num?)?.toInt() ?? 0;
+    final by = (r['by_status'] as Map?) ?? const {};
+    return [
+      '$n ${n == 1 ? 'entry' : 'entries'}',
+      for (final s in entryStatuses)
+        if (((by[s] as num?) ?? 0) > 0) '${by[s]} ${donationStatusText(s)}',
+    ].join(' · ');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return PagedListView(
+      controller: controller,
+      header: widget.header,
+      empty: EmptyView(
+        icon: Icons.article_outlined,
+        title: widget.disasterTypeName != null
+            ? 'No donations for ${widget.disasterTypeName} yet.'
+            : 'No donations to show.',
+        message: 'Reports appear here once they have donations.',
+        compact: true,
+      ),
+      itemBuilder: (context, r) {
+        final id = (r['report_id'] as num).toInt();
+        final label = '${r['report_label'] ?? 'Report #$id'}';
+        return Padding(
+          padding: const EdgeInsets.only(bottom: Space.sm),
+          child: AppCard(
+            key: ValueKey('report-records-$id'),
+            onTap: () => openReportRecords(context, reportId: id, title: label),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label, style: t.titleMedium),
+                      Gaps.v4,
+                      Text(
+                        statusLine(r),
+                        style: t.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right),
+              ],
+            ),
+          ),
         );
       },
     );
@@ -218,31 +330,13 @@ class ReportRecordsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(title)),
-      body: Loader(
-        load: [
-          () => api.get(
-            '/donations/records',
-            query: {'report_id': '$reportId', 'include_closed': 'true'},
-          ),
-        ],
-        builder: (context, data) {
-          final entries = (data[0] as List).cast<Map>();
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              EntryStatusSummary(entries),
-              Gaps.v16,
-              DonationEntriesView(
-                entries: entries,
-                reportFilter: false,
-                footer: _canManageRecords ? (e) => _EntryActions(e) : null,
-                emptyTitle: 'No donations for this report yet.',
-                emptyMessage:
-                    'Donation entries appear here once donors submit them.',
-              ),
-            ],
-          );
-        },
+      // NF-003: this report's entries a page at a time, with the summary of
+      // the whole report on top and the filters on the server.
+      body: PagedDonationEntries(
+        reportId: reportId,
+        footer: _canManageRecords ? (e) => _EntryActions(e) : null,
+        emptyTitle: 'No donations for this report yet.',
+        emptyMessage: 'Donation entries appear here once donors submit them.',
       ),
     );
   }
@@ -285,72 +379,103 @@ class _EntryActions extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Appendix H 6.3 View donation summaries per report (CMO, Administrator)
+// Appendix H 6.3 View donation summaries per report (CMO, Administrator).
+// NF-001 / NF-003: one page at a time from GET /cmo/report-summaries,
+// grouped in SQL and filtered by disaster type.
 // ---------------------------------------------------------------------------
-class ReportSummariesScreen extends StatelessWidget {
-  const ReportSummariesScreen({super.key});
+class ReportSummariesScreen extends StatefulWidget {
+  final int? disasterTypeId;
+  final String? disasterTypeName;
+  const ReportSummariesScreen({
+    super.key,
+    this.disasterTypeId,
+    this.disasterTypeName,
+  });
+
+  @override
+  State<ReportSummariesScreen> createState() => _ReportSummariesScreenState();
+}
+
+class _ReportSummariesScreenState extends State<ReportSummariesScreen> {
+  late final controller = PagedController(
+    fetch: (offset, limit) => api.get(
+      '/cmo/report-summaries',
+      query: {
+        if (widget.disasterTypeId != null)
+          'disaster_type_id': '${widget.disasterTypeId}',
+        'limit': '$limit',
+        'offset': '$offset',
+      },
+    ),
+  );
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Loader(
-      load: [() => api.get('/cmo/dashboard')],
-      builder: (context, data) {
-        final rows = ((data[0] as Map)['per_report'] as List).cast<Map>();
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            if (rows.isEmpty)
-              const EmptyState('No received donations under any report yet.'),
-            for (final r in rows)
-              Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '${r['report_label']}',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '${r['confirmed_count']} acknowledged '
-                        '(${r['confirmed_quantity']} units, '
-                        'PHP ${r['confirmed_value']}) · '
-                        '${r['pending_count']} waiting for CMO',
-                      ),
-                      const SizedBox(height: 8),
-                      LinearProgressIndicator(
-                        value:
-                            ((num.tryParse('${r['fulfillment_percentage']}') ??
-                                        0) /
-                                    100)
-                                .clamp(0, 1)
-                                .toDouble(),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Fulfillment ${r['fulfillment_percentage']}%',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
+    return PagedListView(
+      controller: controller,
+      empty: EmptyState(
+        widget.disasterTypeName != null
+            ? 'No received donations for ${widget.disasterTypeName} yet.'
+            : 'No received donations under any report yet.',
+      ),
+      itemBuilder: (context, r) => Card(
+        margin: const EdgeInsets.only(bottom: 10),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${r['report_label']}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
               ),
-          ],
-        );
-      },
+              const SizedBox(height: 6),
+              Text(
+                '${r['confirmed_count']} acknowledged '
+                '(${r['confirmed_quantity']} units, '
+                'PHP ${r['confirmed_value']}) · '
+                '${r['pending_count']} waiting for CMO',
+              ),
+              const SizedBox(height: 8),
+              LinearProgressIndicator(
+                value:
+                    ((num.tryParse('${r['fulfillment_percentage']}') ?? 0) /
+                            100)
+                        .clamp(0, 1)
+                        .toDouble(),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Fulfillment ${r['fulfillment_percentage']}%',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
 // ---------------------------------------------------------------------------
 // Appendix H 7.5 Monitor completed support records
-// (Administrator, CSWS Main Office, DRRMO)
+// (Administrator, CSWS Main Office, DRRMO). NF-001 / NF-003: the stage chips
+// and the disaster type are filters on the server, one page at a time.
 // ---------------------------------------------------------------------------
 class SupportRecordsScreen extends StatefulWidget {
-  const SupportRecordsScreen({super.key});
+  final int? disasterTypeId;
+  final String? disasterTypeName;
+  const SupportRecordsScreen({
+    super.key,
+    this.disasterTypeId,
+    this.disasterTypeName,
+  });
 
   @override
   State<SupportRecordsScreen> createState() => _SupportRecordsScreenState();
@@ -358,80 +483,100 @@ class SupportRecordsScreen extends StatefulWidget {
 
 class _SupportRecordsScreenState extends State<SupportRecordsScreen> {
   String stage = 'Completed';
+  late final controller = PagedController(fetch: _fetchFor(stage));
+
+  PageFetch _fetchFor(String stage) =>
+      (offset, limit) => api.get(
+        '/logistics/requests',
+        query: {
+          if (stage.isNotEmpty) 'stage': stage,
+          if (widget.disasterTypeId != null)
+            'disaster_type_id': '${widget.disasterTypeId}',
+          'limit': '$limit',
+          'offset': '$offset',
+        },
+      );
+
+  void _pick(String s) {
+    if (s == stage) return;
+    setState(() => stage = s);
+    controller.refresh(fetch: _fetchFor(s));
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Loader(
-      load: [() => api.get('/logistics/requests')],
-      builder: (context, data) {
-        final all = (data[0] as List).cast<Map>();
-        final rows = stage.isEmpty
-            ? all
-            : all.where((r) => r['stage'] == stage).toList();
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (final s in const [
-                    'Completed',
-                    '',
-                    'Pending',
-                    'Accepted',
-                    'In Transit',
-                    'Declined',
-                  ])
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: ChoiceChip(
-                        label: Text(s.isEmpty ? 'All' : s),
-                        selected: stage == s,
-                        onSelected: (_) => setState(() => stage = s),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty) const EmptyState('No logistics requests here.'),
-            for (final r in rows)
-              Card(
-                margin: const EdgeInsets.only(bottom: 10),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    child: Icon(
-                      r['request_type'] == 'Pickup'
-                          ? Icons.door_front_door_outlined
-                          : Icons.fire_truck_outlined,
-                    ),
+    final type = widget.disasterTypeName;
+    return PagedListView(
+      controller: controller,
+      header: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final s in const [
+                'Completed',
+                '',
+                'Pending',
+                'Accepted',
+                'In Transit',
+                'Declined',
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: ChoiceChip(
+                    label: Text(s.isEmpty ? 'All' : s),
+                    selected: stage == s,
+                    onSelected: (_) => _pick(s),
                   ),
-                  // A Disaster Unit pickup run has no delivery.
-                  title: Text(
-                    r['request_type'] == 'Pickup'
-                        ? 'Request #${r['request_id']} · pickup run, '
-                              '${r['destination'] ?? '-'}'
-                        : 'Request #${r['request_id']} · delivery '
-                              '#${r['delivery_id']} to ${r['destination'] ?? '-'}',
-                  ),
-                  subtitle: Text(
-                    [
-                      if (r['report_label'] != null) '${r['report_label']}',
-                      if ((r['goods'] as List?)?.isNotEmpty ?? false)
-                        (r['goods'] as List).join(', '),
-                      if (r['scheduled_date'] != null)
-                        'Scheduled ${niceDate(r['scheduled_date'])}',
-                      if (r['notes'] != null) '${r['notes']}',
-                    ].join('\n'),
-                  ),
-                  isThreeLine: true,
-                  trailing: Badge2.status('${r['stage']}'),
                 ),
-              ),
-          ],
-        );
-      },
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
+      empty: EmptyState(
+        type != null
+            ? 'No logistics requests for $type here.'
+            : 'No logistics requests here.',
+      ),
+      itemBuilder: (context, r) => Card(
+        margin: const EdgeInsets.only(bottom: 10),
+        child: ListTile(
+          leading: CircleAvatar(
+            child: Icon(
+              r['request_type'] == 'Pickup'
+                  ? Icons.door_front_door_outlined
+                  : Icons.fire_truck_outlined,
+            ),
+          ),
+          // A Disaster Unit pickup run has no delivery.
+          title: Text(
+            r['request_type'] == 'Pickup'
+                ? 'Request #${r['request_id']} · pickup run, '
+                      '${r['destination'] ?? '-'}'
+                : 'Request #${r['request_id']} · delivery '
+                      '#${r['delivery_id']} to ${r['destination'] ?? '-'}',
+          ),
+          subtitle: Text(
+            [
+              if (r['report_label'] != null) '${r['report_label']}',
+              if ((r['goods'] as List?)?.isNotEmpty ?? false)
+                (r['goods'] as List).join(', '),
+              if (r['scheduled_date'] != null)
+                'Scheduled ${niceDate(r['scheduled_date'])}',
+              if (r['notes'] != null) '${r['notes']}',
+            ].join('\n'),
+          ),
+          isThreeLine: true,
+          trailing: Badge2.status('${r['stage']}'),
+        ),
+      ),
     );
   }
 }
@@ -439,6 +584,8 @@ class _SupportRecordsScreenState extends State<SupportRecordsScreen> {
 // ---------------------------------------------------------------------------
 // Administrator "Records" menu: the monitoring parts of Modules 4-8 that
 // Appendix H gives the Administrator (view only).
+// NF-001: a "Disaster type" filter above the tabs. The choice is kept while
+// switching tabs, and each tab asks the server for that type only.
 // ---------------------------------------------------------------------------
 class AdminRecordsScreen extends StatefulWidget {
   const AdminRecordsScreen({super.key});
@@ -451,6 +598,11 @@ class _AdminRecordsScreenState extends State<AdminRecordsScreen>
     with HomeTargetListener<AdminRecordsScreen> {
   String view = 'donations';
 
+  /// null = All types.
+  int? typeId;
+  String? typeName;
+  late final Future<Map<String, dynamic>> _lookups = api.lookups();
+
   // A donation notification opens Records on Donations, with its Scan QR
   // button, and the donation's pop-out on top.
   @override
@@ -459,7 +611,68 @@ class _AdminRecordsScreenState extends State<AdminRecordsScreen>
   @override
   void applyHomeTarget(HomeTarget target) {
     view = target.view ?? 'donations';
+    // NF-002: /admin/records...?type=<id> (a web address) sets the filter.
+    final q = target.query;
+    if (q != null) {
+      typeId = int.tryParse(q['type'] ?? '');
+      typeName = null;
+      _nameType();
+    }
   }
+
+  /// The name of [typeId] for the empty messages, once the lookups are in.
+  void _nameType() {
+    final id = typeId;
+    if (id == null) return;
+    _lookups.then((m) {
+      for (final t
+          in ((m['disaster_types'] as List?) ?? const []).cast<Map>()) {
+        if (t['id'] == id && mounted && typeId == id) {
+          setState(() => typeName = '${t['name']}');
+        }
+      }
+    });
+  }
+
+  /// NF-002: the open sub-tab and filter in the web address.
+  void _toAddress({bool replace = false}) => AppRoutes.instance.viewChanged(
+    homeTab,
+    view,
+    query: typeId == null ? const {} : {'type': '$typeId'},
+    replace: replace,
+  );
+
+  Widget _typeFilter() => FutureBuilder<Map<String, dynamic>>(
+    future: _lookups,
+    builder: (context, snap) {
+      final types = ((snap.data?['disaster_types'] as List?) ?? const [])
+          .cast<Map>();
+      return DropdownButtonFormField<int?>(
+        key: const ValueKey('records-disaster-type'),
+        initialValue: typeId,
+        isExpanded: true,
+        decoration: const InputDecoration(labelText: 'Disaster type'),
+        items: [
+          const DropdownMenuItem(value: null, child: Text('All types')),
+          for (final t in types)
+            DropdownMenuItem(
+              value: (t['id'] as num).toInt(),
+              child: Text('${t['name']}'),
+            ),
+        ],
+        onChanged: (v) {
+          setState(() {
+            typeId = v;
+            typeName = null;
+            for (final t in types) {
+              if (t['id'] == v) typeName = '${t['name']}';
+            }
+          });
+          _toAddress(replace: true);
+        },
+      );
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -467,25 +680,55 @@ class _AdminRecordsScreenState extends State<AdminRecordsScreen>
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-          child: SegmentedButton<String>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: 'donations', label: Text('Donations')),
-              ButtonSegment(value: 'reports', label: Text('Per report')),
-              ButtonSegment(value: 'deliveries', label: Text('Deliveries')),
-              ButtonSegment(value: 'support', label: Text('Logistics')),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _typeFilter(),
+              Gaps.v12,
+              SegmentedButton<String>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment(value: 'donations', label: Text('Donations')),
+                  ButtonSegment(value: 'reports', label: Text('Per report')),
+                  ButtonSegment(value: 'deliveries', label: Text('Deliveries')),
+                  ButtonSegment(value: 'support', label: Text('Logistics')),
+                ],
+                selected: {view},
+                onSelectionChanged: (v) {
+                  setState(() => view = v.first);
+                  _toAddress();
+                },
+              ),
             ],
-            selected: {view},
-            onSelectionChanged: (v) => setState(() => view = v.first),
           ),
         ),
+        // UAT (Nov 14): sub-tabs opened once stay loaded; another disaster
+        // type starts every sub-tab again from page 1.
         Expanded(
-          child: switch (view) {
-            'reports' => const ReportSummariesScreen(),
-            'deliveries' => const DeliveriesScreen(readOnly: true),
-            'support' => const SupportRecordsScreen(),
-            _ => const DonationRecordsScreen(header: false),
-          },
+          child: KeptViews(
+            current: view,
+            resetKey: typeId ?? 'all',
+            builder: (context, v) => switch (v) {
+              'reports' => ReportSummariesScreen(
+                disasterTypeId: typeId,
+                disasterTypeName: typeName,
+              ),
+              'deliveries' => DeliveriesScreen(
+                readOnly: true,
+                disasterTypeId: typeId,
+                disasterTypeName: typeName,
+              ),
+              'support' => SupportRecordsScreen(
+                disasterTypeId: typeId,
+                disasterTypeName: typeName,
+              ),
+              _ => DonationRecordsScreen(
+                header: false,
+                disasterTypeId: typeId,
+                disasterTypeName: typeName,
+              ),
+            },
+          ),
         ),
       ],
     );
