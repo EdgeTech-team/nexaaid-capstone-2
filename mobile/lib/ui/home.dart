@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
+import '../app_routes.dart';
 import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_dashboard.dart';
@@ -167,6 +168,13 @@ List<_Tab> _tabsFor(String? role) {
   }
 }
 
+/// NF-002: the bottom-menu labels of [role] (Profile last), for the web
+/// address check in app_router.dart. A guest has no role.
+List<String> tabLabelsFor(String? role, bool loggedIn) => [
+  for (final t in _tabsFor(loggedIn ? role : null)) t.label,
+  'Profile',
+];
+
 /// Extra buttons in the signed-in app bar.
 /// Mariquit (Sprint 0): add the notification bell here, e.g.
 /// `const NotificationBell()`.
@@ -193,7 +201,21 @@ class RoleHome extends StatefulWidget {
 class _RoleHomeState extends State<RoleHome> {
   int index = 0;
 
+  /// UAT (Nov 14): tabs opened once stay alive, so going back to one shows
+  /// it at once, where it was left; hidden tabs reload quietly when shown
+  /// again if something changed meanwhile (Loader / PagedListView).
+  final Set<int> _visited = {0};
+  final Map<int, ScrollController> _scrolls = {};
+
   static const _kLastTab = 'last_tab';
+
+  /// NF-002: this role's part of the web address (/admin, /cmo, ...).
+  String get _prefix =>
+      AppRoutes.prefixOf(
+        api.loggedIn ? api.role : null,
+        guest: api.guest && !api.loggedIn,
+      ) ??
+      AppRoutes.guestPrefix;
 
   /// Remember which tab the user opened, so a page refresh or app restart
   /// returns to it instead of the first tab. Signing in, browsing as a
@@ -212,20 +234,76 @@ class _RoleHomeState extends State<RoleHome> {
       final label = p.getString(_kLastTab);
       if (label == null || !mounted || api.mustChangePassword) return;
       if (api.guest || label == 'Profile') return;
+      // NF-002: a web address that names a tab wins.
+      if (_tabInAddress() != null) return;
       final i = _allTabs.indexWhere((t) => t.label == label);
-      if (i >= 0) setState(() => index = i);
+      if (i >= 0) {
+        _show(i);
+        _report(replace: true);
+      }
     } catch (_) {}
   }
 
+  void _show(int i) {
+    if (i == index && _visited.contains(i)) return;
+    // A field in the tab being left must not keep the keyboard.
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() {
+      index = i;
+      _visited.add(i);
+    });
+  }
+
   void _selectTab(int i) {
-    setState(() => index = i);
+    _show(i);
     _rememberTab(i);
+    _report();
   }
 
   List<_Tab> get _allTabs => [
-    ..._tabsFor(api.role),
+    ..._tabsFor(api.loggedIn ? api.role : null),
     const _Tab('Profile', Icons.person_outline, ProfileScreen()),
   ];
+
+  /// NF-002: put the open tab (and its sub-tab) in the address bar.
+  void _report({bool replace = false, String? view}) {
+    AppRoutes.instance.go(
+      AppRoutes.instance.tabPath(_prefix, _allTabs[index].label, view: view),
+      replace: replace,
+    );
+  }
+
+  /// The tab the address bar names, if it is this role's.
+  int? _tabInAddress() {
+    final seg = AppRoutes.segments(AppRoutes.instance.location);
+    if (seg.length < 2 || seg.first != _prefix) return null;
+    final i = _allTabs.indexWhere((t) => AppRoutes.slug(t.label) == seg[1]);
+    return i < 0 ? null : i;
+  }
+
+  /// NF-002: the address changed (a tab or Back/Forward in the browser, a
+  /// typed or bookmarked address): show that tab and sub-tab.
+  void _fromAddress() {
+    if (!mounted) return;
+    final seg = AppRoutes.segments(AppRoutes.instance.location);
+    if (seg.isEmpty || seg.first != _prefix) return;
+    if (seg.length == 1) {
+      // The role's home (/admin): name the tab that shows.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _report(replace: true);
+      });
+      return;
+    }
+    final i = _tabInAddress();
+    if (i == null) return; // app_router.dart shows "Page not found"
+    _show(i);
+    final want = AppRoutes.instance.viewRequest();
+    if (want != null) {
+      HomeNav.open(
+        HomeTarget(_allTabs[i].label, view: want.$1, query: want.$2),
+      );
+    }
+  }
 
   /// A notification asked for an existing tab (home_nav.dart): switch to it,
   /// then run its follow-up (a pop-up or detail page over that tab).
@@ -233,7 +311,12 @@ class _RoleHomeState extends State<RoleHome> {
     final r = HomeNav.target.value;
     if (r == null || !mounted) return;
     final i = _allTabs.indexWhere((t) => t.label == r.to.tab);
-    if (i >= 0 && i != index) setState(() => index = i);
+    if (i >= 0 && i != index) _show(i);
+    if (i >= 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _report(view: r.to.view);
+      });
+    }
     final then = r.to.then;
     if (then != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -245,19 +328,34 @@ class _RoleHomeState extends State<RoleHome> {
   @override
   void dispose() {
     HomeNav.target.removeListener(_onHomeTarget);
+    AppRoutes.instance.removeListener(_fromAddress);
+    for (final c in _scrolls.values) {
+      c.dispose();
+    }
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    AppRoutes.instance.forgetViews();
     HomeNav.target.addListener(_onHomeTarget);
+    AppRoutes.instance.addListener(_fromAddress);
+    // A web address that names a tab (refresh, bookmark) opens it.
+    final fromAddress = _tabInAddress();
+    if (fromAddress != null) {
+      index = fromAddress;
+      _visited.add(index);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _fromAddress());
+    }
     _restoreTab();
     // I1: a temporary password must be changed first.
     if (api.mustChangePassword) {
       index = _tabsFor(api.role).length; // Profile is the last tab
+      _visited.add(index);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !api.mustChangePassword) return;
+        _report(replace: true);
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => const ChangePasswordScreen(forced: true),
@@ -267,20 +365,42 @@ class _RoleHomeState extends State<RoleHome> {
     }
   }
 
+  /// Every tab opened so far, only the chosen one shown. Hidden tabs keep
+  /// their state but take no taps, keyboard focus or animation frames.
+  Widget _tabBodies(List<_Tab> tabs) => Stack(
+    fit: StackFit.expand,
+    children: [
+      for (var i = 0; i < tabs.length; i++)
+        if (_visited.contains(i))
+          Offstage(
+            key: ValueKey('tab-${tabs[i].label}'),
+            offstage: i != index,
+            child: TickerMode(
+              enabled: i == index,
+              child: ExcludeFocus(
+                excluding: i != index,
+                // Each tab its own primary scroll controller, so the lists
+                // of hidden tabs never share one with the shown tab.
+                child: PrimaryScrollController(
+                  controller: _scrolls.putIfAbsent(i, ScrollController.new),
+                  child: tabs[i].body,
+                ),
+              ),
+            ),
+          ),
+    ],
+  );
+
   @override
   Widget build(BuildContext context) {
     final tabs = _allTabs;
     if (index >= tabs.length) index = 0;
+    _visited.add(index);
     final wide = MediaQuery.sizeOf(context).width >= Breakpoints.expanded;
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
 
-    final body = AnimatedSwitcher(
-      duration: MediaQuery.disableAnimationsOf(context)
-          ? Duration.zero
-          : Motion.fast,
-      child: KeyedSubtree(key: ValueKey(index), child: tabs[index].body),
-    );
+    final body = _tabBodies(tabs);
 
     return Scaffold(
       appBar: AppBar(

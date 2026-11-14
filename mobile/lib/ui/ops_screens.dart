@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult, Roles;
@@ -9,6 +11,8 @@ import 'trip_screens.dart';
 import 'widgets.dart';
 import 'logistics_cards.dart';
 import 'needs_action.dart';
+import 'paged_donation_entries.dart' show searchDebounce;
+import 'paginated_list.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
 import 'scheduled_deliveries.dart';
@@ -272,11 +276,18 @@ class DeliveriesScreen extends StatefulWidget {
   final bool barangay;
 
   /// Appendix H 8.5 View delivery records only (Administrator, DRRMO).
+  /// NF-003: these records load one page at a time.
   final bool readOnly;
+
+  /// NF-001: the Administrator's disaster type filter (records screen).
+  final int? disasterTypeId;
+  final String? disasterTypeName;
   const DeliveriesScreen({
     super.key,
     this.barangay = false,
     this.readOnly = false,
+    this.disasterTypeId,
+    this.disasterTypeName,
   });
 
   @override
@@ -325,7 +336,108 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
   @override
   void dispose() {
     searchC.dispose();
+    _pager?.dispose();
     super.dispose();
+  }
+
+  // NF-001 / NF-003 (read-only records): the list arrives a page at a time
+  // with the filters (and disaster type) applied on the server. One
+  // controller per set of filters; a new set starts again from page 1.
+  PagedController? _pager;
+  String? _pagerFor;
+  int _extras = 0;
+
+  Map<String, String> get _recordsQuery => {
+    ...Map.of(_query)..remove('limit'),
+    if (widget.disasterTypeId != null)
+      'disaster_type_id': '${widget.disasterTypeId}',
+  };
+
+  PagedController _pagerOf(Map<String, String> query) {
+    final key = query.toString();
+    if (_pager == null || _pagerFor != key) {
+      final old = _pager;
+      _pager = PagedController(
+        fetch: (offset, limit) => api.get(
+          '/deliveries/',
+          query: {...query, 'limit': '$limit', 'offset': '$offset'},
+        ),
+      );
+      _pagerFor = key;
+      if (old != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+      }
+    }
+    return _pager!;
+  }
+
+  /// Appendix H 8.5 (Administrator, DRRMO): the same cards and filters,
+  /// one page at a time. The counts and the logistics requests come with
+  /// it; pull to refresh reloads all of them.
+  Widget _records(BuildContext context) {
+    final query = _recordsQuery;
+    final pager = _pagerOf(query);
+    return Loader(
+      key: ValueKey('records-$query-$_extras'),
+      load: [
+        api.lookupsResult,
+        api.role == Roles.drrmo
+            ? () => api.get('/drrmo/requests')
+            : () => api.get('/logistics/requests'),
+        () => api.get(
+          '/deliveries/counts',
+          query: {
+            if (widget.disasterTypeId != null)
+              'disaster_type_id': '${widget.disasterTypeId}',
+          },
+        ),
+      ],
+      builder: (context, data) {
+        final names = Names(Map<String, dynamic>.from(data[0] as Map));
+        final requests = <dynamic, Map>{};
+        for (final r in (data[1] as List).cast<Map>().reversed) {
+          requests[r['delivery_id']] = r; // latest request per delivery
+        }
+        final type = widget.disasterTypeName;
+        return PagedListView(
+          controller: pager,
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+          onRefresh: () async {
+            setState(() => _extras++);
+            await pager.refresh();
+          },
+          header: [
+            const PageHeader(
+              'Delivery Records',
+              subtitle: 'Every delivery with its tracking status and history.',
+            ),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: Space.xs,
+              children: [
+                TextButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const TripsScreen()),
+                  ),
+                  icon: const Icon(Icons.local_shipping_outlined),
+                  label: const Text('Trips'),
+                ),
+              ],
+            ),
+            _filters(context, data[2] as Map),
+          ],
+          empty: EmptyState(
+            _filtered
+                ? 'No deliveries match these filters.'
+                : type != null
+                ? 'No deliveries for $type yet.'
+                : 'No deliveries yet.',
+          ),
+          itemBuilder: (context, d) =>
+              _card(context, d, names, false, requests[d['delivery_id']]),
+        );
+      },
+    );
   }
 
   String _ymd(DateTime d) =>
@@ -758,6 +870,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
 
   @override
   Widget build(BuildContext context) {
+    // NF-003: delivery records (8.5) are paged; the other modes stay as they are.
+    if (readOnly) return Scaffold(body: _records(context));
     return Scaffold(
       floatingActionButton: barangay || readOnly
           ? null
@@ -1845,18 +1959,13 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   bool _scrollToList = false;
 
   @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  @override
   void applyHomeTarget(HomeTarget target) {
     if (target.view != null) stage = target.view!;
     _focus = target.id;
     _focusPlaced = false;
     _loads++;
     _scrollToList = target.id != null || target.view != null;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadFocus());
   }
 
   /// Show the requests at [s] (a stat tile, a "Needs your action" line, or
@@ -1868,6 +1977,41 @@ class _DrrmoScreenState extends State<DrrmoScreen>
       _focusPlaced = true;
       _scrollToList = true;
     });
+    _loadFocus();
+  }
+
+  /// NF-003: the focused request on its own (it may be on a later page of
+  /// its stage), loaded again after any change so its buttons stay right.
+  Map? _focused;
+
+  Future<void> _loadFocus() async {
+    final id = _focus;
+    if (id == null) {
+      if (_focused != null && mounted) setState(() => _focused = null);
+      return;
+    }
+    final r = await api.get('/drrmo/requests', query: {'request_id': '$id'});
+    if (!mounted || _focus != id || !r.ok || r.json is! List) return;
+    final hit = (r.json as List).cast<Map>().where(
+      (x) => x['request_id'] == id,
+    );
+    setState(() {
+      _focused = hit.isEmpty ? null : hit.first;
+      // The request may have moved on since the notice (e.g. accepted).
+      if (!_focusPlaced && _focused != null) stage = '${_focused!['stage']}';
+      _focusPlaced = true;
+    });
+  }
+
+  void _refreshFocus() {
+    if (_focus != null) _loadFocus();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    api.addListener(_refreshFocus);
+    Realtime.instance.logistics.addListener(_refreshFocus);
   }
 
   /// Bring the stage chips to the top of the screen (or as far as the
@@ -1875,10 +2019,18 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   void _revealList() {
     _scrollToList = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final box = _dashboard.currentContext?.findRenderObject() as RenderBox?;
-      if (!mounted || box == null || !_scroll.hasClients) return;
+      final ctx = _dashboard.currentContext;
+      final box = ctx?.findRenderObject() as RenderBox?;
+      if (!mounted || ctx == null || box == null || !_scroll.hasClients) {
+        return;
+      }
+      final view = Scrollable.of(ctx).context.findRenderObject() as RenderBox;
+      // Where the dashboard ends, measured from the top of the list.
+      final end = box
+          .localToGlobal(Offset(0, box.size.height), ancestor: view)
+          .dy;
       final p = _scroll.position;
-      final target = (Space.md + box.size.height).clamp(0.0, p.maxScrollExtent);
+      final target = (p.pixels + end).clamp(0.0, p.maxScrollExtent);
       if (MediaQuery.disableAnimationsOf(context)) {
         _scroll.jumpTo(target);
       } else {
@@ -2048,6 +2200,81 @@ class _DrrmoScreenState extends State<DrrmoScreen>
     );
   }
 
+  // NF-003: the requests of the chosen stage (and search), a page at a time
+  // from the server. A new stage, search or notice starts again from page 1.
+  PagedController? _list;
+  String? _listFor;
+  Timer? _typing;
+  String _query = ''; // the search the list was loaded for (_q is typed)
+
+  PagedController _listOf(String stage) {
+    final key = '$stage-$_loads-$_query';
+    if (_list == null || _listFor != key) {
+      final old = _list;
+      final q = _query;
+      _list = PagedController(
+        fetch: (offset, limit) => api.get(
+          '/drrmo/requests',
+          query: {
+            'stage': stage,
+            if (q.isNotEmpty) 'q': q,
+            'limit': '$limit',
+            'offset': '$offset',
+          },
+        ),
+      );
+      _listFor = key;
+      if (old != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+      }
+    }
+    return _list!;
+  }
+
+  /// Phase 6 search, sent once typing stops (barangay, report, or request /
+  /// delivery number).
+  void _search(String v) {
+    _q = v;
+    _typing?.cancel();
+    _typing = Timer(searchDebounce, () {
+      if (mounted && v.trim() != _query) setState(() => _query = v.trim());
+    });
+  }
+
+  @override
+  void dispose() {
+    api.removeListener(_refreshFocus);
+    Realtime.instance.logistics.removeListener(_refreshFocus);
+    _typing?.cancel();
+    _scroll.dispose();
+    _list?.dispose();
+    super.dispose();
+  }
+
+  Widget _row(BuildContext context, Map r) {
+    final cs = Theme.of(context).colorScheme;
+    return AnimatedContainer(
+      key: ValueKey('request-${r['request_id']}'),
+      duration: const Duration(milliseconds: 250),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(Radii.lg),
+        border: Border.all(
+          color: r['request_id'] == _focus ? cs.primary : Colors.transparent,
+          width: 2,
+        ),
+      ),
+      child: LogisticsRequestCard(
+        r,
+        // The delivery's timeline (who did each step, when).
+        onTap: r['delivery_id'] is int
+            ? () => showDeliveryHistory(context, r['delivery_id'] as int)
+            : null,
+        actions: _actionsFor(r),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Loader(
@@ -2055,35 +2282,20 @@ class _DrrmoScreenState extends State<DrrmoScreen>
       refresh: Realtime.instance.logistics, // live: new or changed requests
       load: [
         () => api.get('/drrmo/dashboard'),
-        () => api.get('/drrmo/requests'),
+        // NF-003: the stage chips are counted on the server.
+        () => api.get('/drrmo/requests/counts'),
         // Testing #19: deliveries that have not arrived yet.
         () => api.get('/deliveries/', query: scheduledDeliveriesQuery),
       ],
       builder: (context, data) {
         final dash = data[0] as Map;
-        final all = (data[1] as List).cast<Map>();
+        final counts = data[1] as Map;
         final scheduled = (data[2] as List).cast<Map>();
-        if (_focus != null && !_focusPlaced) {
-          // The request may have moved on since the notice (e.g. accepted).
-          final hit = all.where((r) => r['request_id'] == _focus);
-          if (hit.isNotEmpty) stage = '${hit.first['stage']}';
-          _focusPlaced = true;
-        }
+        // The request a notification or tile is about, first in its stage.
+        final focused = _focus == null ? null : _focused;
         if (_scrollToList) _revealList();
-        // Phase 6: search by barangay, report or request / delivery number.
-        final q = _q.trim().toLowerCase().replaceFirst('#', '');
-        bool hit(Map r) =>
-            q.isEmpty ||
-            '${r['destination'] ?? ''} ${r['report_label'] ?? ''}'
-                .toLowerCase()
-                .contains(q) ||
-            '${r['request_id']}' == q ||
-            '${r['delivery_id']}' == q;
-        final inStage = all.where((r) => r['stage'] == stage && hit(r));
-        final rows = [
-          ...inStage.where((r) => r['request_id'] == _focus),
-          ...inStage.where((r) => r['request_id'] != _focus),
-        ];
+        final showFocused =
+            focused != null && focused['stage'] == stage && _query.isEmpty;
         const stages = {
           'Pending': 'New',
           'Accepted': 'Accepted',
@@ -2110,155 +2322,123 @@ class _DrrmoScreenState extends State<DrrmoScreen>
           onTap: () => _show(to),
         );
         final cs = Theme.of(context).colorScheme;
-        return CustomScrollView(
-          controller: _scroll,
-          physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
-          slivers: [
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.md,
-                Space.md,
-                Space.md,
-                0,
-              ),
-              sliver: SliverToBoxAdapter(
-                child: Column(
-                  key: _dashboard,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
-                    // Phase 6: new requests, today's pickups, on the way.
-                    NeedsActionCard(
-                      onOpen: (i) => _show(
-                        '${i['view'] ?? stage}',
-                        focus:
-                            ((i['ids'] as List?) ?? const []).firstOrNull
-                                as int?,
-                      ),
-                    ),
-                    const ResponseTimesCard(), // Phase 7
-                    // 9.6 (testing): each card shows its requests below.
-                    StatGrid([
-                      tile(
-                        'New requests',
-                        dash['pending_requests'],
-                        Icons.mark_email_unread_outlined,
-                        'Pending',
-                        color: const Color(0xFFEF6C00),
-                      ),
-                      tile(
-                        'Accepted',
-                        dash['scheduled'],
-                        Icons.event_available,
-                        'Accepted',
-                      ),
-                      tile(
-                        'On the way',
-                        dash['in_transit'],
-                        Icons.local_shipping_outlined,
-                        'In Transit',
-                        color: const Color(0xFF1565C0),
-                      ),
-                      tile(
-                        'Completed',
-                        dash['completed'],
-                        Icons.done_all,
-                        'Completed',
-                        color: const Color(0xFF2E7D32),
-                      ),
-                    ]),
-                    ScheduledDeliveriesCard(
-                      deliveries: scheduled,
-                      onOpen: (d) =>
-                          showDeliveryHistory(context, d['delivery_id'] as int),
-                    ),
-                    const SectionTitle('Logistics requests'),
-                  ],
-                ),
-              ),
-            ),
-            // The stage chips stay at the top while the list scrolls.
-            SliverPersistentHeader(
-              pinned: true,
-              delegate: _PinnedBar(
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: Space.md),
-                  child: Row(
-                    children: [
-                      for (final e in stages.entries)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 6),
-                          child: ChoiceChip(
-                            label: Text(
-                              '${e.value} (${all.where((r) => r['stage'] == e.key).length})',
-                            ),
-                            selected: stage == e.key,
-                            onSelected: (_) => setState(() => stage = e.key),
-                          ),
-                        ),
-                    ],
+        final list = _listOf(stage);
+        return PagedListView(
+          controller: list,
+          scrollController: _scroll,
+          refresh: Realtime.instance.logistics,
+          padding: const EdgeInsets.fromLTRB(
+            Space.md,
+            Space.md,
+            Space.md,
+            Space.xl,
+          ),
+          header: [
+            Column(
+              key: _dashboard,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
+                // Phase 6: new requests, today's pickups, on the way.
+                NeedsActionCard(
+                  onOpen: (i) => _show(
+                    '${i['view'] ?? stage}',
+                    focus:
+                        ((i['ids'] as List?) ?? const []).firstOrNull as int?,
                   ),
                 ),
-              ),
-            ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.md,
-                Space.sm,
-                Space.md,
-                Space.xl,
-              ),
-              sliver: SliverList.list(
-                children: [
-                  TextField(
-                    textInputAction: TextInputAction.search,
-                    decoration: const InputDecoration(
-                      labelText: 'Search barangay, report or request no.',
-                      prefixIcon: Icon(Icons.search),
-                    ),
-                    onChanged: (v) => setState(() => _q = v),
+                const ResponseTimesCard(), // Phase 7
+                // 9.6 (testing): each card shows its requests below.
+                StatGrid([
+                  tile(
+                    'New requests',
+                    dash['pending_requests'],
+                    Icons.mark_email_unread_outlined,
+                    'Pending',
+                    color: const Color(0xFFEF6C00),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
-                    child: Text(
-                      '${stages[stage] ?? stage}: ${rows.length} '
-                      'request${rows.length == 1 ? '' : 's'}',
-                      style: Theme.of(context).textTheme.labelLarge
-                          ?.copyWith(color: cs.onSurfaceVariant),
-                    ),
+                  tile(
+                    'Accepted',
+                    dash['scheduled'],
+                    Icons.event_available,
+                    'Accepted',
                   ),
-                  if (rows.isEmpty) const EmptyState('No requests here.'),
-                  for (final r in rows)
-                    AnimatedContainer(
-                      key: ValueKey('request-${r['request_id']}'),
-                      duration: const Duration(milliseconds: 250),
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(Radii.lg),
-                        border: Border.all(
-                          color: r['request_id'] == _focus
-                              ? cs.primary
-                              : Colors.transparent,
-                          width: 2,
-                        ),
-                      ),
-                      child: LogisticsRequestCard(
-                        r,
-                        // The delivery's timeline (who did each step, when).
-                        onTap: r['delivery_id'] is int
-                            ? () => showDeliveryHistory(
-                                context,
-                                r['delivery_id'] as int,
-                              )
-                            : null,
-                        actions: _actionsFor(r),
-                      ),
-                    ),
-                ],
-              ),
+                  tile(
+                    'On the way',
+                    dash['in_transit'],
+                    Icons.local_shipping_outlined,
+                    'In Transit',
+                    color: const Color(0xFF1565C0),
+                  ),
+                  tile(
+                    'Completed',
+                    dash['completed'],
+                    Icons.done_all,
+                    'Completed',
+                    color: const Color(0xFF2E7D32),
+                  ),
+                ]),
+                ScheduledDeliveriesCard(
+                  deliveries: scheduled,
+                  onOpen: (d) =>
+                      showDeliveryHistory(context, d['delivery_id'] as int),
+                ),
+                const SectionTitle('Logistics requests'),
+              ],
             ),
           ],
+          // The stage chips stay at the top while the list scrolls.
+          pinned: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: Space.md),
+            child: Row(
+              children: [
+                for (final e in stages.entries)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text('${e.value} (${counts[e.key] ?? 0})'),
+                      selected: stage == e.key,
+                      onSelected: (_) => setState(() => stage = e.key),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          subheader: [
+            TextFormField(
+              initialValue: _q,
+              textInputAction: TextInputAction.search,
+              decoration: const InputDecoration(
+                labelText: 'Search barangay, report or request no.',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onChanged: _search,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
+              child: ListenableBuilder(
+                listenable: list,
+                builder: (context, _) {
+                  final n = list.total ?? list.items.length;
+                  return Text(
+                    '${stages[stage] ?? stage}: $n '
+                    'request${n == 1 ? '' : 's'}',
+                    style: Theme.of(context).textTheme.labelLarge
+                        ?.copyWith(color: cs.onSurfaceVariant),
+                  );
+                },
+              ),
+            ),
+            if (showFocused) _row(context, focused),
+          ],
+          empty: showFocused
+              ? const SizedBox.shrink()
+              : const EmptyState('No requests here.'),
+          // The focused request is already on top.
+          itemBuilder: (context, r) => r['request_id'] == _focus && showFocused
+              ? const SizedBox.shrink()
+              : _row(context, r),
         );
       },
     );
@@ -2342,29 +2522,4 @@ class _DrrmoScreenState extends State<DrrmoScreen>
         label: const Text('Mark completed'),
       ),
   ];
-}
-
-/// A bar that stays at the top of a CustomScrollView (DRRMO stage chips).
-class _PinnedBar extends SliverPersistentHeaderDelegate {
-  final Widget child;
-  const _PinnedBar(this.child);
-
-  static const double _height = 56;
-
-  @override
-  double get minExtent => _height;
-
-  @override
-  double get maxExtent => _height;
-
-  @override
-  Widget build(BuildContext context, double shrinkOffset, bool overlaps) =>
-      Material(
-        color: Theme.of(context).scaffoldBackgroundColor,
-        elevation: overlaps ? 2 : 0,
-        child: Align(alignment: Alignment.centerLeft, child: child),
-      );
-
-  @override
-  bool shouldRebuild(_PinnedBar old) => true;
 }

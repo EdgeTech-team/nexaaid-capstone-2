@@ -26,7 +26,10 @@ class HomeTarget {
   /// Runs after the tab is showing, with the app's main context.
   final void Function(BuildContext context)? then;
 
-  const HomeTarget(this.tab, {this.view, this.id, this.then});
+  /// NF-002: the filters of a web address (e.g. {'type': '3'}), or null.
+  final Map<String, String>? query;
+
+  const HomeTarget(this.tab, {this.view, this.id, this.then, this.query});
 }
 
 abstract final class HomeNav {
@@ -37,6 +40,12 @@ abstract final class HomeNav {
   /// Go to [to]: close the pages on top and show that tab.
   static void go(BuildContext context, HomeTarget to) {
     Navigator.of(context).popUntil((r) => r.isFirst);
+    target.value = _Request(++_seq, to);
+  }
+
+  /// NF-002: show [to] without closing anything (the web address asked
+  /// for a tab's sub-tab, e.g. after Back in the browser).
+  static void open(HomeTarget to) {
     target.value = _Request(++_seq, to);
   }
 
