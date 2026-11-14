@@ -1,10 +1,13 @@
 # routers/cmo_router.py
 # Manuscript UC-C1 / UC-C2 and the City Confirmation Module.
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy import String, case, exists, func, literal, or_, select
+from sqlalchemy.orm import Session, aliased
+from core.pagination import PageParams, paginate_query, set_total_header
 from core.database import get_db
 from core.auth import require_role
 from core.audit import log_action
@@ -14,7 +17,7 @@ from models.physical_donation_model import PhysicalDonation
 from models.donation_confirmation_model import DonationConfirmation
 from models.guest_donor_model import GuestDonor
 from models.received_goods_model import ReceivedGoods
-from models.report import DisasterReport, DisasterType, Barangay
+from models.report import DisasterReport, DisasterType, Barangay, ReportFulfillment
 from schemas.donation_confirmation_schema import ConfirmDonationRequest, DonationConfirmationResponse
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 
@@ -296,11 +299,30 @@ class EntryDecision(ConfirmDonationRequest):
 
 @router.get("/entries/pending")
 def pending_entries(
+    response: Response,
+    q: Optional[str] = None,
+    disaster_type_id: Optional[int] = None,
+    barangay_id: Optional[int] = None,
+    on_hold: Optional[bool] = None,
+    newest: bool = True,
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(CMO)),
 ):
     """Entries with items CSWS received that wait for the CMO (incl. on hold
-    / under review), newest first."""
+    / under review), newest first.
+
+    NF-003 (Module 6.1), all optional: q (QR reference, item, donor,
+    barangay, disaster or report), disaster_type_id, barangay_id, on_hold
+    (true = only On Hold, false = all but On Hold), newest (sort by when CSWS
+    received them) and limit / offset (X-Total-Count). With any of them the
+    database filters, sorts and pages; without them the answer is as before."""
+    if _wants_sql_paging(page, q, disaster_type_id, barangay_id, on_hold, newest):
+        rows, total = _entry_page(db, "Received", page=page, q=q,
+                                  disaster_type_id=disaster_type_id,
+                                  barangay_id=barangay_id, on_hold=on_hold, newest=newest)
+        set_total_header(response, page, total)
+        return rows
     donations = (db.query(PhysicalDonation)
                  .filter(PhysicalDonation.status == "Received")
                  .order_by(PhysicalDonation.donation_id.desc()).all())
@@ -309,9 +331,25 @@ def pending_entries(
 
 @router.get("/entries/acknowledged")
 def acknowledged_entries(
+    response: Response,
+    q: Optional[str] = None,
+    disaster_type_id: Optional[int] = None,
+    barangay_id: Optional[int] = None,
+    newest: bool = True,
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(CMO)),
 ):
+    """The CMO's History (Module 6.1). NF-003, all optional: q,
+    disaster_type_id, barangay_id, newest (sort by when they were
+    acknowledged) and limit / offset (X-Total-Count), filtered, sorted and
+    paged in the database. Without them the answer is as before."""
+    if _wants_sql_paging(page, q, disaster_type_id, barangay_id, None, newest):
+        rows, total = _entry_page(db, "Confirmed", page=page, q=q,
+                                  disaster_type_id=disaster_type_id,
+                                  barangay_id=barangay_id, on_hold=None, newest=newest)
+        set_total_header(response, page, total)
+        return rows
     donations = (db.query(PhysicalDonation)
                  .filter(PhysicalDonation.status == "Confirmed")
                  .order_by(PhysicalDonation.donation_id.desc()).all())
@@ -456,7 +494,190 @@ def cmo_dashboard(
         "acknowledged_entries": entries(confirmed),
         "pending_confirmation": len(pending),
         "on_hold": sum(1 for d in pending if decisions.get(d.donation_id) and decisions[d.donation_id].status == "On Hold"),
+        # NF-003: entries (not items) on hold, for the "On hold" tile, so the app
+        # no longer downloads the whole queue to count them.
+        "on_hold_entries": _entry_page(db, "Received", page=_COUNT_ONLY, q=None,
+                                       disaster_type_id=None, barangay_id=None,
+                                       on_hold=True, newest=True)[1],
         "pending_review": sum(1 for d in pending if decisions.get(d.donation_id) and decisions[d.donation_id].status == "Pending Review"),
         "confirmed": len(confirmed),
         "per_report": per_report,
 }
+
+# ---------------------------------------------------------------------------
+# NF-001 / NF-003 (Module 6.3): donation summaries per report, one page at a
+# time and filtered by disaster type, grouped in SQL. GET /cmo/dashboard keeps
+# its per_report list as it was (CMO dashboard, installed APKs).
+# ---------------------------------------------------------------------------
+
+
+@router.get("/report-summaries")
+def report_summaries(
+    response: Response,
+    disaster_type_id: Optional[int] = None,
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(CMO, "Administrator")),
+):
+    """Appendix H 6.3 View donation summaries per report (CMO, Administrator).
+
+    The same numbers as GET /cmo/dashboard's per_report, newest report first:
+    received items waiting for the CMO (pending_count), acknowledged items
+    with their quantity and estimated value, and the report's fulfillment.
+    Optional disaster_type_id (an unknown id gives an empty list) and
+    limit / offset (X-Total-Count holds the number of reports)."""
+    pd = PhysicalDonation
+    confirmed = pd.status == "Confirmed"
+    query = (
+        db.query(
+            pd.report_id.label("report_id"),
+            func.sum(case((pd.status == "Received", 1), else_=0)).label("pending_count"),
+            func.sum(case((confirmed, 1), else_=0)).label("confirmed_count"),
+            func.sum(case((confirmed, pd.quantity), else_=0)).label("confirmed_quantity"),
+            func.sum(case((confirmed, func.coalesce(pd.estimated_value, 0)), else_=0))
+            .label("confirmed_value"),
+        )
+        .filter(pd.status.in_(["Received", "Confirmed"]))
+    )
+    if disaster_type_id is not None:
+        query = (query.join(DisasterReport, DisasterReport.report_id == pd.report_id)
+                 .filter(DisasterReport.disaster_type_id == disaster_type_id))
+    query = query.group_by(pd.report_id)
+    rows, total = paginate_query(query, page, pd.report_id.desc())
+    set_total_header(response, page, total)
+
+    ids = [r.report_id for r in rows]
+    labels = _report_labels(db, ids)
+    fulfillment = {
+        f.report_id: float(f.fulfillment_percentage)
+        for f in db.query(ReportFulfillment).filter(ReportFulfillment.report_id.in_(ids or [-1]))
+    }
+    return [{
+        "report_id": r.report_id,
+        "report_label": labels.get(r.report_id),
+        "pending_count": int(r.pending_count or 0),
+        "confirmed_count": int(r.confirmed_count or 0),
+        "confirmed_quantity": int(r.confirmed_quantity or 0),
+        "confirmed_value": float(r.confirmed_value or 0),
+        "fulfillment_percentage": fulfillment.get(r.report_id, 0.0),
+    } for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# NF-003 (Module 6.1): the CMO's queue, On hold and History lists, filtered,
+# sorted and paged in SQL. The rows are still built by _entry_rows, so every
+# field is the same as in the old full answer.
+# ---------------------------------------------------------------------------
+# A "page" of no rows: _entry_page then only counts.
+_COUNT_ONLY = SimpleNamespace(requested=True, offset=0, limit=0)
+
+
+def _wants_sql_paging(page, q, disaster_type_id, barangay_id, on_hold, newest) -> bool:
+    return (page.requested or bool(q and q.strip()) or disaster_type_id is not None
+            or barangay_id is not None or on_hold is not None or newest is False)
+
+
+def _like(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _entry_page(db: Session, status: str, *, page, q, disaster_type_id, barangay_id,
+                on_hold, newest) -> tuple:
+    """Entries (one per QR) whose items have this status ("Received": the
+    queue, "Confirmed": History), as _entry_rows builds them.
+
+    Time: when CSWS received them (queue) or when the CMO acknowledged them
+    (History); entries without one sort last, then by the newest item."""
+    pd = PhysicalDonation
+    if status == "Received":
+        when = (select(func.max(ReceivedGoods.received_at))
+                .where(ReceivedGoods.donation_id == pd.donation_id).scalar_subquery())
+    else:
+        when = (select(func.max(DonationConfirmation.confirmed_at))
+                .where(DonationConfirmation.donation_id == pd.donation_id,
+                       DonationConfirmation.status == "Confirmed").scalar_subquery())
+    g = (db.query(
+            pd.batch_reference.label("ref"),
+            func.max(pd.donation_id).label("last_id"),
+            func.min(pd.report_id).label("report_id"),
+            func.max(when).label("at"),
+        )
+        .filter(pd.status == status)
+        .group_by(pd.batch_reference)
+        .subquery())
+
+    query = db.query(g.c.ref)
+    if disaster_type_id is not None or barangay_id is not None:
+        query = query.join(DisasterReport, DisasterReport.report_id == g.c.report_id)
+        if disaster_type_id is not None:
+            query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
+        if barangay_id is not None:
+            query = query.filter(DisasterReport.barangay_id == barangay_id)
+    if on_hold is not None:
+        held = _all_on_hold(g)
+        query = query.filter(held if on_hold else ~held)
+    if q and q.strip():
+        query = query.filter(_cmo_search(g, q.strip().lower(), status))
+
+    total = query.count()
+    order = (g.c.at.is_(None).asc(),
+             g.c.at.desc() if newest else g.c.at.asc(),
+             g.c.last_id.desc() if newest else g.c.last_id.asc())
+    query = query.order_by(*order)
+    if page.requested:
+        query = query.offset(page.offset).limit(page.limit)
+    refs = [ref for (ref,) in query.all()]
+    if not refs:
+        return [], total
+    donations = (db.query(pd).filter(pd.batch_reference.in_(refs), pd.status == status)
+                 .order_by(pd.donation_id.desc()).all())
+    built = {e["batch_reference"]: e for e in _entry_rows(db, donations)}
+    return [built[ref] for ref in refs if ref in built], total
+
+
+def _all_on_hold(g):
+    """_entry_rows' cmo_decision == "On Hold": the latest decision of every
+    received item of the entry is On Hold."""
+    row = aliased(PhysicalDonation)
+    latest = aliased(DonationConfirmation)
+    decision = (select(latest.status).where(latest.donation_id == row.donation_id)
+                .order_by(latest.confirmation_id.desc()).limit(1).scalar_subquery())
+    return ~exists().where(
+        row.batch_reference == g.c.ref, row.status == "Received",
+        or_(decision.is_(None), decision != "On Hold"))
+
+
+def _cmo_search(g, text: str, status: str):
+    """The CMO screens' search: QR reference, donor, barangay, disaster type,
+    report ("#12 Flood - Tipolo") or an item name."""
+    pattern = _like(text)
+    row = aliased(PhysicalDonation)
+    item_row = aliased(PhysicalDonation)
+    report = aliased(DisasterReport)
+    dtype = aliased(DisasterType)
+    brgy = aliased(Barangay)
+    user = aliased(User)
+    guest = aliased(GuestDonor)
+    name = func.trim(func.coalesce(user.first_name, "") + " " + func.coalesce(user.last_name, ""))
+    label = (literal("#") + func.cast(report.report_id, String) + " "
+             + func.coalesce(dtype.type_name, "Disaster") + " - "
+             + func.coalesce(brgy.barangay_name, "Barangay"))
+    return or_(
+        func.lower(g.c.ref).like(pattern, escape="\\"),
+        exists().where(
+            report.report_id == g.c.report_id,
+            dtype.disaster_type_id == report.disaster_type_id,
+            brgy.barangay_id == report.barangay_id,
+            func.lower(label).like(pattern, escape="\\")),
+        exists().where(
+            item_row.batch_reference == g.c.ref, item_row.status == status,
+            Item.item_id == item_row.item_id,
+            func.lower(Item.item_name).like(pattern, escape="\\")),
+        exists().where(
+            row.donation_id == g.c.last_id, user.user_id == row.user_id,
+            func.lower(name).like(pattern, escape="\\")),
+        exists().where(
+            row.donation_id == g.c.last_id, guest.guest_donor_id == row.guest_donor_id,
+            func.lower(func.coalesce(guest.full_name, "") + " (guest)").like(pattern, escape="\\")),
+    )

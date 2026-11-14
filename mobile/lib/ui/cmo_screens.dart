@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../app_routes.dart';
 import 'home_nav.dart';
 import 'input_formatters.dart' show pesos;
 import 'ops_screens.dart' show CmoEntryDetails;
+import 'paged_donation_entries.dart' show searchDebounce;
+import 'paginated_list.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
 
@@ -121,25 +126,6 @@ String _amount(Map i) {
 }
 
 /// Text that matches the search box: reference, items, donor, place.
-bool _matches(Map e, String q) {
-  final s = q.trim().toLowerCase();
-  if (s.isEmpty) return true;
-  return [
-    _ref(e),
-    e['donor'],
-    e['barangay'],
-    e['disaster_type'],
-    e['report_label'],
-    for (final i in _items(e)) i['item_name'],
-  ].join(' ').toLowerCase().contains(s);
-}
-
-int _byTime(Map a, Map b, String key, bool newest) {
-  final ta = _time(a[key]) ?? DateTime(0);
-  final tb = _time(b[key]) ?? DateTime(0);
-  return newest ? tb.compareTo(ta) : ta.compareTo(tb);
-}
-
 // ----- shared pieces -----------------------------------------------------------
 
 /// Round icon on a soft tint, used for card leads and section icons.
@@ -394,6 +380,67 @@ class _SearchSort extends StatelessWidget {
   }
 }
 
+/// NF-003: one CMO list (queue, On hold, History) a page at a time from
+/// [path]. Search (it waits until typing stops), sort and [filters] are
+/// sent to the server; a change starts again from page 1.
+class _CmoList {
+  _CmoList(this.path, this.filters) {
+    controller = PagedController(fetch: _fetch());
+  }
+
+  final String path;
+  final Map<String, String> Function() filters;
+  late final PagedController controller;
+  String query = '';
+  bool newest = true;
+  Timer? _typing;
+
+  PageFetch _fetch() {
+    final params = {
+      ...filters(),
+      if (query.trim().isNotEmpty) 'q': query.trim(),
+      'newest': '$newest',
+    };
+    return (offset, limit) => api.get(
+      path,
+      query: {...params, 'limit': '$limit', 'offset': '$offset'},
+    );
+  }
+
+  void reload() => controller.refresh(fetch: _fetch());
+
+  void search(String v) {
+    _typing?.cancel();
+    _typing = Timer(searchDebounce, () {
+      if (v == query) return;
+      query = v;
+      reload();
+    });
+  }
+
+  void sort(bool v) {
+    if (v == newest) return;
+    newest = v;
+    reload();
+  }
+
+  void dispose() {
+    _typing?.cancel();
+    controller.dispose();
+  }
+}
+
+/// "12 results" under a list header, kept up to date as pages arrive.
+Widget _resultCount(PagedController c, String Function(int n) text) =>
+    ListenableBuilder(
+      listenable: c,
+      builder: (context, _) => Text(
+        text(c.total ?? c.items.length),
+        style: Theme.of(context).textTheme.bodySmall
+            ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+      ),
+    );
+
 // ----- Acknowledge tab ---------------------------------------------------------
 
 class CmoScreen extends StatefulWidget {
@@ -406,9 +453,10 @@ class CmoScreen extends StatefulWidget {
 class _CmoScreenState extends State<CmoScreen>
     with HomeTargetListener<CmoScreen> {
   int _loads = 0;
-  String _query = '';
-  bool _newest = true;
   final _queueKey = GlobalKey();
+
+  /// NF-003: the queue (everything waiting except On hold), paged.
+  final _queue = _CmoList('/cmo/entries/pending', () => {'on_hold': 'false'});
 
   @override
   String get homeTab => 'Acknowledge';
@@ -416,10 +464,15 @@ class _CmoScreenState extends State<CmoScreen>
   @override
   void applyHomeTarget(HomeTarget target) {
     _loads++; // e.g. an entry was just acknowledged from a notification
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _queue.reload();
+    });
   }
 
-  void _reload() {
-    if (mounted) setState(() => _loads++);
+  @override
+  void dispose() {
+    _queue.dispose();
+    super.dispose();
   }
 
   void _scrollToQueue() {
@@ -429,11 +482,16 @@ class _CmoScreenState extends State<CmoScreen>
     }
   }
 
+  /// The review page stays open after a decision (UAT, Nov 14). Back here,
+  /// an entry that left the queue is taken out at once; the counts and the
+  /// list reload quietly in the background (Loader / PagedListView).
   Future<void> _open(Map e) async {
-    final changed = await Navigator.of(
-      context,
-    ).push<bool>(MaterialPageRoute(builder: (_) => CmoReviewScreen(entry: e)));
-    if (changed == true) _reload();
+    final decision = await Navigator.of(context).push<String?>(
+      MaterialPageRoute(builder: (_) => CmoReviewScreen(entry: e)),
+    );
+    if (decision == 'Acknowledged' || decision == 'On Hold') {
+      _queue.controller.removeWhere((x) => _ref(x) == _ref(e));
+    }
   }
 
   @override
@@ -442,31 +500,20 @@ class _CmoScreenState extends State<CmoScreen>
     final t = Theme.of(context).textTheme;
     return Loader(
       key: ValueKey(_loads),
-      load: [
-        () => api.get('/cmo/dashboard'),
-        () => api.get('/cmo/entries/pending'),
-      ],
+      load: [() => api.get('/cmo/dashboard')],
       builder: (context, data) {
         final dash = data[0] as Map;
-        final pending = (data[1] as List).cast<Map>();
-        final held = pending.where((e) => e['cmo_decision'] == 'On Hold');
-        final queue =
-            pending
-                .where((e) => e['cmo_decision'] != 'On Hold')
-                .where((e) => _matches(e, _query))
-                .toList()
-              ..sort((a, b) => _byTime(a, b, 'received_at', _newest));
-        final waiting =
-            dash['needs_review_entries'] ??
-            pending.where((e) => e['cmo_decision'] != 'On Hold').length;
-        return ListView(
+        final waiting = dash['needs_review_entries'] ?? 0;
+        final held = (dash['on_hold_entries'] as num?)?.toInt() ?? 0;
+        return PagedListView(
+          controller: _queue.controller,
           padding: const EdgeInsets.fromLTRB(
             Space.md,
             Space.md,
             Space.md,
             Space.xl,
           ),
-          children: [
+          header: [
             const PageHeader(
               'Acknowledge Donations',
               subtitle: 'Review donations received by CSWS.',
@@ -501,54 +548,49 @@ class _CmoScreenState extends State<CmoScreen>
               icon: Icons.pause_circle_outline,
               color: _amber,
               title: 'On hold',
-              subtitle: held.isEmpty
+              subtitle: held == 0
                   ? 'No donations on hold.'
-                  : '${held.length} donation${held.length == 1 ? '' : 's'} '
+                  : '$held donation${held == 1 ? '' : 's'} '
                         'waiting for more information.',
-              onTap: () async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const CmoOnHoldScreen()),
-                );
-                _reload();
-              },
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const CmoOnHoldScreen()),
+              ),
             ),
             Gaps.v8,
             Row(
               key: _queueKey,
               children: [
                 Expanded(child: Text('Needs review', style: t.titleMedium)),
-                Text(
-                  '${queue.length} result${queue.length == 1 ? '' : 's'}',
-                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                _resultCount(
+                  _queue.controller,
+                  (n) => '$n result${n == 1 ? '' : 's'}',
                 ),
               ],
             ),
             Gaps.v8,
             _SearchSort(
               hint: 'Search by donation ID, item or donor',
-              onSearch: (v) => setState(() => _query = v),
-              newest: _newest,
-              onSort: (v) => setState(() => _newest = v),
+              onSearch: _queue.search,
+              newest: _queue.newest,
+              onSort: (v) => setState(() => _queue.sort(v)),
             ),
             Gaps.v12,
-            if (queue.isEmpty)
-              EmptyView(
-                icon: Icons.task_alt,
-                title: _query.isEmpty
-                    ? 'All caught up'
-                    : 'No donation matches "$_query"',
-                message: _query.isEmpty
-                    ? 'New donations appear here once CSWS receives them.'
-                    : null,
-                compact: true,
-              ),
-            for (final e in queue)
-              CmoEntryCard(
-                e,
-                actionLabel: 'Review & Acknowledge',
-                onTap: () => _open(e),
-              ),
           ],
+          empty: EmptyView(
+            icon: Icons.task_alt,
+            title: _queue.query.isEmpty
+                ? 'All caught up'
+                : 'No donation matches "${_queue.query}"',
+            message: _queue.query.isEmpty
+                ? 'New donations appear here once CSWS receives them.'
+                : null,
+            compact: true,
+          ),
+          itemBuilder: (context, e) => CmoEntryCard(
+            e,
+            actionLabel: 'Review & Acknowledge',
+            onTap: () => _open(e),
+          ),
         );
       },
     );
@@ -570,30 +612,34 @@ class CmoReviewScreen extends StatefulWidget {
 class _CmoReviewScreenState extends State<CmoReviewScreen> {
   bool _busy = false;
 
-  Map get e => widget.entry;
+  /// UAT (Nov 14): the page stays open after a decision and shows it; the
+  /// list behind updates by itself. Closing (X) returns the decision.
+  late final Map e = Map.of(widget.entry);
+  String? _decision;
+
+  bool get _acknowledged => _decision == 'Acknowledged';
 
   String get _path => '/cmo/entries/${Uri.encodeComponent(_ref(e))}/decide';
 
+  void _close() => Navigator.of(context).pop(_decision);
+
   Future<void> _acknowledge() async {
-    if (_busy) return; // never sent twice
+    if (_busy || _acknowledged) return; // never sent twice
     setState(() => _busy = true);
-    final r = await api.post(
-      _path,
-      body: {'status': 'Acknowledged', 'notes': null},
+    final r = await act(
+      context,
+      () => api.post(_path, body: {'status': 'Acknowledged', 'notes': null}),
+      success: '${_ref(e)} acknowledged',
     );
     if (!mounted) return;
-    if (r.ok) {
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => CmoAcknowledgedScreen(entry: e)),
-        result: true,
-      );
-      return;
-    }
-    setState(() => _busy = false);
-    AppToast.info(
-      context,
-      r.status == 0 ? 'Cannot reach the server' : r.errorText,
-    );
+    setState(() {
+      _busy = false;
+      if (r.ok) {
+        _decision = 'Acknowledged';
+        e['acknowledged'] = true;
+        e['cmo_decision'] = 'Acknowledged';
+      }
+    });
   }
 
   Future<void> _decide(String decision) async {
@@ -615,11 +661,70 @@ class _CmoReviewScreenState extends State<CmoReviewScreen> {
           : '${_ref(e)} marked for review',
     );
     if (!mounted) return;
-    if (r.ok) {
-      Navigator.of(context).pop(true);
-    } else {
-      setState(() => _busy = false);
-    }
+    setState(() {
+      _busy = false;
+      if (r.ok) {
+        _decision = decision;
+        e['cmo_decision'] = decision;
+        e['hold_reason'] = v['notes'];
+      }
+    });
+  }
+
+  /// What was just decided, at the top of the page.
+  Widget _result(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final (color, icon, title, text) = switch (_decision) {
+      'Acknowledged' => (
+        _green,
+        Icons.check_circle,
+        'Donation acknowledged',
+        'Main Office can now put it on a delivery. You can find it in '
+            'History.',
+      ),
+      'On Hold' => (
+        _amber,
+        Icons.pause_circle,
+        'Put on hold',
+        'The donor and CSWS Main Office see the reason. You can still '
+            'acknowledge it here once it is sorted out.',
+      ),
+      _ => (
+        _amber,
+        Icons.rate_review,
+        'Marked for review',
+        'It stays in your queue until you acknowledge or hold it.',
+      ),
+    };
+    return Semantics(
+      liveRegion: true,
+      child: Container(
+        key: const ValueKey('cmo-decision'),
+        margin: const EdgeInsets.only(bottom: Space.sm),
+        padding: const EdgeInsets.all(Space.sm),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(Radii.md),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, color: color),
+            Gaps.h8,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: t.titleSmall),
+                  Text(text, style: t.bodySmall),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -632,239 +737,275 @@ class _CmoReviewScreenState extends State<CmoReviewScreen> {
     final reason = (e['hold_reason'] ?? '').toString().trim();
     final held = e['cmo_decision'] == 'On Hold';
     final items = _items(e);
-    return Scaffold(
-      appBar: AppBar(title: const Text('Review donation')),
-      body: Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: _maxWidth),
-          child: ListView(
-            padding: const EdgeInsets.all(Space.md),
-            children: [
-              AppCard(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _Badge(Icons.qr_code_2, cs.primary, size: 52),
-                    Gaps.h12,
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _ref(e),
-                            style: t.titleMedium?.copyWith(
-                              fontFamily: 'monospace',
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          if (_where(e).isNotEmpty)
-                            Text(
-                              _where(e),
-                              style: t.bodyMedium?.copyWith(
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
-                          if (received != null)
-                            Text(
-                              'Received ${_when(received)}',
-                              style: t.bodySmall?.copyWith(
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
-                          Gaps.v8,
-                          StatusChip(status, label: label),
-                        ],
-                      ),
-                    ),
-                  ],
+    // Back (Android, browser, the X) returns the decision to the list.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _close();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Review donation'),
+          leading: _decision == null
+              ? BackButton(onPressed: _close)
+              : IconButton(
+                  key: const ValueKey('cmo-review-close'),
+                  tooltip: 'Close',
+                  icon: const Icon(Icons.close),
+                  onPressed: _close,
                 ),
-              ),
-              // Why it was held / marked for review earlier (the CMO's own
-              // reason; donors' notes are not shown here).
-              if (reason.isNotEmpty) ...[
-                Gaps.v12,
-                Container(
-                  padding: const EdgeInsets.all(Space.sm),
-                  decoration: BoxDecoration(
-                    color: _amber.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(Radii.md),
-                  ),
+        ),
+        body: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _maxWidth),
+            child: ListView(
+              padding: const EdgeInsets.all(Space.md),
+              children: [
+                if (_decision != null) _result(context),
+                AppCard(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(Icons.info_outline, color: _amber, size: 20),
-                      Gaps.h8,
+                      _Badge(Icons.qr_code_2, cs.primary, size: 52),
+                      Gaps.h12,
                       Expanded(
-                        child: Text(
-                          '${held ? 'On hold' : 'Marked for review'}: $reason',
-                          style: t.bodyMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              Gaps.v12,
-              AppCard(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Space.md,
-                  vertical: Space.xs,
-                ),
-                child: Column(
-                  children: [
-                    _InfoRow(
-                      icon: Icons.person_outline,
-                      label: 'Donor',
-                      value: '${e['donor'] ?? 'Donor'}',
-                    ),
-                    const Divider(height: 1),
-                    _InfoRow(
-                      icon: Icons.flood_outlined,
-                      label: 'Disaster report',
-                      value: _reportName(e),
-                    ),
-                  ],
-                ),
-              ),
-              Gaps.v16,
-              Text(
-                'Items (${items.length})',
-                style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              Gaps.v8,
-              AppCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    for (var n = 0; n < items.length; n++) ...[
-                      if (n > 0) const Divider(height: 1, indent: 64),
-                      ListTile(
-                        leading: _Badge(
-                          Icons.inventory_2_outlined,
-                          cs.primary,
-                          size: 40,
-                        ),
-                        title: Text(
-                          '${items[n]['item_name'] ?? 'Item'}',
-                          style: t.bodyLarge?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        subtitle: Text(_amount(items[n])),
-                      ),
-                    ],
-                    if (value > 0) ...[
-                      const Divider(height: 1),
-                      Padding(
-                        padding: const EdgeInsets.all(Space.md),
-                        child: Row(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: Text(
-                                'Estimated value',
+                            Text(
+                              _ref(e),
+                              style: t.titleMedium?.copyWith(
+                                fontFamily: 'monospace',
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            if (_where(e).isNotEmpty)
+                              Text(
+                                _where(e),
                                 style: t.bodyMedium?.copyWith(
                                   color: cs.onSurfaceVariant,
                                 ),
                               ),
-                            ),
-                            Text(
-                              pesos(value) ?? '',
-                              style: t.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
+                            if (received != null)
+                              Text(
+                                'Received ${_when(received)}',
+                                style: t.bodySmall?.copyWith(
+                                  color: cs.onSurfaceVariant,
+                                ),
                               ),
-                            ),
+                            Gaps.v8,
+                            StatusChip(status, label: label),
                           ],
                         ),
                       ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      // Same width as the content, so the buttons never stretch across a
-      // laptop screen. Acknowledge is the main action; Hold and Mark for
-      // review sit under it (UC-C1 alt 4a / 4b), each asking for a reason.
-      bottomNavigationBar: Material(
-        elevation: 8,
-        color: cs.surface,
-        child: SafeArea(
-          child: Align(
-            heightFactor: 1,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: _maxWidth),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  Space.md,
-                  Space.sm,
-                  Space.md,
-                  Space.md,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    FilledButton.icon(
-                      onPressed: _busy ? null : _acknowledge,
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(52),
-                      ),
-                      icon: _busy
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.check),
-                      label: const Text('Acknowledge'),
+                // Why it was held / marked for review earlier (the CMO's own
+                // reason; donors' notes are not shown here).
+                if (reason.isNotEmpty) ...[
+                  Gaps.v12,
+                  Container(
+                    padding: const EdgeInsets.all(Space.sm),
+                    decoration: BoxDecoration(
+                      color: _amber.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(Radii.md),
                     ),
-                    Gaps.v8,
-                    Row(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (!held) ...[
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: _busy
-                                  ? null
-                                  : () => _decide('On Hold'),
-                              style: OutlinedButton.styleFrom(
-                                minimumSize: const Size.fromHeight(48),
-                              ),
-                              icon: const Icon(Icons.pause_circle_outline),
-                              label: const Text('Hold'),
-                            ),
-                          ),
-                          Gaps.h8,
-                        ],
+                        const Icon(Icons.info_outline, color: _amber, size: 20),
+                        Gaps.h8,
                         Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: _busy
-                                ? null
-                                : () => _decide('Pending Review'),
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size.fromHeight(48),
-                            ),
-                            icon: const Icon(Icons.rate_review_outlined),
-                            label: const Text(
-                              'Mark for review',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                          child: Text(
+                            '${held ? 'On hold' : 'Marked for review'}: $reason',
+                            style: t.bodyMedium,
                           ),
                         ),
                       ],
                     ),
-                    Gaps.v8,
-                    Text(
-                      'Acknowledging is final. Not sure yet? Hold it or '
-                      'mark it for review.',
-                      textAlign: TextAlign.center,
-                      style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                    ),
-                  ],
+                  ),
+                ],
+                Gaps.v12,
+                AppCard(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Space.md,
+                    vertical: Space.xs,
+                  ),
+                  child: Column(
+                    children: [
+                      _InfoRow(
+                        icon: Icons.person_outline,
+                        label: 'Donor',
+                        value: '${e['donor'] ?? 'Donor'}',
+                      ),
+                      const Divider(height: 1),
+                      _InfoRow(
+                        icon: Icons.flood_outlined,
+                        label: 'Disaster report',
+                        value: _reportName(e),
+                      ),
+                    ],
+                  ),
+                ),
+                Gaps.v16,
+                Text(
+                  'Items (${items.length})',
+                  style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                Gaps.v8,
+                AppCard(
+                  padding: EdgeInsets.zero,
+                  child: Column(
+                    children: [
+                      for (var n = 0; n < items.length; n++) ...[
+                        if (n > 0) const Divider(height: 1, indent: 64),
+                        ListTile(
+                          leading: _Badge(
+                            Icons.inventory_2_outlined,
+                            cs.primary,
+                            size: 40,
+                          ),
+                          title: Text(
+                            '${items[n]['item_name'] ?? 'Item'}',
+                            style: t.bodyLarge?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(_amount(items[n])),
+                        ),
+                      ],
+                      if (value > 0) ...[
+                        const Divider(height: 1),
+                        Padding(
+                          padding: const EdgeInsets.all(Space.md),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Estimated value',
+                                  style: t.bodyMedium?.copyWith(
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                pesos(value) ?? '',
+                                style: t.titleSmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Same width as the content, so the buttons never stretch across a
+        // laptop screen. Acknowledge is the main action; Hold and Mark for
+        // review sit under it (UC-C1 alt 4a / 4b), each asking for a reason.
+        bottomNavigationBar: Material(
+          elevation: 8,
+          color: cs.surface,
+          child: SafeArea(
+            child: Align(
+              heightFactor: 1,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _maxWidth),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    Space.md,
+                    Space.sm,
+                    Space.md,
+                    Space.md,
+                  ),
+                  child: _acknowledged
+                      // Acknowledging is final: only closing is left.
+                      ? FilledButton.icon(
+                          onPressed: _close,
+                          style: FilledButton.styleFrom(
+                            minimumSize: const Size.fromHeight(52),
+                          ),
+                          icon: const Icon(Icons.close),
+                          label: const Text('Close'),
+                        )
+                      : Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            FilledButton.icon(
+                              onPressed: _busy ? null : _acknowledge,
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size.fromHeight(52),
+                              ),
+                              icon: _busy
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.check),
+                              label: const Text('Acknowledge'),
+                            ),
+                            Gaps.v8,
+                            Row(
+                              children: [
+                                if (!held) ...[
+                                  Expanded(
+                                    child: OutlinedButton.icon(
+                                      onPressed: _busy
+                                          ? null
+                                          : () => _decide('On Hold'),
+                                      style: OutlinedButton.styleFrom(
+                                        minimumSize: const Size.fromHeight(48),
+                                      ),
+                                      icon: const Icon(
+                                        Icons.pause_circle_outline,
+                                      ),
+                                      label: const Text('Hold'),
+                                    ),
+                                  ),
+                                  Gaps.h8,
+                                ],
+                                Expanded(
+                                  child: OutlinedButton.icon(
+                                    onPressed: _busy
+                                        ? null
+                                        : () => _decide('Pending Review'),
+                                    style: OutlinedButton.styleFrom(
+                                      minimumSize: const Size.fromHeight(48),
+                                    ),
+                                    icon: const Icon(
+                                      Icons.rate_review_outlined,
+                                    ),
+                                    label: const Text(
+                                      'Mark for review',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Gaps.v8,
+                            Text(
+                              'Acknowledging is final. Not sure yet? Hold it or '
+                              'mark it for review.',
+                              textAlign: TextAlign.center,
+                              style: t.bodySmall?.copyWith(
+                                color: cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
                 ),
               ),
             ),
@@ -914,106 +1055,6 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
-// ----- success page ----------------------------------------------------------------
-
-/// Shown once after acknowledging. The entry has left the queue.
-class CmoAcknowledgedScreen extends StatelessWidget {
-  final Map entry;
-  const CmoAcknowledgedScreen({super.key, required this.entry});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    final items = _items(entry);
-    return Scaffold(
-      appBar: AppBar(automaticallyImplyLeading: false),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520),
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.all(Space.lg),
-            children: [
-              Center(
-                child: Container(
-                  width: 96,
-                  height: 96,
-                  decoration: const BoxDecoration(
-                    color: _green,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.check, color: Colors.white, size: 56),
-                ),
-              ),
-              Gaps.v24,
-              Semantics(
-                liveRegion: true,
-                child: Text(
-                  'Donation acknowledged',
-                  textAlign: TextAlign.center,
-                  style: t.headlineSmall,
-                ),
-              ),
-              Gaps.v8,
-              Text(
-                'Main Office can now put it on a delivery. You can find it '
-                'in History.',
-                textAlign: TextAlign.center,
-                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-              ),
-              Gaps.v24,
-              AppCard(
-                child: Row(
-                  children: [
-                    _Badge(Icons.qr_code_2, cs.primary),
-                    Gaps.h12,
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _ref(entry),
-                            style: t.titleSmall?.copyWith(
-                              fontFamily: 'monospace',
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          if (_where(entry).isNotEmpty)
-                            Text(
-                              _where(entry),
-                              style: t.bodySmall?.copyWith(
-                                color: cs.onSurfaceVariant,
-                              ),
-                            ),
-                          if (items.isNotEmpty)
-                            Text(
-                              '${_itemLine(items.first)}'
-                              '${items.length > 1 ? '  +${items.length - 1} more' : ''}',
-                              style: t.bodyMedium,
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Gaps.v24,
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                ),
-                child: const Text('Back to list'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ----- On hold page ----------------------------------------------------------------
 
 /// Entries the CMO paused, with the reason. Opening one goes back to the
@@ -1026,9 +1067,14 @@ class CmoOnHoldScreen extends StatefulWidget {
 }
 
 class _CmoOnHoldScreenState extends State<CmoOnHoldScreen> {
-  int _loads = 0;
-  String _query = '';
-  bool _newest = true;
+  /// NF-003: only the entries on hold, paged and searched on the server.
+  final _held = _CmoList('/cmo/entries/pending', () => {'on_hold': 'true'});
+
+  @override
+  void dispose() {
+    _held.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1036,55 +1082,42 @@ class _CmoOnHoldScreenState extends State<CmoOnHoldScreen> {
     final t = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: const Text('On hold')),
-      body: Loader(
-        key: ValueKey(_loads),
-        load: [() => api.get('/cmo/entries/pending')],
-        builder: (context, data) {
-          final held =
-              (data[0] as List)
-                  .cast<Map>()
-                  .where((e) => e['cmo_decision'] == 'On Hold')
-                  .where((e) => _matches(e, _query))
-                  .toList()
-                ..sort((a, b) => _byTime(a, b, 'received_at', _newest));
-          return ListView(
-            padding: const EdgeInsets.all(Space.md),
-            children: [
-              Text(
-                'Donations that need more information before you '
-                'acknowledge them.',
-                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-              ),
-              Gaps.v12,
-              _SearchSort(
-                hint: 'Search by donation ID, item or donor',
-                onSearch: (v) => setState(() => _query = v),
-                newest: _newest,
-                onSort: (v) => setState(() => _newest = v),
-              ),
-              Gaps.v12,
-              if (held.isEmpty)
-                const EmptyView(
-                  icon: Icons.pause_circle_outline,
-                  title: 'Nothing on hold',
-                  compact: true,
-                ),
-              for (final e in held)
-                CmoEntryCard(
-                  e,
-                  actionLabel: 'Review',
-                  onTap: () async {
-                    final changed = await Navigator.of(context).push<bool>(
-                      MaterialPageRoute(
-                        builder: (_) => CmoReviewScreen(entry: e),
-                      ),
-                    );
-                    if (changed == true && mounted) setState(() => _loads++);
-                  },
-                ),
-            ],
-          );
-        },
+      body: PagedListView(
+        controller: _held.controller,
+        padding: const EdgeInsets.all(Space.md),
+        header: [
+          Text(
+            'Donations that need more information before you '
+            'acknowledge them.',
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v12,
+          _SearchSort(
+            hint: 'Search by donation ID, item or donor',
+            onSearch: _held.search,
+            newest: _held.newest,
+            onSort: (v) => setState(() => _held.sort(v)),
+          ),
+          Gaps.v12,
+        ],
+        empty: const EmptyView(
+          icon: Icons.pause_circle_outline,
+          title: 'Nothing on hold',
+          compact: true,
+        ),
+        itemBuilder: (context, e) => CmoEntryCard(
+          e,
+          actionLabel: 'Review',
+          onTap: () async {
+            final decision = await Navigator.of(context).push<String?>(
+              MaterialPageRoute(builder: (_) => CmoReviewScreen(entry: e)),
+            );
+            // Acknowledged or marked for review: no longer on hold.
+            if (decision != null && decision != 'On Hold') {
+              _held.controller.removeWhere((x) => _ref(x) == _ref(e));
+            }
+          },
+        ),
       ),
     );
   }
@@ -1103,196 +1136,218 @@ class CmoHistoryScreen extends StatefulWidget {
 
 class _CmoHistoryScreenState extends State<CmoHistoryScreen>
     with HomeTargetListener<CmoHistoryScreen> {
-  static const _page = 20;
-  int _loads = 0;
   String _view = 'donations';
-  String _query = '';
-  bool _newest = true;
   String? _disaster;
   String? _barangay;
-  int _shown = _page;
+
+  /// Names -> ids for the filters (GET /lookups).
+  late final Future<Map<String, dynamic>> _lookups = api.lookups();
+  Map<String, int> _disasterIds = const {};
+  Map<String, int> _barangayIds = const {};
+
+  /// NF-003: acknowledged entries, filtered, sorted and paged on the server.
+  late final _history = _CmoList(
+    '/cmo/entries/acknowledged',
+    () => {
+      if (_disasterIds[_disaster] != null)
+        'disaster_type_id': '${_disasterIds[_disaster]}',
+      if (_barangayIds[_barangay] != null)
+        'barangay_id': '${_barangayIds[_barangay]}',
+    },
+  );
+
+  /// UC-C2 summaries per report, a page at a time (GET /cmo/report-summaries).
+  final _reports = PagedController(
+    fetch: (offset, limit) => api.get(
+      '/cmo/report-summaries',
+      query: {'limit': '$limit', 'offset': '$offset'},
+    ),
+  );
 
   @override
   String get homeTab => 'History';
 
   @override
-  void applyHomeTarget(HomeTarget target) => _loads++;
+  void applyHomeTarget(HomeTarget target) {
+    // NF-002: /cmo/history/per-report (a web address, Back / Forward).
+    if (target.view == 'donations' || target.view == 'reports') {
+      _view = target.view!;
+      if (target.query != null) return; // only the sub-tab changed
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _history.reload();
+      _reports.refresh();
+    });
+  }
 
-  void _reset() => _shown = _page;
+  @override
+  void dispose() {
+    _history.dispose();
+    _reports.dispose();
+    super.dispose();
+  }
+
+  Map<String, int> _ids(dynamic list) => {
+    for (final m in ((list as List?) ?? const []).cast<Map>())
+      '${m['name']}': (m['id'] as num).toInt(),
+  };
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
-    return Loader(
-      key: ValueKey(_loads),
-      load: [
-        () => api.get('/cmo/entries/acknowledged'),
-        () => api.get('/cmo/dashboard'),
-      ],
-      builder: (context, data) {
-        final all = (data[0] as List).cast<Map>();
-        final perReport = ((data[1] as Map)['per_report'] as List? ?? const [])
-            .cast<Map>();
-        final disasters = {
-          for (final e in all)
-            if (e['disaster_type'] != null) '${e['disaster_type']}',
-        }.toList()..sort();
-        final barangays = {
-          for (final e in all)
-            if (e['barangay'] != null) '${e['barangay']}',
-        }.toList()..sort();
-        final rows =
-            all
-                .where(
-                  (e) => _disaster == null || e['disaster_type'] == _disaster,
-                )
-                .where((e) => _barangay == null || e['barangay'] == _barangay)
-                .where((e) => _matches(e, _query))
-                .toList()
-              ..sort((a, b) => _byTime(a, b, 'acknowledged_at', _newest));
-        final page = rows.take(_shown).toList();
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(
-            Space.md,
-            Space.md,
-            Space.md,
-            Space.xl,
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _lookups,
+      builder: (context, snap) {
+        _disasterIds = _ids(snap.data?['disaster_types']);
+        _barangayIds = _ids(snap.data?['barangays']);
+        final header = <Widget>[
+          PageHeader('History', subtitle: 'Every donation you acknowledged.'),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(
+                value: 'donations',
+                icon: Icon(Icons.list_alt),
+                label: Text('Donations'),
+              ),
+              ButtonSegment(
+                value: 'reports',
+                icon: Icon(Icons.summarize_outlined),
+                label: Text('Per report'),
+              ),
+            ],
+            selected: {_view},
+            onSelectionChanged: (s) {
+              setState(() => _view = s.first);
+              AppRoutes.instance.viewChanged(homeTab, _view);
+            },
           ),
-          children: [
-            PageHeader('History', subtitle: 'Every donation you acknowledged.'),
-            SegmentedButton<String>(
-              segments: const [
-                ButtonSegment(
-                  value: 'donations',
-                  icon: Icon(Icons.list_alt),
-                  label: Text('Donations'),
+          Gaps.v12,
+          if (_view == 'donations') ...[
+            _SearchSort(
+              hint: 'Search by donation ID, item or donor',
+              onSearch: _history.search,
+              newest: _history.newest,
+              onSort: (v) => setState(() => _history.sort(v)),
+            ),
+            Gaps.v8,
+            Wrap(
+              spacing: Space.xs,
+              runSpacing: Space.xs,
+              children: [
+                _FilterMenu(
+                  label: 'All disasters',
+                  value: _disaster,
+                  options: _disasterIds.keys.toList()..sort(),
+                  onChanged: (v) {
+                    setState(() => _disaster = v);
+                    _history.reload();
+                  },
                 ),
-                ButtonSegment(
-                  value: 'reports',
-                  icon: Icon(Icons.summarize_outlined),
-                  label: Text('Per report'),
+                _FilterMenu(
+                  label: 'All barangays',
+                  value: _barangay,
+                  options: _barangayIds.keys.toList()..sort(),
+                  onChanged: (v) {
+                    setState(() => _barangay = v);
+                    _history.reload();
+                  },
                 ),
               ],
-              selected: {_view},
-              onSelectionChanged: (s) => setState(() => _view = s.first),
             ),
-            Gaps.v12,
-            if (_view == 'donations') ...[
-              _SearchSort(
-                hint: 'Search by donation ID, item or donor',
-                onSearch: (v) => setState(() {
-                  _query = v;
-                  _reset();
-                }),
-                newest: _newest,
-                onSort: (v) => setState(() => _newest = v),
-              ),
-              Gaps.v8,
-              Wrap(
-                spacing: Space.xs,
-                runSpacing: Space.xs,
-                children: [
-                  _FilterMenu(
-                    label: 'All disasters',
-                    value: _disaster,
-                    options: disasters,
-                    onChanged: (v) => setState(() {
-                      _disaster = v;
-                      _reset();
-                    }),
+            Gaps.v8,
+            Row(
+              children: [
+                Expanded(
+                  child: _resultCount(
+                    _history.controller,
+                    (n) => 'Showing ${_history.controller.items.length} of $n',
                   ),
-                  _FilterMenu(
-                    label: 'All barangays',
-                    value: _barangay,
-                    options: barangays,
-                    onChanged: (v) => setState(() {
-                      _barangay = v;
-                      _reset();
-                    }),
-                  ),
-                ],
-              ),
-              Gaps.v8,
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Showing ${page.length} of ${rows.length}',
-                      style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => Scaffold(
-                          appBar: AppBar(title: const Text('Donation records')),
-                          body: const DonationRecordsScreen(header: false),
-                        ),
+                ),
+                TextButton.icon(
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => Scaffold(
+                        appBar: AppBar(title: const Text('Donation records')),
+                        body: const DonationRecordsScreen(header: false),
                       ),
                     ),
-                    icon: const Icon(Icons.folder_open_outlined, size: 18),
-                    label: const Text('All records'),
                   ),
-                ],
-              ),
-              Gaps.v8,
-              if (rows.isEmpty)
-                EmptyView(
-                  icon: Icons.history,
-                  title: all.isEmpty
-                      ? 'No acknowledged donations yet'
-                      : 'No donation matches these filters',
-                  compact: true,
+                  icon: const Icon(Icons.folder_open_outlined, size: 18),
+                  label: const Text('All records'),
                 ),
-              for (final e in page)
-                CmoEntryCard(
-                  e,
-                  history: true,
-                  onTap: () => showDetailPopout<void>(
-                    context,
-                    title: 'Donation entry',
-                    child: CmoEntryDetails(e),
-                  ),
-                ),
-              if (rows.length > page.length)
-                OutlinedButton(
-                  onPressed: () => setState(() => _shown += _page),
-                  child: Text('Show ${rows.length - page.length} more'),
-                ),
-            ] else ...[
-              if (perReport.isEmpty)
-                const EmptyView(
-                  icon: Icons.summarize_outlined,
-                  title: 'No donations yet',
-                  compact: true,
-                ),
-              for (final r in perReport)
-                AppCard(
-                  margin: const EdgeInsets.only(bottom: Space.sm),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('${r['report_label']}', style: t.titleSmall),
-                      Gaps.v4,
-                      Text(
-                        '${r['confirmed_count']} item(s) acknowledged '
-                        '(${r['confirmed_quantity']} units'
-                        '${(r['confirmed_value'] as num? ?? 0) > 0 ? ', ${pesos(r['confirmed_value'] as num)}' : ''}'
-                        ') · ${r['pending_count']} waiting',
-                        style: t.bodyMedium,
-                      ),
-                      Gaps.v8,
-                      Progress(
-                        delivered: 0,
-                        needed: 0,
-                        percent: r['fulfillment_percentage'] as num? ?? 0,
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+              ],
+            ),
+            Gaps.v8,
           ],
+        ];
+        final padding = const EdgeInsets.fromLTRB(
+          Space.md,
+          Space.md,
+          Space.md,
+          Space.xl,
+        );
+        if (_view == 'donations') {
+          final filtered =
+              _history.query.isNotEmpty ||
+              _disaster != null ||
+              _barangay != null;
+          return PagedListView(
+            key: const ValueKey('history-donations'),
+            controller: _history.controller,
+            padding: padding,
+            header: header,
+            empty: EmptyView(
+              icon: Icons.history,
+              title: filtered
+                  ? 'No donation matches these filters'
+                  : 'No acknowledged donations yet',
+              compact: true,
+            ),
+            itemBuilder: (context, e) => CmoEntryCard(
+              e,
+              history: true,
+              onTap: () => showDetailPopout<void>(
+                context,
+                title: 'Donation entry',
+                child: CmoEntryDetails(e),
+              ),
+            ),
+          );
+        }
+        return PagedListView(
+          key: const ValueKey('history-reports'),
+          controller: _reports,
+          padding: padding,
+          header: header,
+          empty: const EmptyView(
+            icon: Icons.summarize_outlined,
+            title: 'No donations yet',
+            compact: true,
+          ),
+          itemBuilder: (context, r) => AppCard(
+            margin: const EdgeInsets.only(bottom: Space.sm),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${r['report_label']}', style: t.titleSmall),
+                Gaps.v4,
+                Text(
+                  '${r['confirmed_count']} item(s) acknowledged '
+                  '(${r['confirmed_quantity']} units'
+                  '${(r['confirmed_value'] as num? ?? 0) > 0 ? ', ${pesos(r['confirmed_value'] as num)}' : ''}'
+                  ') · ${r['pending_count']} waiting',
+                  style: t.bodyMedium,
+                ),
+                Gaps.v8,
+                Progress(
+                  delivered: 0,
+                  needed: 0,
+                  percent: r['fulfillment_percentage'] as num? ?? 0,
+                ),
+              ],
+            ),
+          ),
         );
       },
     );

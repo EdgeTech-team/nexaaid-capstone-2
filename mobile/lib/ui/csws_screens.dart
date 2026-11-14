@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../app_routes.dart';
 import '../realtime.dart';
 import 'needs_action.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
@@ -285,6 +286,10 @@ class _ReceiveScreenState extends State<ReceiveScreen>
   /// goods and enter the actual quantity, like any other receipt.
   @override
   void applyHomeTarget(HomeTarget target) {
+    // NF-002: /csws/receive/received, /csws/receive/inventory.
+    if (const {'pending', 'received', 'inventory'}.contains(target.view)) {
+      view = target.view!;
+    }
     if (target.view == 'scan') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _scan();
@@ -458,7 +463,10 @@ class _ReceiveScreenState extends State<ReceiveScreen>
                 ),
               ],
               selected: {view},
-              onSelectionChanged: (s) => setState(() => view = s.first),
+              onSelectionChanged: (s) {
+                setState(() => view = s.first);
+                AppRoutes.instance.viewChanged(homeTab, view);
+              },
             ),
             const SizedBox(height: 12),
             ReceiveFilterBar(

@@ -10,6 +10,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # NF-002: path web addresses (usePathUrlStrategy). Part of the Flutter
+  # SDK, not a pub.dev package.
+  flutter_web_plugins:
+    sdk: flutter
   cupertino_icons: ^1.0.8
   http: ^1.2.0
   mobile_scanner: ^7.4.2

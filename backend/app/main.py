@@ -118,6 +118,9 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    # NF-003: paged lists send their total in this header; without it the
+    # web build cannot read it (browsers hide non-simple headers).
+    expose_headers=["X-Total-Count"],
 )
 
 app.include_router(health_router)

@@ -64,10 +64,21 @@ final _server = MockClient((req) async {
       'completed': 0,
       'declined': 0,
     },
+    // NF-003: the server filters by stage (and request_id), as the real one.
     '/drrmo/requests' => [
-      _request(1, _accepted ? 'Accepted' : 'Pending'),
-      _request(2, 'Accepted'),
+      for (final r in [
+        _request(1, _accepted ? 'Accepted' : 'Pending'),
+        _request(2, 'Accepted'),
+      ])
+        if ((req.url.queryParameters['stage'] ?? r['stage']) == r['stage'] &&
+            (req.url.queryParameters['request_id'] ?? '${r['request_id']}') ==
+                '${r['request_id']}')
+          r,
     ],
+    '/drrmo/requests/counts' => {
+      'Pending': _accepted ? 0 : 1,
+      'Accepted': _accepted ? 2 : 1,
+    },
     '/deliveries/' => <Object>[],
     '/deliveries/needs-action' => {
       'items': [

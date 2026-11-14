@@ -2,13 +2,16 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core.auth import require_role
 from core.audit import log_action
+from core.pagination import PageParams, paginate_list, set_total_header
+from services.logistics_stage import stage_column, stage_is
 from models.user_rbac_model import User
 from models.logistics_request_model import LogisticsRequest
 from models.delivery import Delivery
@@ -309,23 +312,66 @@ def request_rows(db: Session, requests) -> list:
 
 @router.get("/requests")
 def list_requests(
+    response: Response,
     status: Optional[str] = Query(default=None, description="Pending / Accepted / Declined / Completed"),
     priority_level: Optional[str] = Query(default=None, description="Critical / High / Medium / Low"),
+    stage: Optional[str] = Query(default=None, description="Pending / Accepted / In Transit / Completed / Declined / Cancelled"),
+    request_id: Optional[int] = Query(default=None, description="Only this request (a notification opens it)"),
+    q: Optional[str] = Query(default=None, max_length=100,
+                             description="Barangay, report, or request / delivery number"),
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(DRRMO)),
 ):
     """UC-DR1 step 1: DRRMO sees requests ordered by the linked report's
-    3.11 priority, so the most urgent deliveries get scheduled first."""
+    3.11 priority, so the most urgent deliveries get scheduled first.
+
+    NF-003 (Module 7.2): optional limit / offset (X-Total-Count). The
+    priority comes from each request's report(s), so the page is cut after
+    that sort; status still filters in the database first."""
     query = db.query(LogisticsRequest)
     if status:
         query = query.filter(LogisticsRequest.status == status)
+    if stage:
+        query = query.filter(stage_is(stage.strip()))
+    if request_id is not None:
+        query = query.filter(LogisticsRequest.request_id == request_id)
     rows = request_rows(db, query.all())
     for r in rows:
         # Table 36: only the DRRMO user who accepted it moves the delivery.
         r["mine"] = r["assigned_to_user_id"] == current_user.user_id
     if priority_level:
         rows = [r for r in rows if r["priority_level"] == priority_level]
-    return sorted(rows, key=priority_sort_key)
+    if q and q.strip():
+        rows = [r for r in rows if _matches(r, q)]
+    rows, total = paginate_list(sorted(rows, key=priority_sort_key), page)
+    set_total_header(response, page, total)
+    return rows
+
+
+def _matches(row: dict, q: str) -> bool:
+    """Phase 6 search, now on the server so it covers every page: the
+    barangay or report name contains the text, or it is the request or
+    delivery number ("#12" or "12")."""
+    text = q.strip().lower().lstrip("#")
+    return (text in f"{row.get('destination') or ''} {row.get('report_label') or ''}".lower()
+            or text == str(row.get("request_id"))
+            or text == str(row.get("delivery_id")))
+
+
+@router.get("/requests/counts")
+def request_counts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(DRRMO)),
+):
+    """NF-003: requests per stage, for the DRRMO screen's stage chips
+    ("New (3)"), counted in SQL instead of from the whole list."""
+    stage = stage_column()
+    counts = {s: 0 for s in ("Pending", "Accepted", "In Transit", "Completed", "Declined", "Cancelled")}
+    for name, n in db.query(stage, func.count(LogisticsRequest.request_id)).group_by(stage).all():
+        counts[name] = n
+    return counts
+
 
 
 @router.patch("/requests/{request_id}/accept", response_model=LogisticsRequestResponse)
@@ -457,6 +503,12 @@ def _move_own_delivery(db: Session, request_id: int, current_user, from_status: 
     if d.status != from_status:
         raise HTTPException(status_code=409, detail=f"Delivery #{d.delivery_id} is {d.status}.")
     move_to_next_status(db, d, current_user)
+    # G-002 / S-6: status changes by DRRMO go to the activity log too.
+    log_action(db, current_user,
+               "DRRMO PICKED UP DELIVERY" if from_status == "Preparing" else "DRRMO DELIVERED",
+               "logistics_requests", request_id,
+               old={"delivery_id": d.delivery_id, "status": from_status},
+               new={"delivery_id": d.delivery_id, "status": d.status})
     db.commit()
     return request_rows(db, [req])[0]
 
