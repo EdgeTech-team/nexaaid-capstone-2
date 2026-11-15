@@ -108,7 +108,7 @@ class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
               disasterTypeId: widget.disasterTypeId,
               disasterTypeName: widget.disasterTypeName,
             )
-          // NF-003: entries load 20 at a time; filters, sort and counts come
+          // NF-003: entries load 10 at a time; filters, sort and counts come
           // from the server. A Barangay Rep only gets its own (backend).
           : PagedDonationEntries(
               header: top,

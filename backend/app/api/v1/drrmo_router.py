@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from core.auth import require_role
 from core.audit import log_action
-from core.pagination import PageParams, paginate_list, set_total_header
+from core.pagination import PageParams, paginate_list, parse_ids, set_total_header
 from services.logistics_stage import stage_column, stage_is
 from models.user_rbac_model import User
 from models.logistics_request_model import LogisticsRequest
@@ -319,6 +319,8 @@ def list_requests(
     request_id: Optional[int] = Query(default=None, description="Only this request (a notification opens it)"),
     q: Optional[str] = Query(default=None, max_length=100,
                              description="Barangay, report, or request / delivery number"),
+    delivery_ids: Optional[str] = Query(default=None, max_length=1100,
+                                        description="Comma list: only these deliveries' requests"),
     page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(DRRMO)),
@@ -336,6 +338,9 @@ def list_requests(
         query = query.filter(stage_is(stage.strip()))
     if request_id is not None:
         query = query.filter(LogisticsRequest.request_id == request_id)
+    if delivery_ids is not None:
+        # NF-003: the requests of the deliveries on one page only.
+        query = query.filter(LogisticsRequest.delivery_id.in_(parse_ids(delivery_ids)))
     rows = request_rows(db, query.all())
     for r in rows:
         # Table 36: only the DRRMO user who accepted it moves the delivery.

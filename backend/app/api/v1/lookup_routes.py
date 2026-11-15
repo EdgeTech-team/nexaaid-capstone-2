@@ -26,6 +26,7 @@ from models.delivery import Delivery
 from models.logistics_request_model import LogisticsRequest
 from models.user_rbac_model import User
 from services.fulfillment import progress_for_reports
+from services.report_feed import feed_row
 from services.need_templates import item_per_family, need_templates
 from services.units import dimension, units_for
 
@@ -123,36 +124,7 @@ def get_lookups(
         "reports": [],
         # Donor / organization screens: only validated reports are published
         # to donors (manuscript UC-A3 step 9, UC-D2).
-        "validated_reports": [
-            {
-                "id": r.report_id,
-                "name": f"{label(r)} - {r.priority_level or 'No priority'}",
-                # Public summary for donor cards (UC-D2 step 2: needs,
-                # priority guidance and fulfillment status).
-                "disaster": r.disaster_label(types),
-                "barangay": barangays.get(r.barangay_id, "Barangay"),
-                "barangay_id": r.barangay_id,
-                # NF-003: reports created together for several barangays
-                # share an event; the donor screens show them as one card.
-                "event_id": r.event_id,
-                "event_name": r.event_name,
-                "sitio": ", ".join(r.sitio_names) or None,
-                "sitios": r.sitio_names,
-                "priority_level": r.priority_level,
-                "assistance_needed": r.assistance_needed,
-                "affected_families": r.affected_families,
-                "description": r.description,
-                "total_items_needed": r.fulfillment.total_items_needed if r.fulfillment else r.estimated_quantity,
-                "total_items_delivered": r.fulfillment.total_items_delivered if r.fulfillment else 0,
-                "fulfillment_percentage": float(r.fulfillment.fulfillment_percentage) if r.fulfillment else 0.0,
-                # Per need: needed / pledged / confirmed / delivered, so the
-                # donate screen can say what is still missing.
-                "needs": progress[r.report_id]["needs"],
-                # Ivan (donor feed): "New validated report · 2h".
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in validated
-        ],
+        "validated_reports": [feed_row(r, types, barangays, progress, label) for r in validated],
         # Staff only (F-01). Filled below for the roles in INTERNAL_LIST_ROLES.
         "pending_donations": [],     # CSWS receives these
         "received_donations": [],    # CMO confirms these

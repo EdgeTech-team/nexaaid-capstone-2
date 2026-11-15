@@ -2,11 +2,12 @@
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
-from sqlalchemy import func
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from core import email as mail_service
 from core.database import get_db
+from core.pagination import PageParams, paginate_list, paginate_query, set_total_header
 from core.auth import hash_password, require_role
 from core.temp_password import generate_temp_password
 from core.uploads import transfer_upload
@@ -155,12 +156,16 @@ def _user_row(u: User, orgs: dict, barangays: dict) -> dict:
 # UC-A1 Manage Internal Accounts: list accounts, view role, update status/details
 @router.get("/users")
 def list_users(
+    response: Response,
     role: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None, description="search name or email"),
     active: Optional[bool] = Query(default=None, description="true = Active, false = Deactivated (I2)"),
+    page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(ADMIN)),
 ):
+    """NF-003: with `limit` (and `offset`) one page of 20 accounts, the
+    total in X-Total-Count; without it the full list, as before."""
     # Deleted accounts (1.2) are gone from every section.
     query = db.query(User).join(Role, Role.role_id == User.role_id).filter(User.deleted_at.is_(None))
     if role:
@@ -172,6 +177,16 @@ def list_users(
         )
     orgs = {o.organization_id: o for o in db.query(Organization).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
+    if page.requested:
+        # Paged: the status filter has to be in SQL so the count is right.
+        if active is not None:
+            # Postgres stores a real boolean; the SQLite test database keeps
+            # the server default as the text 'true'. Both read alike here.
+            is_on = or_(User.is_active == True, User.is_active == "true")  # noqa: E712
+            query = query.filter(is_on if active else ~is_on)
+        users, total = paginate_query(query, page, User.user_id)
+        set_total_header(response, page, total)
+        return [_user_row(u, orgs, barangays) for u in users]
     users = query.order_by(User.user_id).all()
     if active is not None:
         # I2. Filtered in Python so it reads is_active the same way on Postgres
@@ -336,6 +351,12 @@ def list_organizations(
         query = query.filter(Organization.reviewed_at.isnot(None))
     elif reviewed is False:
         query = query.filter(Organization.reviewed_at.is_(None))
+    return _organization_rows(db, query)
+
+
+def _organization_rows(db: Session, query) -> list:
+    """The Registrations / organization rows for an Organization query,
+    newest first."""
     # Reason and decision time kept in audit_logs from before comment 1.3,
     # when the Administrator still approved, held or rejected organizations.
     reasons, decided = {}, {}
@@ -383,6 +404,98 @@ def list_organizations(
 # registrations too, in the same Registrations list as organizations.
 # Review only: donor accounts are active as soon as they register.
 DONOR = "Individual Donor"
+
+
+def _registrations(db: Session, review: str, kind: str, q: Optional[str]) -> list:
+    """Organizations and individual donors as one list (Registrations),
+    filtered by review status, kind and search, unsorted."""
+    if review not in ("all", "done", "not"):
+        raise HTTPException(status_code=422, detail="review must be all, done or not")
+    if kind not in ("all", "donors", "orgs"):
+        raise HTTPException(status_code=422, detail="kind must be all, donors or orgs")
+    like = f"%{q.strip()}%" if q and q.strip() else None
+    rows = []
+    if kind in ("all", "orgs"):
+        oq = db.query(Organization)
+        if review == "done":
+            oq = oq.filter(Organization.reviewed_at.isnot(None))
+        elif review == "not":
+            oq = oq.filter(Organization.reviewed_at.is_(None))
+        if like:
+            oq = oq.filter(Organization.org_name.ilike(like) | Organization.contact_email.ilike(like))
+        for o in _organization_rows(db, oq):
+            rows.append({
+                "type": "org", "id": o["organization_id"], "name": o["org_name"],
+                "email": o["contact_email"] or "No email", "created_at": o["created_at"],
+                "reviewed": o["reviewed_at"] is not None, "org": o,
+            })
+    if kind in ("all", "donors"):
+        uq = (db.query(User).join(Role, Role.role_id == User.role_id)
+              .filter(Role.role_name == DONOR, User.deleted_at.is_(None)))
+        if review == "done":
+            uq = uq.filter(User.reviewed_at.isnot(None))
+        elif review == "not":
+            uq = uq.filter(User.reviewed_at.is_(None))
+        if like:
+            uq = uq.filter((User.first_name + " " + User.last_name).ilike(like) | User.email.ilike(like))
+        for u in uq:
+            rows.append({
+                "type": "donor", "id": u.user_id, "name": f"{u.first_name} {u.last_name}".strip(),
+                "email": u.email, "created_at": u.created_at, "reviewed": u.reviewed_at is not None,
+            })
+    return rows
+
+
+@router.get("/registrations")
+def list_registrations(
+    response: Response,
+    review: str = Query(default="all", description="all / done (Reviewed) / not (Not Reviewed)"),
+    kind: str = Query(default="all", description="all / donors / orgs"),
+    q: Optional[str] = Query(default=None, max_length=100, description="name or email"),
+    sort: str = Query(default="newest", description="newest / oldest / name"),
+    focus_type: Optional[str] = Query(default=None, description="org / donor: only this registration"),
+    focus_id: Optional[int] = Query(default=None),
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """NF-003: the Registrations list (organizations and individual donors),
+    filtered, sorted and a page at a time on the server. It used to be built
+    in the app from two full lists."""
+    if sort not in ("newest", "oldest", "name"):
+        raise HTTPException(status_code=422, detail="sort must be newest, oldest or name")
+    rows = _registrations(db, review, kind, q)
+    if focus_type is not None and focus_id is not None:
+        # The registration a notification is about (shown first, outlined).
+        rows = [r for r in rows if r["type"] == focus_type and r["id"] == focus_id]
+
+    def when(r):
+        c = r["created_at"]
+        return c.timestamp() if c is not None else None
+
+    tie = lambda r: (r["type"], r["id"])  # noqa: E731  stable order for equal keys
+    if sort == "name":
+        rows.sort(key=lambda r: (r["name"].lower(), tie(r)))
+    else:
+        dated = [r for r in rows if when(r) is not None]
+        undated = sorted((r for r in rows if when(r) is None), key=tie)
+        dated.sort(key=lambda r: (when(r), tie(r)), reverse=(sort == "newest"))
+        rows = dated + undated  # unknown dates last, as in the app
+    rows, total = paginate_list(rows, page)
+    set_total_header(response, page, total)
+    return rows
+
+
+@router.get("/registrations/counts")
+def registration_counts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """NF-003: All / Reviewed / Not Reviewed counts for the Registrations
+    switch (over every registration, as before)."""
+    rows = _registrations(db, "all", "all", None)
+    reviewed = sum(1 for r in rows if r["reviewed"])
+    return {"all": len(rows), "reviewed": reviewed, "not_reviewed": len(rows) - reviewed}
 
 
 @router.patch("/users/{user_id}/review")

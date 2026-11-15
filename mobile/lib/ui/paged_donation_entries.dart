@@ -14,8 +14,8 @@ import 'widgets.dart';
 /// Same layout as [DonationEntriesView], but every filter, the sort and
 /// the counts come from the server (GET /donations/records and
 /// GET /donations/records/counts with the same filters), because the app
-/// no longer holds every entry. The donor's own list (My Giving) still
-/// uses [DonationEntriesView].
+/// no longer holds every entry. [donor]: the signed-in donor's own entries
+/// (My giving, GET /donations/mine/entries), 10 per page as well.
 class PagedDonationEntries extends StatefulWidget {
   /// Widgets above the filters (title, Scan QR, Entries / Per report).
   final List<Widget> header;
@@ -33,6 +33,19 @@ class PagedDonationEntries extends StatefulWidget {
   /// on top.
   final int? reportId;
 
+  /// NF-003: the donor's own list (My giving). Oct 25: the CMO's
+  /// acknowledgement is not shown; acknowledged reads as received.
+  final bool donor;
+
+  /// Donor lists from the summary cards: 'waiting' or 'on_the_way'.
+  final String? donorView;
+
+  /// Tapping an entry (donor: its detail page).
+  final void Function(Map entry)? onTap;
+
+  /// Space between two entry cards (9.4: the donor's list needs more).
+  final double gap;
+
   const PagedDonationEntries({
     super.key,
     this.header = const [],
@@ -40,6 +53,10 @@ class PagedDonationEntries extends StatefulWidget {
     this.disasterTypeId,
     this.disasterTypeName,
     this.reportId,
+    this.donor = false,
+    this.donorView,
+    this.onTap,
+    this.gap = Space.sm,
     this.emptyTitle = 'No donations to show.',
     this.emptyMessage = 'Donation entries appear here once donors submit them.',
   });
@@ -79,8 +96,15 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
   late final controller = PagedController(fetch: _fetchFor(_filters()));
 
   /// The list's filters, also sent to the counts endpoint.
+  String get _path =>
+      widget.donor ? '/donations/mine/entries' : '/donations/records';
+  String get _countsPath => widget.donor
+      ? '/donations/mine/entries/counts'
+      : '/donations/records/counts';
+
   Map<String, String> _filters() => {
-    'include_closed': 'true',
+    if (!widget.donor) 'include_closed': 'true',
+    'view': ?widget.donorView,
     'sort': _sortParam[sort]!,
     if (widget.disasterTypeId != null)
       'disaster_type_id': '${widget.disasterTypeId}',
@@ -93,7 +117,7 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
 
   PageFetch _fetchFor(Map<String, String> filters) =>
       (offset, limit) => api.get(
-        '/donations/records',
+        _path,
         query: {...filters, 'limit': '$limit', 'offset': '$offset'},
       );
 
@@ -113,7 +137,8 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
 
   Future<void> _loadCounts(Map<String, String> filters) async {
     final generation = ++_countsGeneration;
-    final r = await api.get('/donations/records/counts', query: filters);
+    // The donor's counts cover all of their entries (as before).
+    final r = await api.get(_countsPath, query: widget.donor ? null : filters);
     // Answers for an older filter are dropped.
     if (!mounted || generation != _countsGeneration) return;
     setState(() => counts = r.ok && r.json is Map ? r.json as Map : null);
@@ -160,7 +185,7 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
 
   String _chipLabel(String? s) {
     final int? n = s == null ? (counts?['all'] as num?)?.toInt() : _count(s);
-    final name = s == null ? 'All' : donationStatusText(s);
+    final name = s == null ? 'All' : donationStatusText(s, donor: widget.donor);
     return n == null ? name : '$name ($n)';
   }
 
@@ -178,7 +203,8 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
         child: Row(
           children: [
             for (final s in <String?>[null, ...entryStatuses])
-              if (s != 'Partly Received' || (_count(s!) ?? 0) > 0)
+              if ((s != 'Partly Received' || (_count(s!) ?? 0) > 0) &&
+                  !(widget.donor && s == 'Confirmed'))
                 Padding(
                   padding: const EdgeInsets.only(right: Space.xs),
                   child: ChoiceChip(
@@ -193,7 +219,7 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
       Gaps.v12,
       AppTextField(
         controller: searchC,
-        label: api.role == Roles.barangay
+        label: api.role == Roles.barangay || widget.donor
             ? 'Search QR reference or item'
             : 'Search QR reference, donor or item',
         icon: Icons.search,
@@ -289,8 +315,13 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
             ),
       itemBuilder: (context, e) => Padding(
         key: ValueKey('entry-${e['batch_reference']}'),
-        padding: const EdgeInsets.only(bottom: Space.sm),
-        child: DonationEntryCard(entry: e, footer: widget.footer?.call(e)),
+        padding: EdgeInsets.only(bottom: widget.gap),
+        child: DonationEntryCard(
+          entry: e,
+          footer: widget.footer?.call(e),
+          onTap: widget.onTap == null ? null : () => widget.onTap!(e),
+          donor: widget.donor,
+        ),
       ),
     );
   }

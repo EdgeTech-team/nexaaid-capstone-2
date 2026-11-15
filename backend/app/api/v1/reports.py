@@ -45,13 +45,14 @@ CHANGE LOG
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import joinedload
 from datetime import datetime, timedelta, timezone
 from core.priority_engine import apply_priority
 from services.fulfillment import progress as needs_progress, recalculate as recalculate_fulfillment, set_needs
 from services.items import resolve_item_id
+from services import report_paging
 
 from core.database import get_db
 from core.auth import get_current_user, get_current_user_optional, require_role, has_role, barangay_scope, can_view_unvalidated_report
@@ -395,19 +396,15 @@ def get_event(
 
 # ---------------------------------------------------------------------------
 # List — staff only, with filters + pagination
+#
+# NF-003 (all roles): every report list also has a paged mode. Send `offset`
+# (with `limit`, at most 100) and the list is filtered by fulfillment status,
+# sorted in the database (services/report_paging.py) and the total comes in
+# the X-Total-Count header. Without `offset` the answer is exactly as before,
+# so installed APKs keep working.
 # ---------------------------------------------------------------------------
-@router.get("/", response_model=List[DisasterReportResponse])
-def list_reports(
-    status_filter: Optional[str] = Query(default=None, alias="status"),
-    barangay_id: Optional[int] = Query(default=None),
-    disaster_type_id: Optional[int] = Query(default=None),
-    source: Optional[str] = Query(default=None),
-    priority_level: Optional[str] = Query(default=None), # 3.7
-    skip: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
-    db: Session = Depends(get_db),
-    current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
-):
+def _staff_reports(db: Session, current_user, *, status_filter=None, barangay_id=None,
+                   disaster_type_id=None, source=None, priority_level=None, mine=False):
     query = db.query(DisasterReport).filter(DisasterReport.deleted_at.is_(None))
     own_barangay = barangay_scope(current_user)
     if own_barangay is not None:
@@ -423,7 +420,53 @@ def list_reports(
         query = query.filter(DisasterReport.source == canonical_source(source))
     if priority_level:
         query = query.filter(DisasterReport.priority_level == priority_level) #3.7
+    if mine:
+        query = query.filter(DisasterReport.user_id == current_user.user_id)
+    return query
 
+
+def _validated_reports(db: Session, *, barangay_id=None, disaster_type_id=None, priority_level=None):
+    query = db.query(DisasterReport).filter(
+        DisasterReport.status == "Validated", DisasterReport.deleted_at.is_(None))
+    if barangay_id:
+        query = query.filter(DisasterReport.barangay_id == barangay_id)
+    if disaster_type_id:
+        query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
+    if priority_level:
+        query = query.filter(DisasterReport.priority_level == priority_level)
+    return query
+
+
+def _paged(query, response: Response, offset: int, limit: int, fulfillment, sort,
+           editable_first_for=None, monitoring=True):
+    query = report_paging.filter_fulfillment(report_paging.with_fulfillment(query), fulfillment)
+    if monitoring:
+        query = query.options(joinedload(DisasterReport.fulfillment))
+    rows = report_paging.page(report_paging.order(query, sort, editable_first_for), response, offset, limit)
+    return [_to_monitoring(r) for r in rows] if monitoring else rows
+
+
+@router.get("/", response_model=List[DisasterReportResponse])
+def list_reports(
+    response: Response,
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    barangay_id: Optional[int] = Query(default=None),
+    disaster_type_id: Optional[int] = Query(default=None),
+    source: Optional[str] = Query(default=None),
+    priority_level: Optional[str] = Query(default=None), # 3.7
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: Optional[int] = Query(default=None, ge=0, description="NF-003 paged mode"),
+    fulfillment: Optional[str] = Query(default=None),
+    sort: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
+):
+    query = _staff_reports(db, current_user, status_filter=status_filter, barangay_id=barangay_id,
+                           disaster_type_id=disaster_type_id, source=source,
+                           priority_level=priority_level)
+    if offset is not None:
+        return _paged(query, response, offset, limit, fulfillment, sort, monitoring=False)
     return (
         query.order_by(DisasterReport.created_at.desc())
         .offset(skip)
@@ -434,6 +477,7 @@ def list_reports(
 
 @router.get("/monitoring", response_model=List[ReportMonitoringResponse])
 def list_report_monitoring(
+    response: Response,
     barangay_id: Optional[int] = Query(default=None),
     disaster_type_id: Optional[int] = Query(default=None),
     status_filter: Optional[str] = Query(default=None, alias="status"),
@@ -441,30 +485,36 @@ def list_report_monitoring(
     priority_level: Optional[str] = Query(default=None), # 3.7
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
+    offset: Optional[int] = Query(default=None, ge=0, description="NF-003 paged mode"),
+    fulfillment: Optional[str] = Query(default=None),
+    sort: Optional[str] = Query(default=None),
+    mine: bool = Query(default=False, description="Only the reports this user submitted"),
     db: Session = Depends(get_db),
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
-    query = (
-        db.query(DisasterReport)
-        .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.deleted_at.is_(None))
-    )
-    own_barangay = barangay_scope(current_user)
-    if own_barangay is not None:
-        query = query.filter(DisasterReport.barangay_id == own_barangay)
+    query = _staff_reports(db, current_user, status_filter=status_filter, barangay_id=barangay_id,
+                           disaster_type_id=disaster_type_id, source=source,
+                           priority_level=priority_level, mine=mine)
+    if offset is not None:
+        # "Only my reports": the ones that can still be edited come first.
+        return _paged(query, response, offset, limit, fulfillment, sort,
+                      editable_first_for=current_user.user_id if mine else None)
+    return _monitoring_rows(query.options(joinedload(DisasterReport.fulfillment)), skip, limit)
 
-    if status_filter:
-        query = query.filter(DisasterReport.status == status_filter)
-    if barangay_id:
-        query = query.filter(DisasterReport.barangay_id == barangay_id)
-    if disaster_type_id:
-        query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
-    if source:
-        query = query.filter(DisasterReport.source == canonical_source(source))
-    if priority_level:
-        query = query.filter(DisasterReport.priority_level == priority_level) #3.7
 
-    return _monitoring_rows(query, skip, limit)
+@router.get("/monitoring/counts")
+def report_monitoring_counts(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    priority_level: Optional[str] = Query(default=None),
+    mine: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
+):
+    """NF-003: reports per fulfillment status for the Filter panel, with the
+    same filters as the list (the app no longer has every report to count)."""
+    query = _staff_reports(db, current_user, status_filter=status_filter,
+                           priority_level=priority_level, mine=mine)
+    return report_paging.fulfillment_counts(report_paging.with_fulfillment(query))
 
 
 # ---------------------------------------------------------------------------
@@ -473,26 +523,34 @@ def list_report_monitoring(
 # ---------------------------------------------------------------------------
 @router.get("/validated", response_model=List[ReportMonitoringResponse])
 def list_validated_reports(
+    response: Response,
     barangay_id: Optional[int] = Query(default=None),
     disaster_type_id: Optional[int] = Query(default=None),
     priority_level: Optional[str] = Query(default=None),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=200),
+    offset: Optional[int] = Query(default=None, ge=0, description="NF-003 paged mode"),
+    fulfillment: Optional[str] = Query(default=None),
+    sort: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    query = (
-        db.query(DisasterReport)
-        .options(joinedload(DisasterReport.fulfillment))
-        .filter(DisasterReport.status == "Validated", DisasterReport.deleted_at.is_(None))
-    )
-    if barangay_id:
-        query = query.filter(DisasterReport.barangay_id == barangay_id)
-    if disaster_type_id:
-        query = query.filter(DisasterReport.disaster_type_id == disaster_type_id)
-    if priority_level:
-        query = query.filter(DisasterReport.priority_level == priority_level)
-    return _monitoring_rows(query, skip, limit)
+    query = _validated_reports(db, barangay_id=barangay_id, disaster_type_id=disaster_type_id,
+                               priority_level=priority_level)
+    if offset is not None:
+        return _paged(query, response, offset, limit, fulfillment, sort)
+    return _monitoring_rows(query.options(joinedload(DisasterReport.fulfillment)), skip, limit)
+
+
+@router.get("/validated/counts")
+def validated_report_counts(
+    priority_level: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """NF-003: validated reports per fulfillment status (Filter panel)."""
+    query = _validated_reports(db, priority_level=priority_level)
+    return report_paging.fulfillment_counts(report_paging.with_fulfillment(query))
 
 
 # ---------------------------------------------------------------------------

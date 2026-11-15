@@ -323,6 +323,22 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     searchC.clear();
     dates = null;
     _focus = target.id;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadFocus());
+  }
+
+  /// NF-003: the delivery a notification points at, loaded on its own (it
+  /// may be on another page) and shown first.
+  Map? _focused;
+
+  Future<void> _loadFocus() async {
+    final id = _focus;
+    if (id == null) {
+      if (_focused != null && mounted) setState(() => _focused = null);
+      return;
+    }
+    final r = await api.get('/deliveries/$id');
+    if (!mounted || _focus != id) return;
+    setState(() => _focused = r.ok && r.json is Map ? r.json as Map : null);
   }
 
   // Filters (all optional). Changing one reloads the list.
@@ -336,18 +352,19 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
   @override
   void dispose() {
     searchC.dispose();
+    _pager?.removeListener(_pageChanged);
     _pager?.dispose();
     super.dispose();
   }
 
-  // NF-001 / NF-003 (read-only records): the list arrives a page at a time
-  // with the filters (and disaster type) applied on the server. One
-  // controller per set of filters; a new set starts again from page 1.
+  // NF-001 / NF-003: the list arrives 10 at a time (numbered pages) with
+  // the filters (and the disaster type, records screen) applied on the
+  // server. One controller per set of filters; a new set starts at page 1.
   PagedController? _pager;
   String? _pagerFor;
   int _extras = 0;
 
-  Map<String, String> get _recordsQuery => {
+  Map<String, String> get _pageQuery => {
     ...Map.of(_query)..remove('limit'),
     if (widget.disasterTypeId != null)
       'disaster_type_id': '${widget.disasterTypeId}',
@@ -357,12 +374,13 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     final key = query.toString();
     if (_pager == null || _pagerFor != key) {
       final old = _pager;
+      old?.removeListener(_pageChanged);
       _pager = PagedController(
         fetch: (offset, limit) => api.get(
           '/deliveries/',
           query: {...query, 'limit': '$limit', 'offset': '$offset'},
         ),
-      );
+      )..addListener(_pageChanged);
       _pagerFor = key;
       if (old != null) {
         WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
@@ -371,19 +389,43 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     return _pager!;
   }
 
+  /// NF-003: the logistics request of each delivery on the page on screen,
+  /// asked for those deliveries only (it used to be every request there is).
+  Map<dynamic, Map> _requests = {};
+  int _requestsAsked = 0;
+
+  Future<void> _pageChanged() async {
+    final p = _pager;
+    if (p == null || barangay || p.isLoading) return;
+    final ids = [for (final d in p.items) d['delivery_id']].join(',');
+    final asked = ++_requestsAsked;
+    if (ids.isEmpty) {
+      if (_requests.isNotEmpty && mounted) setState(() => _requests = {});
+      return;
+    }
+    final r = await api.get(
+      api.role == Roles.drrmo ? '/drrmo/requests' : '/logistics/requests',
+      query: {'delivery_ids': ids},
+    );
+    if (!mounted || asked != _requestsAsked || !r.ok || r.json is! List) {
+      return;
+    }
+    final byDelivery = <dynamic, Map>{};
+    for (final x in (r.json as List).cast<Map>().reversed) {
+      byDelivery[x['delivery_id']] = x; // latest request per delivery
+    }
+    setState(() => _requests = byDelivery);
+  }
+
   /// Appendix H 8.5 (Administrator, DRRMO): the same cards and filters,
-  /// one page at a time. The counts and the logistics requests come with
-  /// it; pull to refresh reloads all of them.
+  /// one page of 10 at a time.
   Widget _records(BuildContext context) {
-    final query = _recordsQuery;
+    final query = _pageQuery;
     final pager = _pagerOf(query);
     return Loader(
       key: ValueKey('records-$query-$_extras'),
       load: [
         api.lookupsResult,
-        api.role == Roles.drrmo
-            ? () => api.get('/drrmo/requests')
-            : () => api.get('/logistics/requests'),
         () => api.get(
           '/deliveries/counts',
           query: {
@@ -394,10 +436,6 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
       ],
       builder: (context, data) {
         final names = Names(Map<String, dynamic>.from(data[0] as Map));
-        final requests = <dynamic, Map>{};
-        for (final r in (data[1] as List).cast<Map>().reversed) {
-          requests[r['delivery_id']] = r; // latest request per delivery
-        }
         final type = widget.disasterTypeName;
         return PagedListView(
           controller: pager,
@@ -424,7 +462,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                 ),
               ],
             ),
-            _filters(context, data[2] as Map),
+            _filters(context, data[1] as Map),
           ],
           empty: EmptyState(
             _filtered
@@ -434,7 +472,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                 : 'No deliveries yet.',
           ),
           itemBuilder: (context, d) =>
-              _card(context, d, names, false, requests[d['delivery_id']]),
+              _card(context, d, names, false, _requests[d['delivery_id']]),
         );
       },
     );
@@ -872,8 +910,9 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
   Widget build(BuildContext context) {
     // NF-003: delivery records (8.5) are paged; the other modes stay as they are.
     if (readOnly) return Scaffold(body: _records(context));
+    final pager = _pagerOf(_pageQuery);
     return Scaffold(
-      floatingActionButton: barangay || readOnly
+      floatingActionButton: barangay
           ? null
           : FloatingActionButton.extended(
               onPressed: () => _prepare(context),
@@ -881,38 +920,31 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
               label: const Text('Prepare delivery'),
             ),
       body: Loader(
-        // A new key reloads the list whenever a filter changes.
-        key: ValueKey(_query.toString()),
         // Live: a delivery or DRRMO request changed (Realtime).
         refresh: Realtime.instance.logistics,
         load: [
-          () => api.get('/deliveries/', query: _query),
           api.lookupsResult,
-          barangay
-              ? () => api.get('/dashboard/barangay')
-              : api.role == Roles.drrmo
-              ? () => api.get('/drrmo/requests')
-              : () => api.get('/logistics/requests'),
           () => api.get('/deliveries/counts'),
+          if (barangay) () => api.get('/dashboard/barangay'),
+          // Barangay: deliveries waiting for confirmation on every page,
+          // so a whole trip can be confirmed in one tap.
+          if (barangay)
+            () => api.get(
+              '/deliveries/',
+              query: {'status': 'Delivered', 'limit': '100', 'offset': '0'},
+            ),
         ],
         builder: (context, data) {
-          final names = Names(Map<String, dynamic>.from(data[1] as Map));
-          final rows = (data[0] as List).cast<Map>();
-          final counts = data[3] as Map;
-          final acked = barangay
+          final names = Names(Map<String, dynamic>.from(data[0] as Map));
+          final counts = data[1] as Map;
+          final acked = barangay && data.length > 2
               ? ((data[2] as Map)['acknowledged_deliveries'] as List).toSet()
               : <dynamic>{};
-          final requests = <dynamic, Map>{};
-          if (!barangay) {
-            for (final r in (data[2] as List).cast<Map>().reversed) {
-              requests[r['delivery_id']] = r; // latest request per delivery
-            }
-          }
           // Barangay: trips that brought several deliveries that are now
           // waiting for confirmation, so they can confirm them in one tap.
           final waitingByTrip = <int, int>{};
-          if (barangay) {
-            for (final d in rows) {
+          if (barangay && data.length > 3) {
+            for (final d in (data[3] as List).cast<Map>()) {
               if (d['trip_id'] != null && d['status'] == 'Delivered') {
                 final id = d['trip_id'] as int;
                 waitingByTrip[id] = (waitingByTrip[id] ?? 0) + 1;
@@ -920,20 +952,33 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
             }
             waitingByTrip.removeWhere((_, n) => n < 2);
           }
-          return ListView(
+          final focused = _focused;
+          Widget outlined(Map d) => Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(Radii.lg),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.primary,
+                width: 2,
+              ),
+            ),
+            child: _card(
+              context,
+              d,
+              names,
+              acked.contains(d['delivery_id']),
+              _requests[d['delivery_id']],
+            ),
+          );
+          return PagedListView(
+            controller: pager,
+            refresh: Realtime.instance.logistics,
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-            children: [
+            header: [
               PageHeader(
-                barangay
-                    ? 'Incoming Aid'
-                    : readOnly
-                    ? 'Delivery Records'
-                    : 'Release & Delivery Tracking',
+                barangay ? 'Incoming Aid' : 'Release & Delivery Tracking',
                 subtitle: barangay
                     ? 'Aid for your assigned barangay. Confirm receipt when it '
                           'arrives, then acknowledge it.'
-                    : readOnly
-                    ? 'Every delivery with its tracking status and history.'
                     : 'Prepare goods from a report\'s inventory, then move the '
                           'status one step at a time.',
               ),
@@ -949,21 +994,20 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                       icon: const Icon(Icons.local_shipping_outlined),
                       label: const Text('Trips'),
                     ),
-                    if (!readOnly)
-                      TextButton.icon(
-                        onPressed: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => Scaffold(
-                              appBar: AppBar(
-                                title: const Text('Logistics support records'),
-                              ),
-                              body: const SupportRecordsScreen(),
+                    TextButton.icon(
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => Scaffold(
+                            appBar: AppBar(
+                              title: const Text('Logistics support records'),
                             ),
+                            body: const SupportRecordsScreen(),
                           ),
                         ),
-                        icon: const Icon(Icons.fire_truck_outlined),
-                        label: const Text('Logistics support records'),
                       ),
+                      icon: const Icon(Icons.fire_truck_outlined),
+                      label: const Text('Logistics support records'),
+                    ),
                   ],
                 ),
               _filters(context, counts),
@@ -992,41 +1036,36 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                     ),
                   ),
                 ),
-              if (rows.isEmpty)
-                EmptyState(
-                  _filtered
-                      ? 'No deliveries match these filters.'
-                      : barangay
-                      ? 'No deliveries to your barangay yet.'
-                      : readOnly
-                      ? 'No deliveries yet.'
-                      : 'No deliveries yet. Tap "Prepare delivery".',
+              // Phase 6: several deliveries leave together (all or nothing),
+              // from the deliveries on this page.
+              if (!barangay)
+                ListenableBuilder(
+                  listenable: pager,
+                  builder: (context, _) =>
+                      _batchButton(context, pager.items, _requests),
                 ),
-              // Phase 6: several deliveries leave together (all or nothing).
-              if (!barangay && !readOnly) _batchButton(context, rows, requests),
-              for (final d in [
-                ...rows.where((d) => d['delivery_id'] == _focus),
-                ...rows.where((d) => d['delivery_id'] != _focus),
-              ])
-                Container(
-                  decoration: d['delivery_id'] == _focus
-                      ? BoxDecoration(
-                          borderRadius: BorderRadius.circular(Radii.lg),
-                          border: Border.all(
-                            color: Theme.of(context).colorScheme.primary,
-                            width: 2,
-                          ),
-                        )
-                      : null,
-                  child: _card(
+              // The delivery a notification points at comes first.
+              if (focused != null) outlined(focused),
+            ],
+            empty: focused != null
+                ? const SizedBox.shrink()
+                : EmptyState(
+                    _filtered
+                        ? 'No deliveries match these filters.'
+                        : barangay
+                        ? 'No deliveries to your barangay yet.'
+                        : 'No deliveries yet. Tap "Prepare delivery".',
+                  ),
+            itemBuilder: (context, d) =>
+                focused != null && d['delivery_id'] == focused['delivery_id']
+                ? const SizedBox.shrink()
+                : _card(
                     context,
                     d,
                     names,
                     acked.contains(d['delivery_id']),
-                    requests[d['delivery_id']],
+                    _requests[d['delivery_id']],
                   ),
-                ),
-            ],
           );
         },
       ),

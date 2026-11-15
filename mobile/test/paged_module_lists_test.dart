@@ -100,7 +100,7 @@ void main() {
       await pump(tester, const CmoScreen());
       final first = to('/cmo/entries/pending').first;
       expect(first['on_hold'], 'false');
-      expect(first['limit'], '20');
+      expect(first['limit'], '10');
       expect(first['offset'], '0');
       expect(first['newest'], 'true');
 
@@ -121,7 +121,7 @@ void main() {
     Api.instance.role = Roles.cmo;
     await http.runWithClient(() async {
       await pump(tester, const CmoHistoryScreen());
-      expect(to('/cmo/entries/acknowledged').first['limit'], '20');
+      expect(to('/cmo/entries/acknowledged').first['limit'], '10');
       await tester.tap(find.text('All disasters'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Typhoon').last);
@@ -132,7 +132,7 @@ void main() {
 
       await tester.tap(find.text('Per report'));
       await tester.pumpAndSettle();
-      expect(to('/cmo/report-summaries').last['limit'], '20');
+      expect(to('/cmo/report-summaries').last['limit'], '10');
     }, server);
   });
 
@@ -144,7 +144,7 @@ void main() {
         await pump(tester, const DrrmoScreen());
         final first = to('/drrmo/requests').first;
         expect(first['stage'], 'Pending');
-        expect(first['limit'], '20');
+        expect(first['limit'], '10');
         expect(find.text('New (2)'), findsOneWidget);
         expect(find.text('Completed (5)'), findsOneWidget);
 
@@ -168,7 +168,7 @@ void main() {
       );
       final page = to('/donations/records').first;
       expect(page['report_id'], '12');
-      expect(page['limit'], '20');
+      expect(page['limit'], '10');
       expect(find.text('3 entries · 4 items'), findsOneWidget);
       // The report is fixed, so there is no Report dropdown.
       expect(find.byKey(const ValueKey('entries-report')), findsNothing);
