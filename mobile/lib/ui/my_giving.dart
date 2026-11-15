@@ -8,6 +8,7 @@ import 'donor_dashboard.dart'
     show DonationDetailScreen, ReportProgressCard, donationStep;
 import 'home_nav.dart';
 import 'item_art.dart';
+import 'paged_donation_entries.dart';
 import 'widgets.dart';
 
 // ---------------------------------------------------------------------------
@@ -112,47 +113,47 @@ class MyGivingScreen extends StatefulWidget {
 }
 
 class _MyGivingScreenState extends State<MyGivingScreen> {
-  int _loads = 0; // a new value reloads (after an edit or delete)
-
-  Future<void> _push(Widget page) async {
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
-    if (mounted) setState(() => _loads++);
-  }
+  // Edits and deletes reload the counts and the list by themselves (Api
+  // notifies after a change).
+  Future<void> _push(Widget page) =>
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
 
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
+    // NF-003: the four cards' numbers come from the server; the donations
+    // below are 10 per page (GET /donations/mine/entries).
     return Loader(
-      key: ValueKey(_loads),
-      load: [() => api.get('/donations/mine')],
+      load: [() => api.get('/donations/mine/entries/counts')],
       builder: (context, data) {
-        final m = data[0] as Map;
-        final entries = (m['entries'] as List? ?? const []).cast<Map>();
-        final supported = (m['supported_reports'] as List? ?? const [])
+        final c = data[0] is Map ? data[0] as Map : const {};
+        final summary = (c['summary'] as Map?) ?? const {};
+        final supported = ((c['supported_reports'] as List?) ?? const [])
             .cast<Map>();
-        final waiting = entries.where(isWaiting).toList();
-        final moving = entries.where(isOnTheWay).toList();
-
-        return ListView(
-          physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
-          padding: Space.page,
-          children: [
-            Text('My giving', style: t.headlineSmall),
-            Gaps.v4,
-            Text(
-              entries.isEmpty
-                  ? 'Your donations and their deliveries will show here.'
-                  : 'Tap a card to see the list.',
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            Gaps.v16,
-            if (entries.isEmpty)
+        final all = (c['all'] as num?)?.toInt() ?? 0;
+        final title = [
+          Text('My giving', style: t.headlineSmall),
+          Gaps.v4,
+          Text(
+            all == 0
+                ? 'Your donations and their deliveries will show here.'
+                : 'Tap a card to see the list.',
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v16,
+        ];
+        if (all == 0) {
+          return ListView(
+            physics: const AlwaysScrollableScrollPhysics(), // pull to refresh
+            padding: Space.page,
+            children: [
+              ...title,
               AppCard(
                 child: EmptyView(
                   compact: true,
                   icon: Icons.volunteer_activism_outlined,
-                  title: 'You haven\'t donated yet',
+                  title: "You haven't donated yet",
                   message:
                       'Pick a barangay that needs help and pledge goods. '
                       'You can follow them all the way to the barangay.',
@@ -163,60 +164,54 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
                     onPressed: () => openAllReports(context),
                   ),
                 ),
-              )
-            else ...[
-              // ---- 1. Four cards, each opens its list -----------------
-              StatCardGrid([
-                StatCard(
-                  label: 'Donations made',
-                  value: '${entries.length}',
-                  icon: Icons.volunteer_activism_outlined,
-                  onTap: () => _push(const MyDonationsScreen()),
-                ),
-                StatCard(
-                  label: 'Waiting for drop-off or pickup',
-                  value: '${waiting.length}',
-                  icon: Icons.schedule,
-                  color: StatusColors.base('Pending'),
-                  onTap: () =>
-                      _push(const MyDonationsScreen(waitingOnly: true)),
-                ),
-                StatCard(
-                  label: 'In delivery',
-                  value: '${moving.length}',
-                  icon: Icons.local_shipping_outlined,
-                  color: StatusColors.base('In Transit'),
-                  onTap: () =>
-                      _push(const MyDonationsScreen(onTheWayOnly: true)),
-                ),
-                StatCard(
-                  label: 'Reports supported',
-                  value: '${supported.length}',
-                  icon: Icons.campaign_outlined,
-                  color: StatusColors.base('Confirmed'),
-                  onTap: () =>
-                      _push(SupportedReportsScreen(reports: supported)),
-                ),
-              ]),
-
-              // ---- 2. Donation status ---------------------------------
-              const SectionHeader(
-                'Donation status',
-                subtitle: 'Each donation and where it is now.',
               ),
-              // Every entry (one QR each) with the status chips, search,
-              // report and handover filters and the sort, as on develop.
-              // 9.4 (testing): more room between donations.
-              DonationEntriesView(
-                entries: entries,
-                donor: true,
-                gap: Space.lg,
-                footer: (e) => entryJourney(context, e),
-                onTap: (e) => _push(DonationDetailScreen(entry: e)),
-              ),
-              Gaps.v8,
             ],
+          );
+        }
+        return PagedDonationEntries(
+          donor: true,
+          // 9.4 (testing): more room between donations.
+          gap: Space.lg,
+          header: [
+            ...title,
+            // ---- 1. Four cards, each opens its list -------------------
+            StatCardGrid([
+              StatCard(
+                label: 'Donations made',
+                value: '${summary['entries'] ?? all}',
+                icon: Icons.volunteer_activism_outlined,
+                onTap: () => _push(const MyDonationsScreen()),
+              ),
+              StatCard(
+                label: 'Waiting for drop-off or pickup',
+                value: '${summary['waiting'] ?? 0}',
+                icon: Icons.schedule,
+                color: StatusColors.base('Pending'),
+                onTap: () => _push(const MyDonationsScreen(waitingOnly: true)),
+              ),
+              StatCard(
+                label: 'In delivery',
+                value: '${summary['on_the_way'] ?? 0}',
+                icon: Icons.local_shipping_outlined,
+                color: StatusColors.base('In Transit'),
+                onTap: () => _push(const MyDonationsScreen(onTheWayOnly: true)),
+              ),
+              StatCard(
+                label: 'Reports supported',
+                value: '${supported.length}',
+                icon: Icons.campaign_outlined,
+                color: StatusColors.base('Confirmed'),
+                onTap: () => _push(SupportedReportsScreen(reports: supported)),
+              ),
+            ]),
+            // ---- 2. Donation status -----------------------------------
+            const SectionHeader(
+              'Donation status',
+              subtitle: 'Each donation and where it is now.',
+            ),
           ],
+          footer: (e) => entryJourney(context, e),
+          onTap: (e) => _push(DonationDetailScreen(entry: e)),
         );
       },
     );
@@ -390,8 +385,6 @@ class MyDonationsScreen extends StatefulWidget {
 }
 
 class _MyDonationsScreenState extends State<MyDonationsScreen> {
-  int _loads = 0;
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -404,47 +397,30 @@ class _MyDonationsScreenState extends State<MyDonationsScreen> {
               : 'My donations',
         ),
       ),
-      body: Loader(
-        key: ValueKey(_loads),
-        load: [() => api.get('/donations/mine')],
-        builder: (context, data) {
-          final all = ((data[0] as Map)['entries'] as List).cast<Map>();
-          final entries = widget.waitingOnly
-              ? all.where(isWaiting).toList()
-              : widget.onTheWayOnly
-              ? all.where(isOnTheWay).toList()
-              : all;
-          return ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: Space.page,
-            children: [
-              DonationEntriesView(
-                entries: entries,
-                donor: true,
-                emptyTitle: widget.waitingOnly
-                    ? 'Nothing is waiting'
-                    : widget.onTheWayOnly
-                    ? 'Nothing is on the road'
-                    : 'You haven\'t donated yet',
-                emptyMessage: widget.waitingOnly
-                    ? 'Every donation has been dropped off or picked up.'
-                    : widget.onTheWayOnly
-                    ? 'When CSWS sends your goods to the barangay, they show here.'
-                    : 'Pick a barangay that needs help and pledge goods.',
-                gap: Space.lg,
-                footer: (e) => entryJourney(context, e),
-                onTap: (e) async {
-                  final changed = await Navigator.of(context).push<bool>(
-                    MaterialPageRoute(
-                      builder: (_) => DonationDetailScreen(entry: e),
-                    ),
-                  );
-                  if (changed == true && mounted) setState(() => _loads++);
-                },
-              ),
-            ],
-          );
-        },
+      // NF-003: 20 donations per page, filtered on the server. Edits and
+      // deletes reload the page by themselves.
+      body: PagedDonationEntries(
+        donor: true,
+        donorView: widget.waitingOnly
+            ? 'waiting'
+            : widget.onTheWayOnly
+            ? 'on_the_way'
+            : null,
+        emptyTitle: widget.waitingOnly
+            ? 'Nothing is waiting'
+            : widget.onTheWayOnly
+            ? 'Nothing is on the road'
+            : "You haven't donated yet",
+        emptyMessage: widget.waitingOnly
+            ? 'Every donation has been dropped off or picked up.'
+            : widget.onTheWayOnly
+            ? 'When CSWS sends your goods to the barangay, they show here.'
+            : 'Pick a barangay that needs help and pledge goods.',
+        gap: Space.lg,
+        footer: (e) => entryJourney(context, e),
+        onTap: (e) => Navigator.of(context).push<bool>(
+          MaterialPageRoute(builder: (_) => DonationDetailScreen(entry: e)),
+        ),
       ),
     );
   }

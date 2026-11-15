@@ -89,6 +89,15 @@ List<Map<String, dynamic>> sortAndFilterReports(
   return list;
 }
 
+/// NF-003: the sort as the server names it (services/report_paging.py).
+String reportSortParam(ReportSort s) => switch (s) {
+  ReportSort.urgent => 'urgent',
+  ReportSort.leastFulfilled => 'least_fulfilled',
+  ReportSort.mostFulfilled => 'most_fulfilled',
+  ReportSort.mostFamilies => 'most_families',
+  ReportSort.newest => 'newest',
+};
+
 /// What a report list shows: the three filters of the Filter panel (null =
 /// all), the sort, and "Only my reports" (Report Status, Disaster Unit).
 @immutable
@@ -195,6 +204,11 @@ class ReportFilterBar extends StatelessWidget {
   /// The rows loaded now, for counts like "Not Started (9)".
   final List<Map> rows;
 
+  /// NF-003: counts per fulfillment status from the server, for lists
+  /// loaded a page at a time (the app no longer has every report). Used
+  /// instead of [rows] when given.
+  final Map<String, int>? counts;
+
   /// Priorities and Fulfillment Status only work with this status
   /// (Report Validation: 'Validated'); null = always.
   final String? detailsOnlyFor;
@@ -213,6 +227,7 @@ class ReportFilterBar extends StatelessWidget {
     this.anyStatus = true,
     this.priorities = true,
     this.rows = const [],
+    this.counts,
     this.detailsOnlyFor,
     this.showSort = true,
     this.trailing = const [],
@@ -366,6 +381,7 @@ class _FilterPanelState extends State<_FilterPanel> {
         bar.detailsOnlyFor == null || d.status == bar.detailsOnlyFor;
     final note = details ? null : 'Only for ${bar.detailsOnlyFor} reports';
     int count(String s) =>
+        bar.counts?[s] ??
         bar.rows.where((r) => fulfillmentState(r) == s).length;
 
     Widget choice(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -7,6 +9,8 @@ import '../realtime.dart';
 import 'needs_action.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'home_nav.dart';
+import 'paginated_list.dart';
+import 'paged_donation_entries.dart' show searchDebounce;
 import 'widgets.dart';
 import 'batch_sheet.dart';
 import 'inventory_view.dart';
@@ -256,25 +260,107 @@ class ReceiveScreen extends StatefulWidget {
 class _ReceiveScreenState extends State<ReceiveScreen>
     with HomeTargetListener<ReceiveScreen> {
   final searchC = TextEditingController();
-  String search = '';
+  String search = ''; // typed
+  String _searchSent = ''; // what the list was loaded for
+  Timer? _typing;
   String view = 'pending';
-  int _loads = 0;
 
   // Concerns2.txt 5.2: filter and sort by barangay and report, remembered
-  // on this phone. Priority comes from the validated reports (Module 3).
+  // on this phone.
   ReceiveFilters filters = const ReceiveFilters();
-  Map<int, String?> priorities = {};
+
+  // Inventory tab: its own item search and sort (as InventoryView had).
+  final _itemC = TextEditingController();
+  String _itemSearch = '';
+  InventorySort _inventorySort = InventorySort.itemAz;
+
+  /// NF-003: each tab 20 rows per page, filtered and sorted by the server
+  /// (GET /donations/receive-queue, services/receive_queue.py). It used to
+  /// download every pending entry, every record and the whole inventory.
+  late final PagedController _list = PagedController(fetch: _fetch());
+
+  /// Tab counts, "shown of total" and the Barangay / Report choices.
+  Map? _summary;
+  int _summaryAsked = 0;
+
+  static const _sortParam = {
+    ReceiveSort.urgent: 'urgent',
+    ReceiveSort.waitingLongest: 'waiting_longest',
+    ReceiveSort.newest: 'newest',
+    ReceiveSort.barangayAz: 'barangay_az',
+  };
+  static const _inventorySortParam = {
+    InventorySort.itemAz: 'item_az',
+    InventorySort.quantityHigh: 'quantity_high',
+    InventorySort.quantityLow: 'quantity_low',
+    InventorySort.lastUpdated: 'last_updated',
+  };
+
+  /// The filters both the list and the summary use.
+  Map<String, String> get _filters => {
+    'barangay': ?filters.barangay,
+    if (filters.reportId != null) 'report_id': '${filters.reportId}',
+    'handover': ?filters.handover,
+    if (view == 'received') 'status': ?filters.status,
+    'when': filters.when.name,
+    // "Today" / "Last 7 days" in this phone's time zone.
+    'tz': '${DateTime.now().timeZoneOffset.inMinutes}',
+    if (view == 'inventory' && _itemSearch.trim().isNotEmpty)
+      'q': _itemSearch.trim()
+    else if (view != 'inventory' && _searchSent.isNotEmpty)
+      'q': _searchSent,
+  };
+
+  PageFetch _fetch() {
+    final q = {
+      ..._filters,
+      'tab': view,
+      'sort': _sortParam[filters.sort]!,
+      'inventory_sort': _inventorySortParam[_inventorySort]!,
+    };
+    return (offset, limit) => api.get(
+      '/donations/receive-queue',
+      query: {...q, 'limit': '$limit', 'offset': '$offset'},
+    );
+  }
+
+  /// A filter, the tab or the search changed: page 1 and new counts.
+  void _reload() {
+    _list.refresh(fetch: _fetch());
+    _loadSummary();
+  }
+
+  Future<void> _loadSummary() async {
+    final asked = ++_summaryAsked;
+    final f = _filters..remove('q');
+    final r = await api.get(
+      '/donations/receive-queue/summary',
+      query: {...f, if (_searchSent.isNotEmpty) 'q': _searchSent},
+    );
+    if (!mounted || asked != _summaryAsked || !r.ok || r.json is! Map) return;
+    setState(() => _summary = r.json as Map);
+  }
+
+  /// After a receive (or any change elsewhere) the counts follow.
+  void _changedElsewhere() {
+    if (mounted) _loadSummary();
+  }
 
   @override
   void initState() {
     super.initState();
     _restoreFilters();
-    _loadPriorities();
+    _loadSummary();
+    api.addListener(_changedElsewhere);
   }
 
   @override
   void dispose() {
+    api.removeListener(_changedElsewhere);
+    _typing?.cancel();
+    _list.dispose();
     searchC.dispose();
+    _itemC.dispose();
     super.dispose();
   }
 
@@ -288,7 +374,12 @@ class _ReceiveScreenState extends State<ReceiveScreen>
   void applyHomeTarget(HomeTarget target) {
     // NF-002: /csws/receive/received, /csws/receive/inventory.
     if (const {'pending', 'received', 'inventory'}.contains(target.view)) {
-      view = target.view!;
+      if (target.view != view) {
+        view = target.view!;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _reload();
+        });
+      }
     }
     if (target.view == 'scan') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -299,42 +390,50 @@ class _ReceiveScreenState extends State<ReceiveScreen>
 
   Future<void> _restoreFilters() async {
     final f = await ReceiveFilters.load();
-    if (mounted) setState(() => filters = f);
-  }
-
-  /// Priority per report for "Most urgent" and the report headers. If this
-  /// fails, the screen still works; reports just have no priority shown.
-  Future<void> _loadPriorities() async {
-    final r = await api.get('/reports/validated', query: {'limit': '200'});
-    if (!mounted || !r.ok || r.json is! List) return;
-    setState(() {
-      priorities = {
-        for (final x in (r.json as List).cast<Map>())
-          (x['report_id'] as num).toInt(): x['priority_level'] as String?,
-      };
-    });
+    if (!mounted) return;
+    setState(() => filters = f);
+    _reload();
   }
 
   void _setFilters(ReceiveFilters f) {
     setState(() => filters = f);
     f.save();
+    _reload();
   }
 
   void _showAll() {
     final f = filters.cleared();
     searchC.clear();
+    _itemC.clear();
     setState(() {
       search = '';
+      _searchSent = '';
+      _itemSearch = '';
       filters = f;
     });
     f.save();
+    _reload();
   }
 
-  /// Opens an entry; when its sheet closes, the pending list and the
-  /// inventory reload (after a receive they have changed).
+  void _onSearch(String v, {bool items = false}) {
+    setState(() {
+      if (!items) search = v.trim();
+    });
+    _typing?.cancel();
+    _typing = Timer(searchDebounce, () {
+      if (!mounted) return;
+      setState(() => items ? _itemSearch = v : _searchSent = v.trim());
+      _reload();
+    });
+  }
+
+  /// Opens an entry; when its sheet closes, the page on screen and the
+  /// counts reload (after a receive they have changed).
   Future<void> _open(String reference) async {
     await openDonationByQr(context, reference);
-    if (mounted) setState(() => _loads++);
+    if (!mounted) return;
+    _list.reloadQuietly();
+    _loadSummary();
   }
 
   Future<void> _scan() async {
@@ -343,200 +442,309 @@ class _ReceiveScreenState extends State<ReceiveScreen>
     if (code != null && mounted) await _open(code);
   }
 
+  int _n(String tab, String key) =>
+      ((_summary?[tab] as Map?)?[key] as num?)?.toInt() ?? 0;
+
   @override
   Widget build(BuildContext context) {
-    return Loader(
-      key: ValueKey(_loads),
-      load: [
-        () => api.get('/donations/entries', query: {'pending_only': 'true'}),
-        () => api.get('/donations/inventory'),
-        // 5.2 Received tab: one record per donation entry (one QR).
-        () => api.get('/donations/records'),
-      ],
-      builder: (context, data) {
-        final allReports = ((data[0] as Map)['reports'] as List).cast<Map>();
-        final inventory = (data[1] as List).cast<Map>();
-        final records = (data[2] as List).cast<Map>();
-        final receivedAll = records
-            .where((e) => e['status'] != 'Pending')
-            .toList();
-
-        // Choices come from every tab, so the lists are the same everywhere.
-        final everything = <Map>[...allReports, ...receivedAll, ...inventory];
-        final barangays = barangayOptions(everything);
-        final reportChoices = reportOptions(everything, filters.barangay);
-
-        // Report -> its pending entries (one per QR / batch_reference),
-        // filtered and in the chosen order.
-        final reports = filterPendingReports(
-          allReports,
-          filters,
-          search: search,
-          priorities: priorities,
-        );
-        final pendingTotal = allReports.fold<int>(
-          0,
-          (n, r) => n + (r['entries'] as List).length,
-        );
-        final pendingCount = reports.fold<int>(
-          0,
-          (n, r) => n + (r['entries'] as List).length,
-        );
-        final received = filterReceivedEntries(
-          records,
-          filters,
-          search: search,
-          priorities: priorities,
-        );
-        final stock = filterInventoryRows(inventory, filters);
-        // Inventory is linked to specific reports (Inventory module rules).
-        final reportCount = stock.map((i) => i['report_id']).toSet().length;
-        final hiding = filters.narrowed || search.isNotEmpty;
-        return ListView(
-          padding: const EdgeInsets.all(16),
+    final s = _summary;
+    final barangays = ((s?['barangays'] as List?) ?? const [])
+        .map((b) => '$b')
+        .toList();
+    final reports = {
+      for (final r in ((s?['reports'] as List?) ?? const []).cast<Map>())
+        (r['report_id'] as num).toInt(): '${r['report_label']}',
+    };
+    final hiding =
+        filters.narrowed || search.isNotEmpty || _itemSearch.isNotEmpty;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return PagedListView(
+      controller: _list,
+      onRefresh: () async => _reload(),
+      header: [
+        const PageHeader(
+          'Handle Physical Donations',
+          subtitle:
+              'Scan the donor\'s QR code (or search the reference), check '
+              'the goods, and record the actual quantity received.',
+        ),
+        FilledButton.icon(
+          onPressed: _scan,
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+          icon: const Icon(Icons.qr_code_scanner),
+          label: const Text('Scan QR code'),
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: const Text('Donation records')),
+                  body: const DonationRecordsScreen(header: false),
+                ),
+              ),
+            ),
+            icon: const Icon(Icons.folder_open_outlined),
+            label: const Text('All donation records'),
+          ),
+        ),
+        Row(
           children: [
-            const PageHeader(
-              'Handle Physical Donations',
-              subtitle:
-                  'Scan the donor\'s QR code (or search the reference), check '
-                  'the goods, and record the actual quantity received.',
-            ),
-            FilledButton.icon(
-              onPressed: _scan,
-              style: FilledButton.styleFrom(
-                minimumSize: const Size.fromHeight(52),
-              ),
-              icon: const Icon(Icons.qr_code_scanner),
-              label: const Text('Scan QR code'),
-            ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: const Text('Donation records')),
-                      body: const DonationRecordsScreen(header: false),
-                    ),
-                  ),
+            Expanded(
+              child: TextField(
+                controller: searchC,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  labelText: 'Or type the QR reference, donor or item',
+                  hintText: 'DON-...',
                 ),
-                icon: const Icon(Icons.folder_open_outlined),
-                label: const Text('All donation records'),
+                onChanged: _onSearch,
+                onSubmitted: _open,
               ),
             ),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: searchC,
-                    textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      labelText: 'Or type the QR reference, donor or item',
-                      hintText: 'DON-...',
-                    ),
-                    onChanged: (v) => setState(() => search = v.trim()),
-                    onSubmitted: _open,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                OutlinedButton(
-                  onPressed: () => _open(searchC.text),
-                  child: const Text('Find'),
-                ),
-              ],
+            const SizedBox(width: 8),
+            OutlinedButton(
+              onPressed: () => _open(searchC.text),
+              child: const Text('Find'),
             ),
-            const SizedBox(height: 14),
-            SegmentedButton<String>(
-              segments: [
-                ButtonSegment(
-                  value: 'pending',
-                  label: Text('Pending ($pendingCount)'),
-                ),
-                ButtonSegment(
-                  value: 'received',
-                  label: Text('Received (${received.length})'),
-                ),
-                ButtonSegment(
-                  value: 'inventory',
-                  label: Text('Inventory ($reportCount)'),
-                ),
-              ],
-              selected: {view},
-              onSelectionChanged: (s) {
-                setState(() => view = s.first);
-                AppRoutes.instance.viewChanged(homeTab, view);
-              },
-            ),
-            const SizedBox(height: 12),
-            ReceiveFilterBar(
-              key: ValueKey('filters-$view'),
-              filters: filters,
-              onChanged: _setFilters,
-              onShowAll: _showAll,
-              barangays: barangays,
-              reports: reportChoices,
-              received: view == 'received',
-              compact: view == 'inventory',
-              searching: search.isNotEmpty,
-              shown: switch (view) {
-                'received' => received.length,
-                'inventory' => stock.length,
-                _ => pendingCount,
-              },
-              total: switch (view) {
-                'received' => receivedAll.length,
-                'inventory' => inventory.length,
-                _ => pendingTotal,
-              },
-              noun: view == 'inventory' ? 'items in stock' : 'entries',
-            ),
-            const SizedBox(height: 12),
-            if (view == 'pending') ...[
-              if (reports.isEmpty)
-                ReceiveEmpty(
-                  hiding: hiding,
-                  nothingText: 'Nothing waiting to be received.',
-                  onShowAll: _showAll,
-                ),
-              for (final r in reports)
-                PendingReportCard(
-                  report: r,
-                  onOpen: _open,
-                  priority: r['priority_level'] as String?,
-                  showWaiting: true,
-                ),
-            ] else if (view == 'received') ...[
-              if (received.isEmpty)
-                ReceiveEmpty(
-                  hiding: hiding,
-                  nothingText: 'No goods received yet.',
-                  onShowAll: _showAll,
-                ),
-              for (final e in received)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: DonationEntryCard(
-                    entry: e,
-                    onTap: () => _open('${e['batch_reference']}'),
-                  ),
-                ),
-            ] else if (stock.isEmpty && inventory.isNotEmpty)
-              ReceiveEmpty(
-                hiding: true,
-                nothingText: 'Inventory is empty.',
-                onShowAll: _showAll,
-              )
-            else
-              InventoryView(
-                // New key when the barangay/report changes, so its own
-                // report list starts fresh.
-                key: ValueKey('inv-${filters.barangay}-${filters.reportId}'),
-                rows: stock,
-              ),
           ],
-        );
+        ),
+        const SizedBox(height: 14),
+        SegmentedButton<String>(
+          segments: [
+            ButtonSegment(
+              value: 'pending',
+              label: Text('Pending (${_n('pending', 'shown')})'),
+            ),
+            ButtonSegment(
+              value: 'received',
+              label: Text('Received (${_n('received', 'shown')})'),
+            ),
+            ButtonSegment(
+              value: 'inventory',
+              label: Text('Inventory (${_n('inventory', 'reports')})'),
+            ),
+          ],
+          selected: {view},
+          onSelectionChanged: (sel) {
+            setState(() => view = sel.first);
+            AppRoutes.instance.viewChanged(homeTab, view);
+            _reload();
+          },
+        ),
+        const SizedBox(height: 12),
+        ReceiveFilterBar(
+          key: ValueKey('filters-$view'),
+          filters: filters,
+          onChanged: _setFilters,
+          onShowAll: _showAll,
+          barangays: barangays,
+          reports: reports,
+          received: view == 'received',
+          compact: view == 'inventory',
+          searching: search.isNotEmpty,
+          shown: _n(view, 'shown'),
+          total: _n(view, 'total'),
+          noun: view == 'inventory' ? 'items in stock' : 'entries',
+        ),
+        if (view == 'inventory') ...[
+          const SizedBox(height: 12),
+          AppTextField(
+            controller: _itemC,
+            label: 'Search item',
+            icon: Icons.search,
+            onChanged: (v) => _onSearch(v, items: true),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<InventorySort>(
+            key: const ValueKey('inventory-sort'),
+            initialValue: _inventorySort,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Sort by'),
+            items: [
+              for (final s in InventorySort.values)
+                DropdownMenuItem(value: s, child: Text(s.label)),
+            ],
+            onChanged: (v) {
+              if (v == null || v == _inventorySort) return;
+              setState(() => _inventorySort = v);
+              _reload();
+            },
+          ),
+        ],
+        const SizedBox(height: 12),
+      ],
+      empty: ReceiveEmpty(
+        hiding: hiding,
+        nothingText: switch (view) {
+          'received' => 'No goods received yet.',
+          'inventory' => 'Inventory is empty.',
+          _ => 'Nothing waiting to be received.',
+        },
+        onShowAll: _showAll,
+      ),
+      itemBuilder: (context, row) {
+        // Rows of one report come together; its heading goes above the
+        // first of them on this page.
+        final i = _list.items.indexOf(row);
+        final prev = i > 0 ? _list.items[i - 1] : null;
+        final first = prev == null || prev['report_id'] != row['report_id'];
+        return switch (view) {
+          'received' => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: DonationEntryCard(
+              entry: row,
+              onTap: () => _open('${row['batch_reference']}'),
+            ),
+          ),
+          'inventory' => _StockRow(row: row, heading: first, t: t, cs: cs),
+          _ => PendingEntryRow(entry: row, heading: first, onOpen: _open),
+        };
       },
+    );
+  }
+}
+
+/// NF-003: one pending entry on a page of the Pending tab. The first entry
+/// of a report on the page carries the report's heading (label, priority,
+/// how many of its entries are waiting).
+class PendingEntryRow extends StatelessWidget {
+  final Map entry;
+  final bool heading;
+  final Future<void> Function(String batchReference) onOpen;
+  const PendingEntryRow({
+    super.key,
+    required this.entry,
+    required this.heading,
+    required this.onOpen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final e = entry;
+    final priority = e['report_priority'] as String?;
+    final waiting = (e['report_waiting'] as num?)?.toInt() ?? 0;
+    return Padding(
+      padding: EdgeInsets.only(top: heading ? Space.sm : 0),
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (heading) ...[
+              ListTile(
+                leading: const CircleAvatar(
+                  child: Icon(Icons.assignment_outlined),
+                ),
+                title: Text(
+                  '${e['report_label'] ?? 'Report #${e['report_id']}'}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  '${priority != null ? '$priority priority · ' : ''}'
+                  '$waiting ${waiting == 1 ? 'entry' : 'entries'} waiting',
+                ),
+                trailing: priority == null ? null : Badge2.priority(priority),
+              ),
+              const Divider(height: 1),
+            ],
+            ListTile(
+              leading: const Icon(Icons.inventory_2_outlined),
+              title: Text(
+                'Donation ${e['entry_no']} · ${e['total_items']} '
+                '${e['total_items'] == 1 ? 'item' : 'items'}',
+              ),
+              subtitle: Text(
+                [
+                  if (e['donor'] != null) '${e['donor']}',
+                  '${e['handover_method']}',
+                  if (e['pending_items'] != e['total_items'])
+                    '${e['pending_items']} still pending',
+                  if (waitingText(e['created_at']).isNotEmpty)
+                    waitingText(e['created_at']),
+                ].join(' · '),
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => onOpen('${e['batch_reference']}'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// NF-003: one stock row of the Inventory tab; the first row of a report on
+/// the page carries the report's name.
+class _StockRow extends StatelessWidget {
+  final Map row;
+  final bool heading;
+  final TextTheme t;
+  final ColorScheme cs;
+  const _StockRow({
+    required this.row,
+    required this.heading,
+    required this.t,
+    required this.cs,
+  });
+
+  String _updated(Map r) {
+    final d = DateTime.tryParse('${r['last_updated']}')?.toLocal();
+    if (d == null) return '';
+    String two(int n) => n.toString().padLeft(2, '0');
+    return 'Updated ${d.year}-${two(d.month)}-${two(d.day)} '
+        '${two(d.hour)}:${two(d.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final i = row;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (heading) ...[
+          Padding(
+            padding: const EdgeInsets.only(top: Space.sm),
+            child: Text(inventoryReportLabel(i), style: t.titleSmall),
+          ),
+          const Divider(),
+        ],
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: Space.xxs),
+          child: Row(
+            children: [
+              Icon(
+                Icons.warehouse_outlined,
+                size: 18,
+                color: cs.onSurfaceVariant,
+              ),
+              Gaps.h8,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('${i['item_name']}', style: t.bodyMedium),
+                    if (_updated(i).isNotEmpty)
+                      Text(
+                        _updated(i),
+                        style: t.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              Text(
+                '${i['quantity']} ${i['unit'] ?? ''}'.trim(),
+                style: t.titleSmall,
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

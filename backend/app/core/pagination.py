@@ -84,3 +84,13 @@ def set_total_header(response: Response, page: PageParams, total: int) -> None:
     sends no limit gets the response byte-for-byte as before."""
     if page.requested:
         response.headers[TOTAL_HEADER] = str(total)
+
+
+def parse_ids(text: str, most: int = MAX_LIMIT) -> list:
+    """A comma list of ids ("3,7,12") from a query parameter, for "the rows
+    of one page only" lookups. 422 for anything else or more than `most`."""
+    from fastapi import HTTPException
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    if len(parts) > most or not all(p.isdigit() for p in parts):
+        raise HTTPException(status_code=422, detail=f"Give up to {most} ids, comma separated")
+    return [int(p) for p in parts]

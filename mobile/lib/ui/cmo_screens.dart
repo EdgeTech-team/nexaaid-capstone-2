@@ -1126,7 +1126,7 @@ class _CmoOnHoldScreenState extends State<CmoOnHoldScreen> {
 // ----- History tab -----------------------------------------------------------------
 
 /// Every acknowledged entry (search, disaster and barangay filters, newest
-/// or oldest first, 20 at a time), and the summary per report (UC-C2).
+/// or oldest first, 10 at a time), and the summary per report (UC-C2).
 class CmoHistoryScreen extends StatefulWidget {
   const CmoHistoryScreen({super.key});
 
