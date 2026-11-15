@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 
 import 'disaster_art.dart';
@@ -8,13 +11,15 @@ import 'donate_screen.dart';
 import 'event_screen.dart' show EventLink;
 export 'donate_screen.dart' show DonateScreen, DonationReceipt;
 import 'needs_progress.dart';
+import 'paged_donation_entries.dart' show searchDebounce;
+import 'paginated_list.dart';
 
 /// Ivan's note #2: the signed-in donor / relief organization's middle tab.
 /// It shows every validated report, active and done, in one list. There is
 /// no separate Done section (Ivan's note): fulfilled reports are found with
 /// the "Fulfilled" progress chip or by sorting. Reports stay "Validated"
-/// after they are fulfilled, so the list comes from GET /lookups
-/// `validated_reports`.
+/// after they are fulfilled. NF-003: the list comes 10 at a time from
+/// GET /public/reports/feed (filtered and sorted on the server).
 class DonorReportsTab extends StatelessWidget {
   const DonorReportsTab({super.key});
 
@@ -48,8 +53,51 @@ class _ReportsFeedState extends State<ReportsFeed> {
   _Quick quick = _Quick.all;
   ReportSort sort = ReportSort.urgent;
 
+  // NF-003: 20 reports per page, filtered and sorted by the server (GET
+  // /public/reports/feed). The search is sent once typing stops.
+  late final PagedController _list = PagedController(fetch: _fetch(_query));
+  late Map<String, String> _sent = _query;
+  String _searchSent = '';
+  Timer? _typing;
+
+  Map<String, String> get _query => {
+    if (widget.done != null) 'done': '${widget.done}',
+    if (_searchSent.isNotEmpty) 'q': _searchSent,
+    'barangay': ?barangay,
+    'disaster': ?type,
+    'priority': ?priority,
+    'quick': quick.name,
+    'sort': reportSortParam(sort),
+  };
+
+  PageFetch _fetch(Map<String, String> q) =>
+      (offset, limit) => api.get(
+        '/public/reports/feed',
+        query: {...q, 'limit': '$limit', 'offset': '$offset'},
+      );
+
+  /// After any filter change: back to page 1 with the new filters.
+  void _sync() {
+    final q = _query;
+    if (mapEquals(q, _sent)) return;
+    _sent = q;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _list.refresh(fetch: _fetch(q));
+    });
+  }
+
+  void _onSearch(String v) {
+    setState(() => search = v.trim());
+    _typing?.cancel();
+    _typing = Timer(searchDebounce, () {
+      if (mounted) setState(() => _searchSent = search);
+    });
+  }
+
   @override
   void dispose() {
+    _typing?.cancel();
+    _list.dispose();
     _searchC.dispose();
     super.dispose();
   }
@@ -66,6 +114,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
   void _resetFilters() => setState(() {
     _searchC.clear();
     search = '';
+    _searchSent = '';
     barangay = type = priority = null;
     quick = _Quick.all;
   });
@@ -96,46 +145,25 @@ class _ReportsFeedState extends State<ReportsFeed> {
 
   @override
   Widget build(BuildContext context) {
+    _sync();
     return Loader(
-      load: [api.lookupsResult],
+      load: [
+        api.lookupsResult,
+        () => api.get(
+          '/public/reports/feed/counts',
+          query: {if (widget.done != null) 'done': '${widget.done}'},
+        ),
+      ],
       builder: (context, data) {
         final names = Names(Map<String, dynamic>.from(data[0] as Map));
+        final counts = data.length > 1 && data[1] is Map
+            ? data[1] as Map
+            : const {};
+        final allCount = (counts['all'] as num?)?.toInt() ?? 0;
+        final urgentCount = (counts['urgent'] as num?)?.toInt() ?? 0;
         final done = widget.done;
         final cs = Theme.of(context).colorScheme;
         final t = Theme.of(context).textTheme;
-        final all = names.rows('validated_reports').where((r) {
-          if (done == null) return true;
-          final full = (fulfillmentPercent(r) ?? 0) >= 100;
-          return done ? full : !full;
-        }).toList();
-        final q = search.toLowerCase();
-        bool quickOk(Map r) {
-          final pct = fulfillmentPercent(r) ?? 0;
-          return switch (quick) {
-            _Quick.all => true,
-            _Quick.urgent =>
-              r['priority_level'] == 'Critical' ||
-                  r['priority_level'] == 'High',
-            _Quick.needs => pct < 100,
-            _Quick.fulfilled => pct >= 100,
-          };
-        }
-
-        final matching = all.where((r) {
-          final text = [
-            r['barangay'],
-            if (api.loggedIn) r['sitio'], // 4.2: guests search by barangay
-            r['disaster'],
-            r['assistance_needed'],
-            r['description'],
-          ].join(' ').toLowerCase();
-          return (q.isEmpty || text.contains(q)) &&
-              (barangay == null || r['barangay'] == barangay) &&
-              (type == null || r['disaster'] == type) &&
-              (priority == null || r['priority_level'] == priority) &&
-              quickOk(r);
-        }).toList();
-        final reports = sortAndFilterReports(matching, sort: sort);
 
         // Active filters, shown as chips that can be removed one by one.
         final active = <(String, IconData, VoidCallback)>[
@@ -190,10 +218,10 @@ class _ReportsFeedState extends State<ReportsFeed> {
               ),
             );
 
-        return ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
+        return PagedListView(
+          controller: _list,
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-          children: [
+          header: [
             PageHeader(
               done == null
                   ? 'All Reports'
@@ -217,7 +245,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
                     : done
                     ? 'Completed reports'
                     : 'Active reports',
-                value: '${all.length}',
+                value: '$allCount',
                 icon: done == true
                     ? Icons.task_alt_outlined
                     : Icons.report_outlined,
@@ -226,8 +254,7 @@ class _ReportsFeedState extends State<ReportsFeed> {
               if (done != true)
                 StatCard(
                   label: 'High / critical priority',
-                  value:
-                      '${all.where((r) => r['priority_level'] == 'High' || r['priority_level'] == 'Critical').length}',
+                  value: '$urgentCount',
                   icon: Icons.trending_up,
                   color: PriorityColors.base('High'),
                   onTap: done == null
@@ -249,13 +276,13 @@ class _ReportsFeedState extends State<ReportsFeed> {
                     : IconButton(
                         tooltip: 'Clear search',
                         icon: const Icon(Icons.close),
-                        onPressed: () => setState(() {
+                        onPressed: () {
                           _searchC.clear();
-                          search = '';
-                        }),
+                          _onSearch('');
+                        },
                       ),
               ),
-              onChanged: (v) => setState(() => search = v.trim()),
+              onChanged: _onSearch,
             ),
             if (done == null) ...[
               Gaps.v12,
@@ -373,10 +400,17 @@ class _ReportsFeedState extends State<ReportsFeed> {
             Row(
               children: [
                 Expanded(
-                  child: Text(
-                    '${reports.length} '
-                    '${reports.length == 1 ? 'report' : 'reports'} found',
-                    style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                  child: ListenableBuilder(
+                    listenable: _list,
+                    builder: (context, _) {
+                      final n = _list.total ?? _list.items.length;
+                      return Text(
+                        '$n ${n == 1 ? 'report' : 'reports'} found',
+                        style: t.bodyMedium?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      );
+                    },
                   ),
                 ),
                 PopupMenuButton<ReportSort>(
@@ -404,28 +438,29 @@ class _ReportsFeedState extends State<ReportsFeed> {
               ],
             ),
             Gaps.v8,
-            if (reports.isEmpty)
-              _NoReports(
-                message: all.isEmpty
-                    ? (done == true
-                          ? 'No completed reports yet.'
-                          : 'When the City validates a disaster report, it '
-                                'shows up here.')
-                    : 'Try adjusting your search or filters to find more '
-                          'reports.',
-                onReset: _anyFilter ? _resetFilters : null,
-              ),
-            for (final r in reports)
-              _ReportListCard(
-                report: r,
-                onDetails: () => _showDetails(context, r, names),
-                // A fulfilled report has what it needs: no Donate button.
-                onDonate:
-                    widget.done == true || (fulfillmentPercent(r) ?? 0) >= 100
-                    ? null
-                    : () => _donate(r, names),
-              ),
           ],
+          empty: _NoReports(
+            message: allCount == 0
+                ? (done == true
+                      ? 'No completed reports yet.'
+                      : 'When the City validates a disaster report, it '
+                            'shows up here.')
+                : 'Try adjusting your search or filters to find more '
+                      'reports.',
+            onReset: _anyFilter ? _resetFilters : null,
+          ),
+          itemBuilder: (context, row) {
+            final r = Map<String, dynamic>.from(row);
+            return _ReportListCard(
+              report: r,
+              onDetails: () => _showDetails(context, r, names),
+              // A fulfilled report has what it needs: no Donate button.
+              onDonate:
+                  widget.done == true || (fulfillmentPercent(r) ?? 0) >= 100
+                  ? null
+                  : () => _donate(r, names),
+            );
+          },
         );
       },
     );

@@ -13,6 +13,7 @@ import 'report_filters.dart' show reportStatuses;
 import 'report_summary_card.dart' show NeedChips;
 import 'donor_screens.dart' show DonateScreen;
 import 'event_screen.dart' show EventLink, openEvent;
+import 'paginated_list.dart';
 import 'widgets.dart';
 
 /// Where each notification opens (Oct 11 notes, Jenises): always the page
@@ -676,15 +677,28 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  // Changing this key makes Loader fetch again (after mark-read / mark-all).
-  int _reload = 0;
+  // NF-003: the inbox loads 10 at a time (it used to stop at the newest 50,
+  // so older notifications could not be reached). The server answers
+  // {unread_count, items}; the list only needs the items.
+  final _list = PagedController(
+    fetch: (offset, limit) async {
+      final r = await api.get(
+        '/notifications/',
+        query: {'limit': '$limit', 'offset': '$offset'},
+      );
+      if (!r.ok || r.json is! Map) return r;
+      return ApiResult(r.status, (r.json as Map)['items'], r.raw, r.headers);
+    },
+  );
   Timer? _timer;
   StreamSubscription? _live;
   DateTime _last = DateTime.fromMillisecondsSinceEpoch(0);
   String? _seen; // unread count + newest id last shown
 
+  /// After mark-read, delete or a new notification: the rows on screen are
+  /// loaded again in place (no flash, the scroll position is kept).
   void _refreshList() {
-    if (mounted) setState(() => _reload++);
+    if (mounted) _list.reloadQuietly();
   }
 
   /// While the inbox is open, new notifications appear by themselves.
@@ -717,6 +731,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   void dispose() {
     _timer?.cancel();
     _live?.cancel();
+    _list.dispose();
     super.dispose();
   }
 
@@ -794,24 +809,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           ),
         ],
       ),
-      body: Loader(
-        key: ValueKey(_reload),
-        load: [() => api.get('/notifications/')],
-        builder: (context, data) {
-          final items = ((data[0] as Map)['items'] as List)
-              .cast<Map<String, dynamic>>();
-          return ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              if (items.isEmpty)
-                const EmptyState(
-                  'No notifications yet.',
-                  icon: Icons.notifications_none,
-                ),
-              for (final n in items) _tile(context, n),
-            ],
-          );
-        },
+      body: PagedListView(
+        controller: _list,
+        empty: const EmptyState(
+          'No notifications yet.',
+          icon: Icons.notifications_none,
+        ),
+        itemBuilder: (context, n) =>
+            _tile(context, Map<String, dynamic>.from(n)),
       ),
     );
   }

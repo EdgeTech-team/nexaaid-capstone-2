@@ -456,3 +456,96 @@ def donation_records_per_report(
     )
     set_total_header(response, page, total)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# NF-003 (CSWS Main Office): the Receive screen's tabs, 20 rows per page.
+# Same rows as before (GET /donations/entries?pending_only=true,
+# GET /donations/records, GET /donations/inventory), with the screen's
+# filters and sorts applied here (services/receive_queue.py).
+# ---------------------------------------------------------------------------
+from core.pagination import paginate_list  # noqa: E402
+from services import receive_queue  # noqa: E402
+
+
+def _receive_sources(db: Session, current_user: User):
+    """Pending groups, received entries and stock rows, as the three old
+    endpoints sent them, plus each report's priority."""
+    entries = _scoped_entries(db, current_user)
+    groups = group_by_report([dict(e) for e in entries], pending_only=True)
+    records = [e for e in entries if e["status"] not in CLOSED]
+    stock = [r.model_dump() for r in view_inventory(report_id=None, db=db, current_user=current_user)]
+    ids = {g["report_id"] for g in groups}
+    priorities = {r.report_id: r.priority_level
+                  for r in db.query(DisasterReport).filter(DisasterReport.report_id.in_(ids))} if ids else {}
+    return groups, records, stock, priorities
+
+
+@router.get("/receive-queue")
+def receive_queue_page(
+    response: Response,
+    tab: str = Query(default="pending"),
+    barangay: Optional[str] = Query(default=None, max_length=100),
+    report_id: Optional[int] = None,
+    handover: Optional[str] = Query(default=None, max_length=30),
+    status: Optional[str] = Query(default=None, max_length=30, description="Received tab only"),
+    when: str = Query(default="any"),
+    tz: int = Query(default=480, ge=-720, le=840, description="Phone's UTC offset in minutes"),
+    q: Optional[str] = Query(default=None, max_length=100),
+    sort: str = Query(default="urgent"),
+    inventory_sort: str = Query(default="item_az"),
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
+):
+    """One tab of the Receive screen, filtered, sorted and a page at a time
+    (X-Total-Count): pending entries (grouped by report in the app), received
+    entries, or stock rows (grouped by report)."""
+    receive_queue.check(tab, sort, when, inventory_sort)
+    groups, records, stock, priorities = _receive_sources(db, current_user)
+    if tab == "pending":
+        rows = receive_queue.pending_rows(groups, priorities, barangay=barangay, report_id=report_id,
+                                          handover=handover, when=when, tz=tz, search=q, sort=sort)
+    elif tab == "received":
+        rows = receive_queue.received_rows(records, barangay=barangay, report_id=report_id, handover=handover,
+                                           status=status, when=when, tz=tz, search=q, sort=sort)
+    else:
+        rows = receive_queue.inventory_rows(stock, barangay=barangay, report_id=report_id, search=q,
+                                            sort=inventory_sort)
+    rows, total = paginate_list(rows, page)
+    set_total_header(response, page, total)
+    return rows
+
+
+@router.get("/receive-queue/summary")
+def receive_queue_summary(
+    barangay: Optional[str] = Query(default=None, max_length=100),
+    report_id: Optional[int] = None,
+    handover: Optional[str] = Query(default=None, max_length=30),
+    status: Optional[str] = Query(default=None, max_length=30),
+    when: str = Query(default="any"),
+    tz: int = Query(default=480, ge=-720, le=840),
+    q: Optional[str] = Query(default=None, max_length=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
+):
+    """The tab labels ("Pending (12)"), the "shown of total" line and the
+    Barangay / Report dropdowns, for the same filters."""
+    receive_queue.check("pending", "urgent", when, "item_az")
+    groups, records, stock, priorities = _receive_sources(db, current_user)
+    pending = receive_queue.pending_rows(groups, priorities, barangay=barangay, report_id=report_id,
+                                         handover=handover, when=when, tz=tz, search=q)
+    received = receive_queue.received_rows(records, barangay=barangay, report_id=report_id,
+                                           handover=handover, status=status, when=when, tz=tz, search=q)
+    stock_shown = receive_queue.inventory_rows(stock, barangay=barangay, report_id=report_id)
+    received_all = [e for e in records if e["status"] != "Pending"]
+    everything = [*groups, *received_all, *stock]
+    barangays, reports = receive_queue.options(everything, barangay)
+    return {
+        "pending": {"shown": len(pending), "total": sum(len(g["entries"]) for g in groups)},
+        "received": {"shown": len(received), "total": len(received_all)},
+        "inventory": {"shown": len(stock_shown), "total": len(stock),
+                      "reports": len({r["report_id"] for r in stock_shown})},
+        "barangays": barangays,
+        "reports": reports,
+    }

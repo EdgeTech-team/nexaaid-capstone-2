@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Query
 from sqlalchemy import exists, func, literal, or_
-from core.pagination import PageParams, paginate_query, set_total_header
+from core.pagination import PageParams, paginate_query, parse_ids, set_total_header
 from models.report import DisasterReport
 from services.logistics_stage import stage_is
 from core.audit import log_action
@@ -184,6 +184,8 @@ def list_my_requests(
     response: Response,
     stage: Optional[str] = None,
     disaster_type_id: Optional[int] = None,
+    delivery_ids: Optional[str] = Query(default=None, max_length=1100,
+                                        description="Comma list: only these deliveries' requests"),
     page: PageParams = Depends(),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("CSWS Main Office", "Administrator", DISASTER_UNIT)),
@@ -205,6 +207,9 @@ def list_my_requests(
         query = query.filter(stage_is(stage.strip()))
     if disaster_type_id is not None:
         query = query.filter(_of_disaster_type(disaster_type_id))
+    if delivery_ids is not None:
+        # NF-003: the requests of the deliveries on one page only.
+        query = query.filter(LogisticsRequest.delivery_id.in_(parse_ids(delivery_ids)))
     rows, total = paginate_query(query, page, LogisticsRequest.request_id.desc())
     set_total_header(response, page, total)
     return request_rows(db, rows)

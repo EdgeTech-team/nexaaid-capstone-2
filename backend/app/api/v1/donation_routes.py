@@ -19,7 +19,7 @@ import httpx
 import qrcode
 from services.items import resolve_item_id
 from services.units import line_amounts, describe as describe_amount
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from core.database import get_db
@@ -60,6 +60,7 @@ from schemas.physical_donation_schema import (
 from core.audit import log_action
 from core.notifications import notify_event, notify_event_many, user_ids_with_role
 from services.donation_entries import build_entries, filter_and_sort, group_by_report
+from core.pagination import PageParams, paginate_list, set_total_header
 from services.donation_additions import (
     REMOVED_PREFIX, change_blocked, is_removed, next_addition_no, next_item_number,
     removed_notes, removed_reason, summary as additions_summary, summary_text,
@@ -1288,6 +1289,94 @@ def my_donations(
             }
             for e in filter_and_sort(entries)
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# NF-003 (Donor, Organization): My giving, 20 donations per page.
+# The entries are the same ones GET /donations/mine sends; the status chips,
+# report / handover filters, search and sort that the app used to apply
+# (donation_entries_view.dart, filterEntries with donor: true) run here.
+# ---------------------------------------------------------------------------
+ENTRY_SORTS = ("newest", "oldest", "most_items", "fewest_items", "due_soonest")
+
+
+def _donor_has_status(e: dict, status: str) -> bool:
+    """'On Hold' = an item the CMO put on hold; for donors 'Received' also
+    covers what the CMO acknowledged (Oct 25)."""
+    if status == "On Hold":
+        return (e.get("on_hold_items") or 0) > 0
+    if status == "Received":
+        return e["status"] in ("Received", "Confirmed")
+    return e["status"] == status
+
+
+def _my_entries(db: Session, user: User) -> dict:
+    return my_donations(db=db, current_user=user)
+
+
+@router.get("/mine/entries")
+def my_entries_page(
+    response: Response,
+    status: Optional[str] = Query(default=None, max_length=30),
+    report_id: Optional[int] = Query(default=None),
+    handover_method: Optional[str] = Query(default=None, max_length=30),
+    q: Optional[str] = Query(default=None, max_length=100),
+    sort: str = Query(default="newest"),
+    view: Optional[str] = Query(default=None, description="waiting / on_the_way (the summary cards' lists)"),
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The signed-in donor's own donation entries, filtered, sorted and a
+    page at a time (X-Total-Count)."""
+    if sort not in ENTRY_SORTS:
+        raise HTTPException(status_code=422, detail=f"sort must be one of: {', '.join(ENTRY_SORTS)}")
+    if view not in (None, "waiting", "on_the_way"):
+        raise HTTPException(status_code=422, detail="view must be waiting or on_the_way")
+    entries = _my_entries(db, current_user)["entries"]
+    text = (q or "").strip().lower()
+    out = [
+        e for e in entries
+        if (not status or _donor_has_status(e, status))
+        and (report_id is None or e["report_id"] == report_id)
+        and (not handover_method or e["handover_method"] == handover_method)
+        and (view != "waiting" or (e.get("pending_items") or 0) > 0)
+        and (view != "on_the_way" or e.get("lifecycle_status") == "In Transit"
+             or e.get("delivery_note") is not None)
+        and (not text or text in (e["batch_reference"] or "").lower()
+             or text in (e.get("donor") or "").lower()
+             or any(text in (i["item_name"] or "").lower() for i in e["items"]))
+    ]
+    rows, total = paginate_list(filter_and_sort(out, sort=sort), page)
+    set_total_header(response, page, total)
+    return rows
+
+
+@router.get("/mine/entries/counts")
+def my_entries_counts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Chip counts, the Report dropdown and My giving's four summary cards,
+    for the donor's own entries."""
+    data = _my_entries(db, current_user)
+    entries = data["entries"]
+    statuses = ("Pending", "Partly Received", "Received", "Confirmed", "Expired", "Cancelled", "On Hold")
+    reports = {}
+    for e in entries:
+        reports.setdefault(e["report_id"], e.get("report_label") or (e.get("report") or {}).get("label"))
+    return {
+        "all": len(entries),
+        "by_status": {s: sum(1 for e in entries if _donor_has_status(e, s)) for s in statuses},
+        "reports": [{"report_id": rid, "report_label": label} for rid, label in reports.items()],
+        "summary": {
+            "entries": len(entries),
+            "waiting": sum(1 for e in entries if (e.get("pending_items") or 0) > 0),
+            "on_the_way": sum(1 for e in entries if e.get("lifecycle_status") == "In Transit"
+                              or e.get("delivery_note") is not None),
+        },
+        "supported_reports": data["supported_reports"],
     }
 
 

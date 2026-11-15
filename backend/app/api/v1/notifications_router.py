@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from core.auth import get_current_user
+from core.pagination import TOTAL_HEADER
 from core.database import get_db
 from models.notification import Notification
 from schemas.notification import NotificationList
@@ -19,6 +20,7 @@ def _unread(db: Session, user_id: int) -> int:
 
 @router.get("/", response_model=NotificationList)
 def my_notifications(
+    response: Response,
     unread_only: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -27,6 +29,9 @@ def my_notifications(
 ):
     base = db.query(Notification).filter(Notification.user_id == current_user.user_id)
     q = base.filter(Notification.is_read.is_(False)) if unread_only else base
+    # NF-003: the inbox loads a page at a time; the total is in the header
+    # (the body is unchanged for installed apps).
+    response.headers[TOTAL_HEADER] = str(q.count())
     items = (
         q.order_by(Notification.sent_at.desc(), Notification.notification_id.desc())
         .offset(offset)

@@ -14,6 +14,8 @@ import 'package:mobile/ui/home_nav.dart';
 import 'package:mobile/ui/report_filters.dart';
 import 'package:mobile/ui/report_screens.dart';
 
+import 'fake_report_server.dart';
+
 const _barangays = ['Tipolo', 'Banilad', 'Looc', 'Opao', 'Casili'];
 
 Map<String, dynamic> _row(
@@ -52,6 +54,9 @@ final _asked = <Uri>[];
 /// Filters by the same query parameters as the backend.
 final _server = MockClient((req) async {
   _asked.add(req.url);
+  // NF-003: report lists are filtered, sorted and paged by the server.
+  final paged = fakeReportResponse(req.url, _rows);
+  if (paged != null && req.url.path != '/reports/mine') return paged;
   final q = req.url.queryParameters;
   bool keep(Map r) =>
       (q['status'] == null || r['status'] == q['status']) &&
