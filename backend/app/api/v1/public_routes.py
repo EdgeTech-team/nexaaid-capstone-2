@@ -4,11 +4,16 @@ Only validated reports are exposed, and never who reported them
 (no user_id, source, contact number or SMS text).
 """
 from services.fulfillment import progress_for_reports
-from fastapi import APIRouter, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from core.auth import get_current_user_optional
 from core.database import get_db
+from core.pagination import PageParams, paginate_list, set_total_header
+from services import report_feed
 from models.report import DisasterReport, DisasterType, Barangay
 from models.delivery import Delivery, DeliveryItem, Receipt
 from models.physical_donation_model import PhysicalDonation
@@ -19,6 +24,67 @@ router = APIRouter(prefix="/public", tags=["public"])
 URGENT_LEVELS = ("Critical", "High")   # assumption: confirm with the team
 RECEIVED_STATUSES = ("Received", "Confirmed")   # past CSWS receipt; Confirmed follows Received
 DELIVERED_STATUS = "Delivered"         # from the 3.10 status flow
+
+
+def _feed_reports(db: Session):
+    """Every validated report, newest first, with what the feed filters on."""
+    return (
+        db.query(DisasterReport)
+        .options(joinedload(DisasterReport.fulfillment), joinedload(DisasterReport.event))
+        .filter(DisasterReport.status == "Validated", DisasterReport.deleted_at.is_(None))
+        .order_by(DisasterReport.report_id.desc())
+        .all()
+    )
+
+
+def _names(db: Session):
+    types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
+    barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
+    return types, barangays
+
+
+@router.get("/reports/feed")
+def report_feed_page(
+    response: Response,
+    done: Optional[bool] = Query(default=None, description="true = fulfilled only, false = still needs help"),
+    q: Optional[str] = Query(default=None, max_length=100),
+    barangay: Optional[str] = Query(default=None, max_length=100),
+    disaster: Optional[str] = Query(default=None, max_length=100),
+    priority: Optional[str] = Query(default=None, max_length=50),
+    quick: str = Query(default="all"),
+    sort: str = Query(default="urgent"),
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user_optional),
+):
+    """NF-003 (Donor, Organization, guest): the validated reports feed,
+    filtered, sorted and 20 at a time on the server. Rows are the same as
+    GET /lookups `validated_reports`; guests never see sitio names in the
+    search (4.2)."""
+    types, barangays = _names(db)
+    rows = report_feed.select(_feed_reports(db), types, barangays, done=done, q=q,
+                              barangay=barangay, disaster=disaster, priority=priority,
+                              quick=quick, sort=sort, with_sitio=user is not None)
+    rows, total = paginate_list(rows, page)
+    set_total_header(response, page, total)
+    progress = progress_for_reports(db, rows)
+
+    def label(r):
+        return f"#{r.report_id} {r.disaster_label(types)} - {barangays.get(r.barangay_id, 'Barangay')}"
+
+    return [report_feed.feed_row(r, types, barangays, progress, label) for r in rows]
+
+
+@router.get("/reports/feed/counts")
+def report_feed_counts(
+    done: Optional[bool] = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """The two summary cards: all reports in the feed and how many are High
+    or Critical priority."""
+    types, barangays = _names(db)
+    rows = report_feed.select(_feed_reports(db), types, barangays, done=done)
+    return {"all": len(rows), "urgent": sum(1 for r in rows if r.priority_level in report_feed.URGENT)}
 
 
 @router.get("/reports")

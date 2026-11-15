@@ -87,7 +87,7 @@ void main() {
 
       final donations = to('/donations/records').last;
       expect(donations['disaster_type_id'], '2');
-      expect(donations['limit'], '20');
+      expect(donations['limit'], '10');
       expect(donations['offset'], '0');
       expect(to('/donations/records/counts').last['disaster_type_id'], '2');
       expect(find.text('No donations for Typhoon yet.'), findsOneWidget);
@@ -98,13 +98,13 @@ void main() {
       await tester.pumpAndSettle();
       final summaries = to('/cmo/report-summaries').last;
       expect(summaries['disaster_type_id'], '2');
-      expect(summaries['limit'], '20');
+      expect(summaries['limit'], '10');
 
       await tester.tap(find.text('Deliveries'));
       await tester.pumpAndSettle();
       final deliveries = to('/deliveries/').last;
       expect(deliveries['disaster_type_id'], '2');
-      expect(deliveries['limit'], '20'); // no longer a fixed 200
+      expect(deliveries['limit'], '10'); // no longer a fixed 200
       expect(deliveries['offset'], '0');
       expect(to('/deliveries/counts').last['disaster_type_id'], '2');
       expect(find.text('No deliveries for Typhoon yet.'), findsOneWidget);
@@ -114,7 +114,7 @@ void main() {
       final logistics = to('/logistics/requests').last;
       expect(logistics['disaster_type_id'], '2');
       expect(logistics['stage'], 'Completed');
-      expect(logistics['limit'], '20');
+      expect(logistics['limit'], '10');
 
       // The choice stays when going back to Donations
       await tester.tap(find.text('Donations'));

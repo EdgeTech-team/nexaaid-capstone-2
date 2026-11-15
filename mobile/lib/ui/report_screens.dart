@@ -8,6 +8,7 @@ import 'donation_info.dart' show NewReportDonationInfo;
 import 'form_draft.dart';
 import 'input_formatters.dart';
 import 'records_screens.dart' show SupportRecordsScreen;
+import 'paged_reports.dart';
 import 'report_filters.dart';
 import 'report_summary_card.dart';
 import 'sitio_picker.dart';
@@ -1502,51 +1503,39 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
   Widget build(BuildContext context) {
     // Roles without 3.3 priority filtering never send a priority.
     final priority = widget.filter ? view.priority : null;
-    return Loader(
-      key: ValueKey(priority),
-      load: [
-        () =>
-            api.get('/reports/validated', query: {'priority_level': ?priority}),
-        api.lookupsResult,
-      ],
-      builder: (context, data) {
-        final all = (data[0] as List).cast<Map<String, dynamic>>();
-        final names = Names(Map<String, dynamic>.from(data[1] as Map));
-        final rows = sortAndFilterReports(
-          all,
-          fulfillment: view.fulfillment,
-          sort: view.sort,
-        );
-        return ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            if (widget.header)
-              PageHeader(
-                'Validated Reports',
-                subtitle:
-                    'Reports approved by the Administrator • ${roleLine()}',
-              ),
-            // One Filter button and a compact sort (UAT Nov 2026).
-            // Fulfillment status and sort for every role (Ivan's note:
-            // fulfilled reports are found with the Fulfilled filter, there is
-            // no separate Done section); priorities only for 3.3 roles.
-            ReportFilterBar(
-              value: view,
-              onChanged: _show,
-              priorities: widget.filter,
-              rows: all,
-            ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty)
-              ReportListEmpty(
-                'No validated reports to show.',
-                filtered: activeFilters(view) > 0,
-                onClear: () => _show(view.withFilters()),
-              ),
-            for (final r in rows) ReportCard(r, names),
-          ],
-        );
+    // NF-003: filtered, sorted and paged by the server (10 at a time).
+    return PagedReportList(
+      path: '/reports/validated',
+      query: {
+        'priority_level': ?priority,
+        'fulfillment': ?view.fulfillment,
+        'sort': reportSortParam(view.sort),
       },
+      countsPath: '/reports/validated/counts',
+      countsQuery: {'priority_level': ?priority},
+      header: (counts) => [
+        if (widget.header)
+          PageHeader(
+            'Validated Reports',
+            subtitle: 'Reports approved by the Administrator • ${roleLine()}',
+          ),
+        // One Filter button and a compact sort (UAT Nov 2026).
+        // Fulfillment status and sort for every role (Ivan's note:
+        // fulfilled reports are found with the Fulfilled filter, there is
+        // no separate Done section); priorities only for 3.3 roles.
+        ReportFilterBar(
+          value: view,
+          onChanged: _show,
+          priorities: widget.filter,
+          counts: counts,
+        ),
+      ],
+      empty: ReportListEmpty(
+        'No validated reports to show.',
+        filtered: activeFilters(view) > 0,
+        onClear: () => _show(view.withFilters()),
+      ),
+      itemBuilder: (context, r, names) => ReportCard(r, names),
     );
   }
 }
@@ -1663,6 +1652,28 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
   // reports here until the Administrator validates them.
   bool get _reporter => api.role == Roles.cswsUnit;
 
+  /// The Disaster Unit's own reports (ids), for Edit / Withdraw and the
+  /// "Only my reports" count. Only this user's reports, so a short list.
+  Set<int> _mine = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMine();
+  }
+
+  Future<void> _loadMine() async {
+    if (!_reporter) return;
+    final r = await api.get('/reports/mine');
+    if (!mounted || !r.ok || r.json is! List) return;
+    setState(
+      () => _mine = {
+        for (final x in (r.json as List).cast<Map>())
+          (x['report_id'] as num).toInt(),
+      },
+    );
+  }
+
   ReportView _initialView() {
     final saved = ReportViewMemory.read(_list, const ReportView());
     if (widget.focusStatus == null && widget.focusId == null) return saved;
@@ -1687,7 +1698,10 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
         ),
       ),
     );
-    if (saved == true && mounted) setState(() => _loads++);
+    if (saved == true && mounted) {
+      setState(() => _loads++);
+      _loadMine();
+    }
   }
 
   Future<void> _withdraw(Map<String, dynamic> r) async {
@@ -1717,117 +1731,93 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
       ),
       success: 'Report #${r['report_id']} withdrawn',
     );
-    if (res.ok && mounted) setState(() => _loads++);
+    if (res.ok && mounted) {
+      setState(() => _loads++);
+      _loadMine();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Loader(
-      key: ValueKey('${view.status}/${view.priority}/$_loads'),
-      load: [
-        // Status and priority are filtered by the server. Up to 200 reports:
-        // the default page is 50, so older reports never showed.
-        () => api.get(
-          '/reports/monitoring',
-          query: {
-            if (view.status != null) 'status': view.status!,
-            if (view.priority != null) 'priority_level': view.priority!,
-            'limit': '200',
-          },
+    final mine = _mine;
+    bool editable(Map r) =>
+        mine.contains(r['report_id']) &&
+        (r['status'] == 'Pending' || r['status'] == 'Rejected');
+    final filters = {
+      'status': ?view.status,
+      'priority_level': ?view.priority,
+      if (view.onlyMine) 'mine': 'true',
+    };
+    // NF-003: status, priority, fulfillment, "only mine" and the sort are
+    // applied by the server, 20 reports at a time. With "Only my reports",
+    // the ones that can still be edited come first (server side too).
+    return PagedReportList(
+      path: '/reports/monitoring',
+      query: {
+        ...filters,
+        'fulfillment': ?view.fulfillment,
+        'sort': reportSortParam(view.sort),
+      },
+      countsPath: '/reports/monitoring/counts',
+      countsQuery: filters,
+      reloadKey: _loads,
+      // The report a notification pointed at comes first, outlined.
+      focusId: widget.focusId,
+      header: (counts) => [
+        PageHeader(
+          'Report Status',
+          subtitle:
+              'Fulfillment progress of every report, active and done • '
+              '${roleLine()}',
         ),
-        api.lookupsResult,
-        if (_reporter) () => api.get('/reports/mine'),
-      ],
-      builder: (context, data) {
-        final names = Names(Map<String, dynamic>.from(data[1] as Map));
-        final mine = _reporter
-            ? {
-                for (final r in (data[2] as List).cast<Map>())
-                  r['report_id'] as int,
-              }
-            : <int>{};
-        final all = (data[0] as List).cast<Map<String, dynamic>>();
-        bool editable(Map r) =>
-            mine.contains(r['report_id']) &&
-            (r['status'] == 'Pending' || r['status'] == 'Rejected');
-        final sorted = sortAndFilterReports(
-          view.onlyMine
-              ? all.where((r) => mine.contains(r['report_id'])).toList()
-              : all,
-          fulfillment: view.fulfillment,
-          sort: view.sort,
-        );
-        // My own reports that can still be edited come first.
-        final rows = view.onlyMine
-            ? [...sorted.where(editable), ...sorted.where((r) => !editable(r))]
-            : sorted;
-        // The report a notification pointed at comes first, outlined.
-        final hi = rows.indexWhere((r) => r['report_id'] == widget.focusId);
-        if (hi > 0) rows.insert(0, rows.removeAt(hi));
-        return ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            PageHeader(
-              'Report Status',
-              subtitle:
-                  'Fulfillment progress of every report, active and done • '
-                  '${roleLine()}',
-            ),
-            // UAT Nov 2026 (M2.5): one Filter button with Validation Status
-            // (Rejected reports no longer sink to the bottom), Priorities and
-            // Fulfillment Status, and a compact sort.
-            ReportFilterBar(
-              value: view,
-              onChanged: _show,
-              statuses: reportStatuses,
-              rows: all,
-              trailing: [
-                if (_reporter)
-                  FilterChip(
-                    avatar: const Icon(Icons.person_outline, size: 18),
-                    label: Text('Only my reports (${mine.length})'),
-                    selected: view.onlyMine,
-                    onSelected: (v) => _show(view.withOnlyMine(v)),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty)
-              ReportListEmpty(
-                'No reports to show.',
-                filtered: activeFilters(view) > 0 || view.onlyMine,
-                onClear: () => _show(ReportView(sort: view.sort)),
-              ),
-            for (final r in rows)
-              ReportCard(
-                r,
-                names,
-                highlighted: r['report_id'] == widget.focusId,
-                actions: editable(r)
-                    ? [
-                        TextButton.icon(
-                          onPressed: () => _withdraw(r),
-                          style: TextButton.styleFrom(
-                            foregroundColor: AppColors.danger,
-                          ),
-                          icon: const Icon(Icons.block, size: 18),
-                          label: const Text('Withdraw'),
-                        ),
-                        FilledButton.tonalIcon(
-                          onPressed: () => _edit(r),
-                          icon: const Icon(Icons.edit_outlined, size: 18),
-                          label: Text(
-                            r['status'] == 'Rejected'
-                                ? 'Fix and resend'
-                                : 'Edit',
-                          ),
-                        ),
-                      ]
-                    : const [],
+        // UAT Nov 2026 (M2.5): one Filter button with Validation Status
+        // (Rejected reports no longer sink to the bottom), Priorities and
+        // Fulfillment Status, and a compact sort.
+        ReportFilterBar(
+          value: view,
+          onChanged: _show,
+          statuses: reportStatuses,
+          counts: counts,
+          trailing: [
+            if (_reporter)
+              FilterChip(
+                avatar: const Icon(Icons.person_outline, size: 18),
+                label: Text('Only my reports (${mine.length})'),
+                selected: view.onlyMine,
+                onSelected: (v) => _show(view.withOnlyMine(v)),
               ),
           ],
-        );
-      },
+        ),
+      ],
+      empty: ReportListEmpty(
+        'No reports to show.',
+        filtered: activeFilters(view) > 0 || view.onlyMine,
+        onClear: () => _show(ReportView(sort: view.sort)),
+      ),
+      itemBuilder: (context, r, names) => ReportCard(
+        r,
+        names,
+        highlighted: r['report_id'] == widget.focusId,
+        actions: editable(r)
+            ? [
+                TextButton.icon(
+                  onPressed: () => _withdraw(r),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.danger,
+                  ),
+                  icon: const Icon(Icons.block, size: 18),
+                  label: const Text('Withdraw'),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () => _edit(r),
+                  icon: const Icon(Icons.edit_outlined, size: 18),
+                  label: Text(
+                    r['status'] == 'Rejected' ? 'Fix and resend' : 'Edit',
+                  ),
+                ),
+              ]
+            : const [],
+      ),
     );
   }
 }
@@ -1927,95 +1917,76 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
   Widget build(BuildContext context) {
     final status = view.status ?? 'Pending';
     final validated = status == 'Validated';
-    return Loader(
-      key: ValueKey('$status/${view.priority}/$_loads'),
-      load: [
-        // Validated reports come with their fulfillment progress, for the
-        // fulfillment filter and sort (Ivan's note).
-        () => validated
-            ? api.get(
-                '/reports/validated',
-                query: {
-                  if (view.priority != null) 'priority_level': view.priority!,
-                },
-              )
-            : api.get('/reports/', query: {'status': status}),
-        api.lookupsResult,
+    // NF-003: a page at a time. Validated reports come with their
+    // fulfillment progress, for the fulfillment filter and sort (Ivan's
+    // note); Pending and Rejected stay newest first.
+    return PagedReportList(
+      path: validated ? '/reports/validated' : '/reports/',
+      query: validated
+          ? {
+              'priority_level': ?view.priority,
+              'fulfillment': ?view.fulfillment,
+              'sort': reportSortParam(view.sort),
+            }
+          : {'status': status, 'sort': 'newest'},
+      countsPath: validated ? '/reports/validated/counts' : null,
+      countsQuery: {'priority_level': ?view.priority},
+      reloadKey: _loads,
+      // The report a notification pointed at comes first, outlined.
+      focusId: _highlight,
+      header: (counts) => [
+        PageHeader('Report Validation', subtitle: roleLine()),
+        // UAT Nov 2026 (M2.3, M3.3): one Filter button instead of the
+        // Pending / Validated / Rejected switch and two chip rows.
+        // Priorities, fulfillment and sort are for validated reports, as
+        // before.
+        ReportFilterBar(
+          value: view,
+          defaults: _defaults,
+          onChanged: _show,
+          statuses: _statuses,
+          anyStatus: false,
+          counts: counts,
+          detailsOnlyFor: 'Validated',
+          showSort: validated,
+        ),
       ],
-      builder: (context, data) {
-        final all = (data[0] as List).cast<Map<String, dynamic>>();
-        final rows = validated
-            ? sortAndFilterReports(
-                all,
-                fulfillment: view.fulfillment,
-                sort: view.sort,
-              )
-            : all;
-        // The report a notification pointed at comes first, outlined.
-        final hi = rows.indexWhere((r) => r['report_id'] == _highlight);
-        if (hi > 0) rows.insert(0, rows.removeAt(hi));
-        final names = Names(Map<String, dynamic>.from(data[1] as Map));
-        return ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            PageHeader('Report Validation', subtitle: roleLine()),
-            // UAT Nov 2026 (M2.3, M3.3): one Filter button instead of the
-            // Pending / Validated / Rejected switch and two chip rows.
-            // Priorities, fulfillment and sort are for validated reports, as
-            // before.
-            ReportFilterBar(
-              value: view,
-              defaults: _defaults,
-              onChanged: _show,
-              statuses: _statuses,
-              anyStatus: false,
-              rows: all,
-              detailsOnlyFor: 'Validated',
-              showSort: validated,
-            ),
-            const SizedBox(height: 12),
-            if (rows.isEmpty)
-              ReportListEmpty(
-                'No ${status.toLowerCase()} reports.',
-                filtered: view.priority != null || view.fulfillment != null,
-                onClear: () => _show(view.withFilters(status: status)),
-              ),
-            for (final r in rows)
-              ReportCard(
-                r,
-                names,
-                highlighted: r['report_id'] == _highlight,
-                actions: status == 'Pending'
-                    ? [
-                        OutlinedButton(
-                          onPressed: () => _reject(r),
-                          child: const Text('Reject'),
-                        ),
-                        FilledButton.icon(
-                          onPressed: () => act(
-                            context,
-                            () =>
-                                api.post('/reports/${r['report_id']}/validate'),
-                            success:
-                                'Report #${r['report_id']} validated and published to donors',
-                          ),
-                          icon: const Icon(Icons.check),
-                          label: const Text('Validate'),
-                        ),
-                      ]
-                    : status == 'Rejected'
-                    ? [
-                        OutlinedButton.icon(
-                          onPressed: () => _delete(r),
-                          icon: const Icon(Icons.delete_outline),
-                          label: const Text('Delete'),
-                        ),
-                      ]
-                    : const [],
-              ),
-          ],
-        );
-      },
+      empty: ReportListEmpty(
+        'No ${status.toLowerCase()} reports.',
+        filtered: view.priority != null || view.fulfillment != null,
+        onClear: () => _show(view.withFilters(status: status)),
+      ),
+      itemBuilder: (context, r, names) => ReportCard(
+        r,
+        names,
+        highlighted: r['report_id'] == _highlight,
+        actions: status == 'Pending'
+            ? [
+                OutlinedButton(
+                  onPressed: () => _reject(r),
+                  child: const Text('Reject'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => act(
+                    context,
+                    () => api.post('/reports/${r['report_id']}/validate'),
+                    success:
+                        'Report #${r['report_id']} validated and published to donors',
+                  ),
+                  icon: const Icon(Icons.check),
+                  label: const Text('Validate'),
+                ),
+              ]
+            : status == 'Rejected'
+            ? [
+                OutlinedButton.icon(
+                  onPressed: () => _delete(r),
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Delete'),
+                ),
+              ]
+            : const [],
+      ),
     );
   }
 }

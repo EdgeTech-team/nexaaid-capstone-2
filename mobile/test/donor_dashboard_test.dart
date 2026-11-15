@@ -11,12 +11,15 @@ import 'package:http/testing.dart';
 import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/disaster_art.dart';
-import 'package:mobile/ui/donation_entries_view.dart';
 import 'package:mobile/ui/donor_feed.dart';
 import 'package:mobile/ui/donor_dashboard.dart';
 import 'package:mobile/ui/item_art.dart';
 import 'package:mobile/ui/my_giving.dart';
+import 'package:mobile/ui/paged_donation_entries.dart';
 import 'package:mobile/ui/donor_screens.dart';
+
+import 'fake_my_giving.dart';
+import 'fake_report_server.dart';
 
 Map<String, dynamic> _report(
   int id,
@@ -154,7 +157,23 @@ final _newMine = <String, dynamic>{
   'deliveries': <Map>[],
 };
 
+final _validated = [
+  _report(1, 'Tipolo', 'Medium', 20),
+  _report(2, 'Banilad', 'Critical', 40),
+  _report(3, 'Looc', 'Critical', 100), // done: not "urgent"
+];
+
 final _server = MockClient((req) async {
+  // NF-003: the Reports tab gets 20 at a time from the feed endpoint.
+  final feed = fakeFeedResponse(req.url, _validated);
+  if (feed != null) return feed;
+  // NF-003: My giving's donations, 20 per page, and its cards' numbers.
+  final giving = fakeMyGivingResponse(
+    req.url,
+    (_mine['entries'] as List).cast<Map>(),
+    supported: ((_mine['supported_reports'] as List?) ?? const []).cast<Map>(),
+  );
+  if (giving != null) return giving;
   final body = switch (req.url.path) {
     '/donations/mine' => _mine,
     '/public/recent-deliveries' => [
@@ -179,11 +198,7 @@ final _server = MockClient((req) async {
       'disaster_types': [
         {'id': 1, 'name': 'Flood'},
       ],
-      'validated_reports': [
-        _report(1, 'Tipolo', 'Medium', 20),
-        _report(2, 'Banilad', 'Critical', 40),
-        _report(3, 'Looc', 'Critical', 100), // done: not "urgent"
-      ],
+      'validated_reports': _validated,
     },
     _ => {'detail': 'not mocked'},
   };
@@ -367,7 +382,10 @@ void main() {
         // Donation status: every entry with the status chips, search and
         // sort, each with its full journey; QR only when waiting.
         expect(find.text('Donation status'), findsOneWidget);
-        expect(find.byType(DonationEntriesView), findsOneWidget);
+        expect(
+          find.byType(PagedDonationEntries),
+          findsOneWidget,
+        ); // NF-003: 20 per page
         expect(find.byKey(const ValueKey('entries-sort')), findsOneWidget);
         expect(find.textContaining('BATCH-ANA-1'), findsWidgets);
         expect(find.textContaining('BATCH-ANA-2'), findsWidgets);
@@ -425,7 +443,10 @@ void main() {
     await http.runWithClient(() async {
       await _pump(tester, const MyDonationsScreen());
       expect(find.text('My donations'), findsOneWidget);
-      expect(find.byType(DonationEntriesView), findsOneWidget);
+      expect(
+        find.byType(PagedDonationEntries),
+        findsOneWidget,
+      ); // NF-003: 20 per page
       expect(find.textContaining('BATCH-ANA-1'), findsWidgets);
     }, () => _server);
   });
@@ -465,7 +486,10 @@ void main() {
     await http.runWithClient(() async {
       await _pump(tester, const DonorReportsTab());
       expect(find.text('All Reports'), findsOneWidget);
-      expect(find.text('Find communities that need assistance.'), findsOneWidget);
+      expect(
+        find.text('Find communities that need assistance.'),
+        findsOneWidget,
+      );
       expect(find.text('Done'), findsNothing); // no separate Done section
       // Active and fulfilled reports in one list. Every card has Details;
       // only the open ones (Banilad, Tipolo) have Donate.
@@ -502,6 +526,8 @@ void main() {
 
       // Nothing matches: empty state, then Reset filters.
       await tester.enterText(find.byType(TextField).first, 'zzz');
+      // NF-003: the search is sent once typing stops.
+      await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpAndSettle();
       expect(find.text('No reports found'), findsOneWidget);
       await tester.tap(find.text('Reset filters'));

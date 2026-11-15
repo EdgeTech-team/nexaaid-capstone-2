@@ -12,6 +12,8 @@ import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/report_filters.dart';
 import 'package:mobile/ui/report_screens.dart';
 
+import 'fake_report_server.dart';
+
 /// A row as GET /reports/monitoring and /reports/validated send it:
 /// fulfillment_percentage is a Decimal, so it arrives as text.
 Map<String, dynamic> _row(
@@ -38,6 +40,9 @@ final _rows = [
 ];
 
 final _server = MockClient((req) async {
+  // NF-003: report lists are filtered, sorted and paged by the server.
+  final paged = fakeReportResponse(req.url, _rows);
+  if (paged != null) return paged;
   final body = switch (req.url.path) {
     '/reports/monitoring' || '/reports/validated' => _rows,
     '/lookups' => {

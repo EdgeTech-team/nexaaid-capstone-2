@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'kept_views.dart';
@@ -8,6 +10,8 @@ import 'account_form.dart' show AccountsScreen;
 import 'csws_screens.dart' show ActivityList;
 import 'donation_info.dart' show BarangayDonationInfoScreen;
 import 'private_file_view.dart';
+import 'paginated_list.dart';
+import 'paged_donation_entries.dart' show searchDebounce;
 import 'widgets.dart';
 import 'entry_report_views.dart';
 import 'home_nav.dart';
@@ -218,7 +222,34 @@ class _UsersScreenState extends State<UsersScreen> {
   String role = '';
   String q = '';
   late String status = widget.status;
-  int reloads = 0; // bumped after an account is deleted, so the list reloads
+
+  // NF-003: 20 accounts per page; role, status and search are filtered by
+  // the server (GET /admin/users with limit / offset).
+  late final PagedController _list = PagedController(fetch: _fetch());
+
+  PageFetch _fetch() {
+    final filters = {
+      if (status != 'all') 'active': '${status == 'active'}',
+      if (role.isNotEmpty) 'role': role,
+      if (q.isNotEmpty) 'q': q,
+    };
+    return (offset, limit) => api.get(
+      '/admin/users',
+      query: {...filters, 'limit': '$limit', 'offset': '$offset'},
+    );
+  }
+
+  /// A filter changed: back to page 1 with the new filters.
+  void _filter(VoidCallback change) {
+    setState(change);
+    _list.refresh(fetch: _fetch());
+  }
+
+  @override
+  void dispose() {
+    _list.dispose();
+    super.dispose();
+  }
 
   /// For a deactivated account, a labeled line with the reason the
   /// Administrator gave (or a note when none was recorded).
@@ -230,132 +261,115 @@ class _UsersScreenState extends State<UsersScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Loader(
-      load: [
-        () => api.get(
-          '/admin/users',
-          query: {
-            if (status != 'all') 'active': '${status == 'active'}',
-            if (role.isNotEmpty) 'role': role,
-            if (q.isNotEmpty) 'q': q,
-          },
+    return PagedListView(
+      controller: _list,
+      header: [
+        const PageHeader(
+          'All accounts',
+          subtitle:
+              'Active and deactivated accounts. Tap one to see its '
+              'details, edit it, deactivate it, restore it or delete it.',
         ),
-      ],
-      key: ValueKey('$status|$role|$q|$reloads'),
-      builder: (context, data) {
-        final users = (data[0] as List).cast<Map>();
-        return ListView(
-          padding: const EdgeInsets.all(16),
+        TextField(
+          decoration: const InputDecoration(
+            prefixIcon: Icon(Icons.search),
+            labelText: 'Search name or email',
+          ),
+          onSubmitted: (v) => _filter(() => q = v.trim()),
+        ),
+        const SizedBox(height: 10),
+        Row(
           children: [
-            const PageHeader(
-              'All accounts',
-              subtitle:
-                  'Active and deactivated accounts. Tap one to see its '
-                  'details, edit it, deactivate it, restore it or delete it.',
-            ),
-            TextField(
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                labelText: 'Search name or email',
+            Expanded(
+              flex: 3,
+              child: DropdownButtonFormField<String>(
+                initialValue: role,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Role'),
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('All roles')),
+                  for (final r in const [
+                    Roles.admin,
+                    Roles.donor,
+                    Roles.org,
+                    Roles.cmo,
+                    Roles.cswsMain,
+                    Roles.cswsUnit,
+                    Roles.barangay,
+                    Roles.drrmo,
+                  ])
+                    DropdownMenuItem(value: r, child: Text(r)),
+                ],
+                onChanged: (v) => _filter(() => role = v ?? ''),
               ),
-              onSubmitted: (v) => setState(() => q = v.trim()),
             ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: role,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Role'),
-                    items: [
-                      const DropdownMenuItem(
-                        value: '',
-                        child: Text('All roles'),
-                      ),
-                      for (final r in const [
-                        Roles.admin,
-                        Roles.donor,
-                        Roles.org,
-                        Roles.cmo,
-                        Roles.cswsMain,
-                        Roles.cswsUnit,
-                        Roles.barangay,
-                        Roles.drrmo,
-                      ])
-                        DropdownMenuItem(value: r, child: Text(r)),
-                    ],
-                    onChanged: (v) => setState(() => role = v ?? ''),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: 2,
+              child: DropdownButtonFormField<String>(
+                key: const ValueKey('accounts-status'),
+                initialValue: status,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Status'),
+                items: const [
+                  DropdownMenuItem(value: 'all', child: Text('All')),
+                  DropdownMenuItem(value: 'active', child: Text('Active')),
+                  DropdownMenuItem(
+                    value: 'deactivated',
+                    child: Text('Deactivated'),
                   ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  flex: 2,
-                  child: DropdownButtonFormField<String>(
-                    key: const ValueKey('accounts-status'),
-                    initialValue: status,
-                    isExpanded: true,
-                    decoration: const InputDecoration(labelText: 'Status'),
-                    items: const [
-                      DropdownMenuItem(value: 'all', child: Text('All')),
-                      DropdownMenuItem(value: 'active', child: Text('Active')),
-                      DropdownMenuItem(
-                        value: 'deactivated',
-                        child: Text('Deactivated'),
-                      ),
-                    ],
-                    onChanged: (v) => setState(() => status = v ?? 'all'),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '${users.length} ${status == 'all' ? '' : '$status '}accounts',
-              style: const TextStyle(color: Brand.muted),
-            ),
-            const SizedBox(height: 6),
-            for (final u in users)
-              Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: u['is_active'] == true
-                        ? Brand.pinkSoft
-                        : Colors.black12,
-                    child: Icon(
-                      u['is_active'] == true
-                          ? Icons.person
-                          : Icons.person_off_outlined,
-                      color: u['is_active'] == true ? Brand.pink : Colors.grey,
-                    ),
-                  ),
-                  title: Text('${u['name']}'),
-                  subtitle: Text(
-                    '${u['email']}\n${u['role']}'
-                    '${u['assigned_barangay'] != null ? ' · ${u['assigned_barangay']}' : ''}'
-                    '${u['organization'] != null ? ' · ${u['organization']} (${u['organization_status']})' : ''}'
-                    '${_reasonLine(u)}',
-                  ),
-                  isThreeLine: true,
-                  onTap: () async {
-                    final deleted = await Navigator.of(context).push<bool>(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            AccountDetailScreen(userId: u['user_id'] as int),
-                      ),
-                    );
-                    if (deleted == true && mounted) setState(() => reloads++);
-                  },
-                  // UC-A1: tap the row for details, Edit details and
-                  // Deactivate (account_detail_screen.dart).
-                  trailing: const Icon(Icons.chevron_right),
-                ),
+                ],
+                onChanged: (v) => _filter(() => status = v ?? 'all'),
               ),
+            ),
           ],
-        );
-      },
+        ),
+        const SizedBox(height: 12),
+        ListenableBuilder(
+          listenable: _list,
+          builder: (context, _) => Text(
+            '${_list.total ?? _list.items.length} '
+            '${status == 'all' ? '' : '$status '}accounts',
+            style: const TextStyle(color: Brand.muted),
+          ),
+        ),
+        const SizedBox(height: 6),
+      ],
+      empty: const EmptyState('No accounts to show.'),
+      itemBuilder: (context, u) => Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: ListTile(
+          leading: CircleAvatar(
+            backgroundColor: u['is_active'] == true
+                ? Brand.pinkSoft
+                : Colors.black12,
+            child: Icon(
+              u['is_active'] == true ? Icons.person : Icons.person_off_outlined,
+              color: u['is_active'] == true ? Brand.pink : Colors.grey,
+            ),
+          ),
+          title: Text('${u['name']}'),
+          subtitle: Text(
+            '${u['email']}\n${u['role']}'
+            '${u['assigned_barangay'] != null ? ' · ${u['assigned_barangay']}' : ''}'
+            '${u['organization'] != null ? ' · ${u['organization']} (${u['organization_status']})' : ''}'
+            '${_reasonLine(u)}',
+          ),
+          isThreeLine: true,
+          onTap: () async {
+            final deleted = await Navigator.of(context).push<bool>(
+              MaterialPageRoute(
+                builder: (_) =>
+                    AccountDetailScreen(userId: u['user_id'] as int),
+              ),
+            );
+            if (deleted == true && mounted) _list.reloadQuietly();
+          },
+          // UC-A1: tap the row for details, Edit details and
+          // Deactivate (account_detail_screen.dart).
+          trailing: const Icon(Icons.chevron_right),
+        ),
+      ),
     );
   }
 }
@@ -378,16 +392,94 @@ class RegistrationsScreen extends StatefulWidget {
 
 class _RegistrationsScreenState extends State<RegistrationsScreen> {
   String review = 'all'; // all | done | not
-  bool _focused = false;
-  final _focusKey = GlobalKey();
   String kind = 'all'; // all | donors | orgs
   String sort = 'newest'; // newest | oldest | name
-  String search = '';
+  String search = ''; // what the list was loaded for
+  Timer? _typing;
   final Set<String> _busy = {};
-  int _loads = 0;
+
+  /// The registration a notification is about, shown first and outlined.
+  Map<String, dynamic>? _focus;
+
+  // NF-003: organizations and donors in one list, filtered, sorted and 20
+  // per page on the server (GET /admin/registrations). It used to be built
+  // here from two full lists.
+  late final PagedController _list = PagedController(fetch: _fetch());
+
+  PageFetch _fetch() {
+    final filters = {
+      'review': review,
+      'kind': kind,
+      'sort': sort,
+      if (search.trim().isNotEmpty) 'q': search.trim(),
+    };
+    return (offset, limit) => api.get(
+      '/admin/registrations',
+      query: {...filters, 'limit': '$limit', 'offset': '$offset'},
+    );
+  }
+
+  void _filter(VoidCallback change) {
+    setState(change);
+    _list.refresh(fetch: _fetch());
+  }
+
+  /// Search is sent once typing stops.
+  void _search(String v) {
+    _typing?.cancel();
+    _typing = Timer(searchDebounce, () {
+      if (mounted && v.trim() != search.trim()) _filter(() => search = v);
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.focusId != null) _loadFocus(first: true);
+  }
+
+  @override
+  void dispose() {
+    _typing?.cancel();
+    _list.dispose();
+    super.dispose();
+  }
 
   DateTime? _when(dynamic v) =>
       v == null ? null : DateTime.tryParse('$v')?.toLocal();
+
+  /// A server row as the card shows it.
+  Map<String, dynamic> _item(Map r) => {
+    'type': r['type'],
+    'id': r['id'],
+    'name': '${r['name']}',
+    'email': '${r['email']}',
+    'when': _when(r['created_at']),
+    'reviewed': r['reviewed'] == true,
+    if (r['org'] != null) 'org': r['org'],
+  };
+
+  /// Open on the notified registration: its type and review section, with
+  /// it first (problema_napud 1.1).
+  Future<void> _loadFocus({bool first = false}) async {
+    final r = await api.get(
+      '/admin/registrations',
+      query: {'focus_type': ?widget.focusType, 'focus_id': '${widget.focusId}'},
+    );
+    if (!mounted || !r.ok || r.json is! List || (r.json as List).isEmpty) {
+      return;
+    }
+    final item = _item((r.json as List).first as Map);
+    if (first) {
+      _filter(() {
+        _focus = item;
+        review = item['reviewed'] == true ? 'done' : 'not';
+        kind = item['type'] == 'org' ? 'orgs' : 'donors';
+      });
+    } else {
+      setState(() => _focus = item);
+    }
+  }
 
   Future<void> _setReviewed(Map<String, dynamic> i, bool value) async {
     final key = '${i['type']}-${i['id']}';
@@ -400,10 +492,9 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
       body: {'reviewed': value},
     );
     if (!mounted) return;
-    setState(() {
-      _busy.remove(key);
-      if (r.ok) _loads++;
-    });
+    setState(() => _busy.remove(key));
+    // The list and the counts reload by themselves after a change.
+    if (r.ok && _focus != null && i['id'] == _focus!['id']) _loadFocus();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -417,95 +508,26 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
     );
   }
 
+  Widget _card(Map<String, dynamic> i, {bool highlighted = false}) => Padding(
+    padding: const EdgeInsets.only(bottom: Space.sm),
+    child: _RegistrationCard(
+      highlighted: highlighted,
+      item: i,
+      busy: _busy.contains('${i['type']}-${i['id']}'),
+      onReview: (v) => _setReviewed(i, v),
+    ),
+  );
+
   @override
   Widget build(BuildContext context) {
+    final focus = _focus;
     return Loader(
-      key: ValueKey(_loads),
-      load: [
-        () => api.get('/admin/organizations'),
-        () => api.get('/admin/users', query: {'role': Roles.donor}),
-      ],
+      load: [() => api.get('/admin/registrations/counts')],
       builder: (context, data) {
-        final all = <Map<String, dynamic>>[
-          for (final o in (data[0] as List).cast<Map>())
-            {
-              'type': 'org',
-              'id': o['organization_id'],
-              'name': '${o['org_name']}',
-              'email': '${o['contact_email'] ?? 'No email'}',
-              'when': _when(o['created_at']),
-              'reviewed': o['reviewed_at'] != null,
-              'org': o,
-            },
-          for (final u in (data[1] as List).cast<Map>())
-            {
-              'type': 'donor',
-              'id': u['user_id'],
-              'name': '${u['name']}',
-              'email': '${u['email']}',
-              'when': _when(u['created_at']),
-              'reviewed': u['reviewed_at'] != null,
-            },
-        ];
-        // Open on the notified account: its type and review section.
-        final focus = widget.focusId == null
-            ? null
-            : all
-                  .where(
-                    (i) =>
-                        i['type'] == widget.focusType &&
-                        i['id'] == widget.focusId,
-                  )
-                  .firstOrNull;
-        if (focus != null && !_focused) {
-          _focused = true;
-          review = focus['reviewed'] == true ? 'done' : 'not';
-          kind = focus['type'] == 'org' ? 'orgs' : 'donors';
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            final c = _focusKey.currentContext;
-            if (c != null) Scrollable.ensureVisible(c, alignment: 0.1);
-          });
-        }
-        final notReviewed = all.where((i) => i['reviewed'] != true).length;
-        final q = search.trim().toLowerCase();
-        final items = all
-            .where(
-              (i) =>
-                  review == 'all' ||
-                  (review == 'done') == (i['reviewed'] == true),
-            )
-            .where(
-              (i) => kind == 'all' || (kind == 'orgs') == (i['type'] == 'org'),
-            )
-            .where(
-              (i) =>
-                  q.isEmpty ||
-                  '${i['name']} ${i['email']}'.toLowerCase().contains(q),
-            )
-            .toList();
-
-        int byDate(Map a, Map b) {
-          final x = a['when'] as DateTime?;
-          final y = b['when'] as DateTime?;
-          if (x == null && y == null) return 0;
-          if (x == null) return 1;
-          if (y == null) return -1;
-          return x.compareTo(y);
-        }
-
-        items.sort(
-          (a, b) => switch (sort) {
-            'oldest' => byDate(a, b),
-            'name' => (a['name'] as String).toLowerCase().compareTo(
-              (b['name'] as String).toLowerCase(),
-            ),
-            _ => byDate(b, a),
-          },
-        );
-
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
+        final counts = data[0] is Map ? data[0] as Map : const {};
+        return PagedListView(
+          controller: _list,
+          header: [
             const PageHeader(
               'Registrations',
               subtitle:
@@ -515,18 +537,21 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
             SegmentedButton<String>(
               showSelectedIcon: false,
               segments: [
-                ButtonSegment(value: 'all', label: Text('All (${all.length})')),
+                ButtonSegment(
+                  value: 'all',
+                  label: Text('All (${counts['all'] ?? 0})'),
+                ),
                 ButtonSegment(
                   value: 'done',
-                  label: Text('Reviewed (${all.length - notReviewed})'),
+                  label: Text('Reviewed (${counts['reviewed'] ?? 0})'),
                 ),
                 ButtonSegment(
                   value: 'not',
-                  label: Text('Not Reviewed ($notReviewed)'),
+                  label: Text('Not Reviewed (${counts['not_reviewed'] ?? 0})'),
                 ),
               ],
               selected: {review},
-              onSelectionChanged: (s) => setState(() => review = s.first),
+              onSelectionChanged: (s) => _filter(() => review = s.first),
             ),
             Gaps.v12,
             Wrap(
@@ -540,7 +565,7 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
                   ChoiceChip(
                     label: Text(label),
                     selected: kind == value,
-                    onSelected: (_) => setState(() => kind = value),
+                    onSelected: (_) => _filter(() => kind = value),
                   ),
               ],
             ),
@@ -548,7 +573,7 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
             AppTextField(
               label: 'Search name or email',
               icon: Icons.search,
-              onChanged: (v) => setState(() => search = v),
+              onChanged: _search,
             ),
             Gaps.v12,
             DropdownButtonFormField<String>(
@@ -560,27 +585,25 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
                 DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
                 DropdownMenuItem(value: 'name', child: Text('Name (A to Z)')),
               ],
-              onChanged: (v) => setState(() => sort = v ?? 'newest'),
+              onChanged: (v) => _filter(() => sort = v ?? 'newest'),
             ),
             Gaps.v16,
-            if (items.isEmpty)
-              EmptyState(
-                review == 'not'
-                    ? 'Every registration has been reviewed.'
-                    : 'No registrations to show.',
-              ),
-            for (final i in items)
-              Padding(
-                padding: const EdgeInsets.only(bottom: Space.sm),
-                child: _RegistrationCard(
-                  key: identical(i, focus) ? _focusKey : null,
-                  highlighted: identical(i, focus),
-                  item: i,
-                  busy: _busy.contains('${i['type']}-${i['id']}'),
-                  onReview: (v) => _setReviewed(i, v),
-                ),
-              ),
+            if (focus != null) _card(focus, highlighted: true),
           ],
+          empty: focus != null
+              ? const SizedBox.shrink()
+              : EmptyState(
+                  review == 'not'
+                      ? 'Every registration has been reviewed.'
+                      : 'No registrations to show.',
+                ),
+          // The notified registration is already on top.
+          itemBuilder: (context, r) =>
+              focus != null &&
+                  r['type'] == focus['type'] &&
+                  r['id'] == focus['id']
+              ? const SizedBox.shrink()
+              : _card(_item(r)),
         );
       },
     );
@@ -596,7 +619,6 @@ class _RegistrationCard extends StatelessWidget {
   final bool highlighted;
   final ValueChanged<bool> onReview;
   const _RegistrationCard({
-    super.key,
     required this.item,
     required this.busy,
     required this.onReview,

@@ -12,12 +12,79 @@ import 'package:mobile/ui/admin_screens.dart';
 
 final reviewed = <String>[];
 
+/// The registrations as GET /admin/registrations sends them (NF-003: the
+/// server merges organizations and donors, filters, sorts and pages).
+final _registrations = [
+  {
+    'type': 'org',
+    'id': 3,
+    'name': 'Helping Hands',
+    'email': 'hh@example.com',
+    'created_at': '2026-10-02T08:00:00',
+    'reviewed': false,
+    'org': {
+      'organization_id': 3,
+      'org_name': 'Helping Hands',
+      'organization_type': 'NGO',
+      'contact_email': 'hh@example.com',
+      'created_at': '2026-10-02T08:00:00',
+      'reviewed_at': null,
+      'user_id': 9,
+    },
+  },
+  {
+    'type': 'donor',
+    'id': 7,
+    'name': 'Maria Santos',
+    'email': 'maria@example.com',
+    'created_at': '2026-10-05T08:00:00',
+    'reviewed': false,
+  },
+  {
+    'type': 'donor',
+    'id': 8,
+    'name': 'Juan Cruz',
+    'email': 'juan@example.com',
+    'created_at': '2026-09-01T08:00:00',
+    'reviewed': true,
+  },
+];
+
+http.Response _registrationList(Map<String, String> q) {
+  final rows = _registrations.where((r) {
+    if (q['focus_id'] != null) {
+      return r['type'] == q['focus_type'] && '${r['id']}' == q['focus_id'];
+    }
+    final review = q['review'] ?? 'all';
+    final kind = q['kind'] ?? 'all';
+    final text = (q['q'] ?? '').toLowerCase();
+    return (review == 'all' || (review == 'done') == r['reviewed']) &&
+        (kind == 'all' || (kind == 'orgs') == (r['type'] == 'org')) &&
+        '${r['name']} ${r['email']}'.toLowerCase().contains(text);
+  }).toList();
+  final offset = int.tryParse(q['offset'] ?? '') ?? 0;
+  final limit = int.tryParse(q['limit'] ?? '') ?? rows.length;
+  return http.Response(
+    jsonEncode(rows.skip(offset).take(limit).toList()),
+    200,
+    headers: {'x-total-count': '${rows.length}'},
+  );
+}
+
 final _server = MockClient((req) async {
   if (req.method == 'PATCH') {
     reviewed.add('${req.url.path} ${req.body}');
     return http.Response(jsonEncode({'ok': true}), 200);
   }
+  if (req.url.path == '/admin/registrations') {
+    return _registrationList(req.url.queryParameters);
+  }
   final body = switch (req.url.path) {
+    '/admin/registrations/counts' => {
+      'all': 3,
+      'reviewed': 1,
+      'not_reviewed': 2,
+    },
     '/admin/organizations' => [
       {
         'organization_id': 3,

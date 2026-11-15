@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 
 import '../api.dart';
 import 'widgets.dart';
@@ -9,8 +10,13 @@ import 'widgets.dart';
 // ---------------------------------------------------------------------------
 // NF-003 (NEW FEATURE): one paged list for every module.
 //
+// Lists show 10 records per page with numbered pages (IT expert, UAT:
+// "pagination"): "Showing 11–20 of 107" and ‹ 1 2 3 … 6 › under the list.
+// Opening another page replaces the 20 rows on screen with the next 20.
+//
 // The backend answers `?limit=&offset=` with one page (a JSON array) and the
 // number of matching rows in the X-Total-Count header (ApiResult.total).
+// Page n is offset (n - 1) × 20.
 //
 //   final c = PagedController(
 //     fetch: (offset, limit) => api.get('/things', query: {
@@ -18,144 +24,157 @@ import 'widgets.dart';
 //   );
 //   PagedListView(controller: c, itemBuilder: ..., empty: ...);
 //
-// When a filter changes call c.refresh(fetch: <new fetch>): the list starts
-// again from page 1, and a page still on its way for the old filter is
-// dropped when it arrives, so it can never land in the new list.
+// When a filter changes call c.refresh(fetch: <new fetch>): the list goes
+// back to page 1, and a page still on its way for the old filter is dropped
+// when it arrives, so it can never land in the new list.
 //
-// After a change elsewhere (an action, a live update) the list is loaded
-// again with reloadQuietly(): the rows stay on screen until the fresh ones
-// arrive, so nothing flashes and the scroll position is kept (UAT, Nov 14).
+// After a change elsewhere (an action, a live update) the page on screen is
+// loaded again with reloadQuietly(): the rows stay until the fresh ones
+// arrive, so nothing flashes and the user stays on the same page.
 // ---------------------------------------------------------------------------
 
 typedef PageFetch = Future<ApiResult> Function(int offset, int limit);
 
-/// The most rows the backend sends in one page (core/pagination.py
-/// MAX_LIMIT); a quiet reload asks for at most this many.
-const maxPageRows = 100;
+/// Records per page, everywhere (team decision: 10, so the page buttons
+/// stay within a screen or two on a phone).
+const defaultPageSize = 10;
 
 class PagedController extends ChangeNotifier {
-  PagedController({required PageFetch fetch, this.pageSize = 20})
+  PagedController({required PageFetch fetch, this.pageSize = defaultPageSize})
     : _fetchPage = fetch;
 
   PageFetch _fetchPage;
   final int pageSize;
 
-  /// The rows loaded so far, in the server's order.
+  /// The rows of the page on screen, in the server's order.
   final List<Map> items = [];
 
-  /// Where the next page starts.
-  int offset = 0;
+  /// The page on screen (1 = first).
+  int page = 1;
 
   /// Matching rows on the server (null until the first page arrives, or
   /// if the server sent no X-Total-Count).
   int? total;
 
+  /// A page is on its way (the first one, or another page the user opened).
   bool isLoading = false;
 
-  /// The failed request, or null. Rows already loaded stay.
+  /// The failed request, or null. The rows already on screen stay.
   ApiResult? error;
 
   /// True once a first page arrived (for the empty state).
   bool loadedOnce = false;
 
-  bool _lastPageSeen = false;
-  bool _quiet = false;
   int _generation = 0;
   bool _disposed = false;
 
-  bool get hasMore =>
-      !_lastPageSeen && (total == null || items.length < total!);
+  /// The page the last request was for (Retry opens it again).
+  int _asked = 1;
+
+  /// Where the page on screen starts.
+  int get offset => (page - 1) * pageSize;
+
+  /// Number of pages, or null while the total is unknown.
+  int? get pageCount =>
+      total == null ? null : math.max(1, (total! + pageSize - 1) ~/ pageSize);
+
+  bool get hasPrevious => page > 1;
+
+  bool get hasNext {
+    final n = pageCount;
+    return n != null ? page < n : items.length == pageSize;
+  }
 
   /// Load page 1 again: on open, pull-to-refresh, the web refresh button, or
   /// a filter change (pass the new [fetch]).
   Future<void> refresh({PageFetch? fetch}) {
     if (fetch != null) _fetchPage = fetch;
-    _generation++;
     items.clear();
-    offset = 0;
     total = null;
-    error = null;
     loadedOnce = false;
-    _lastPageSeen = false;
-    _quiet = false;
-    isLoading = false;
-    return _load();
+    return _load(1);
   }
 
-  /// Load the rows already shown again (up to [maxPageRows]) after a change
-  /// elsewhere, keeping them on screen until the fresh ones arrive. A failed
+  /// Open page [n] (1 = first). Out-of-range pages are ignored.
+  Future<void> goTo(int n) {
+    final last = pageCount;
+    if (n < 1 ||
+        (last != null && n > last) ||
+        (n == page && loadedOnce && error == null)) {
+      return Future.value();
+    }
+    return _load(n);
+  }
+
+  Future<void> next() => hasNext ? goTo(page + 1) : Future.value();
+  Future<void> previous() => hasPrevious ? goTo(page - 1) : Future.value();
+
+  /// Try the page that failed again, keeping the rows on screen.
+  Future<void> retry() => _load(_asked);
+
+  /// Load the page on screen again after a change elsewhere, keeping its
+  /// rows until the fresh ones arrive. If the page is now past the end
+  /// (its last rows were removed), the last page is shown instead. A failed
   /// quiet reload keeps the old rows and says nothing.
   Future<void> reloadQuietly() async {
-    if (!loadedOnce || items.isEmpty) return refresh();
-    final generation = ++_generation; // a page on its way is dropped
-    _quiet = true;
-    isLoading = false;
-    final limit = items.length.clamp(pageSize, maxPageRows);
-    final r = await _fetchPage(0, limit);
+    if (!loadedOnce) return refresh();
+    final generation = ++_generation;
+    final r = await _fetchPage(offset, pageSize);
     if (_disposed || generation != _generation) return;
-    _quiet = false;
-    if (r.ok && r.json is List) {
-      final page = (r.json as List).cast<Map>();
-      items
-        ..clear()
-        ..addAll(page);
-      offset = page.length;
-      total = r.total ?? (page.length < limit ? page.length : total);
-      _lastPageSeen = page.length < limit;
-      error = null;
+    if (!r.ok || r.json is! List) return;
+    final rows = (r.json as List).cast<Map>();
+    total = r.total ?? total;
+    if (rows.isEmpty && page > 1) {
+      await _load(
+        pageCount != null ? math.min(page - 1, pageCount!) : page - 1,
+        quiet: true,
+      );
+      return;
     }
+    items
+      ..clear()
+      ..addAll(rows);
+    error = null;
     _notify();
   }
 
   /// Take rows out at once (e.g. the entry just acknowledged left the
-  /// queue), without waiting for the server. The next page starts that
-  /// many rows earlier, as the server no longer counts them either.
+  /// queue), then load the page again so it fills up from the next page.
   void removeWhere(bool Function(Map row) test) {
     final before = items.length;
     items.removeWhere(test);
     final gone = before - items.length;
     if (gone == 0) return;
-    offset = math.max(0, offset - gone);
     if (total != null) total = math.max(0, total! - gone);
     _notify();
+    reloadQuietly();
   }
 
-  /// Load the next page. Does nothing while a page is loading, after the
-  /// last page, or after an error (the user taps Retry instead).
-  Future<void> loadMore() {
-    if (isLoading || _quiet || !hasMore || error != null) {
-      return Future.value();
+  Future<void> _load(int n, {bool quiet = false}) async {
+    final generation = ++_generation;
+    _asked = n;
+    if (!quiet) {
+      isLoading = true;
+      error = null;
+      _notify();
     }
-    return _load();
-  }
-
-  /// Try the failed page again, keeping the rows already loaded.
-  Future<void> retry() {
-    if (isLoading) return Future.value();
-    error = null;
-    return _load();
-  }
-
-  Future<void> _load() async {
-    final generation = _generation;
-    isLoading = true;
-    error = null;
-    _notify();
-    final r = await _fetchPage(offset, pageSize);
-    // Disposed, or refreshed for another filter meanwhile: drop this page.
+    final r = await _fetchPage((n - 1) * pageSize, pageSize);
+    // Disposed, or another page / filter asked for meanwhile: drop this one.
     if (_disposed || generation != _generation) return;
     isLoading = false;
     if (!r.ok || r.json is! List) {
-      error = r;
+      if (!quiet) error = r;
       _notify();
       return;
     }
-    final page = (r.json as List).cast<Map>();
-    items.addAll(page);
-    offset += page.length;
-    total = r.total ?? total;
-    if (page.length < pageSize) _lastPageSeen = true;
+    page = n;
+    items
+      ..clear()
+      ..addAll((r.json as List).cast<Map>());
+    total =
+        r.total ?? (items.length < pageSize ? offset + items.length : total);
     loadedOnce = true;
+    error = null;
     _notify();
   }
 
@@ -170,13 +189,13 @@ class PagedController extends ChangeNotifier {
   }
 }
 
-/// A scrolling list that loads the next page well before the bottom, with
-/// a placeholder card while fetching, an inline error + Retry that keeps
-/// loaded rows, an end-of-list line, and the screen's empty state. Pull
-/// down to refresh; the web build also gets a refresh button.
+/// A list of 10 records per page with numbered pages under it, a loading
+/// line while another page loads, an inline error + Retry that keeps the
+/// rows on screen, and the screen's empty state. Pull down to refresh; the
+/// web build also gets a refresh button.
 ///
 /// While its tab or page is hidden (another bottom-menu tab, or a page
-/// opened on top), changes are only noted; the list reloads quietly when it
+/// opened on top), changes are only noted; the page reloads quietly when it
 /// shows again.
 class PagedListView extends StatefulWidget {
   final PagedController controller;
@@ -193,7 +212,7 @@ class PagedListView extends StatefulWidget {
 
   final Widget Function(BuildContext context, Map item) itemBuilder;
 
-  /// Shown when the first page is empty.
+  /// Shown when there are no records.
   final Widget empty;
 
   /// What pull-to-refresh and the web refresh button do. Defaults to
@@ -233,23 +252,10 @@ class _PagedListViewState extends State<PagedListView>
   ScrollController get _scroll =>
       widget.scrollController ?? (_own ??= ScrollController());
 
-  /// Start the next page this far from the bottom (at least 1200 px, or
-  /// two and a half screens), so it is usually there before it is reached.
-  double get _nearBottom => math.max(
-    1200.0,
-    _scroll.hasClients && _scroll.position.hasViewportDimension
-        ? _scroll.position.viewportDimension * 2.5
-        : 0,
-  );
+  /// The top of the rows, to bring into view when another page opens.
+  final _rowsTop = GlobalKey();
 
   bool _stale = false;
-
-  /// The rows' sliver. Rows added while the bottom of the list is still
-  /// off screen (the next page arrives early) change no built child, so the
-  /// sliver would keep the old length and the list would stop scrolling
-  /// there; it is told to measure itself again whenever rows change.
-  final _rowsKey = GlobalKey();
-  int _shown = 0;
 
   PagedController get c => widget.controller;
 
@@ -259,7 +265,6 @@ class _PagedListViewState extends State<PagedListView>
   void initState() {
     super.initState();
     c.addListener(_changed);
-    _scroll.addListener(_maybeLoadMore);
     api.addListener(_elsewhere); // e.g. after an action
     widget.refresh?.addListener(_elsewhere);
     // First page after the first frame (the controller notifies at once,
@@ -293,10 +298,6 @@ class _PagedListViewState extends State<PagedListView>
       old.refresh?.removeListener(_elsewhere);
       widget.refresh?.addListener(_elsewhere);
     }
-    if (old.scrollController != widget.scrollController) {
-      (old.scrollController ?? _own)?.removeListener(_maybeLoadMore);
-      _scroll.addListener(_maybeLoadMore);
-    }
   }
 
   @override
@@ -304,12 +305,12 @@ class _PagedListViewState extends State<PagedListView>
     c.removeListener(_changed);
     api.removeListener(_elsewhere);
     widget.refresh?.removeListener(_elsewhere);
-    _scroll.removeListener(_maybeLoadMore);
     _own?.dispose();
     super.dispose();
   }
 
-  /// Something changed elsewhere: reload quietly now, or when shown again.
+  /// Something changed elsewhere: reload the page quietly now, or when the
+  /// list shows again.
   void _elsewhere() {
     if (!mounted) return;
     if (!shown) {
@@ -320,25 +321,37 @@ class _PagedListViewState extends State<PagedListView>
   }
 
   void _changed() {
-    if (!mounted) return;
-    setState(() {});
-    if (c.items.length != _shown) {
-      _shown = c.items.length;
-      _rowsKey.currentContext?.findRenderObject()?.markNeedsLayout();
-    }
-    // A short page (or a tall screen on the web) may not scroll at all:
-    // keep loading until the screen is filled or the list ends.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeLoadMore());
+    if (mounted) setState(() {});
   }
 
-  void _maybeLoadMore() {
-    if (!mounted || !_scroll.hasClients || !c.loadedOnce) return;
-    // Not laid out (a page on top, or a hidden tab): no size to check yet.
+  /// Open page [n] and bring the top of the rows into view (the visitor may
+  /// be at the bottom of the list, at the page buttons).
+  void _open(int n) {
+    c.goTo(n);
+    final ctx = _rowsTop.currentContext;
+    final box = ctx?.findRenderObject();
+    if (box == null || !_scroll.hasClients) return;
     final p = _scroll.position;
-    if (!p.hasContentDimensions || !p.hasViewportDimension) return;
-    if (p.extentAfter < _nearBottom) c.loadMore();
+    final pinned = widget.pinned != null ? widget.pinnedHeight : 0.0;
+    final top =
+        RenderAbstractViewport.of(box).getOffsetToReveal(box, 0).offset -
+        pinned -
+        8;
+    if (top >= p.pixels) return; // already in view
+    final to = top.clamp(0.0, p.maxScrollExtent);
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _scroll.jumpTo(to);
+    } else {
+      _scroll.animateTo(
+        to,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
+    }
   }
 
+  /// Under the rows: errors, the empty state, "Showing 11–20 of 107" and the
+  /// page buttons.
   Widget _footer(BuildContext context) {
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
@@ -350,54 +363,62 @@ class _PagedListViewState extends State<PagedListView>
         onRetry: c.retry,
       );
     }
-    if (error != null) {
-      return Padding(
-        key: const ValueKey('paged-error'),
-        padding: const EdgeInsets.symmetric(vertical: Space.sm),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                error.status == 0
-                    ? "Couldn't load more. Check the connection."
-                    : "Couldn't load more: ${error.errorText}",
-                style: t.bodySmall?.copyWith(color: cs.error),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: c.retry,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Retry'),
-            ),
-          ],
-        ),
-      );
-    }
     if (!c.loadedOnce && c.items.isEmpty) {
       return const Column(children: [SkeletonCard(), Gaps.v12, SkeletonCard()]);
     }
-    if (c.isLoading) {
-      // The next rows' place, instead of a spinner at the very bottom.
-      return const Padding(
-        key: ValueKey('paged-loading'),
-        padding: EdgeInsets.only(top: Space.sm),
-        child: SkeletonCard(),
-      );
-    }
     if (c.loadedOnce && c.items.isEmpty) return widget.empty;
-    if (c.loadedOnce && !c.hasMore) {
-      final n = c.total ?? c.items.length;
-      return Padding(
-        key: const ValueKey('paged-end'),
-        padding: const EdgeInsets.symmetric(vertical: Space.md),
-        child: Text(
-          n == 1 ? 'That is the only one.' : 'That is all $n.',
-          textAlign: TextAlign.center,
-          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+
+    final total = c.total;
+    final from = c.offset + 1;
+    final to = c.offset + c.items.length;
+    final pages = c.pageCount;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (error != null)
+          Padding(
+            key: const ValueKey('paged-error'),
+            padding: const EdgeInsets.only(top: Space.sm),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    error.status == 0
+                        ? "Couldn't open that page. Check the connection."
+                        : "Couldn't open that page: ${error.errorText}",
+                    style: t.bodySmall?.copyWith(color: cs.error),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: c.retry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.only(top: Space.md),
+          child: Text(
+            total == null ? 'Showing $from–$to' : 'Showing $from–$to of $total',
+            key: const ValueKey('paged-range'),
+            textAlign: TextAlign.center,
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
         ),
-      );
-    }
-    return const SizedBox.shrink();
+        if (c.hasPrevious || c.hasNext)
+          Padding(
+            padding: const EdgeInsets.only(top: Space.sm),
+            child: Pager(
+              page: c.page,
+              pageCount: pages,
+              hasNext: c.hasNext,
+              enabled: !c.isLoading,
+              onPage: _open,
+            ),
+          ),
+      ],
+    );
   }
 
   @override
@@ -418,6 +439,8 @@ class _PagedListViewState extends State<PagedListView>
     final rows = c.items;
     final pad = widget.padding.resolve(Directionality.of(context));
     final pinned = widget.pinned;
+    // Another page is on its way: the rows on screen fade until it arrives.
+    final switching = c.isLoading && c.loadedOnce;
     return RefreshIndicator(
       onRefresh: _refresh,
       child: CustomScrollView(
@@ -438,17 +461,184 @@ class _PagedListViewState extends State<PagedListView>
               padding: EdgeInsets.fromLTRB(pad.left, Space.sm, pad.right, 0),
               sliver: SliverList.list(children: widget.subheader),
             ),
+          SliverToBoxAdapter(
+            key: _rowsTop,
+            child: SizedBox(
+              height: 3,
+              child: switching
+                  ? const LinearProgressIndicator(
+                      key: ValueKey('paged-loading'),
+                    )
+                  : null,
+            ),
+          ),
           SliverPadding(
-            padding: pad.copyWith(top: pinned != null ? Space.sm : 0),
+            padding: pad.copyWith(top: pinned != null ? Space.sm : 4),
             sliver: SliverList.builder(
-              key: _rowsKey,
               itemCount: rows.length + 1,
-              itemBuilder: (context, i) => i < rows.length
-                  ? widget.itemBuilder(context, rows[i])
-                  : _footer(context),
+              itemBuilder: (context, i) {
+                if (i == rows.length) return _footer(context);
+                return AnimatedOpacity(
+                  opacity: switching ? 0.4 : 1,
+                  duration: const Duration(milliseconds: 150),
+                  child: IgnorePointer(
+                    ignoring: switching,
+                    child: widget.itemBuilder(context, rows[i]),
+                  ),
+                );
+              },
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Page buttons. Wide screens: ‹ Previous  1 … 4 [5] 6 … 12  Next ›.
+/// Phones: ‹  Page 5 of 12  › with large tap targets.
+class Pager extends StatelessWidget {
+  final int page;
+
+  /// null while the total is unknown (then only Previous / Next).
+  final int? pageCount;
+  final bool hasNext;
+  final bool enabled;
+  final ValueChanged<int> onPage;
+
+  const Pager({
+    super.key,
+    required this.page,
+    required this.pageCount,
+    required this.hasNext,
+    required this.onPage,
+    this.enabled = true,
+  });
+
+  /// The page numbers to show, with null for "…": first, last, and the
+  /// pages around the current one.
+  static List<int?> numbers(int page, int count) {
+    if (count <= 7) return [for (var i = 1; i <= count; i++) i];
+    final show = <int>{1, count, page - 1, page, page + 1};
+    if (page <= 3) show.addAll([2, 3, 4]);
+    if (page >= count - 2) show.addAll([count - 3, count - 2, count - 1]);
+    final sorted = show.where((n) => n >= 1 && n <= count).toList()..sort();
+    final out = <int?>[];
+    for (final n in sorted) {
+      if (out.isNotEmpty && out.last != null && n - out.last! > 1) {
+        out.add(null);
+      }
+      out.add(n);
+    }
+    return out;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final count = pageCount;
+    final prev = enabled && page > 1 ? () => onPage(page - 1) : null;
+    final next = enabled && hasNext ? () => onPage(page + 1) : null;
+
+    return Semantics(
+      container: true,
+      label: count == null
+          ? 'Pages, page $page'
+          : 'Pages, page $page of $count',
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final wide = box.maxWidth >= 560 && count != null;
+          if (!wide) {
+            return Row(
+              key: const ValueKey('pager-compact'),
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton.outlined(
+                  key: const ValueKey('pager-prev'),
+                  tooltip: 'Previous page',
+                  onPressed: prev,
+                  icon: const Icon(Icons.chevron_left),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: Space.md),
+                  child: Text(
+                    count == null ? 'Page $page' : 'Page $page of $count',
+                    style: t.titleSmall,
+                  ),
+                ),
+                IconButton.outlined(
+                  key: const ValueKey('pager-next'),
+                  tooltip: 'Next page',
+                  onPressed: next,
+                  icon: const Icon(Icons.chevron_right),
+                ),
+              ],
+            );
+          }
+          return Wrap(
+            key: const ValueKey('pager-numbers'),
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              TextButton.icon(
+                key: const ValueKey('pager-prev'),
+                onPressed: prev,
+                icon: const Icon(Icons.chevron_left),
+                label: const Text('Previous'),
+              ),
+              for (final n in numbers(page, count))
+                if (n == null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text(
+                      '…',
+                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  )
+                else if (n == page)
+                  Semantics(
+                    selected: true,
+                    label: 'Page $n, current page',
+                    child: FilledButton(
+                      key: ValueKey('pager-page-$n'),
+                      onPressed: null,
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(44, 44),
+                        padding: EdgeInsets.zero,
+                        disabledBackgroundColor: cs.primary,
+                        disabledForegroundColor: cs.onPrimary,
+                      ),
+                      child: Text('$n'),
+                    ),
+                  )
+                else
+                  OutlinedButton(
+                    key: ValueKey('pager-page-$n'),
+                    onPressed: enabled ? () => onPage(n) : null,
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(44, 44),
+                      padding: EdgeInsets.zero,
+                    ),
+                    child: Text('$n', semanticsLabel: 'Page $n'),
+                  ),
+              TextButton(
+                key: const ValueKey('pager-next'),
+                onPressed: next,
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Next'),
+                    SizedBox(width: 4),
+                    Icon(Icons.chevron_right),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
