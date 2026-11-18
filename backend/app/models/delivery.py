@@ -86,10 +86,28 @@ class Delivery(Base):
     handover_code_hash = Column(String(128), nullable=True)
     handover_code_created_at = Column(TIMESTAMP(timezone=True), nullable=True)
 
+    # J5 / NF-010 (team agreement A3): CSWS Main Office's review of a short
+    # delivery (the barangay counted less than was sent). NULL until it is
+    # reviewed; a new review replaces these, the audit log keeps them all.
+    # No stock, fulfillment or priority changes. Migration b9d1f3a5c7e2.
+    discrepancy_cause = Column(String(30), nullable=True)
+    discrepancy_note = Column(Text, nullable=True)
+    discrepancy_reviewed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    discrepancy_reviewed_by_user_id = Column(
+        Integer,
+        ForeignKey("users.user_id", ondelete="SET NULL", name="fk_deliveries_discrepancy_reviewed_by"),
+        nullable=True,
+    )
+
     __table_args__ = (
         CheckConstraint(
              "status IN ('Preparing','In Transit','Delivered', 'Confirmed', 'Cancelled')",
              name="deliveries_status_check",
+        ),
+        CheckConstraint(
+            "discrepancy_cause IS NULL OR discrepancy_cause IN "
+            "('Damaged', 'Lost in transit', 'Miscount at office', 'Miscount at barangay')",
+            name="chk_deliveries_discrepancy_cause",
         ),
     )
 
