@@ -13,6 +13,8 @@ from models.notification import Notification
 from tests.test_delivery_trips import _deliver, _stocked, _trip
 from tests.test_inventory_paths import _stock
 from tests.test_role_flows import accept_body, api, ok  # noqa: F401  (fixture)
+from tests.receipt_helpers import trip_counts
+
 
 LATER = "2030-01-15T09:00:00+08:00"
 
@@ -151,7 +153,8 @@ def test_trip_reschedule_return_and_cancel_one_stop(api, monkeypatch):
     assert _stock(1, b) == 100
     view = ok(client.get(f"/trips/{tid}", headers=t["csws"]))
     assert view["stops"][1]["status"] == "Cancelled" and view["status"] == "Delivered"
-    ok(client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy"], json={}))
+    ok(client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy"],
+                   json=trip_counts(client, tid, t["brgy"])))
     assert ok(client.get(f"/trips/{tid}", headers=t["csws"]))["status"] == "Completed"
 
 

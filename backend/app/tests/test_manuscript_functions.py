@@ -5,6 +5,7 @@ dashboards). Uses the same real-auth fixture as test_role_flows.
 """
 from tests.test_role_flows import accept_body, api, ok, PASSWORD  # noqa: F401  (fixture)
 from tests.reg_helpers import STRONG_PASSWORD, org_payload
+from tests.receipt_helpers import full_counts
 
 
 def _validated_report_with_stock(client, t, qty=100):
@@ -103,7 +104,8 @@ def test_qr_inventory_stock_and_delivery_history(api):
     # UC-B1 alt 4a: acknowledge only after receipt is confirmed
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]).status_code == 409
     # Since Oct 20 confirming receipt also acknowledges (one tap).
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                   json=full_counts(client, did, t["brgy"])), 201)
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]).status_code == 409
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy2"]).status_code == 404
 
@@ -170,7 +172,8 @@ def test_cmo_hold_revert_and_drrmo_completion(api):
     done = ok(client.post(f"/drrmo/requests/{rid_}/delivered", headers=t["drrmo"]))
     assert done["status"] == "Completed" and "30 kg Rice" in done["notes"]
     ok(client.post(f"/deliveries/{delivery['delivery_id']}/confirm-receipt",
-                   headers=t["brgy"], json={}), 201)
+                   headers=t["brgy"],
+                   json=full_counts(client, delivery["delivery_id"], t["brgy"])), 201)
     assert ok(client.get("/drrmo/dashboard", headers=t["drrmo"]))["completed"] == 1
     # CSWS sees the request's status
     assert ok(client.get("/logistics/requests", headers=t["csws"]))[0]["status"] == "Completed"

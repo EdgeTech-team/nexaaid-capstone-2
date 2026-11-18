@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from core import database
 from services.delivery_reminders import run_reminders
+from tests.receipt_helpers import full_counts
 from tests.test_csws_drrmo_flow import _ask
 from tests.test_logistics_needs import _delivery
 from tests.test_pickup_days_and_runs import _activate_everyone
@@ -94,5 +95,6 @@ def test_arrived_but_not_received_reminds_csws_after_24h(api):
                 if n["type"] == "reminder_not_confirmed")
     assert f"Delivery #{did}" in note["message"] and note["entity_id"] == did
     # The barangay confirms: nothing more to remind.
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                   json=full_counts(client, did, t["brgy"])), 201)
     assert _run(t0 + timedelta(hours=40))["not_confirmed"] == 0
