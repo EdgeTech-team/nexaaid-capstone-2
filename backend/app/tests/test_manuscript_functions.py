@@ -107,7 +107,8 @@ def test_qr_inventory_stock_and_delivery_history(api):
     ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
                    json=full_counts(client, did, t["brgy"])), 201)
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy"]).status_code == 409
-    assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy2"]).status_code == 404
+    # J4 / G-001: another barangay's rep is refused with 403 (task brief J4).
+    assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy2"]).status_code == 403
 
     hist = ok(client.get(f"/deliveries/{did}/history", headers=t["csws"]))
     # J2 / NF-015: arriving (and the test helper) also log that a handover

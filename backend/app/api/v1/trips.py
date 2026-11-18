@@ -27,9 +27,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
-from api.v1.deliveries import check_counts, move_to_next_status, record_receipt
+from api.v1.deliveries import check_counts, move_to_next_status, record_receipt, rep_barangay
 from core.audit import log_action
-from core.auth import barangay_scope, has_role, require_role
+from core.auth import has_role, require_role
 from core.database import get_db
 from models.barangay_model import Barangay
 from models.delivery import Delivery, DeliveryItem, DeliveryTrip
@@ -468,10 +468,14 @@ def confirm_trip_receipt(
     trip_id: int,
     payload: TripReceiptConfirm,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("barangay_receiving_rep", "admin")),
+    current_user=Depends(require_role("barangay_receiving_rep")),
 ):
     """Barangay rep: confirm every delivery from this trip that arrived in
     their barangay together (e.g. 3 Banilad reports = 3 deliveries).
+
+    J4 / G-001: the Barangay Receiving Representative only (not the
+    Administrator). No assigned barangay, or no stop of this trip at the
+    rep's barangay, is 403.
 
     J1 / NF-009: the body carries the rep's count for every line of every
     delivery that arrived: {"deliveries": [{"delivery_id", "items"}], ...}.
@@ -481,11 +485,11 @@ def confirm_trip_receipt(
     checked before anything is saved, so one wrong line confirms nothing.
     Each delivery is then saved through record_receipt (UC-B1): its own
     receipt and receipt_items, its own notice, fulfillment per report."""
+    own = rep_barangay(current_user)
     trip = _get_trip(db, trip_id)
-    own = barangay_scope(current_user)
-    mine = [d for d in trip.deliveries if own is None or d.destination_barangay_id == own]
+    mine = [d for d in trip.deliveries if d.destination_barangay_id == own]
     if not mine:
-        raise HTTPException(status_code=404, detail="This trip has no deliveries for your barangay.")
+        raise HTTPException(status_code=403, detail="This trip has no stop at your assigned barangay.")
     ready = {d.delivery_id: d for d in mine if d.status == "Delivered"}
     if not ready:
         raise HTTPException(status_code=409, detail="Nothing to confirm yet: the goods have not arrived.")

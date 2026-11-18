@@ -261,7 +261,7 @@ def test_a_trip_takes_counts_for_each_delivery_all_or_nothing(api):
     # Remarks only, or no deliveries: refused.
     for bad in ({}, {"remarks": "complete"}, {"deliveries": []}):
         assert client.post(url, headers=t["brgy"], json=bad).status_code == 422, bad
-    assert client.post(url, headers=t["brgy2"], json=ANY_TRIP_COUNTS).status_code == 404   # not their stop
+    assert client.post(url, headers=t["brgy2"], json=ANY_TRIP_COUNTS).status_code == 403   # not their stop (J4)
 
     body = trip_counts(client, tid, t["brgy"])      # counts, the stop's code and a signature
     first, second = body["deliveries"]
