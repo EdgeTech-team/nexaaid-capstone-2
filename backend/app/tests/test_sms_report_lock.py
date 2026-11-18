@@ -81,7 +81,8 @@ def test_the_sms_and_its_report_cannot_be_edited_by_the_reporter_either(api):
     assert client.put(f"/reports/{rid}/mine", headers=t["unit"], json=EDIT).status_code == 409
 
     # An unknown sender's SMS is filed under the encoding Administrator: also locked.
-    other, _ = _encode(client, t, contact_number="09998887777")
+    other, _ = _encode(client, t, contact_number="09998887777",
+                       unregistered_sender_reason="Relayed by a barangay")   # J8
     assert client.put(f"/reports/{other['report_id']}/mine", headers=t["admin"],
                       json=EDIT).status_code == 409
 

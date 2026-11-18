@@ -137,6 +137,8 @@ def test_sms_ingest_creates_report_and_metadata(unit_client, admin_client, seed)
         "barangay_id": seed["barangay_id"],
         "affected_families": 5,
         "assistance_needed": "Food, water",
+        # J8: not a Disaster Unit member's number, so a reason is given.
+        "unregistered_sender_reason": "Typed in from a relayed SMS (J8)",
     }
 
     assert unit_client.post("/reports/sms", json=payload).status_code == 403

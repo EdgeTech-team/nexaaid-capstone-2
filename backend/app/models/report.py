@@ -271,6 +271,9 @@ class SmsReportMetadata(Base):
     )
     contact_number = Column(String(20), nullable=False)
     raw_message = Column(Text, nullable=False)
+    # J8 / NF-014: why an SMS from a number that matches no active CSWS
+    # Disaster Unit member was encoded anyway (NULL = registered sender).
+    unregistered_sender_reason = Column(Text, nullable=True)
     encoded_by_user_id = Column(
         Integer, ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False
     )

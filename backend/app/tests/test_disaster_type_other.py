@@ -62,7 +62,9 @@ def test_any_other_type_clears_the_typed_kind(types):
 
 def test_sms_report_of_type_other(types):
     client, t = types
-    sms = {**NEW, "contact_number": "09171234567", "raw_message": "NEXAAID REPORT\nTYPE: Other - Gas leak"}
+    sms = {**NEW, "contact_number": "09171234567", "raw_message": "NEXAAID REPORT\nTYPE: Other - Gas leak",
+           # J8: not a Disaster Unit member's number, so a reason is given
+           "unregistered_sender_reason": "Typed in from a relayed SMS (J8)"}
     assert client.post("/reports/sms", headers=t["admin"], json=sms).status_code == 422
     r = ok(client.post("/reports/sms", headers=t["admin"],
                        json={**sms, "disaster_type_other": "Gas leak"}), 201)
