@@ -64,6 +64,7 @@ from models.barangay_model import Barangay
 from models.disaster_event_model import DisasterEvent
 from services.disaster_events import event_view
 from core.notifications import notify, notify_event_many, notify_many, user_ids_with_role
+from services import report_story
 from schemas.report import (
     DisasterReportCreate,
     DisasterReportUpdate,
@@ -98,8 +99,18 @@ def _notify_new_report(db: Session, report: DisasterReport, exclude_user_id: int
             exclude_user_id=exclude_user_id,
         ),
         "report_submitted", "report", report.report_id,
-        title=f"Report #{report.report_id}",
+        **_wording(db, report),
     )
+
+
+def _wording(db: Session, report: DisasterReport) -> dict:
+    """Readable notification text for a report: "Flood in Barangay Looc",
+    "35 families in Barangay Looc were affected by a flood. They need ...".
+    The report is refreshed first so its barangay, type and needs are loaded."""
+    db.flush()
+    db.refresh(report)
+    return {"title": report_story.label(report), "story": report_story.story(report),
+            "report_no": report.report_id}
 
 
 # ---------------------------------------------------------------------------
@@ -133,15 +144,15 @@ def _notify_report_validated(db: Session, report: DisasterReport, validator_id: 
             db, ["Barangay Receiving Representative"], barangay_id=report.barangay_id
         )) - skip
 
-    title = f"Report #{report.report_id}"
+    words = _wording(db, report)
     notify_event_many(
         db, officials | brgy_reps, "report_validated",
-        "report", report.report_id, title=title,
+        "report", report.report_id, **words,
     )
     if report.event_id is None:
         notify_event_many(
             db, donors, "report_open_for_donations",
-            "report", report.report_id, title=title,
+            "report", report.report_id, **words,
         )
     elif not _event_already_open(db, report):
         # NF-003: donors hear about a multi-barangay disaster ONCE, when its
@@ -150,9 +161,9 @@ def _notify_report_validated(db: Session, report: DisasterReport, validator_id: 
         # event page they already have.
         notify_many(
             db, donors, "report_open_for_donations",
-            "New disaster needs help",
-            f"{report.event_name}: barangays are now accepting donations. "
-            "Choose the barangay you want to help.",
+            f"{report.event_name}: families need your help",
+            f"{words['story']} Other barangays hit by the {report.event_name} may "
+            "need help too. Choose the barangay you want to help.",
             "report", report.report_id,
         )
     return officials | brgy_reps | donors
@@ -186,7 +197,7 @@ def _notify_sms_validated_everyone(
     rest = set(user_ids_with_role(db, ALL_ROLES)) - already
     notify_event_many(
         db, rest, "report_validated", "report", report.report_id,
-        title=f"Report #{report.report_id}",
+        **_wording(db, report),
     )
 
 
@@ -651,7 +662,7 @@ def withdraw_my_report(
                old={"status": old}, new={"status": "Cancelled", "reason": reason or None})
     # It leaves the Administrators' validation queue: tell them why it went.
     notify_event_many(db, user_ids_with_role(db, ["Administrator"]), "report_withdrawn",
-                      "report", report.report_id, title=f"Report #{report.report_id}")
+                      "report", report.report_id, **_wording(db, report))
     db.flush()
     db.refresh(report)
     return report
@@ -835,8 +846,9 @@ def validate_report(
 
     # The reporter gets a personal message...
     notify(db, report.user_id, "report_validated",
-           title=f"Report #{report.report_id} validated",
-           body="Your report was approved and is now visible to donors.",
+           title=f"Your report was validated: {report_story.label(report)}",
+           body=(f"Report #{report.report_id} was approved and is now visible to donors. "
+                 f"{report_story.story(report)}"),
            entity_type="report", entity_id=report.report_id)
 
     # ...and everyone else affected: CMO, both CSWS offices, the barangay
@@ -873,7 +885,7 @@ def reject_report(
                new={"status": "Rejected", "reason": payload.rejection_reason})
 
     notify(db, report.user_id, "report_rejected",
-           title=f"Report #{report.report_id} needs changes",
+           title=f"Your report needs changes: {report_story.label(report)}",
            body=f"Your report was rejected: {payload.rejection_reason}",
            entity_type="report", entity_id=report.report_id)
 

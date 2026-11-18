@@ -15,6 +15,9 @@ class DashboardSummary(BaseModel):
     total_deliveries: int
     total_logistics_requests: int
     active_organizations: int
+    # NF-008 (D6): organizations the Administrator verified (Verified badge).
+    verified_organizations: int = 0
+    verified_organization_names: List[str] = []
 
 class ReportsBreakdown(BaseModel):
     by_status: List[StatusCount]

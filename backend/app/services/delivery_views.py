@@ -150,6 +150,8 @@ def delivery_views(db: Session, deliveries: list) -> list:
     items = {i.item_id: i for i in db.query(Item).filter(Item.item_id.in_(item_ids)).all()} if item_ids else {}
     labels = report_labels(db, {d.report_id for d in deliveries})
     times = status_times(db, deliveries)
+    from services.item_quantities import delivered_item_fields, delivery_received
+    at_barangay = delivery_received(db, [i.delivery_item_id for d in deliveries for i in d.items])
     return [
         {
             "delivery_id": d.delivery_id,
@@ -174,6 +176,10 @@ def delivery_views(db: Session, deliveries: list) -> list:
                     "quantity": i.quantity,
                     "item_name": items[i.item_id].item_name if i.item_id in items else None,
                     "unit": items[i.item_id].unit_of_measure if i.item_id in items else None,
+                    # G-002 (D8): sent, and what the barangay counted (J1).
+                    **delivered_item_fields(
+                        i.quantity, items[i.item_id].unit_of_measure if i.item_id in items else "",
+                        at_barangay.get(i.delivery_item_id)),
                 }
                 for i in d.items
             ],
