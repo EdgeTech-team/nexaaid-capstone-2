@@ -93,6 +93,13 @@ class Delivery(Base):
     )
     trip = relationship("DeliveryTrip", back_populates="deliveries")
 
+    @property
+    def has_discrepancy(self) -> bool:
+        """J1 / NF-009: the barangay counted a different quantity than CSWS
+        sent on at least one line. False before the receipt and for
+        receipts saved before counting started."""
+        return self.receipt is not None and self.receipt.has_discrepancy
+
 
 class DeliveryTrip(Base):
     """One truck run that carries deliveries for several reports, e.g. three
@@ -144,6 +151,20 @@ class DeliveryItem(Base):
         allocations = relationship(
             "DeliveryAllocation", back_populates="delivery_item", cascade="all, delete-orphan"
         )
+        # J1 / NF-009: the barangay's count for this line. Read-only here: the
+        # row is written through Receipt.items and removed by the database
+        # (ON DELETE CASCADE), so this side never changes it.
+        receipt_item = relationship("ReceiptItem", uselist=False, viewonly=True)
+
+        @property
+        def received_quantity(self):
+            """What the barangay counted; None until it confirms, and for
+            receipts saved before counting started."""
+            return self.receipt_item.received_quantity if self.receipt_item is not None else None
+
+        @property
+        def discrepancy_reason(self):
+            return self.receipt_item.discrepancy_reason if self.receipt_item is not None else None
 
 class Receipt(Base): 
         __tablename__ = "receipts"
@@ -165,6 +186,72 @@ class Receipt(Base):
         #relationships
         delivery = relationship ("Delivery", back_populates="receipt")
         received_by = relationship ("User", foreign_keys=[received_by_user_id])
+        # J1 / NF-009: one count per delivery line. Empty for receipts saved
+        # before counting started (they keep the sent quantity).
+        items = relationship(
+            "ReceiptItem", back_populates="receipt", cascade="all, delete-orphan",
+            order_by="ReceiptItem.receipt_item_id",
+        )
+
+        @property
+        def has_discrepancy(self) -> bool:
+            return any(i.received_quantity != i.expected_quantity for i in self.items)
+
+
+class ReceiptItem(Base):
+    """J1 / NF-009 (team agreement Nov 18, 2026): what the Barangay
+    Receiving Representative counted for one delivery line.
+
+    expected_quantity   what CSWS sent (delivery_items.quantity), copied at
+                        confirmation so the record never changes
+    received_quantity   what the barangay counted (0 or more)
+    discrepancy_reason  required when the two differ: "Over" when more
+                        arrived; "Short", "Damaged" or "Wrong item" when
+                        fewer arrived; empty when they match
+
+    Fulfillment counts min(received_quantity, expected_quantity) as
+    delivered (services/fulfillment.py). Migration f7b2d4e6a8c1."""
+
+    __tablename__ = "receipt_items"
+    __table_args__ = (
+        UniqueConstraint("delivery_item_id", name="uq_receipt_items_delivery_item_id"),
+        CheckConstraint("expected_quantity > 0", name="chk_receipt_items_expected"),
+        CheckConstraint("received_quantity >= 0", name="chk_receipt_items_received"),
+        CheckConstraint(
+            "discrepancy_reason IS NULL"
+            " OR discrepancy_reason IN ('Short', 'Damaged', 'Wrong item', 'Over')",
+            name="chk_receipt_items_reason",
+        ),
+        CheckConstraint(
+            "(received_quantity = expected_quantity AND discrepancy_reason IS NULL)"
+            " OR (received_quantity > expected_quantity"
+            " AND COALESCE(discrepancy_reason, '') = 'Over')"
+            " OR (received_quantity < expected_quantity"
+            " AND COALESCE(discrepancy_reason, '') IN ('Short', 'Damaged', 'Wrong item'))",
+            name="chk_receipt_items_reason_fits",
+        ),
+    )
+
+    receipt_item_id = Column(Integer, primary_key=True)
+    receipt_id = Column(
+        Integer,
+        ForeignKey("receipts.receipt_id", ondelete="CASCADE", name="fk_receipt_items_receipt_id"),
+        nullable=False, index=True,
+    )
+    delivery_item_id = Column(
+        Integer,
+        ForeignKey("delivery_items.delivery_item_id", ondelete="CASCADE",
+                   name="fk_receipt_items_delivery_item_id"),
+        nullable=False,
+    )
+    expected_quantity = Column(Integer, nullable=False)
+    received_quantity = Column(Integer, nullable=False)
+    discrepancy_reason = Column(String(20), nullable=True)
+    discrepancy_note = Column(Text, nullable=True)
+
+    receipt = relationship("Receipt", back_populates="items")
+    delivery_item = relationship("DeliveryItem")
+
 
 class DeliveryAllocation(Base):
     """Whose goods went on a delivery (Oct 13 concerns, delivery

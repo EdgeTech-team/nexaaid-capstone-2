@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from models.audit_log_model import AuditLog
 from models.barangay_model import Barangay
-from models.delivery import Delivery, DeliveryItem
+from models.delivery import Delivery, DeliveryItem, ReceiptItem
 from models.item_model import Item
 from models.report import DisasterReport, DisasterType
 from schemas.physical_donation_schema import MANILA
@@ -137,8 +137,23 @@ def status_times(db: Session, deliveries: list) -> dict:
     return out
 
 
+def receipt_counts(db: Session, deliveries: list) -> dict:
+    """J1 / NF-009: {delivery_item_id: ReceiptItem} for these deliveries, in
+    one query. Lines without a count (not confirmed yet, or confirmed
+    before counting started) are not in it."""
+    line_ids = [i.delivery_item_id for d in deliveries for i in d.items]
+    if not line_ids:
+        return {}
+    return {
+        r.delivery_item_id: r
+        for r in db.query(ReceiptItem).filter(ReceiptItem.delivery_item_id.in_(line_ids)).all()
+    }
+
+
 def delivery_views(db: Session, deliveries: list) -> list:
-    """Deliveries as dicts with the names people read next to the ids."""
+    """Deliveries as dicts with the names people read next to the ids.
+    J1 / NF-009: each line also shows what the barangay counted, and each
+    delivery whether a count differs (has_discrepancy)."""
     if not deliveries:
         return []
     brgys = {
@@ -150,6 +165,14 @@ def delivery_views(db: Session, deliveries: list) -> list:
     items = {i.item_id: i for i in db.query(Item).filter(Item.item_id.in_(item_ids)).all()} if item_ids else {}
     labels = report_labels(db, {d.report_id for d in deliveries})
     times = status_times(db, deliveries)
+    counts = receipt_counts(db, deliveries)
+
+    def differs(d) -> bool:
+        return any(
+            c.received_quantity != c.expected_quantity
+            for c in (counts.get(i.delivery_item_id) for i in d.items) if c is not None
+        )
+
     return [
         {
             "delivery_id": d.delivery_id,
@@ -174,9 +197,14 @@ def delivery_views(db: Session, deliveries: list) -> list:
                     "quantity": i.quantity,
                     "item_name": items[i.item_id].item_name if i.item_id in items else None,
                     "unit": items[i.item_id].unit_of_measure if i.item_id in items else None,
+                    "received_quantity": (counts[i.delivery_item_id].received_quantity
+                                          if i.delivery_item_id in counts else None),
+                    "discrepancy_reason": (counts[i.delivery_item_id].discrepancy_reason
+                                           if i.delivery_item_id in counts else None),
                 }
                 for i in d.items
             ],
+            "has_discrepancy": differs(d),
         }
         for d in deliveries
     ]

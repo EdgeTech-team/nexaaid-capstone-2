@@ -6,6 +6,7 @@ acknowledgement is final (task #10, Oct 23: no undo at all).
 from datetime import datetime, timedelta, timezone
 
 import api.v1.deliveries as deliveries
+from tests.receipt_helpers import full_counts
 from tests.test_delivery_allocation import _give
 from tests.test_donation_batch import _report
 from tests.test_pickup_days_and_runs import _activate_everyone
@@ -81,7 +82,8 @@ def test_donors_and_the_barangay_follow_the_delivery(api, monkeypatch):
     assert client.post("/logistics/requests", headers=t["csws"], json={
         "delivery_id": did, "trucks": 1, "drivers": 1, "volunteers": 0}).status_code == 409
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))   # Delivered
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={"remarks": "Complete"}), 201)
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                   json=full_counts(client, did, t["brgy"], remarks="Complete")), 201)
     got = _types(client, t["donor"])[: len(_types(client, t["donor"])) - before]
     for event in ("donation_delivery_rescheduled", "donation_in_transit", "donation_delivered",
                   "donation_barangay_confirmed"):

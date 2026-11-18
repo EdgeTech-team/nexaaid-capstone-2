@@ -653,27 +653,16 @@ class ReceiveAidPage extends StatelessWidget {
     return ModulePage(
       title: 'Receive & acknowledge aid',
       note:
-          'UC-B1: when aid arrives, confirm receipt. This records the '
-          'acknowledgment and updates the report\'s fulfillment progress.',
+          'UC-B1: confirm receipt on the Incoming aid screen (Deliveries). '
+          'There you count every item that arrived; a count that differs '
+          'from what CSWS sent needs a reason (J1 / NF-009). Receipt is no '
+          'longer confirmed from this console.',
       children: [
         ApiForm(
           title: 'Deliveries to my barangay',
           subtitle: 'GET /deliveries/',
           button: 'Load',
           onSubmit: (_) => _api.get('/deliveries/'),
-        ),
-        ApiForm(
-          title: 'Confirm receipt',
-          subtitle: 'POST /deliveries/{id}/confirm-receipt',
-          fields: const [
-            F('id', 'Delivered aid', lookup: 'delivered_deliveries'),
-            F('remarks', 'Remarks (optional)'),
-          ],
-          button: 'Confirm receipt',
-          onSubmit: (v) => _api.post(
-            '/deliveries/${v.i('id')}/confirm-receipt',
-            body: {'remarks': v.s('remarks')},
-          ),
         ),
       ],
     );

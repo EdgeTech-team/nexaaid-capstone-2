@@ -2,6 +2,7 @@
 Table 36 Logistics Support Coordination, Table 37 Delivery Tracking)."""
 from datetime import timedelta
 
+from tests.receipt_helpers import full_counts
 from tests.test_logistics_needs import _delivery
 from tests.test_pickup_days_and_runs import _activate_everyone
 from tests.test_role_flows import accept_body, api, ok  # noqa: F401  (fixture)
@@ -227,7 +228,8 @@ def test_undo_never_after_the_barangay_confirmed(api):
     did = _delivery(client, t)["delivery_id"]
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                   json=full_counts(client, did, t["brgy"])), 201)
     r = client.post(f"/deliveries/{did}/undo", headers=t["csws"])
     assert r.status_code == 409 and "confirmed receipt" in r.json()["detail"]
 
