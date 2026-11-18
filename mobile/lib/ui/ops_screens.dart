@@ -16,6 +16,7 @@ import 'paginated_list.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
 import 'scheduled_deliveries.dart';
+import 'item_amounts.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
 
@@ -1084,10 +1085,12 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     final next = i >= 0 && i < 2 ? _deliverySteps[i + 1] : null;
     final items = (d['items'] as List? ?? const [])
         .map(
-          (it) =>
-              '${it['quantity']} ${it['unit'] ?? ''} '
-                      '${it['item_name'] ?? names.of('items', it['item_id'], fallback: 'item')}'
-                  .replaceAll(RegExp(r'\s+'), ' '),
+          // G-002 (D8): plus what the barangay counted (J1), when known.
+          (it) => deliveredLine(
+            it,
+            name:
+                '${it['item_name'] ?? names.of('items', it['item_id'], fallback: 'item')}',
+          ),
         )
         .toList();
     final reqStage = request?['stage'] as String?;
@@ -1866,9 +1869,9 @@ class CmoEntryDetails extends StatelessWidget {
                 ),
                 Gaps.h8,
                 Expanded(
+                  // G-002 (D8): readable amount, packaging, quantities.
                   child: Text(
-                    '${i['quantity']} ${i['unit']} ${i['item_name']} '
-                    '(${i['packaging']})',
+                    '${i['item_name']} · ${itemAmount(i)}\n${itemQuantities(i)}',
                   ),
                 ),
               ],

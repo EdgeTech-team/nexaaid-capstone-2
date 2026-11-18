@@ -9,11 +9,19 @@ class Organization(Base):
             "status IN ('Pending','Approved','Rejected')",
             name="chk_organizations_status"
         ),
+        CheckConstraint(
+            "organization_category IN ('Government', 'Non-government')",
+            name="chk_organizations_category",
+        ),
     )
 
     organization_id = Column(Integer, primary_key=True, autoincrement=True, nullable=False)
     org_name = Column(String(150), nullable=False)
     organization_type = Column(String(100), nullable=False)
+    # NF-008 (D6): Government or Non-government, set from organization_type
+    # (schemas/organization_schema.ORGANIZATION_TYPES). Migration d4a7b2e8c6f1.
+    organization_category = Column(String(20), nullable=False,
+                                   server_default="Non-government", default="Non-government")
     address = Column(Text, nullable=True)
     contact_person = Column(String(150), nullable=False)
     registration_no = Column(String(100), nullable=True, unique=True)  
