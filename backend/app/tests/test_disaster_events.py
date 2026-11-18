@@ -263,8 +263,13 @@ def test_donors_are_notified_once_per_event(ev):
                  .filter_by(user_id=donor, type="report_open_for_donations")
                  .order_by(Notification.notification_id).all())
         assert [n.entity_id for n in notes] == [ids[0], single]
-        assert notes[0].title == "New disaster needs help"
-        assert "Flood" in notes[0].message and "Choose the barangay" in notes[0].message
+        assert notes[0].title.endswith(": families need your help")
+        assert "affected by a flood" in notes[0].message
+        assert "Choose the barangay" in notes[0].message
+        # A single-barangay report says who needs what, not "Report #N".
+        assert notes[1].title == "Flood in Barangay Test: families need your help"
+        assert notes[1].message.startswith("3 families in Barangay Test were affected by a flood.")
+        assert "Report #" not in notes[1].title
     finally:
         db.close()
 

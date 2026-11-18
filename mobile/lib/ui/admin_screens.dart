@@ -15,6 +15,7 @@ import 'paged_donation_entries.dart' show searchDebounce;
 import 'widgets.dart';
 import 'entry_report_views.dart';
 import 'home_nav.dart';
+import 'item_amounts.dart';
 
 // ---------------------------------------------------------------------------
 // UC-A4 / manuscript 7.7 Administrator dashboard
@@ -393,7 +394,9 @@ class RegistrationsScreen extends StatefulWidget {
 class _RegistrationsScreenState extends State<RegistrationsScreen> {
   String review = 'all'; // all | done | not
   String kind = 'all'; // all | donors | orgs
-  String sort = 'newest'; // newest | oldest | name
+  // NF-008 (D6): the review queue first (not reviewed, Government types
+  // first, then newest). newest | oldest | name | review
+  String sort = 'review';
   String search = ''; // what the list was loaded for
   Timer? _typing;
   final Set<String> _busy = {};
@@ -508,6 +511,48 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
     );
   }
 
+  /// NF-008 (D6) Mark verified: the Verified badge then shows to CSWS and
+  /// on the transparency dashboard.
+  Future<void> _verifyOrg(Map<String, dynamic> i) async {
+    final r = await act(
+      context,
+      () => api.post('/admin/organizations/${i['id']}/verify', body: const {}),
+      success: '${i['name']} marked Verified',
+    );
+    if (r.ok && _focus != null && i['id'] == _focus!['id']) _loadFocus();
+  }
+
+  /// NF-008 (D6) Deactivate: fake or wrong documents. The reason is
+  /// required and emailed to the organization.
+  Future<void> _deactivateOrg(Map<String, dynamic> i) async {
+    final v = await formDialog(
+      context,
+      title: 'Deactivate ${i['name']}?',
+      message:
+          'The organization can no longer sign in. The reason is emailed to '
+          'it. You can activate the account again from View account.',
+      fields: const [
+        DialogField(
+          'reason',
+          'Reason (emailed to the organization)',
+          multiline: true,
+          hint: 'e.g. The ID photo does not match the contact person.',
+        ),
+      ],
+      confirm: 'Deactivate',
+    );
+    if (v == null || !mounted) return;
+    final r = await act(
+      context,
+      () => api.post(
+        '/admin/organizations/${i['id']}/deactivate',
+        body: {'reason': v['reason']},
+      ),
+      success: '${i['name']} deactivated. The reason was emailed.',
+    );
+    if (r.ok && _focus != null && i['id'] == _focus!['id']) _loadFocus();
+  }
+
   Widget _card(Map<String, dynamic> i, {bool highlighted = false}) => Padding(
     padding: const EdgeInsets.only(bottom: Space.sm),
     child: _RegistrationCard(
@@ -515,6 +560,8 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
       item: i,
       busy: _busy.contains('${i['type']}-${i['id']}'),
       onReview: (v) => _setReviewed(i, v),
+      onVerify: () => _verifyOrg(i),
+      onDeactivate: () => _deactivateOrg(i),
     ),
   );
 
@@ -581,11 +628,15 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
               isExpanded: true,
               decoration: const InputDecoration(labelText: 'Sort by'),
               items: const [
+                DropdownMenuItem(
+                  value: 'review',
+                  child: Text('Review queue (Government first)'),
+                ),
                 DropdownMenuItem(value: 'newest', child: Text('Newest first')),
                 DropdownMenuItem(value: 'oldest', child: Text('Oldest first')),
                 DropdownMenuItem(value: 'name', child: Text('Name (A to Z)')),
               ],
-              onChanged: (v) => _filter(() => sort = v ?? 'newest'),
+              onChanged: (v) => _filter(() => sort = v ?? 'review'),
             ),
             Gaps.v16,
             if (focus != null) _card(focus, highlighted: true),
@@ -618,10 +669,14 @@ class _RegistrationCard extends StatelessWidget {
   final bool busy;
   final bool highlighted;
   final ValueChanged<bool> onReview;
+  final VoidCallback? onVerify;
+  final VoidCallback? onDeactivate;
   const _RegistrationCard({
     required this.item,
     required this.busy,
     required this.onReview,
+    this.onVerify,
+    this.onDeactivate,
     this.highlighted = false,
   });
 
@@ -634,6 +689,10 @@ class _RegistrationCard extends StatelessWidget {
     final o = item['org'] as Map?;
     final reviewed = item['reviewed'] == true;
     final when = item['when'] as DateTime?;
+    // NF-008 (D6): Unverified / Verified / Deactivated, and the warning.
+    final state =
+        '${o?['verification_state'] ?? (reviewed ? 'Verified' : 'Unverified')}';
+    final warning = o?['warning'] as String?;
     // Donors: their account. Organizations: the organization's account.
     final accountId = org
         ? (o?['user_id'] as num?)?.toInt()
@@ -658,7 +717,8 @@ class _RegistrationCard extends StatelessWidget {
                     Text('${item['name']}', style: t.titleMedium),
                     Text(
                       org
-                          ? '${o?['organization_type'] ?? 'Organization'}'
+                          ? '${o?['organization_category'] ?? 'Organization'}'
+                                ' · ${o?['organization_type'] ?? ''}'
                           : 'Individual donor',
                       style: muted,
                     ),
@@ -666,7 +726,13 @@ class _RegistrationCard extends StatelessWidget {
                 ),
               ),
               Gaps.h8,
-              StatusChip(reviewed ? 'Reviewed' : 'Not Reviewed'),
+              org
+                  ? StatusChip(switch (state) {
+                      'Verified' => 'Confirmed',
+                      'Deactivated' => 'Cancelled',
+                      _ => 'Pending',
+                    }, label: state)
+                  : StatusChip(reviewed ? 'Reviewed' : 'Not Reviewed'),
             ],
           ),
           Gaps.v8,
@@ -677,6 +743,21 @@ class _RegistrationCard extends StatelessWidget {
                 : 'Registered ${niceDate(when.toIso8601String())}',
             style: muted,
           ),
+          if (org && warning != null) ...[
+            Gaps.v8,
+            StatusChip('On Hold', label: warning),
+          ],
+          if (org && o?['deactivation_reason'] != null) ...[
+            Gaps.v8,
+            Text('Deactivated: ${o!['deactivation_reason']}', style: muted),
+          ],
+          if (org && o?['contact_id_missing'] == true) ...[
+            Gaps.v8,
+            const StatusChip(
+              'Cancelled',
+              label: 'Contact person\'s ID missing',
+            ),
+          ],
           if (org) ...[
             Gaps.v8,
             Text(
@@ -707,20 +788,54 @@ class _RegistrationCard extends StatelessWidget {
                 ),
                 Gaps.h8,
               ],
-              Expanded(
-                child: AppButton(
-                  reviewed ? 'Mark Not Reviewed' : 'Mark Reviewed',
-                  icon: reviewed ? Icons.undo : Icons.fact_check_outlined,
-                  variant: reviewed
-                      ? AppButtonVariant.secondary
-                      : AppButtonVariant.tonal,
-                  loading: busy,
-                  expand: true,
-                  onPressed: () => onReview(!reviewed),
+              if (!org)
+                Expanded(
+                  child: AppButton(
+                    reviewed ? 'Mark Not Reviewed' : 'Mark Reviewed',
+                    icon: reviewed ? Icons.undo : Icons.fact_check_outlined,
+                    variant: reviewed
+                        ? AppButtonVariant.secondary
+                        : AppButtonVariant.tonal,
+                    loading: busy,
+                    expand: true,
+                    onPressed: () => onReview(!reviewed),
+                  ),
+                )
+              else if (state == 'Unverified')
+                Expanded(
+                  child: AppButton(
+                    'Mark verified',
+                    icon: Icons.verified_outlined,
+                    variant: AppButtonVariant.tonal,
+                    loading: busy,
+                    expand: true,
+                    onPressed: onVerify,
+                  ),
+                )
+              else if (state == 'Verified')
+                Expanded(
+                  child: AppButton(
+                    'Mark Unverified',
+                    icon: Icons.undo,
+                    variant: AppButtonVariant.secondary,
+                    loading: busy,
+                    expand: true,
+                    onPressed: () => onReview(false),
+                  ),
                 ),
-              ),
             ],
           ),
+          // NF-008 (D6): fake or wrong documents.
+          if (org && state != 'Deactivated' && onDeactivate != null)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: onDeactivate,
+                style: TextButton.styleFrom(foregroundColor: cs.error),
+                icon: const Icon(Icons.block, size: 18),
+                label: const Text('Deactivate'),
+              ),
+            ),
         ],
       ),
     );
@@ -864,8 +979,10 @@ class _BarangayDonationList extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // G-002 (D8): readable amount and packaging.
                           Text(
-                            '${d['quantity']} ${d['item_name']}',
+                            '${d['item_name']} · ${itemAmount(d)}'
+                            '${(d['packaging'] ?? '').toString().isEmpty ? '' : ' (${d['packaging']})'}',
                             style: t.titleSmall,
                           ),
                           Gaps.v4,
@@ -1016,9 +1133,11 @@ class BarangayDashboard extends StatelessWidget {
                 child: ListTile(
                   dense: true,
                   title: Text(
-                    '${d['quantity']} ${d['item_name']} · ${d['qr_reference']}',
+                    '${d['item_name']} · ${itemAmount(d)} · ${d['qr_reference']}',
                   ),
-                  subtitle: Text('${d['report_label']}'),
+                  // G-002 (D8)
+                  isThreeLine: true,
+                  subtitle: Text('${itemQuantities(d)}\n${d['report_label']}'),
                   trailing: Badge2.status('${d['status']}'),
                 ),
               ),

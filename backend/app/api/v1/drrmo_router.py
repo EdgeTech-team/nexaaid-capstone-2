@@ -1,4 +1,5 @@
 # Manuscript UC-DR1 / UC-DR2 and the Logistics Support Coordination Module.
+from services.item_quantities import goods_line
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -199,9 +200,10 @@ def _pickup_stops(db: Session, requests) -> dict:
                 "lng": float(first.pickup_lng) if first and first.pickup_lng is not None else None,
                 "report_id": first.report_id if first else None,
                 "status": entry_status({l.status for l in lines}) if lines else "Unknown",
+                # G-002 (D8): "Rice: 10 packs x 5 kg (Sack)".
                 "goods": [
-                    f"{l.quantity} {items[l.item_id].unit_of_measure} {items[l.item_id].item_name}"
-                    if l.item_id in items else f"{l.quantity} item(s)"
+                    goods_line(l, items[l.item_id].item_name, items[l.item_id].unit_of_measure)
+                    if l.item_id in items else f"{l.quantity} item(s) ({l.packaging})"
                     for l in lines
                 ],
             })

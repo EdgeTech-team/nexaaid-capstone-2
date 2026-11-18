@@ -67,12 +67,71 @@ def _record_login_failure(key: str) -> None:
 
 
 def clear_failed_logins(key: str | None = None) -> None:
-    """Forget failed sign-ins: one login after it succeeds, or all (tests)."""
+    """Forget failed sign-ins: one login after it succeeds, or all (tests).
+    Clearing all also forgets the guest donation counts below."""
     with _failed_lock:
         if key is None:
             _failed_logins.clear()
+            _guest_submits.clear()
         else:
             _failed_logins.pop(key, None)
+
+
+# NF-005 (D2): guest donations per connection, same pattern as F-02 (server
+# memory, no table). At most GUEST_MAX_PER_IP_HOUR guest submissions an hour
+# from one client address. The address is request.client.host, which
+# core/client_ip.py (F-21) already reads from the trusted end of
+# X-Forwarded-For behind Render's proxy, so a forged header cannot reset it.
+GUEST_SUBMIT_WINDOW_SECONDS = 60 * 60
+_guest_submits: dict = {}
+
+
+def _env_limit(name: str, default: int) -> int:
+    import os
+    try:
+        value = int(os.getenv(name, default))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def guest_max_per_ip_hour() -> int:
+    return _env_limit("GUEST_MAX_PER_IP_HOUR", 5)
+
+
+def _recent_guest_submits(ip: str) -> list:
+    cutoff = _now() - GUEST_SUBMIT_WINDOW_SECONDS
+    recent = [t for t in _guest_submits.get(ip, ()) if t > cutoff]
+    if recent:
+        _guest_submits[ip] = recent
+    else:
+        _guest_submits.pop(ip, None)
+    return recent
+
+
+def check_guest_submit(ip: str | None) -> None:
+    """429 when this address already sent GUEST_MAX_PER_IP_HOUR guest
+    donations in the last hour."""
+    key = ip or "unknown"
+    with _failed_lock:
+        recent = _recent_guest_submits(key)
+    if len(recent) >= guest_max_per_ip_hour():
+        wait = int(recent[0] + GUEST_SUBMIT_WINDOW_SECONDS - _now()) + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=("Too many guest donations from this connection. "
+                    f"Try again in {(wait + 59) // 60} minute(s), or sign in."),
+            headers={"Retry-After": str(wait)},
+        )
+
+
+def record_guest_submit(ip: str | None) -> None:
+    key = ip or "unknown"
+    with _failed_lock:
+        if len(_guest_submits) > 10_000:          # keep memory small
+            for k in list(_guest_submits):
+                _recent_guest_submits(k)
+        _guest_submits[key] = _recent_guest_submits(key) + [_now()]
 
 
 # F-17: the same counter limits a guest's phone check when cancelling a
@@ -127,6 +186,8 @@ def user_payload(user: User) -> dict:
         "organization_id": user.organization_id,
         "assigned_barangay_id": user.assigned_barangay_id,
         "must_change_password": user.must_change_password in (True, 1, "1", "true"),
+        # NF-006 (D4): the app shows "Verify your email to request pickups".
+        "email_verified": getattr(user, "email_verified_at", None) is not None,
     }
 
 

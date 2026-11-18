@@ -11,12 +11,15 @@ import 'landing/about_section.dart';
 import 'landing/landing_screen.dart' show HowItWorksSteps;
 import 'landing/mission_section.dart';
 import 'landing/landing_extras.dart' show kImpactImage;
+import 'donate_screen.dart' show resumeGuestDonation;
 import 'donor_screens.dart' show DonateScreen;
 import 'expiry_widgets.dart' show cancelDonation, cautionButtonStyle;
 import 'qr_save.dart';
+import 'verify_email_sheet.dart';
 import 'home_nav.dart';
 import 'needs_progress.dart' show stillNeededText;
 import 'widgets.dart';
+import 'item_amounts.dart';
 
 // ---------------------------------------------------------------------------
 // Adviser item 10 / Module 9: donor and relief organization dashboard
@@ -81,6 +84,16 @@ class DonorDashboard extends StatefulWidget {
 }
 
 class _DonorDashboardState extends State<DonorDashboard> {
+  @override
+  void initState() {
+    super.initState();
+    // NF-004: a guest who signed in to request a pickup goes back to the
+    // donation they were filling in.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) resumeGuestDonation(context);
+    });
+  }
+
   /// "See all reports": the Reports tab, every validated report, active and
   /// done, with the priority and progress filters (2.4, 3.3).
   void _openAllReports() => HomeNav.go(context, const HomeTarget('Reports'));
@@ -130,6 +143,9 @@ class _DonorDashboardState extends State<DonorDashboard> {
               summary: sum,
               barangays: {for (final r in helped) _barangayOf(r)}.length,
             ),
+            // NF-006 (D4): "Verify your email to request pickups".
+            if (profile['email_verified'] == false)
+              const _Centered(child: VerifyEmailBanner()),
             _Centered(
               child: SectionHeader(
                 'Barangays that need help',
@@ -457,7 +473,9 @@ class _DashboardHero extends StatelessWidget {
                   ].join(' · '),
                   style: t.bodyLarge?.copyWith(color: AppColors.harborMist),
                 ),
-                StatusChip(status),
+                // NF-008 (D6): Unverified until the Administrator reviews it,
+                // then Verified.
+                StatusChip('${profile['verification_state'] ?? status}'),
               ],
             ),
           ]
@@ -662,39 +680,6 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
     if (fresh != null) setState(() => _entry = fresh);
   }
 
-  /// Oct 23: open the donate form in "add items" mode for this donation.
-  Future<void> _addItems(BuildContext context, Map e) async {
-    final lookups = await api.lookupsResult();
-    if (!context.mounted) return;
-    final names = Names(
-      lookups.ok && lookups.json is Map
-          ? Map<String, dynamic>.from(lookups.json as Map)
-          : <String, dynamic>{},
-    );
-    final info = e['report'] as Map? ?? const {};
-    final report =
-        names
-            .rows('validated_reports')
-            .where((r) => '${r['id'] ?? r['report_id']}' == '${e['report_id']}')
-            .firstOrNull ??
-        {
-          'id': e['report_id'],
-          'disaster': info['disaster'] ?? 'Disaster',
-          'barangay': info['barangay'] ?? '',
-          'assistance_needed': info['assistance_needed'],
-          'priority_level': info['priority_level'],
-        };
-    final added = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder: (_) => DonateScreen(report: report, names: names, addTo: e),
-      ),
-    );
-    if (added == true) {
-      _changed = true;
-      await _reload();
-    }
-  }
-
   /// Oct 23: remove one waiting item, after a strong warning and a reason.
   Future<void> _removeItem(BuildContext context, Map e, Map item) async {
     final reason = await confirmRemoveItem(
@@ -764,8 +749,10 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
         builder: (_) => DonateScreen(report: report, names: names, edit: e),
       ),
     );
-    // Back to the list, which reloads with the changes.
-    if (saved == true && context.mounted) Navigator.of(context).pop(true);
+    if (saved == true) {
+      _changed = true;
+      await _reload();
+    }
   }
 
   /// Oct 25: the donor cancels (with a reason) instead of deleting, so CSWS
@@ -841,22 +828,24 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Want to add more?',
+                        'Change or add items?',
                         style: t.titleSmall?.copyWith(
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                       Gaps.v4,
                       Text(
-                        'New items join this donation and keep the same QR '
-                        'code and pickup.',
+                        // D7: one form, filled in, with "+ Add item" inside.
+                        'Edit your items or add more in one form. New items '
+                        'keep the same QR code and pickup.',
                         style: muted,
                       ),
                       Gaps.v12,
                       FilledButton.icon(
-                        onPressed: () => _addItems(context, e),
-                        icon: const Icon(Icons.add_rounded, size: 20),
-                        label: const Text('Add items'),
+                        key: const ValueKey('edit-donation'),
+                        onPressed: () => _edit(context, e),
+                        icon: const Icon(Icons.edit_note_rounded, size: 20),
+                        label: const Text('Edit donation'),
                       ),
                       if (open.length > 1) ...[
                         Gaps.v8,
@@ -872,9 +861,12 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
               ],
             ),
           ],
-          if (canAdd && (canEdit || canCancel))
+          if (canAdd && ((canEdit && cancelled) || canCancel))
             const Divider(height: Space.lg * 1.5),
-          if (canEdit || canCancel) ...[
+          // D7: "Edit donation" above covers changes; a declined donation
+          // still gets "Fix and send again", and one that can't take new
+          // items still gets "Edit donation" here.
+          if ((canEdit && (cancelled || !canAdd)) || canCancel) ...[
             Text(
               cancelled ? 'Changed your mind?' : 'Need to change something?',
               style: t.labelLarge?.copyWith(color: cs.onSurfaceVariant),
@@ -884,7 +876,7 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
               spacing: Space.xs,
               runSpacing: Space.xs,
               children: [
-                if (canEdit)
+                if (canEdit && (cancelled || !canAdd))
                   OutlinedButton.icon(
                     onPressed: () => _edit(context, e),
                     icon: Icon(
@@ -894,7 +886,7 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                       size: 20,
                     ),
                     label: Text(
-                      cancelled ? 'Fix and send again' : 'Update details',
+                      cancelled ? 'Fix and send again' : 'Edit donation',
                     ),
                   ),
                 if (canCancel)
@@ -1093,8 +1085,8 @@ class _RemoveItemDialogState extends State<_RemoveItemDialog> {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final i = widget.item;
-    final what = '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
-        .replaceAll(RegExp(r'\s+'), ' ');
+    // G-002 (D8): "Rice · 10 packs x 5 kg".
+    final what = '${i['item_name']} · ${itemAmount(i)}';
     // A strong warning in amber: red reads as a system error (Oct 25).
     final caution = StatusColors.of('On Hold', Theme.of(context).brightness);
     return AlertDialog(

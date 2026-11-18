@@ -108,13 +108,14 @@ void main() {
     await pump(tester, entries);
     expect(find.text('Donation 1 · 3 items'), findsOneWidget);
     expect(find.text('Donation 1 · 1 item'), findsOneWidget);
-    expect(find.text('2 pcs Sardines'), findsOneWidget);
+    // G-002 (D8): name and readable amount, then packaging and quantities.
+    expect(find.text('Sardines · 2 pcs'), findsOneWidget);
     expect(find.text('On hold: Check the count'), findsOneWidget);
 
     await tester.tap(find.text('Pending (1)'));
     await tester.pump();
-    expect(find.text('2 pcs Sardines'), findsNothing);
-    expect(find.text('2 pcs Bottled Water'), findsOneWidget);
+    expect(find.text('Sardines · 2 pcs'), findsNothing);
+    expect(find.text('Bottled Water · 2 pcs'), findsOneWidget);
 
     // Oct 11 notes (Dave): the CMO "acknowledges", so Confirmed reads
     // "Acknowledged" on screen.

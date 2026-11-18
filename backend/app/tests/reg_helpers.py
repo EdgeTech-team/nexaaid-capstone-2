@@ -59,6 +59,9 @@ def org_payload(client, email, registration_no="REG-2026-01", **overrides) -> di
         "contact_email": email, "contact_number": "09171234567",
         "password": STRONG_PASSWORD, "confirm_password": STRONG_PASSWORD,
         "legitimacy_document": ref(upload(client, "legitimacy_document", pdf(), name="sec.pdf")),
+        # NF-008 (D6): the contact person's government ID is required.
+        "id_front": ref(upload(client, "id_front")),
+        "id_back": ref(upload(client, "id_back", png("gray"))),
         "consent": True,
         "accepted_terms": True,
     }

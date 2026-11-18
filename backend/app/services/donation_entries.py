@@ -95,6 +95,19 @@ def build_entries(
     }
     labels = _report_labels(db, {r.report_id for r in rows})
     users, guests = _donor_names(db, rows) if include_donor else ({}, {})
+    # G-002 (D8): packaging and every quantity that exists.
+    from services.item_quantities import barangay_received, donated_item_fields
+    at_barangay = barangay_received(db, [r.donation_id for r in rows])
+    # NF-011 (D3) / NF-006 (D4): who made each entry, for the trust chips.
+    from services.email_hold import is_held
+    from services.pledge_trust import entry_trust, pledge_is_verified, users_by_id
+    accounts = users_by_id(db, {r.user_id for r in rows})
+    verified_orgs = set()
+    org_ids = {u.organization_id for u in accounts.values() if u.organization_id}
+    if include_donor and org_ids:
+        from models.organization_model import Organization
+        verified_orgs = {o for (o,) in db.query(Organization.organization_id).filter(
+            Organization.organization_id.in_(org_ids), Organization.reviewed_at.isnot(None))}
     decisions = _latest_decisions(db, [r.donation_id for r in rows]) if include_cmo else {}
 
     by_ref: dict = {}
@@ -104,6 +117,8 @@ def build_entries(
     entries = []
     for ref, lines in by_ref.items():
         first = lines[0]
+        account = accounts.get(first.user_id)
+        waiting = [l for l in lines if l.status == "Pending"]
         entry = {
             "batch_reference": ref,
             "report_id": first.report_id,
@@ -116,6 +131,10 @@ def build_entries(
             "pending_items": sum(1 for l in lines if l.status == "Pending"),
             # Handover deadline, or when and why it was closed.
             **entry_expiry_info(lines),
+            # NF-011 (D3): "Guest – not yet received" / "Email not verified".
+            **entry_trust(lines, account),
+            # NF-006 (D4): Door to Door waiting for the donor's email code.
+            "awaiting_email": bool(waiting) and is_held(waiting[0], account),
             "items": [
                 {
                     "donation_id": l.donation_id,
@@ -131,6 +150,7 @@ def build_entries(
                     "estimated_value": float(l.estimated_value) if l.estimated_value is not None else None,
                     "status": l.status,
                     "actual_quantity_received": received.get(l.donation_id),
+                    "pledge_verified": pledge_is_verified(l, account),
                     # e.g. "Not brought to CSWS" (Oct 13) for a closed item.
                     "close_reason": l.close_reason,
                     # Oct 23: which batch it came with (1 = original pledge)
@@ -140,6 +160,9 @@ def build_entries(
                     "added_later": (l.addition_no or 1) > 1,
                     "removed_by_donor": is_removed(l),
                     "removed_reason": removed_reason(l),
+                    **donated_item_fields(
+                        l, items[l.item_id].unit_of_measure if l.item_id in items else "",
+                        received.get(l.donation_id), at_barangay.get(l.donation_id)),
                 }
                 for l in lines
             ],
@@ -170,6 +193,9 @@ def build_entries(
                 if first.user_id
                 else f"{guests.get(first.guest_donor_id, 'Guest')} (guest)"
             )
+            # NF-008 (D6): Verified badge for an organization's entries.
+            entry["organization_verified"] = bool(
+                account is not None and account.organization_id in verified_orgs)
         entries.append(entry)
     return entries
 
