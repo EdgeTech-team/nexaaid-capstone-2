@@ -12,6 +12,9 @@ the reporter; delivered = min(received, sent), so an over-count never
 raises fulfillment; receipts saved before counting keep the sent quantity;
 the database refuses a difference without a reason; a trip takes counts per
 delivery, all or nothing.
+
+J2 / NF-015: every confirm also carries the handover code and a signature
+(tests/receipt_helpers.py proof), so these tests reach the J1 checks.
 """
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -21,7 +24,7 @@ from models.delivery import Delivery, Receipt, ReceiptItem
 from models.report import DisasterReport
 from models.user_rbac_model import User
 from services.fulfillment import progress
-from tests.receipt_helpers import ANY_TRIP_COUNTS, full_counts, trip_counts
+from tests.receipt_helpers import ANY_TRIP_COUNTS, full_counts, proof, trip_counts
 from tests.test_delivery_trips import _deliver, _stocked, _trip
 from tests.test_inventory_paths import _add_item, _donate, _receive
 from tests.test_pickup_days_and_runs import _activate_everyone
@@ -53,7 +56,8 @@ def _count(line, received, reason=None, note=None) -> dict:
 
 
 def _confirm(client, t, did, counts, who="brgy"):
-    return client.post(f"/deliveries/{did}/confirm-receipt", headers=t[who], json={"items": counts})
+    body = {"items": counts, **proof(client, did, t[who])}
+    return client.post(f"/deliveries/{did}/confirm-receipt", headers=t[who], json=body)
 
 
 def _status(client, t, did):
@@ -255,19 +259,21 @@ def test_a_trip_takes_counts_for_each_delivery_all_or_nothing(api):
     url = f"/trips/{tid}/confirm-receipt"
 
     # Remarks only, or no deliveries: refused.
-    for body in ({}, {"remarks": "complete"}, {"deliveries": []}):
-        assert client.post(url, headers=t["brgy"], json=body).status_code == 422, body
+    for bad in ({}, {"remarks": "complete"}, {"deliveries": []}):
+        assert client.post(url, headers=t["brgy"], json=bad).status_code == 422, bad
     assert client.post(url, headers=t["brgy2"], json=ANY_TRIP_COUNTS).status_code == 404   # not their stop
 
-    first, second = trip_counts(client, tid, t["brgy"])["deliveries"]
+    body = trip_counts(client, tid, t["brgy"])      # counts, the stop's code and a signature
+    first, second = body["deliveries"]
     # A delivery left out, or one that is not on this stop: refused.
-    r = client.post(url, headers=t["brgy"], json={"deliveries": [first]})
+    r = client.post(url, headers=t["brgy"], json={**body, "deliveries": [first]})
     assert r.status_code == 422 and "Missing: delivery" in r.json()["detail"]
     extra = {"delivery_id": 9999, "items": first["items"]}
-    assert client.post(url, headers=t["brgy"], json={"deliveries": [first, second, extra]}).status_code == 422
+    assert client.post(url, headers=t["brgy"],
+                       json={**body, "deliveries": [first, second, extra]}).status_code == 422
     # One short line without a reason: nothing at all is confirmed.
     short = {**second["items"][0], "received_quantity": second["items"][0]["received_quantity"] - 5}
-    bad = {"deliveries": [first, {**second, "items": [short]}]}
+    bad = {**body, "deliveries": [first, {**second, "items": [short]}]}
     assert client.post(url, headers=t["brgy"], json=bad).status_code == 422
     rows = ok(client.get("/deliveries/", headers=t["brgy"], params={"trip_id": tid}))
     assert {row["status"] for row in rows} == {"Delivered"}
@@ -275,7 +281,7 @@ def test_a_trip_takes_counts_for_each_delivery_all_or_nothing(api):
     # With a reason, both are confirmed together, each with its own counts.
     fixed = {**short, "discrepancy_reason": "Wrong item"}
     done = ok(client.post(url, headers=t["brgy"], json={
-        "deliveries": [first, {**second, "items": [fixed]}], "remarks": "Stop 1"}))
+        **body, "deliveries": [first, {**second, "items": [fixed]}], "remarks": "Stop 1"}))
     assert sorted(done["confirmed_deliveries"]) == sorted([first["delivery_id"], second["delivery_id"]])
     assert done["with_differences"] == [second["delivery_id"]]
     db = database.SessionLocal()

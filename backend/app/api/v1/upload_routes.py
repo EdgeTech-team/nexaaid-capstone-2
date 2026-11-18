@@ -21,7 +21,7 @@ from core.database import get_db
 from core.storage import get_storage
 from core.uploads import (
     EXTENSION, LABEL, MAX_BYTES, MAX_UNCLAIMED_BYTES, PDF, PURPOSES, clean_image, file_url,
-    hash_token, local_path, purge_unclaimed, read_limited, sniff, unclaimed_bytes,
+    hash_token, local_path, purge_unclaimed, read_limited, size_label, sniff, unclaimed_bytes,
 )
 
 from models.upload_model import Upload, UploadBlob
@@ -65,6 +65,13 @@ def upload_file(
                 413,
                 f"The image is too large",
             )
+    # J2 / NF-015: some purposes have a smaller cap (signature 300 KB, slip
+    # photo 1 MB), checked on the saved bytes.
+    if rule.max_bytes is not None and len(data) > rule.max_bytes:
+        raise HTTPException(
+            413,
+            f"This file must be {size_label(rule.max_bytes)} or smaller.",
+        )
     if user is None:
         # F-14: uploads made before login (registration) are cleaned up once
         # they can no longer be claimed, and refused while too many wait.

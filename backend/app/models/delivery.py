@@ -7,6 +7,7 @@ Also includes a minimal STUB for 'items' (delivery_items.item_id references it )
 
 
 from sqlalchemy import(
+    Boolean,
     Column,
     Integer,
     String,
@@ -15,6 +16,7 @@ from sqlalchemy import(
     CheckConstraint,
     UniqueConstraint,
     TIMESTAMP,
+    false,
     func,
 )
 
@@ -23,6 +25,7 @@ from core.database import Base
 from models.item_model import Item  # noqa: F401
 from models.barangay_model import Barangay  # noqa: F401
 from models.sitio_model import Sitio  # noqa: F401
+from models.upload_model import Upload  # noqa: F401  (receipts.signature_file_id -> uploads.file_id)
 
 # module (3.10)
 
@@ -75,9 +78,17 @@ class Delivery(Base):
         nullable=True,
     )
 
+    # J2 / NF-015 (team agreement A2): the 6-digit handover code made when
+    # the delivery arrives. Only a keyed hash is kept (services/handover.py);
+    # the code is shown once to CSWS Main Office (or the DRRMO user carrying
+    # it) and never to the Barangay Receiving Representative. NULL = no code
+    # yet, or the arrival was undone. Migration a8c3e5f7b9d1.
+    handover_code_hash = Column(String(128), nullable=True)
+    handover_code_created_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
     __table_args__ = (
         CheckConstraint(
-             "status IN ('Preparing','In Transit','Delivered', 'Confirmed', 'Cancelled')", 
+             "status IN ('Preparing','In Transit','Delivered', 'Confirmed', 'Cancelled')",
              name="deliveries_status_check",
         ),
     )
@@ -86,7 +97,7 @@ class Delivery(Base):
     report = relationship("DisasterReport")
     destination_barangay = relationship("Barangay")
     destination_sitio = relationship("Sitio")
-    handled_by = relationship("User", foreign_keys=[handled_by_user_id]) 
+    handled_by = relationship("User", foreign_keys=[handled_by_user_id])
     items = relationship("DeliveryItem", back_populates="delivery", cascade="all, delete-orphan")
     receipt = relationship(
         "Receipt", back_populates="delivery", uselist=False, cascade="all, delete-orphan"
@@ -127,7 +138,7 @@ class DeliveryTrip(Base):
     deliveries = relationship("Delivery", back_populates="trip", order_by="Delivery.stop_order")
     handled_by = relationship("User", foreign_keys=[handled_by_user_id])
 
-class DeliveryItem(Base): 
+class DeliveryItem(Base):
         __tablename__ = "delivery_items"
 
         delivery_item_id = Column (Integer, primary_key=True)
@@ -166,7 +177,7 @@ class DeliveryItem(Base):
         def discrepancy_reason(self):
             return self.receipt_item.discrepancy_reason if self.receipt_item is not None else None
 
-class Receipt(Base): 
+class Receipt(Base):
         __tablename__ = "receipts"
 
         receipt_id = Column (Integer, primary_key=True)
@@ -183,6 +194,26 @@ class Receipt(Base):
 
         remarks = Column(Text, nullable=True)
 
+        # J2 / NF-015 (team agreement A2): proof of receipt. NULL on receipts
+        # saved before J2; the API requires name, position and signature for
+        # every new receipt. Files are uploads (core/uploads.py purposes
+        # receipt_signature and receipt_slip_photo), referenced by file_id;
+        # ON DELETE RESTRICT keeps them while the receipt exists.
+        # Migration a8c3e5f7b9d1.
+        signer_name = Column(String(150), nullable=True)
+        signer_position = Column(String(100), nullable=True)
+        signature_file_id = Column(
+            String(36),
+            ForeignKey("uploads.file_id", ondelete="RESTRICT", name="fk_receipts_signature_file_id"),
+            nullable=True, index=True,
+        )
+        slip_photo_file_id = Column(
+            String(36),
+            ForeignKey("uploads.file_id", ondelete="RESTRICT", name="fk_receipts_slip_photo_file_id"),
+            nullable=True, index=True,
+        )
+        handover_verified = Column(Boolean, nullable=False, default=False, server_default=false())
+
         #relationships
         delivery = relationship ("Delivery", back_populates="receipt")
         received_by = relationship ("User", foreign_keys=[received_by_user_id])
@@ -196,6 +227,15 @@ class Receipt(Base):
         @property
         def has_discrepancy(self) -> bool:
             return any(i.received_quantity != i.expected_quantity for i in self.items)
+
+        @property
+        def reference_no(self):
+            """J2 / NF-015: the Acknowledgment Receipt number, e.g.
+            AR-2026-000123 (year of received_at, receipt_id as 6 digits).
+            Worked out, never stored."""
+            if self.receipt_id is None or self.received_at is None:
+                return None
+            return f"AR-{self.received_at.year}-{self.receipt_id:06d}"
 
 
 class ReceiptItem(Base):

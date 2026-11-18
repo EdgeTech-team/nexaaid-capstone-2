@@ -110,7 +110,11 @@ def test_qr_inventory_stock_and_delivery_history(api):
     assert client.post(f"/deliveries/{did}/acknowledge", headers=t["brgy2"]).status_code == 404
 
     hist = ok(client.get(f"/deliveries/{did}/history", headers=t["csws"]))
-    assert [h["action"] for h in hist["history"]] == [
+    # J2 / NF-015: arriving (and the test helper) also log that a handover
+    # code was made; the code itself is never in the history.
+    actions = [h["action"] for h in hist["history"]]
+    assert "ISSUE HANDOVER CODE" in actions
+    assert [a for a in actions if a != "ISSUE HANDOVER CODE"] == [
         "PREPARE DELIVERY", "UPDATE DELIVERY STATUS", "UPDATE DELIVERY STATUS",
         "CONFIRM RECEIPT", "ACKNOWLEDGE AID"]
     assert hist["acknowledged"] and all(h["at"] for h in hist["history"])
