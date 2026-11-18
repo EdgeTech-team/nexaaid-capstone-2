@@ -4,6 +4,7 @@ import '../api.dart' show ApiResult, Roles;
 import 'delivery_widgets.dart';
 import 'ops_screens.dart' show showDeliveryHistory;
 import 'widgets.dart';
+import 'handover_code.dart';
 
 // ---------------------------------------------------------------------------
 // Delivery trips: several reports on one truck (backend: api/v1/trips.py).
@@ -278,11 +279,22 @@ class TripDetailScreen extends StatelessWidget {
       ),
     );
     if (ok != true || !context.mounted) return;
-    await act(
+    final nav = Navigator.of(context);
+    final r = await act(
       context,
       () => api.post('/trips/$tripId/stops/${stop['barangay_id']}/arrived'),
       success: 'Marked as delivered in ${stop['barangay_name']}',
     );
+    // J2 / NF-015: the stop's handover code, shown once (CSWS Main Office).
+    final shown = r.json is Map ? (r.json as Map)['handover_code'] : null;
+    if (shown is Map && nav.mounted) {
+      await showHandoverCode(
+        nav.context,
+        code: '${shown['code']}',
+        where: '${stop['barangay_name']}',
+        deliveries: (shown['delivery_ids'] as List).length,
+      );
+    }
   }
 
   /// New date for every stop not yet delivered. Barangays are told.
