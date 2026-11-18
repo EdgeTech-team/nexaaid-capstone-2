@@ -22,6 +22,7 @@ from core.uploads import PURPOSES
 from models.audit_log_model import AuditLog
 from models.delivery import Delivery, Receipt
 from models.notification import Notification
+from models.user_rbac_model import User
 from services import handover
 from tests.receipt_helpers import (
     SIGNER, counts_as_sent, handover_code, image_bytes, upload, upload_signature,
@@ -85,6 +86,21 @@ def _age_wrong_rows(minutes):
         db.commit()
     finally:
         db.close()
+
+
+def _rep(client, key, barangay_id=None):
+    """Another Barangay Receiving Representative account: assigned to
+    [barangay_id], or to no barangay at all."""
+    headers = _add_user(client, key, "Barangay Receiving Representative")
+    if barangay_id is not None:
+        db = database.SessionLocal()
+        try:
+            (db.query(User).filter(User.email == f"{key}@test.local")
+             .update({User.assigned_barangay_id: barangay_id}, synchronize_session=False))
+            db.commit()
+        finally:
+            db.close()
+    return headers
 
 
 def _stop_trip(client, t, quantities=(30, 20)):
@@ -206,8 +222,11 @@ def test_five_wrong_codes_lock_confirmation_for_15_minutes(api, monkeypatch):
     assert r.status_code == 429 and int(r.headers["Retry-After"]) > 0
 
     assert _confirm(client, t, did, body).status_code == 429             # the right code too
-    admin_body = {**body, "signature_file_id": upload_signature(client, t["admin"])}
-    assert _confirm(client, t, did, admin_body, who="admin").status_code == 429   # any account
+    # Any account: another rep of the same barangay is locked out too.
+    other_rep = _rep(client, "brgy1b", barangay_id=1)
+    other_body = {**body, "signature_file_id": upload_signature(client, other_rep)}
+    assert client.post(f"/deliveries/{did}/confirm-receipt", headers=other_rep,
+                       json=other_body).status_code == 429
     assert handover_code(client, did) == "654321"                        # a new code ...
     assert _confirm(client, t, did, {**body, "handover_code": "654321"}).status_code == 429  # ... no reset
     assert _status(client, t, did) == "Delivered" and _wrong_rows([did]) == 5
@@ -391,3 +410,56 @@ def test_the_acknowledgment_receipt_for_each_role(api):
     assert client.get(url, headers=t["drrmo"]).status_code == 403
     assert client.get(url, headers=t["cmo"]).status_code == 403
     assert client.get(url, headers=t["brgy2"]).status_code == 404    # another barangay
+
+
+# ------------------------------- J4 / G-001: only the Barangay Rep confirms
+def test_only_the_barangay_rep_confirms_and_acknowledges(api):
+    """UC-B1 actor (task brief J4): Administrator = 403; a rep of another
+    barangay = 403; a rep with no assigned barangay = 403. The Administrator
+    can still read the Acknowledgment Receipt."""
+    client, t = api
+    no_barangay = _rep(client, "brgy0")
+    did, arrived = _arrived(client, t)
+    body = _body(client, t, did, arrived["handover_code"])
+    url = f"/deliveries/{did}/confirm-receipt"
+
+    assert client.post(url, headers=t["admin"], json=body).status_code == 403
+    r = client.post(url, headers=t["brgy2"], json=body)
+    assert r.status_code == 403 and "not for your assigned barangay" in r.json()["detail"]
+    r = client.post(url, headers=no_barangay, json=body)
+    assert r.status_code == 403 and "no assigned barangay" in r.json()["detail"]
+    # Refused before the code was looked at, and nothing was saved.
+    assert _wrong_rows([did]) == 0 and _status(client, t, did) == "Delivered"
+    ok(_confirm(client, t, did, body), 201)                 # the rep of that barangay
+
+    ack = f"/deliveries/{did}/acknowledge"
+    assert client.post(ack, headers=t["admin"]).status_code == 403
+    r = client.post(ack, headers=t["brgy2"])
+    assert r.status_code == 403 and "not for your assigned barangay" in r.json()["detail"]
+    r = client.post(ack, headers=no_barangay)
+    assert r.status_code == 403 and "no assigned barangay" in r.json()["detail"]
+    assert client.post(ack, headers=t["brgy"]).status_code == 409   # the receipt already acknowledged it
+
+    # The Administrator still views the receipt and its signature.
+    a = ok(client.get(f"/deliveries/{did}/acknowledgment", headers=t["admin"]))
+    assert a["view"] == "full" and a["signer_name"] == SIGNER["signer_name"]
+    assert client.get(a["signature_url"], headers=t["admin"]).status_code == 200
+
+
+def test_only_the_barangay_rep_confirms_a_trip_stop(api, monkeypatch):
+    client, t = api
+    monkeypatch.setattr(handover, "new_code", lambda: CODE)
+    no_barangay = _rep(client, "brgy0")
+    tid = _stop_trip(client, t)
+    ok(client.post(f"/trips/{tid}/stops/1/arrived", headers=t["csws"]))
+    body = _trip_body(client, t, tid, CODE)
+    url = f"/trips/{tid}/confirm-receipt"
+
+    assert client.post(url, headers=t["admin"], json=body).status_code == 403
+    r = client.post(url, headers=t["brgy2"], json=body)       # no stop at Barangay Two
+    assert r.status_code == 403 and "assigned barangay" in r.json()["detail"]
+    r = client.post(url, headers=no_barangay, json=body)
+    assert r.status_code == 403 and "no assigned barangay" in r.json()["detail"]
+    assert _wrong_rows(body_ids := [d["delivery_id"] for d in body["deliveries"]]) == 0
+    done = ok(client.post(url, headers=t["brgy"], json=body))
+    assert sorted(done["confirmed_deliveries"]) == sorted(body_ids)

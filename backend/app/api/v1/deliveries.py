@@ -865,6 +865,24 @@ def record_receipt(db: Session, delivery: Delivery, counted: list, proof: Receip
     return ReceiptConfirmResponse(receipt=receipt, delivery=delivery, fulfillment=fulfillment)
 
 
+def rep_barangay(user) -> int:
+    """J4 / G-001 (UC-B1 actor): only the Barangay Receiving Representative
+    confirms receipt or acknowledges aid, and only with an assigned barangay
+    (users.assigned_barangay_id). Returns that barangay; 403 when there is
+    none. The route guards already refuse every other role, the
+    Administrator included."""
+    barangay_id = getattr(user, "assigned_barangay_id", None)
+    if not has_role(user, "barangay_receiving_rep") or barangay_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has no assigned barangay. Ask the Administrator to set one.",
+        )
+    return barangay_id
+
+
+NOT_YOUR_BARANGAY = "This delivery is not for your assigned barangay."
+
+
 @router.post(
     "/{delivery_id}/confirm-receipt",
     response_model=ReceiptConfirmResponse,
@@ -874,12 +892,15 @@ def confirm_receipt(
    delivery_id: int,
    payload: ReceiptConfirm,
    db: Session = Depends(get_db),
-   current_user=Depends(require_role("barangay_receiving_rep","admin")),
+   current_user=Depends(require_role("barangay_receiving_rep")),
 ):
-    """UC-B1. Order of checks: 404; 409 not arrived; 403 another barangay;
+    """UC-B1, Barangay Receiving Representative only (J4 / G-001: not the
+    Administrator). Order of checks: 403 not a rep / no assigned barangay;
+    404; 403 another barangay (alt flow 3a); 409 not arrived (alt flow 4a);
     J2 handover code (429 locked, 409 no code yet, 403 wrong); J1 counts
     (422); J2 signature and slip photo (422). Nothing is saved before all
     of them pass, except the audit row of a wrong code."""
+    own_barangay = rep_barangay(current_user)
     delivery = (
       db.query(Delivery)
       .options(joinedload(Delivery.items))
@@ -888,6 +909,11 @@ def confirm_receipt(
     )
     if not delivery:
         raise HTTPException(status_code=404, detail="Delivery not found")
+
+    # Alt flow 3a: delivery must match the confirming rep's assigned
+    # barangay (users.assigned_barangay_id).
+    if own_barangay != delivery.destination_barangay_id:
+       raise HTTPException(status_code=403, detail=NOT_YOUR_BARANGAY)
 
     # Alt flow 4a: acknowledgment blocked until the delivery has actually
     # arrived — i.e. status must already be 'Delivered'.
@@ -898,15 +924,6 @@ def confirm_receipt(
           detail=f"Cannot confirm receipt-delivery status is"
                   f"'{delivery.status}', must be delivered first",
     )
-
-    # Alt flow 3a: delivery must match the confirming rep's assigned
-    # barangay (users.assigned_barangay_id).
-    own_barangay = barangay_scope(current_user)
-    if own_barangay is not None and own_barangay != delivery.destination_barangay_id:
-       raise HTTPException(
-          status_code=403,
-          detail="This delivery is not for your assigned barangay.",
-       )
 
     # J2 / NF-015: the handover code shown by the staff on site.
     handover.check_code(db, [delivery], payload.handover_code, current_user)
@@ -927,12 +944,17 @@ def confirm_receipt(
 def acknowledge_delivery(
    delivery_id: int,
    db: Session = Depends(get_db),
-   current_user=Depends(require_role("barangay_receiving_rep", "admin")),
+   current_user=Depends(require_role("barangay_receiving_rep")),
 ):
+    # J4 / G-001: the Barangay Receiving Representative of that barangay
+    # only (not the Administrator); no assigned barangay or another
+    # barangay is 403.
+    own_barangay = rep_barangay(current_user)
     delivery = db.get(Delivery, delivery_id)
-    own_barangay = barangay_scope(current_user)
-    if not delivery or (own_barangay is not None and delivery.destination_barangay_id != own_barangay):
+    if not delivery:
         raise HTTPException(status_code=404, detail="Delivery not found")
+    if delivery.destination_barangay_id != own_barangay:
+        raise HTTPException(status_code=403, detail=NOT_YOUR_BARANGAY)
     if delivery.status != "Confirmed":
         raise HTTPException(status_code=409, detail="Confirm receipt first, then acknowledge")
     if _is_acknowledged(db, delivery_id):
