@@ -10,6 +10,7 @@ import 'paged_donation_entries.dart' show searchDebounce;
 import 'paginated_list.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
+import 'item_amounts.dart';
 
 // ---------------------------------------------------------------------------
 // CMO Representative (UC-C1 / UC-C2, City Confirmation Module).
@@ -105,6 +106,10 @@ String _reportName(Map e) {
 /// "20 cans", or "100 sets · Pack of 10 x 1 sets". The packaging is left
 /// out when it only repeats the amount ("1 cans").
 String _amount(Map i) {
+  // G-002 (D8): "10 packs x 5 kg · Sack · Declared 50 kg · Counted 48 kg".
+  if (i['amount_text'] != null) {
+    return '${itemAmount(i)} · ${itemQuantities(i)}';
+  }
   final unit = '${i['unit'] ?? ''}'.trim();
   final base = '${i['quantity']} $unit'.trim();
   final pack = '${i['packaging'] ?? ''}'.trim();

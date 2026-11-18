@@ -23,6 +23,14 @@ def _door(rid, days, landmark="Mandaue City Hall", lat=10.3236, lng=123.9430, **
     }
 
 
+def confirm_calls(client, t, *refs):
+    """NF-007 (D5): a pickup run needs a "Called – confirmed" call per stop."""
+    for ref in refs:
+        r = client.post(f"/donations/entries/{ref}/contact-check", headers=t["csws"],
+                        json={"outcome": "Reached"})
+        assert r.status_code == 200, r.text
+
+
 def _next(weekday):
     """Next date (Philippine time) on that ISO weekday, at least tomorrow."""
     d = datetime.now(MANILA).date() + timedelta(days=1)
@@ -93,6 +101,7 @@ def test_disaster_unit_sees_the_pickup_map_and_requests_drrmo_support(api):
     fri = ok(client.post("/donations/batch", headers=t["donor"],
                          json=_door(rid, [5], landmark="Parkmall, Mandaue City", lat=10.3270, lng=123.9330)), 201)
     a, b = mon_wed["batch_reference"], fri["batch_reference"]
+    confirm_calls(client, t, a, b)       # NF-007: every stop is called first
 
     # CSWS Main Office sees the waiting pickups; donors and the Disaster Unit don't
     board = ok(client.get("/donations/pickups", headers=t["csws"]))
@@ -249,6 +258,7 @@ def test_deleting_the_only_stop_cancels_the_pickup_run(api):
     client, t = api
     rid = _report(client, t)
     a = ok(client.post("/donations/batch", headers=t["donor"], json=_door(rid, [3])), 201)["batch_reference"]
+    confirm_calls(client, t, a)
     req = ok(client.post("/logistics/pickup-requests", headers=t["csws"], json={
         "pickup_date": _next(3).isoformat(), "batch_references": [a], "trucks": 1}), 201)
     ok(client.delete(f"/donations/entries/{a}", headers=t["donor"]))
