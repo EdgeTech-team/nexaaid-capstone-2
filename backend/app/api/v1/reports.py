@@ -964,6 +964,30 @@ def _disaster_unit_member(db: Session, number: Optional[str]):
     )
     return next((u for u in rows if _phone_key(u.contact_number) == key), None)
 
+
+# J8 / NF-014 (team agreement Nov 18, 2026, A5): an SMS from a number that
+# matches no active CSWS Disaster Unit member is refused (422) unless the
+# Administrator gives unregistered_sender_reason. The reason is saved with
+# the SMS and the report shows it as a warning until it is validated.
+UNREGISTERED_SENDER = (
+    "The sender number matches no active CSWS Disaster Unit member. Give a reason "
+    "(unregistered_sender_reason) to encode it anyway."
+)
+
+
+def _sms_warning(meta: SmsReportMetadata, report: DisasterReport) -> Optional[str]:
+    if not meta.unregistered_sender_reason or report.status == "Validated":
+        return None
+    return ("Unregistered sender: the number matches no active CSWS Disaster Unit "
+            f"member. Reason given: {meta.unregistered_sender_reason}")
+
+
+def _sms_meta_view(meta: SmsReportMetadata, report: DisasterReport) -> SmsReportMetadataResponse:
+    view = SmsReportMetadataResponse.model_validate(meta)
+    view.warning = _sms_warning(meta, report)
+    return view
+
+
 @router.post(
     "/sms",
     response_model=SmsReportIngestResponse,
@@ -978,8 +1002,16 @@ def ingest_sms_report(
     # (source "SMS"). It then waits in the validation queue as Pending.
     current_user=Depends(require_role("admin")),
 ):
-    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids", "needs"})
+    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids", "needs",
+                                                "unregistered_sender_reason"})
     sender = _disaster_unit_member(db, payload.contact_number)
+    # J8 / NF-014: an unregistered sender needs a reason; a registered one
+    # is unchanged (any reason sent with it is ignored).
+    reason = None
+    if sender is None:
+        reason = (payload.unregistered_sender_reason or "").strip() or None
+        if reason is None:
+            raise HTTPException(status_code=422, detail=UNREGISTERED_SENDER)
     report = DisasterReport(
         **report_fields,
         user_id=sender.user_id if sender else current_user.user_id,
@@ -996,6 +1028,7 @@ def ingest_sms_report(
         contact_number=payload.contact_number,
         raw_message=payload.raw_message,
         encoded_by_user_id=current_user.user_id,
+        unregistered_sender_reason=reason,
     )
     db.add(sms_meta)
     db.flush()
@@ -1014,12 +1047,14 @@ def ingest_sms_report(
                     "barangay_id": report.barangay_id,
                     "affected_families": report.affected_families,
                     "assistance_needed": report.assistance_needed,
-                    "needs": _needs_log(report)})
+                    "needs": _needs_log(report),
+                    "unregistered_sender_reason": reason})
 
     # The other Administrators and both CSWS offices hear of the new report.
     _notify_new_report(db, report, current_user.user_id)
 
-    return SmsReportIngestResponse(report=report, sms_metadata=sms_meta)
+    view = _sms_meta_view(sms_meta, report)
+    return SmsReportIngestResponse(report=report, sms_metadata=view, warning=view.warning)
 
 
 # ---------------------------------------------------------------------------
@@ -1038,4 +1073,4 @@ def get_sms_metadata(
     )
     if not meta:
         raise HTTPException(status_code=404, detail="No SMS metadata for this report")
-    return meta
+    return _sms_meta_view(meta, meta.report)

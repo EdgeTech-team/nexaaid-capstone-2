@@ -238,8 +238,10 @@ def test_appendix_h_module_access(api):
     assert created["sms_metadata"]["encoded_by_user_id"] == me["admin"]
     ok(client.post(f"/reports/{created['report']['report_id']}/validate",
                    headers=t["admin"], json={}))
-    # A number that is no Disaster Unit member's: kept under the encoder.
-    other = ok(client.post("/reports/sms", json={**sms, "contact_number": "09998887777"},
+    # A number that is no Disaster Unit member's: kept under the encoder
+    # (J8: only with a reason).
+    other = ok(client.post("/reports/sms", json={**sms, "contact_number": "09998887777",
+                                                 "unregistered_sender_reason": "Relayed by a barangay"},
                            headers=t["admin"]), 201)
     assert other["report"]["user_id"] == me["admin"]
 
