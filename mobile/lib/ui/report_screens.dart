@@ -869,22 +869,24 @@ class _NewReportScreenState extends State<NewReportScreen> {
       if (r.ok) Navigator.of(context).pop(true);
       return;
     }
-    final r = await act(
-      context,
-      () => sms
-          ? api.post(
-              '/reports/sms',
-              body: {
-                ...body,
-                'contact_number': smsSender.text.trim(),
-                'raw_message': smsText.text.trim(),
-              },
-            )
-          : api.post('/reports/', body: {...body, 'source': 'Mobile'}),
-      success: sms
-          ? 'SMS report encoded. It is now pending on the Validate tab.'
-          : 'Report submitted. It is now pending admin validation.',
-    );
+    // J8 / NF-014: encodeSmsReport asks for the reason when the sender is
+    // not a registered Disaster Unit member.
+    final r = sms
+        ? await encodeSmsReport(
+            context,
+            {
+              ...body,
+              'contact_number': smsSender.text.trim(),
+              'raw_message': smsText.text.trim(),
+            },
+            success:
+                'SMS report encoded. It is now pending on the Validate tab.',
+          )
+        : await act(
+            context,
+            () => api.post('/reports/', body: {...body, 'source': 'Mobile'}),
+            success: 'Report submitted. It is now pending admin validation.',
+          );
     if (!mounted) return;
     setState(() {
       busy = false;

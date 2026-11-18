@@ -3,10 +3,57 @@
 // received beside the fields that were encoded from it. Nothing here can
 // be edited: a wrong SMS report is rejected with a reason so the Disaster
 // Unit can resend it.
+//
+// J8 / NF-014: an SMS from a number that matches no active CSWS Disaster
+// Unit member is encoded only with a reason; the panel shows it as a
+// warning until the report is validated.
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult;
 import 'widgets.dart';
+
+/// J8: part of the server's 422 detail for an unregistered sender.
+const unregisteredSenderText = 'matches no active CSWS Disaster Unit member';
+
+bool isUnregisteredSender(ApiResult r) =>
+    r.status == 422 &&
+    r.json is Map &&
+    r.json['detail'] is String &&
+    (r.json['detail'] as String).contains(unregisteredSenderText);
+
+/// POST /reports/sms. When the sender number is not a registered Disaster
+/// Unit member's, asks the Administrator for the reason and sends it again
+/// with unregistered_sender_reason (cancel = nothing is saved).
+Future<ApiResult> encodeSmsReport(
+  BuildContext context,
+  Map<String, dynamic> body, {
+  required String success,
+}) async {
+  final first = await api.post('/reports/sms', body: body);
+  if (!context.mounted) return first;
+  if (!isUnregisteredSender(first)) {
+    return act(context, () async => first, success: success);
+  }
+  final v = await formDialog(
+    context,
+    title: 'Unregistered sender',
+    message:
+        '${body['contact_number']} matches no active CSWS Disaster Unit '
+        'member. Give the reason to encode it anyway. The report shows it '
+        'as a warning until it is validated.',
+    fields: const [DialogField('reason', 'Reason', multiline: true)],
+    confirm: 'Encode with reason',
+  );
+  if (v == null || !context.mounted) return first;
+  return act(
+    context,
+    () => api.post(
+      '/reports/sms',
+      body: {...body, 'unregistered_sender_reason': v['reason']},
+    ),
+    success: '$success It shows a warning until it is validated.',
+  );
+}
 
 /// [card] (the encoded fields) with the original SMS of report [reportId]
 /// beside it on a wide screen, or under it on a phone.
@@ -92,6 +139,35 @@ class _SmsOriginalPanelState extends State<SmsOriginalPanel> {
                   style: t.bodySmall?.copyWith(color: cs.error),
                 )
               else ...[
+                if (m['warning'] != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(Space.xs),
+                    decoration: BoxDecoration(
+                      color: cs.errorContainer,
+                      borderRadius: BorderRadius.circular(Radii.sm),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 18,
+                          color: cs.onErrorContainer,
+                        ),
+                        Gaps.h8,
+                        Expanded(
+                          child: Text(
+                            '${m['warning']}',
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onErrorContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Gaps.v8,
+                ],
                 Text(
                   'From ${m['contact_number'] ?? '?'}'
                   '${m['encoded_at'] == null ? '' : ' · encoded ${niceDate(m['encoded_at'])}'}',
