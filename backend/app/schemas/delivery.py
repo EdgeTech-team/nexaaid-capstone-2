@@ -275,3 +275,48 @@ class Acknowledgment(BaseModel):
     handover_verified: bool = False
     has_discrepancy: bool = False
     remarks: Optional[str] = None
+
+
+# J5 / NF-010 (team agreement A3): CSWS Main Office reviews a short delivery
+# (the barangay counted less than was sent). Records the cause only: no
+# stock is restored (office miscounts use the inventory adjustment), and
+# fulfillment and priority are unchanged.
+
+ShortfallCause = Literal["Damaged", "Lost in transit", "Miscount at office", "Miscount at barangay"]
+
+
+class DiscrepancyReview(BaseModel):
+    """POST /deliveries/{id}/discrepancy-review. cause is required; a cause
+    not in the list is refused (422)."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    cause: ShortfallCause
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+class ShortLine(BaseModel):
+    """One line the barangay counted short, with the rep's own reason."""
+    delivery_item_id: int
+    item_id: int
+    item_name: str
+    unit: Optional[str] = None
+    expected_quantity: int
+    received_quantity: int
+    discrepancy_reason: Optional[DiscrepancyReason] = None
+    discrepancy_note: Optional[str] = None
+
+
+class ShortDelivery(BaseModel):
+    """GET /deliveries/discrepancies: a Confirmed delivery with at least one
+    short line, and CSWS Main Office's review of it (None until reviewed)."""
+    delivery_id: int
+    report_id: int
+    report_label: Optional[str] = None
+    barangay_name: str
+    trip_id: Optional[int] = None
+    received_at: datetime
+    short_lines: List[ShortLine]
+    cause: Optional[ShortfallCause] = None
+    note: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    reviewed_by: Optional[str] = None
