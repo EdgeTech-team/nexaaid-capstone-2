@@ -50,14 +50,20 @@ from services.donation_expiry import MANILA, nice_date, now_utc, utc
 from services.delivery_allocation import allocate_delivery, chosen_refs, ready_donations, ready_lines
 from services.delivery_notices import tell_barangay_prepared, tell_donors, tell_status
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
+from services import handover
+from services import acknowledgment as ack_receipts
+from core.uploads import EXTENSION, local_path
+from fastapi.responses import FileResponse
 from schemas.delivery import (
     OVER_REASON,
     SHORT_REASONS,
     DeliveryBatchAdvance,
     DeliveryCreate,
     DeliveryResponse,
+    HandoverCodeResponse,
     ReceiptConfirm,
     ReceiptConfirmResponse,
+    ReceiptProof,
     ReportFulfillmentResponse,
 )
 
@@ -409,7 +415,10 @@ def delete_delivery(
 
 
 # Advance status — CSWS Main Office moves it one step forward, in order
-@router.post("/{delivery_id}/advance", response_model=DeliveryResponse)
+# J2 / NF-015: the step to Delivered (Arrived) makes the handover code. It is
+# in this response once, as "handover_code", and only for CSWS Main Office
+# staff: never for the Administrator. The rest is the usual delivery.
+@router.post("/{delivery_id}/advance", response_model=None)
 def advance_delivery(
     delivery_id: int,
     db: Session = Depends(get_db),
@@ -423,10 +432,14 @@ def advance_delivery(
             detail="Delivery not found"
         )
     move_to_next_status(db, delivery, current_user)
+    code = getattr(delivery, "new_handover_code", None)
     db.flush()
     db.refresh(delivery)
 
-    return delivery
+    body = DeliveryResponse.model_validate(delivery).model_dump(mode="json")
+    if code is not None and has_role(current_user, "csws_main_office"):
+        body["handover_code"] = code
+    return body
 
 
 @router.post("/advance-batch")
@@ -459,10 +472,17 @@ def advance_many(
     return {"moved": moved, "status": "In Transit"}
 
 
-def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delivery:
+def move_to_next_status(db: Session, delivery: Delivery, current_user,
+                        issue_code: bool = True) -> Delivery:
     """One step forward (Preparing -> In Transit -> Delivered) with the
     timestamped history and notifications. Used by advance_delivery and by
-    trips (api/v1/trips.py) so both behave the same. Does not commit."""
+    trips (api/v1/trips.py) so both behave the same. Does not commit.
+
+    J2 / NF-015: reaching Delivered makes the handover code (every way of
+    arriving: CSWS, a trip stop, DRRMO). The code is left on
+    delivery.new_handover_code for the caller to show once; it is not
+    stored. A trip stop passes issue_code=False and makes one code for the
+    whole stop instead."""
     # 'Confirmed' is the last stage and is only reached via
     # confirm_receipt below — never through this endpoint.
     if delivery.status == "Cancelled":
@@ -526,6 +546,11 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
     told = set()
     if delivery.status == "Delivered" and carrying is not None:
         told = complete_on_arrival(db, carrying, current_user)
+
+    # J2 / NF-015: the handover code (never in a notice or the audit log).
+    delivery.new_handover_code = None
+    if delivery.status == "Delivered" and issue_code:
+        delivery.new_handover_code = handover.issue(db, [delivery], current_user)
 
     report = db.get(DisasterReport, delivery.report_id)
     recipients = set(user_ids_with_role(
@@ -593,6 +618,9 @@ def undo_last_step(
                             detail="A step can be undone within 10 minutes only.")
 
     if d.status == "Delivered":
+        # J2 / NF-015: the arrival is taken back, so its handover code stops working.
+        d.handover_code_hash = None
+        d.handover_code_created_at = None
         # Arriving had completed DRRMO's request (Table 36): open it again.
         req = (db.query(LogisticsRequest)
                .filter(LogisticsRequest.delivery_id == delivery_id,
@@ -629,6 +657,42 @@ def timing_summary(
     """Phase 7 dashboards (CSWS and DRRMO): average time from a request to
     DRRMO accepting it, and from On the way to Arrived, from the audit log."""
     return response_times(db)
+
+
+# J2 / NF-015: show a handover code again. Only the hash is stored, so the
+# code from the arrival cannot be shown twice; this makes a new one, which
+# replaces the old one (for a trip stop: one code for every delivery waiting
+# there). Never resets the wrong-code lock.
+@router.post("/{delivery_id}/handover-code", response_model=HandoverCodeResponse)
+def new_handover_code(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office", DRRMO)),
+):
+    """CSWS Main Office staff, or the DRRMO user who carried this delivery.
+    Not the Administrator and not the Barangay Receiving Representative
+    (403). 409 unless the delivery is Delivered (waiting for the barangay)."""
+    d = db.get(Delivery, delivery_id)
+    if d is None or d.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    if has_role(current_user, DRRMO) and not handover.carried_by(db, d, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the DRRMO user who carried this delivery can show its handover code.",
+        )
+    if d.status != "Delivered":
+        raise HTTPException(
+            status_code=409,
+            detail=(f"Delivery #{d.delivery_id} is {STATUS_WORDS.get(d.status, d.status).lower()}. "
+                    "A handover code is only made while it waits for the barangay to confirm."),
+        )
+    group = handover.stop_group(db, d)
+    code = handover.issue(db, group, current_user)
+    return HandoverCodeResponse(
+        delivery_ids=[g.delivery_id for g in group],
+        handover_code=code,
+        created_at=group[0].handover_code_created_at,
+    )
 
 
 # Confirm receipt — Barangay Receiving Representative
@@ -721,53 +785,24 @@ def _differences(counted: list) -> str:
     return "; ".join(parts)
 
 
-@router.post(
-    "/{delivery_id}/confirm-receipt",
-    response_model=ReceiptConfirmResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def confirm_receipt(
-   delivery_id: int,
-   payload: ReceiptConfirm,
-   db: Session = Depends(get_db),
-   current_user=Depends(require_role("barangay_receiving_rep","admin")),
-):
-    delivery = (
-      db.query(Delivery)
-      .options(joinedload(Delivery.items))
-      .filter(Delivery.delivery_id == delivery_id)
-      .first()
-    )
-    if not delivery:
-        raise HTTPException(status_code=404, detail="Delivery not found")
-
-    # Alt flow 4a: acknowledgment blocked until the delivery has actually
-    # arrived — i.e. status must already be 'Delivered'.
-
-    if delivery.status != "Delivered":
-       raise HTTPException(
-          status_code=409,
-          detail=f"Cannot confirm receipt-delivery status is"
-                  f"'{delivery.status}', must be delivered first",
-    )
-
-    # Alt flow 3a: delivery must match the confirming rep's assigned
-    # barangay (users.assigned_barangay_id).
-    own_barangay = barangay_scope(current_user)
-    if own_barangay is not None and own_barangay != delivery.destination_barangay_id:
-       raise HTTPException(
-          status_code=403,
-          detail="This delivery is not for your assigned barangay.",
-       )
-
-    # J1 / NF-009: every line counted, and a fitting reason on each difference.
-    counted = check_counts(delivery, payload.items)
+def record_receipt(db: Session, delivery: Delivery, counted: list, proof: ReceiptProof,
+                   remarks: Optional[str], current_user) -> ReceiptConfirmResponse:
+    """Save one receipt whose code, counts and files were already checked:
+    its counts (J1 / NF-009), the signer and files (J2 / NF-015), the
+    Confirmed status, the acknowledgement, the notices and the fulfillment.
+    Shared by confirm_receipt and the trip confirmation (api/v1/trips.py),
+    so both follow the same rules. Does not commit."""
     differences = _differences(counted)
 
     receipt = Receipt(
        delivery_id=delivery.delivery_id,
        received_by_user_id=current_user.user_id,
-       remarks=payload.remarks
+       remarks=remarks,
+       signer_name=proof.signer_name,
+       signer_position=proof.signer_position,
+       signature_file_id=proof.signature_file_id,
+       slip_photo_file_id=proof.slip_photo_file_id,
+       handover_verified=True,
     )
     for line, received, reason, note in counted:
         receipt.items.append(ReceiptItem(
@@ -780,10 +815,16 @@ def confirm_receipt(
 
     db.add(receipt)
     delivery.status = "Confirmed"
+    # The code did its job; it is not kept once the barangay confirmed.
+    delivery.handover_code_hash = None
     log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
                old={"status": "Delivered"},
-               new={"status": "Confirmed", "remarks": payload.remarks,
+               new={"status": "Confirmed", "remarks": remarks,
                     "has_discrepancy": bool(differences),
+                    "handover_verified": True,
+                    "signer_name": proof.signer_name,
+                    "signer_position": proof.signer_position,
+                    "slip_photo": proof.slip_photo_file_id is not None,
                     "counts": [{"delivery_item_id": line.delivery_item_id, "item_id": line.item_id,
                                 "expected": line.quantity, "received": received, "reason": reason}
                                for line, received, reason, _note in counted]})
@@ -822,6 +863,60 @@ def confirm_receipt(
     db.refresh(fulfillment)
 
     return ReceiptConfirmResponse(receipt=receipt, delivery=delivery, fulfillment=fulfillment)
+
+
+@router.post(
+    "/{delivery_id}/confirm-receipt",
+    response_model=ReceiptConfirmResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def confirm_receipt(
+   delivery_id: int,
+   payload: ReceiptConfirm,
+   db: Session = Depends(get_db),
+   current_user=Depends(require_role("barangay_receiving_rep","admin")),
+):
+    """UC-B1. Order of checks: 404; 409 not arrived; 403 another barangay;
+    J2 handover code (429 locked, 409 no code yet, 403 wrong); J1 counts
+    (422); J2 signature and slip photo (422). Nothing is saved before all
+    of them pass, except the audit row of a wrong code."""
+    delivery = (
+      db.query(Delivery)
+      .options(joinedload(Delivery.items))
+      .filter(Delivery.delivery_id == delivery_id)
+      .first()
+    )
+    if not delivery:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+
+    # Alt flow 4a: acknowledgment blocked until the delivery has actually
+    # arrived — i.e. status must already be 'Delivered'.
+
+    if delivery.status != "Delivered":
+       raise HTTPException(
+          status_code=409,
+          detail=f"Cannot confirm receipt-delivery status is"
+                  f"'{delivery.status}', must be delivered first",
+    )
+
+    # Alt flow 3a: delivery must match the confirming rep's assigned
+    # barangay (users.assigned_barangay_id).
+    own_barangay = barangay_scope(current_user)
+    if own_barangay is not None and own_barangay != delivery.destination_barangay_id:
+       raise HTTPException(
+          status_code=403,
+          detail="This delivery is not for your assigned barangay.",
+       )
+
+    # J2 / NF-015: the handover code shown by the staff on site.
+    handover.check_code(db, [delivery], payload.handover_code, current_user)
+    # J1 / NF-009: every line counted, and a fitting reason on each difference.
+    counted = check_counts(delivery, payload.items)
+    # J2 / NF-015: the signer's own signature (and optional slip photo).
+    handover.check_proof_files(db, payload, current_user)
+
+    return record_receipt(db, delivery, counted, payload, payload.remarks, current_user)
+
 
 # Acknowledge — Barangay Receiving Representative (UC-B1 step 5).
 # Since Oct 20 confirm-receipt records the acknowledgement too, so the app
@@ -863,6 +958,64 @@ def _is_acknowledged(db: Session, delivery_id: int) -> bool:
         AuditLog.entity_id == delivery_id,
         AuditLog.action == "ACKNOWLEDGE AID",
     ).first() is not None
+
+
+# J2 / NF-015: the read-only Acknowledgment Receipt (services/acknowledgment.py).
+# Full view: CSWS Main Office, Disaster Unit, Administrator, the rep of that
+# barangay. Donor view: donors whose goods were on the delivery (items,
+# barangay, reference no., date). Everyone else: 403.
+@router.get("/{delivery_id}/acknowledgment", response_model=None)
+def get_acknowledgment(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(*ack_receipts.READERS)),
+):
+    delivery = db.get(Delivery, delivery_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    return ack_receipts.build(db, delivery, current_user).model_dump(mode="json")
+
+
+def _receipt_file(db: Session, delivery_id: int, user, which: str) -> FileResponse:
+    delivery = db.get(Delivery, delivery_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    up = ack_receipts.receipt_file(db, user, delivery, which)
+    path = local_path(db, up)
+    if path is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(
+        path,
+        media_type=up.content_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{up.file_id}.{EXTENSION[up.content_type]}"',
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.get("/{delivery_id}/acknowledgment/signature")
+def get_acknowledgment_signature(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(*ack_receipts.FULL_READERS)),
+):
+    """The signature PNG. CSWS Main Office, Disaster Unit, Administrator and
+    the rep of that barangay only; never donors."""
+    return _receipt_file(db, delivery_id, current_user, "signature")
+
+
+@router.get("/{delivery_id}/acknowledgment/slip-photo")
+def get_acknowledgment_slip_photo(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(*ack_receipts.FULL_READERS)),
+):
+    """The optional photo of the stamped paper slip. Same readers as the
+    signature; 404 when none was taken."""
+    return _receipt_file(db, delivery_id, current_user, "slip-photo")
 
 
 # Status history with timestamps (who moved it, when)
