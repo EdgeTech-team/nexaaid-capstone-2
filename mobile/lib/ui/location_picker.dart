@@ -377,6 +377,12 @@ class PickupRules {
   final String label;
   final List<ServiceArea> serviceAreas;
 
+  /// NF-004: 'blocked' (guests choose Drop Off only) or 'limited' (one
+  /// Door to Door pickup waiting per guest number). Server: GUEST_DOOR_TO_DOOR.
+  final String guestDoorToDoor;
+
+  bool get guestDoorToDoorBlocked => guestDoorToDoor != 'limited';
+
   const PickupRules({
     this.days = const {1, 2, 3, 4, 5},
     this.startHour = 9,
@@ -385,6 +391,7 @@ class PickupRules {
     this.maxDaysAhead = 13,
     this.label = 'Monday to Friday, 9:00 AM to 5:00 PM',
     this.serviceAreas = defaultServiceAreas,
+    this.guestDoorToDoor = 'blocked',
   });
 
   factory PickupRules.fromJson(Map<String, dynamic> j) {
@@ -402,6 +409,7 @@ class PickupRules {
       maxDaysAhead: (j['max_days_ahead'] as num?)?.toInt() ?? 13,
       label: '${j['label'] ?? 'Monday to Friday, 9:00 AM to 5:00 PM'}',
       serviceAreas: areas.isEmpty ? defaultServiceAreas : areas,
+      guestDoorToDoor: '${j['guest_door_to_door'] ?? 'blocked'}',
     );
   }
 

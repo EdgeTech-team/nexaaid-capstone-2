@@ -5,6 +5,7 @@ import 'delivery_widgets.dart';
 import 'ops_screens.dart' show showDeliveryHistory;
 import 'widgets.dart';
 import 'handover_code.dart';
+import 'item_amounts.dart';
 
 // ---------------------------------------------------------------------------
 // Delivery trips: several reports on one truck (backend: api/v1/trips.py).
@@ -531,9 +532,7 @@ class _StopDelivery extends StatelessWidget {
     final items = (d['items'] as List)
         .cast<Map>()
         .map(
-          (i) => '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name'] ?? ''}'
-              .replaceAll(RegExp(r'\s+'), ' ')
-              .trim(),
+          (i) => deliveredLine(i), // G-002 (D8)
         )
         .join(', ');
     return Padding(

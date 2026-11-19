@@ -11,11 +11,11 @@ from tests.test_lookups_access import _validated
 from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
 
 
-def _guest(client, rid, name, unit="pcs"):
+def _guest(client, rid, name, unit="pcs", phone="09171234567"):
     return ok(client.post("/donations/", json={
         "report_id": rid, "packaging": "Pack", "handover_method": "Drop Off", "quantity": 3,
         "other_item_name": name, "other_item_unit": unit,
-        "guest_donor": {"full_name": "Gina Guest", "contact_number": "09171234567", "consent": True},
+        "guest_donor": {"full_name": "Gina Guest", "contact_number": phone, "consent": True},
     }))
 
 
@@ -30,7 +30,8 @@ def test_a_typed_item_stays_on_the_donation_and_out_of_every_list(api):
     client, t = api
     rid = _validated(client, t)
     first = _guest(client, rid, "Diapers")
-    again = _guest(client, rid, "diapers")
+    # Another guest (NF-005: one number can't pledge the same item twice in 24 h).
+    again = _guest(client, rid, "diapers", phone="09181234567")
     assert first["item_id"] == again["item_id"] != 1          # reused
     assert "Diapers (pcs)" not in _listed(client)
     assert "Diapers (pcs)" not in _listed(client, t["csws"])

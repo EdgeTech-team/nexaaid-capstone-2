@@ -12,13 +12,13 @@ before this migration have no rows here and keep the sent quantity.
 Nothing is backfilled. Additive only; downgrade drops the table.
 
 Revision ID: f7b2d4e6a8c1
-Revises: e2a7c4d9f5b1
+Revises: d4a7b2e8c6f1
 """
 from alembic import op
 
 
 revision = "f7b2d4e6a8c1"
-down_revision = "e2a7c4d9f5b1"
+down_revision = "d4a7b2e8c6f1"
 branch_labels = None
 depends_on = None
 

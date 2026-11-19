@@ -13,26 +13,68 @@ from schemas.upload_schema import UploadRef
 from schemas.user_schema import clean_name
 from pydantic import ConfigDict
 
-ORGANIZATION_TYPES = (
-    "NGO", "Religious", "Civic", "Private/CSR", "Academic", "Government", "Other",
+# NF-008 (D6, agreement A6): a fixed list with two categories, shown as a
+# grouped dropdown. organizations.organization_category is set from it.
+GOVERNMENT = "Government"
+NON_GOVERNMENT = "Non-government"
+OTHER_TYPE = "Other (specify)"
+GOVERNMENT_TYPES = (
+    "Barangay / Barangay Council",
+    "City or Municipal Government Office",
+    "National Government Agency",
+    "Public School or State University",
+    "Government-Owned or Controlled Corporation",
+)
+NON_GOVERNMENT_TYPES = (
+    "Non-Profit / NGO / Foundation",
+    "Religious Organization",
+    "Private Company or Business",
+    "Private School or University",
+    "Civic or Community Group",
+    OTHER_TYPE,                       # counted as Non-government
+)
+ORGANIZATION_TYPES = GOVERNMENT_TYPES + NON_GOVERNMENT_TYPES
+ORGANIZATION_TYPE_GROUPS = {GOVERNMENT: GOVERNMENT_TYPES, NON_GOVERNMENT: NON_GOVERNMENT_TYPES}
+
+# Values older app versions send (the old free list), mapped to the new list.
+LEGACY_TYPES = {
+    "NGO": "Non-Profit / NGO / Foundation",
+    "Religious": "Religious Organization",
+    "Civic": "Civic or Community Group",
+    "Private/CSR": "Private Company or Business",
+    "Academic": "Private School or University",
+    "Government": "City or Municipal Government Office",
+    "Other": OTHER_TYPE,
+}
+
+GOVERNMENT_DOCUMENT_REQUIRED = (
+    "Government organizations must upload one supporting document: an authorization "
+    "or endorsement letter on office letterhead, or the contact person's office ID."
 )
 
-# CHANGED: these types are not registered like private organizations, so the
-# registration number and supporting document are not used for them. For every
-# other type both are optional.
-TYPES_WITHOUT_REGISTRATION = ("Government",)
+
+def organization_category(organization_type: str) -> str:
+    """'Government' or 'Non-government' for a stored organization type
+    (old free labels included; anything unknown is Non-government)."""
+    label = (organization_type or "").strip()
+    if label == GOVERNMENT or label in GOVERNMENT_TYPES:
+        return GOVERNMENT
+    return NON_GOVERNMENT
 
 
 class OrganizationRegisterRequest(BaseModel):
-    """UC-A2 (the organization side). Capstone 2 adviser comments 1.1 and
-    1.3: the supporting document is optional (and ignored for Government),
-    and the account is validated automatically. The registration form no
-    longer asks for a registration number, but the field is still accepted.
-    The Administrator's view is for review only."""
+    """UC-A2 (the organization side). The account signs in at once
+    (Capstone 2 adviser comment 1.3) and starts Unverified until the
+    Administrator reviews it. NF-008 (D6): every organization uploads the
+    contact person's government ID, like an individual donor; Government
+    types also upload one supporting document. For Non-government types the
+    document stays optional (adviser comment 1.1). The registration form no
+    longer asks for a registration number, but the field is still accepted."""
 
     org_name: str
-    organization_type: Literal[ORGANIZATION_TYPES]
-    # Required when organization_type is "Other"; stored as "Other: <text>".
+    # One of ORGANIZATION_TYPES (old app values are mapped, LEGACY_TYPES).
+    organization_type: str
+    # Required for "Other (specify)"; stored as "Other: <text>".
     organization_type_other: Optional[str] = None
     # TODO(Dave Hoyohoy): switch to the structured AddressField once it exists.
     address: Optional[str] = None
@@ -50,8 +92,13 @@ class OrganizationRegisterRequest(BaseModel):
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
     # Supporting document, uploaded first with POST /uploads (photo or PDF).
-    # Optional.
+    # Required for Government types, optional for the others.
     legitimacy_document: Optional[UploadRef] = None
+    # NF-008: the contact person's government ID, front and back, uploaded
+    # first with POST /uploads (purposes id_front / id_back). Required.
+    id_front: UploadRef
+    id_back: UploadRef
+    id_type: Optional[str] = Field(default=None, max_length=40)
     # RA 10173 (Data Privacy Act)
     consent: bool
     # D3: Terms and Conditions agreement. The server stores when it was accepted.
@@ -59,6 +106,14 @@ class OrganizationRegisterRequest(BaseModel):
 
     # Capitalize the first letter of every word (PM rule) after the existing
     # cleaning/validation. The rest of each word is kept as typed ("NGO").
+    @field_validator("organization_type")
+    @classmethod
+    def _ot(cls, v):
+        label = LEGACY_TYPES.get((v or "").strip(), (v or "").strip())
+        if label not in ORGANIZATION_TYPES:
+            raise ValueError("Choose the organization type from the list")
+        return label
+
     @field_validator("org_name")
     @classmethod
     def _on(cls, v):
@@ -121,13 +176,11 @@ class OrganizationRegisterRequest(BaseModel):
     @model_validator(mode="after")
     def _check(self):
 
-        # CHANGED: nothing is required. Government does not use the two
-        # fields, so anything sent through the API is discarded.
-        if self.organization_type in TYPES_WITHOUT_REGISTRATION:
-            self.registration_no = None
-            self.legitimacy_document = None
+        # NF-008: Government types must upload a supporting document.
+        if self.category == GOVERNMENT and self.legitimacy_document is None:
+            raise ValueError(GOVERNMENT_DOCUMENT_REQUIRED)
 
-        if self.organization_type == "Other":
+        if self.organization_type == OTHER_TYPE:
             if not (self.organization_type_other or "").strip():
                 raise ValueError("Please specify the organization type")
             self.organization_type_other = clean_text(
@@ -145,9 +198,14 @@ class OrganizationRegisterRequest(BaseModel):
     @property
     def organization_type_label(self) -> str:
         """Value saved in organizations.organization_type (VARCHAR 100)."""
-        if self.organization_type == "Other":
+        if self.organization_type == OTHER_TYPE:
             return f"Other: {self.organization_type_other}"
         return self.organization_type
+
+    @property
+    def category(self) -> str:
+        """organizations.organization_category."""
+        return organization_category(self.organization_type)
 
     @property
     def contact_person(self) -> str:

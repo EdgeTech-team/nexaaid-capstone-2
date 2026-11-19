@@ -112,17 +112,23 @@ def test_batch_rules_and_door_to_door_pickup(api):
     assert post({**with_addr, "preferred_pickup_at": (slot - timedelta(days=10)).isoformat()}).status_code == 422
     assert post({**with_addr, "preferred_pickup_at": (slot + timedelta(days=60)).isoformat()}).status_code == 422
 
-    g = ok(post({**door, "pickup_address": "  P.J. Burgos St, Mandaue City ",
-                 "pickup_lat": 10.32456, "pickup_lng": 123.94302,
-                 "preferred_pickup_at": slot.isoformat(),
-                 "guest_donor": {"full_name": "Guest", "contact_number": "0917 123 4567", "consent": True}},
-                headers={}), 201)
+    # NF-004: guests choose Drop Off only (GUEST_DOOR_TO_DOOR=blocked, the default).
+    guest = {"full_name": "Guest", "contact_number": "0917 123 4567", "consent": True}
+    pickup = {**door, "pickup_address": "  P.J. Burgos St, Mandaue City ",
+              "pickup_lat": 10.32456, "pickup_lng": 123.94302,
+              "preferred_pickup_at": slot.isoformat()}
+    r = post({**pickup, "guest_donor": guest}, headers={})
+    assert r.status_code == 422
+    assert r.json()["detail"] == ("For the safety of our pickup team, Door to Door is for "
+                                  "registered donors. Sign in or register, or choose Drop Off.")
+
+    g = ok(post(pickup), 201)                    # a logged-in donor may
     assert g["pickup_address"] == "P.J. Burgos St, Mandaue City"
     assert (g["pickup_lat"], g["pickup_lng"]) == (10.32456, 123.94302)
     assert datetime.fromisoformat(g["preferred_pickup_at"]) == slot
     staff = ok(client.get(f"/donations/by-batch/{g['batch_reference']}", headers=t["csws"]))
-    assert staff["donor"] == "Guest (guest)" and staff["donor_contact"] == "09171234567"
-    assert staff["donor_type"] == "Guest"
+    assert staff["donor"] == "donor Test" and staff["donor_contact"] == "09170000000"
+    assert staff["donor_type"] == "Registered"
     assert datetime.fromisoformat(staff["preferred_pickup_at"]) == slot
 
     # Drop Off never keeps pickup details
@@ -153,11 +159,11 @@ def test_pickup_board_lists_waiting_door_to_door_donations(api):
     later = ok(post({**door, "pickup_address": "Later St, Mandaue City",
                      "preferred_pickup_at": _pickup_slot(hour=15).isoformat(),
                      "items": [LINE]}), 201)
+    # NF-004 (D1): only registered donors ask for Door to Door.
     sooner = ok(post({**door, "pickup_address": "Sooner St, Mandaue City",
                       "pickup_notes": "Blue gate, call when outside",
                       "preferred_pickup_at": _pickup_slot(hour=9).isoformat(),
-                      "items": [LINE, {"item_id": 1, "packaging": "Pack", "quantity": 5}],
-                      "guest_donor": {"full_name": "Ana Guest", "contact_number": "09181234567", "consent": True}},                     headers={}), 201)
+                      "items": [LINE, {"item_id": 1, "packaging": "Pack", "quantity": 5}]}), 201)
     ok(post({"report_id": rid, "handover_method": "Drop Off", "items": [LINE]}), 201)  # not a pickup
     done = ok(post({**door, "pickup_address": "Done St, Mandaue City", "items": [LINE],
                     "preferred_pickup_at": _pickup_slot(hour=11).isoformat()}), 201)
@@ -169,7 +175,7 @@ def test_pickup_board_lists_waiting_door_to_door_donations(api):
     first = board[0]
     assert first["pickup_address"] == "Sooner St, Mandaue City"
     assert first["pickup_notes"] == "Blue gate, call when outside"
-    assert (first["donor"], first["donor_type"], first["donor_contact"]) == ("Ana Guest (guest)", "Guest", "09181234567")
+    assert (first["donor"], first["donor_type"], first["donor_contact"]) == ("donor Test", "Registered", "09170000000")
     assert (first["total_items"], first["pending_items"]) == (2, 2)
     assert len(first["items_summary"]) == 2 and first["report_label"]
     assert board[1]["donor_type"] in ("Registered", "Organization")
