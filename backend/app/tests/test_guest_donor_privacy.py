@@ -62,7 +62,9 @@ def test_valid_guest_donation_is_saved_with_consent_time(api):
     client, t = api
     rid = _report(client, t)
     b = ok(client.post("/donations/batch", json=_batch(rid, email="Gina@Example.com")), 201)
-    ok(client.post("/donations/", json=_single(rid)))         # the older endpoint works too
+    # The older endpoint works too (another report: NF-005 refuses the same
+    # number + report + item within 24 hours).
+    ok(client.post("/donations/", json=_single(_report(client, t))))
     rows = _guests()
     assert len(rows) == 2
     assert all(g.consent_at is not None for g in rows)

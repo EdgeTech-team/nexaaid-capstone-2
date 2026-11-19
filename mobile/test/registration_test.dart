@@ -96,23 +96,40 @@ void main() {
     expect(find.byTooltip('Show password'), findsNWidgets(2));
   });
 
-  testWidgets('Organization form: document upload and type dropdown', (
-    tester,
-  ) async {
+  testWidgets('Organization form (NF-008): grouped types, contact ID, '
+      'document required for Government only', (tester) async {
     await _pump(tester, const RegisterScreen(org: true));
-    expect(find.byType(UploadField), findsOneWidget);
-    expect(find.text('Supporting document (photo or PDF)'), findsOneWidget);
+    // The contact person's government ID, front and back, like a donor.
+    expect(find.text("Contact person's government ID"), findsOneWidget);
+    expect(find.byType(UploadField), findsNWidgets(2));
     expect(find.text('Organization type'), findsOneWidget);
     expect(find.text('Please specify the type'), findsNothing);
     expect(find.text('Contact person'), findsOneWidget);
     expect(_registerButton(tester).onPressed, isNull);
 
-    // "Other" asks what kind of organization it is.
+    // One dropdown, grouped Government / Non-government.
     await tester.tap(find.text('Organization type'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Other').last);
+    expect(find.text('GOVERNMENT'), findsOneWidget);
+    expect(find.text('NON-GOVERNMENT'), findsOneWidget);
+    await tester.tap(find.text('Barangay / Barangay Council').last);
+    await tester.pumpAndSettle();
+    // Government: the supporting document is required (no "(optional)").
+    expect(find.byType(UploadField), findsNWidgets(3));
+    expect(find.textContaining('Supporting document'), findsWidgets);
+    expect(find.textContaining('Supporting document (optional)'), findsNothing);
+
+    // "Other (specify)" is Non-government: the document is optional and
+    // it asks what kind of organization it is.
+    await tester.tap(find.text('Barangay / Barangay Council').first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Other (specify)').last);
     await tester.pumpAndSettle();
     expect(find.text('Please specify the type'), findsOneWidget);
+    expect(
+      find.textContaining('Supporting document (optional)'),
+      findsOneWidget,
+    );
   });
 
   test('UploadedFile keeps the claim token for registration', () {
