@@ -58,6 +58,11 @@ def _rows(db: Session, donations) -> list:
     items = {i.item_id: i for i in db.query(Item).all()}
     decisions = _latest_decisions(db, [d.donation_id for d in donations])
     labels = _report_labels(db, {d.report_id for d in donations})
+    # G-002 (D8): what CSWS counted, next to what the donor declared.
+    from models.received_goods_model import ReceivedGoods
+    from services.item_quantities import donated_item_fields
+    counted = {g.donation_id: g.actual_quantity for g in db.query(ReceivedGoods).filter(
+        ReceivedGoods.donation_id.in_([d.donation_id for d in donations] or [-1])).all()}
     out = []
     for d in donations:
         dec = decisions.get(d.donation_id)
@@ -70,7 +75,7 @@ def _rows(db: Session, donations) -> list:
             "item_name": it.item_name if it else "Item",
             "unit": it.unit_of_measure if it else "",
             "quantity": d.quantity,
-            "packaging": d.packaging,
+            **donated_item_fields(d, it.unit_of_measure if it else "", counted.get(d.donation_id)),
             "estimated_value": d.estimated_value,
             "report_id": d.report_id,
             "report_label": labels.get(d.report_id),

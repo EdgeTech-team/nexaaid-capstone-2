@@ -22,6 +22,7 @@ from schemas.user_schema import (
 )
 from core.notifications import notify_event
 from services.accounts import delete_account
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -351,7 +352,34 @@ def list_organizations(
         query = query.filter(Organization.reviewed_at.isnot(None))
     elif reviewed is False:
         query = query.filter(Organization.reviewed_at.is_(None))
-    return _organization_rows(db, query)
+    # NF-008 (D6): the review queue: Unverified first, Government first.
+    return sorted(_organization_rows(db, query), key=review_order)
+
+
+# ---------------------------------------------------------------------------
+# NF-008 (D6, agreement A6): organization verification states.
+#   Unverified   registered, not reviewed yet (can sign in and donate)
+#   Verified     the Administrator reviewed it (organizations.reviewed_at);
+#                a Verified badge shows to CSWS and on the dashboard
+#   Deactivated  fake or wrong documents: the account is deactivated with a
+#                reason, and the reason is emailed
+# ---------------------------------------------------------------------------
+UNVERIFIED, VERIFIED, DEACTIVATED = "Unverified", "Verified", "Deactivated"
+GOVERNMENT_WARNING = "Government type – check document and ID"
+
+
+def organization_state(org: Organization, account: Optional[User]) -> str:
+    if account is not None and not account.is_active:
+        return DEACTIVATED
+    return VERIFIED if org.reviewed_at is not None else UNVERIFIED
+
+
+def review_order(row: dict) -> tuple:
+    """Unverified first, Government type first, then newest first."""
+    state_rank = {UNVERIFIED: 0, VERIFIED: 1, DEACTIVATED: 2}.get(row.get("verification_state"), 1)
+    gov_rank = 0 if row.get("organization_category") == "Government" else 1
+    made = row.get("created_at")
+    return (state_rank, gov_rank, -(made.timestamp() if made else 0), row["organization_id"])
 
 
 def _organization_rows(db: Session, query) -> list:
@@ -368,16 +396,29 @@ def _organization_rows(db: Session, query) -> list:
         reasons[log.entity_id] = (log.new_value or {}).get("reason")
         decided[log.entity_id] = log.timestamp
     # The organization's own account, for "View account" in Registrations.
-    accounts = {}
+    accounts, users = {}, {}
     for u in (db.query(User).filter(User.organization_id.isnot(None), User.deleted_at.is_(None))
               .order_by(User.user_id)):
         accounts.setdefault(u.organization_id, u.user_id)
+        users.setdefault(u.organization_id, u)
     rows = []
     for o in query.order_by(Organization.created_at.desc()).all():
+        account = users.get(o.organization_id)
+        state = organization_state(o, account)
+        category = o.organization_category or "Non-government"
         rows.append({
             "organization_id": o.organization_id,
             "org_name": o.org_name,
             "organization_type": o.organization_type,
+            # NF-008 (D6): category, state and the review warning.
+            "organization_category": category,
+            "verification_state": state,
+            "verified": state == VERIFIED,
+            "warning": (GOVERNMENT_WARNING
+                        if category == "Government" and state == UNVERIFIED else None),
+            "contact_id_url": account.id_document_url if account else None,
+            "deactivation_reason": (account.deactivation_reason
+                                    if account is not None and not account.is_active else None),
             "address": o.address,
             "contact_person": o.contact_person,
             "contact_email": o.contact_email,
@@ -386,6 +427,7 @@ def _organization_rows(db: Session, query) -> list:
             # Comment 1.1: the document is optional, so this only means
             # "no document submitted". It is not an error.
             "document_missing": not (o.legitimacy_document_url or "").strip(),
+            "contact_id_missing": not ((account.id_document_url if account else "") or "").strip(),
             "status": o.status,
             # Older rows only (organizations rejected before comment 1.3).
             "rejection_reason": o.rejection_reason,
@@ -428,6 +470,10 @@ def _registrations(db: Session, review: str, kind: str, q: Optional[str]) -> lis
                 "type": "org", "id": o["organization_id"], "name": o["org_name"],
                 "email": o["contact_email"] or "No email", "created_at": o["created_at"],
                 "reviewed": o["reviewed_at"] is not None, "org": o,
+                # NF-008 (D6)
+                "verification_state": o["verification_state"],
+                "organization_category": o["organization_category"],
+                "warning": o["warning"],
             })
     if kind in ("all", "donors"):
         uq = (db.query(User).join(Role, Role.role_id == User.role_id)
@@ -452,7 +498,8 @@ def list_registrations(
     review: str = Query(default="all", description="all / done (Reviewed) / not (Not Reviewed)"),
     kind: str = Query(default="all", description="all / donors / orgs"),
     q: Optional[str] = Query(default=None, max_length=100, description="name or email"),
-    sort: str = Query(default="newest", description="newest / oldest / name"),
+    sort: str = Query(default="newest",
+                      description="newest / oldest / name / review (Unverified and Government first)"),
     focus_type: Optional[str] = Query(default=None, description="org / donor: only this registration"),
     focus_id: Optional[int] = Query(default=None),
     page: PageParams = Depends(),
@@ -462,8 +509,8 @@ def list_registrations(
     """NF-003: the Registrations list (organizations and individual donors),
     filtered, sorted and a page at a time on the server. It used to be built
     in the app from two full lists."""
-    if sort not in ("newest", "oldest", "name"):
-        raise HTTPException(status_code=422, detail="sort must be newest, oldest or name")
+    if sort not in ("newest", "oldest", "name", "review"):
+        raise HTTPException(status_code=422, detail="sort must be newest, oldest, name or review")
     rows = _registrations(db, review, kind, q)
     if focus_type is not None and focus_id is not None:
         # The registration a notification is about (shown first, outlined).
@@ -474,7 +521,16 @@ def list_registrations(
         return c.timestamp() if c is not None else None
 
     tie = lambda r: (r["type"], r["id"])  # noqa: E731  stable order for equal keys
-    if sort == "name":
+    if sort == "review":
+        # NF-008 (D6): not reviewed first; among them organizations, Government
+        # type first; then newest.
+        def queue(r):
+            org = r.get("org") or {}
+            return (r["reviewed"], r["type"] != "org",
+                    org.get("organization_category") != "Government",
+                    -(when(r) or 0), tie(r))
+        rows.sort(key=queue)
+    elif sort == "name":
         rows.sort(key=lambda r: (r["name"].lower(), tie(r)))
     else:
         dated = [r for r in rows if when(r) is not None]
@@ -617,3 +673,84 @@ def list_audit_logs(
         }
         for log, email in query.order_by(AuditLog.log_id.desc()).limit(limit).all()
     ]
+
+
+class OrganizationDeactivate(BaseModel):
+    reason: str = Field(..., max_length=500)
+
+
+def _org_or_404(db: Session, organization_id: int) -> Organization:
+    org = db.get(Organization, organization_id)
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return org
+
+
+def _org_view(db: Session, org: Organization) -> dict:
+    return next(r for r in _organization_rows(
+        db, db.query(Organization).filter(Organization.organization_id == org.organization_id)))
+
+
+@router.post("/organizations/{organization_id}/verify")
+def verify_organization(
+    organization_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """NF-008 (D6) Mark verified: sets organizations.reviewed_at, so the
+    Verified badge shows to CSWS and on the transparency dashboard."""
+    org = _org_or_404(db, organization_id)
+    if org.reviewed_at is None:
+        org.reviewed_at = datetime.now(timezone.utc)
+        org.reviewed_by_user_id = current_user.user_id
+        log_action(db, current_user, "VERIFY ORGANIZATION", "organizations", org.organization_id,
+                   old={"verification_state": UNVERIFIED},
+                   new={"verification_state": VERIFIED, "reviewed_at": org.reviewed_at.isoformat()},
+                   request=request)
+    db.flush()
+    return _org_view(db, org)
+
+
+@router.post("/organizations/{organization_id}/deactivate")
+def deactivate_organization(
+    organization_id: int,
+    payload: OrganizationDeactivate,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    """NF-008 (D6) Deactivate (fake or wrong documents): a reason is
+    required; every account of the organization is deactivated with it and
+    the reason is emailed to the organization. Activate it again with
+    PATCH /admin/users/{user_id} (is_active = true)."""
+    reason = (payload.reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(status_code=422,
+                            detail="Give a reason when you deactivate an organization")
+    org = _org_or_404(db, organization_id)
+    accounts = (db.query(User)
+                .filter(User.organization_id == org.organization_id, User.deleted_at.is_(None))
+                .all())
+    if any(u.user_id == current_user.user_id for u in accounts):
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    now = datetime.now(timezone.utc)
+    for u in accounts:
+        u.is_active = False
+        u.deactivation_reason = reason
+        u.deactivated_at = now
+    log_action(db, current_user, "DEACTIVATE ORGANIZATION", "organizations", org.organization_id,
+               new={"verification_state": DEACTIVATED, "reason": reason,
+                    "accounts": [u.user_id for u in accounts]},
+               request=request)
+    to = {org.contact_email} | {u.email for u in accounts if u.email}
+    for address in sorted(a for a in to if a):
+        _queue_email(
+            background_tasks, address, "Your NexaAid organization account was deactivated",
+            f"Hello,\n\nThe NexaAid account of {org.org_name} was deactivated by the "
+            f"Administrator.\n\nReason: {reason}\n\nIf you think this is a mistake, contact "
+            "the City Social Welfare Services office.\n\nNexaAid",
+        )
+    db.flush()
+    return _org_view(db, org)

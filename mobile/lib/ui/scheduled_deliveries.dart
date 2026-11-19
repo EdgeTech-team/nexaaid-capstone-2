@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'widgets.dart';
+import 'item_amounts.dart';
 
 /// Testing #19: "Scheduled deliveries" on the CSWS Main Office and DRRMO
 /// dashboards. Deliveries that have not arrived yet (Active / In Transit),
@@ -125,10 +126,7 @@ class _ScheduledTile extends StatelessWidget {
     final items = ((d['items'] as List?) ?? const [])
         .cast<Map>()
         .map(
-          (i) =>
-              '${i['quantity'] ?? ''} ${i['unit'] ?? ''} ${i['item_name'] ?? ''}'
-                  .replaceAll(RegExp(r'\s+'), ' ')
-                  .trim(),
+          (i) => deliveredLine(i), // G-002 (D8)
         )
         .where((s) => s.isNotEmpty)
         .join(', ');
