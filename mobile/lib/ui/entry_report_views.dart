@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'records_screens.dart' show openReportRecords;
 import 'widgets.dart';
+import 'item_amounts.dart';
 
 // Report -> Entries -> Items (team rule, Oct 6). One ENTRY = one donor
 // submission = one batch_reference. The grouping comes from the backend
@@ -115,10 +116,12 @@ class EntryReportsList extends StatelessWidget {
     final received = i['actual_quantity_received'];
     return ListTile(
       dense: true,
-      title: Text('${i['quantity']} ${i['unit']} ${i['item_name']}'),
+      // G-002 (D8): readable amount, packaging and every quantity.
+      title: Text('${i['item_name']} · ${itemAmount(i)}'),
       subtitle: Text(
-        '${i['qr_reference']} · ${i['packaging'] ?? '-'}'
-        '${received != null ? ' · received $received' : ''}',
+        '${i['qr_reference']} · '
+        '${itemQuantities(i).isEmpty ? '-' : itemQuantities(i)}'
+        '${received != null && i['counted_quantity'] == null ? ' · received $received' : ''}',
       ),
       trailing: held.contains(i['donation_id'])
           ? const Badge2(

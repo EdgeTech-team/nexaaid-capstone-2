@@ -53,6 +53,14 @@ class FormDraft {
     if (pending && !_cleared) _write(snapshot());
   }
 
+  /// Saves [data] now (no snapshot function), e.g. a draft carried over
+  /// from a guest to the account they just signed in with.
+  Future<void> flushNow(Map<String, dynamic> data) async {
+    _cleared = false;
+    _timer?.cancel();
+    await _write(data);
+  }
+
   /// After a successful submit: forget the draft.
   Future<void> clear() async {
     _cleared = true;

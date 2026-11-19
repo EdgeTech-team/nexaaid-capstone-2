@@ -217,6 +217,8 @@ EXPECTED = {
     ("POST", "/donations/entries/{reference}/reinstate"): (CSWS, ADMIN),
     ("GET", "/donations/pickup-plan"): (CSWS, ADMIN),
     ("POST", "/donations/pickup-plan/not-home"): (CSWS, ADMIN),
+    # NF-007 (D5): the call that confirms a pickup stop.
+    ("POST", "/donations/entries/{reference}/contact-check"): (CSWS, DRRMO_R, ADMIN),
     ("GET", "/donations/records"): RECORDS,
     ("GET", "/donations/records/counts"): RECORDS,
     ("GET", "/donations/records/per-report"): RECORDS,

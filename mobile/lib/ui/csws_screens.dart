@@ -19,6 +19,7 @@ import 'donation_entries_view.dart' show DonationEntryCard;
 import 'receive_filters.dart';
 import 'ops_screens.dart' show showDeliveryHistory;
 import 'scheduled_deliveries.dart';
+import 'item_amounts.dart';
 export 'batch_sheet.dart' show openDonationByQr, BatchSheet;
 
 /// Camera QR scanner. Returns the scanned text (e.g. DON-1A2B3C...).
@@ -218,6 +219,15 @@ class DonationSheet extends StatelessWidget {
           row('Item', '${d['item_name']}'),
           row('Declared quantity', '${d['quantity']} ${d['unit']}'),
           row('Packaging', d['packaging']),
+          // G-002 (D8)
+          row('Amount', itemAmount(d)),
+          if (d['counted_quantity'] != null)
+            row('Counted by CSWS', '${d['counted_quantity']} ${d['unit']}'),
+          if (d['barangay_received_quantity'] != null)
+            row(
+              'Received by barangay',
+              '${d['barangay_received_quantity']} ${d['unit']}',
+            ),
           row('Estimated value', pesos(d['estimated_value'])),
           row('Handover', d['handover_method']),
           if (d['pickup_address'] != null)
@@ -934,8 +944,9 @@ class CswsMainDashboard extends StatelessWidget {
               Card(
                 margin: const EdgeInsets.only(bottom: 8),
                 child: ListTile(
+                  // G-002 (D8): "Rice · 10 packs x 5 kg (Sack)".
                   title: Text(
-                    '${d['declared_quantity']} ${d['unit']} ${d['item_name']} · ${d['packaging']}',
+                    '${d['item_name']} · ${itemAmount(d)} (${d['packaging']})',
                   ),
                   subtitle: Text(
                     '${d['qr_reference']} · ${d['handover_method']}'

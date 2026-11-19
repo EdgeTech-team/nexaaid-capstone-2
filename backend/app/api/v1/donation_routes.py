@@ -19,11 +19,14 @@ import httpx
 import qrcode
 from services.items import resolve_item_id
 from services.units import line_amounts, describe as describe_amount
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from core.database import get_db
-from core.auth import get_current_user, get_current_user_optional, has_role, require_role
+from core.auth import (
+    check_guest_submit, get_current_user, get_current_user_optional, has_role,
+    record_guest_submit, require_role,
+)
 from models.user_rbac_model import User
 from models.guest_donor_model import GuestDonor
 from models.physical_donation_model import PhysicalDonation
@@ -68,6 +71,16 @@ from services.donation_additions import (
 from services.donation_expiry import (
     close_rows, entry_expiry_info, entry_status, expire_overdue, set_deadline, now_utc,
 )
+from services import guest_limits
+from services.email_hold import apply_hold, is_held, not_held
+from services.pledge_trust import entry_trust, pledge_is_verified
+from services.item_quantities import (
+    barangay_received, donated_item_fields, goods_line,
+)
+
+# NF-006 (D4): what the app shows after a Door to Door donation from an
+# account whose email is not verified yet.
+EMAIL_HOLD_MESSAGE = "Check your email. Enter the code to send this pickup to CSWS."
 
 router = APIRouter(prefix="/donations", tags=["Physical Donations"])
 
@@ -182,7 +195,7 @@ def _donor_info(db: Session, d: PhysicalDonation) -> dict:
         u = db.get(User, d.user_id)
         if u is None:
             return {"donor": "Donor", "donor_type": "Registered",
-                    "donor_contact": None, "donor_email": None}
+                    "donor_contact": None, "donor_email": None, "organization_verified": False}
         org = db.get(Organization, u.organization_id) if u.organization_id else None
         name = f"{u.first_name} {u.last_name}".strip()
         return {
@@ -190,6 +203,8 @@ def _donor_info(db: Session, d: PhysicalDonation) -> dict:
             "donor_type": "Organization" if org else "Registered",
             "donor_contact": u.contact_number,
             "donor_email": u.email,
+            # NF-008 (D6): the Verified badge CSWS sees on organizations.
+            "organization_verified": bool(org and org.reviewed_at is not None),
         }
     g = db.get(GuestDonor, d.guest_donor_id) if d.guest_donor_id else None
     return {
@@ -197,6 +212,7 @@ def _donor_info(db: Session, d: PhysicalDonation) -> dict:
         "donor_type": "Guest",
         "donor_contact": g.contact_number if g else None,
         "donor_email": g.email if g else None,
+        "organization_verified": False,
     }
 
 
@@ -289,6 +305,7 @@ def _batches(view_items: list) -> list:
 def _batch_view(db: Session, rows: list, staff: bool) -> dict:
     first = rows[0]
     pickup = _pickup_row(rows)
+    donor_user = db.get(User, first.user_id) if first.user_id else None
     item_ids = {r.item_id for r in rows}
     items = {i.item_id: i for i in db.query(Item).filter(Item.item_id.in_(item_ids)).all()}
     received = {
@@ -297,6 +314,7 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         .filter(ReceivedGoods.donation_id.in_([r.donation_id for r in rows]))
         .all()
     }
+    at_barangay = barangay_received(db, [r.donation_id for r in rows])
     view = {
         "batch_reference": first.batch_reference,
         "qr_image_base64": _qr_b64(first.batch_reference),
@@ -314,6 +332,11 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         "created_at": first.created_at,
         # Handover deadline / why it was closed (services/donation_expiry.py)
         **entry_expiry_info(rows),
+        # NF-011 (D3): a guest pledge, or one from an account whose email is
+        # not verified, until CSWS receives it.
+        **entry_trust(rows, donor_user),
+        # NF-006 (D4): Door to Door waiting for the donor's email code.
+        "awaiting_email": is_held(pickup, donor_user) and any(r.status == "Pending" for r in rows),
         "total_items": len(rows),
         "items": [
             {
@@ -337,6 +360,7 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
                 "estimated_value": _num(r.estimated_value),
                 "status": r.status,
                 "actual_quantity_received": received.get(r.donation_id),
+                "pledge_verified": pledge_is_verified(r, donor_user),
                 # Oct 23: the batch it came with, when, and if the donor
                 # removed it, why (it stays listed, marked removed).
                 "addition_no": r.addition_no or 1,
@@ -345,6 +369,12 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
                 "removed_by_donor": is_removed(r),
                 "removed_reason": removed_reason(r),
                 "close_reason": r.close_reason,
+                # G-002 (D8): packaging and every quantity that exists. This
+                # view keeps its own amount_text ("... = 72 L", with the total).
+                **{k: v for k, v in donated_item_fields(
+                    r, items[r.item_id].unit_of_measure if r.item_id in items else "",
+                    received.get(r.donation_id), at_barangay.get(r.donation_id)).items()
+                   if k != "amount_text"},
             }
             for r in rows
         ],
@@ -360,6 +390,8 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
             for n in removed_notes(rows)
         ],
     })
+    if view["awaiting_email"]:
+        view["email_hold_message"] = EMAIL_HOLD_MESSAGE
     if staff:
         view.update(_donor_info(db, first))
         view["history"] = _history(db, rows)
@@ -375,31 +407,103 @@ def _reverse_props(lat: float, lng: float) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# NF-004 / NF-005: guest donations. Door to Door for guests follows the
+# GUEST_DOOR_TO_DOOR setting (blocked by default); the other limits always apply.
+# The rules and their numbers are in services/guest_limits.py.
+# ---------------------------------------------------------------------------
+class _BotTrap(Exception):
+    """The hidden "website" field was filled in: answer as if saved."""
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    """F-21: core/client_ip.py already set this from the trusted end of
+    X-Forwarded-For (Render's proxy), so a client cannot fake it."""
+    return request.client.host if request.client else None
+
+
+def _guest_gate(payload, request: Request, current_user: Optional[User]) -> Optional[str]:
+    """The guest checks that need nothing from the database. Returns the
+    client address for a guest (None for a logged-in donor: none of these
+    rules apply to them). Raises _BotTrap for a filled-in hidden field."""
+    if current_user is not None:
+        return None
+    guest_limits.check_handover(payload.handover_method)          # 422 when blocked
+    ip = _client_ip(request)
+    check_guest_submit(ip)                                        # D2: 429 per connection
+    if guest_limits.is_bot(getattr(payload, "website", None)):
+        record_guest_submit(ip)
+        raise _BotTrap()
+    return ip
+
+
+def _guest_db_checks(db: Session, payload, item_ids: list, quantities: list) -> None:
+    """The guest checks that look at the guest's earlier donations."""
+    guest_limits.check_line_quantities(quantities)                # 422
+    if payload.guest_donor is None:
+        return                                                    # _donor_ids answers 400
+    phone = payload.guest_donor.contact_number                    # already normalized
+    if payload.handover_method == "Door to Door":                  # only when "limited"
+        guest_limits.check_open_pickups(db, phone)                # 429, one pickup at a time
+    guest_limits.check_open_entries(db, phone)                    # 429
+    guest_limits.check_duplicates(db, phone, payload.report_id, item_ids)   # 409
+
+
+def _notify_new_donation(db: Session, current_user: Optional[User], first_id: int,
+                         ref: str, confirm_no) -> None:
+    if current_user:  # guest donors have no account
+        notify_event(db, current_user.user_id, "donation_submitted_confirm",
+                     "donation", first_id, batch_no=confirm_no)
+        # Linked to the donation so CSWS can open it from the notification.
+        notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]),
+                          "donation_submitted", "donation", first_id, batch_no=ref)
+    else:
+        # NF-005: guest entries notify CSWS Main Office at most once per
+        # 10 minutes per person ("3 new guest donations").
+        guest_limits.notify_csws_grouped(db, first_id, ref)
+
+
+# ---------------------------------------------------------------------------
 # UC-D2 step 6: create a donation
 # ---------------------------------------------------------------------------
 @router.post("/batch", status_code=201)
 def create_donation_batch(
     payload: DonationBatchCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
     """One donation with one or more items, one QR reference. All items are
-    saved together or none are (alt 3a: no QR for an incomplete entry)."""
+    saved together or none are (alt 3a: no QR for an incomplete entry).
+    Guests: Drop Off only, with limits (services/guest_limits.py)."""
+    try:
+        ip = _guest_gate(payload, request, current_user)
+    except _BotTrap:
+        ref = _new_reference()                     # never saved
+        return {"batch_reference": ref, "qr_image_base64": _qr_b64(ref), "status": "Pending",
+                "report_id": payload.report_id, "handover_method": payload.handover_method,
+                "total_items": len(payload.items), "items": []}
     _get_report(db, payload.report_id, require_validated=True)
     _check_service_area(payload)
+
+    lines = []
+    for line in payload.items:
+        item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
+        # quantity (base unit) + packaging + breakdown (services/units.py)
+        lines.append((line, item_id, line_amounts(db, db.get(Item, item_id), line)))
+    if current_user is None:
+        _guest_db_checks(db, payload, [i for _, i, _ in lines],
+                         [a["quantity"] for _, _, a in lines])
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
 
     batch_reference = _new_reference()
     rows = []
-    for n, line in enumerate(payload.items, start=1):
-        item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
+    for n, (line, item_id, amounts) in enumerate(lines, start=1):
         row = PhysicalDonation(
             user_id=user_id,
             guest_donor_id=guest_donor_id,
             report_id=payload.report_id,
             item_id=item_id,
-            # quantity (base unit) + packaging + breakdown (services/units.py)
-            **line_amounts(db, db.get(Item, item_id), line),
+            **amounts,
             estimated_value=line.estimated_value,
             handover_method=payload.handover_method,
             pickup_address=payload.pickup_address,
@@ -417,15 +521,12 @@ def create_donation_batch(
         db.add(row)
         rows.append(row)
     set_deadline(rows)  # handover deadline (services/donation_expiry.py)
+    apply_hold(rows, current_user)  # NF-006: Door to Door waits for the email code
     db.flush()  # assigns donation_id for the notifications
 
-    if current_user:  # guest donors have no account
-        notify_event(db, current_user.user_id, "donation_submitted_confirm",
-                     "donation", rows[0].donation_id, batch_no=batch_reference)
-    # Linked to the donation so CSWS can open it from the notification.
-    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]),
-                      "donation_submitted", "donation", rows[0].donation_id,
-                      batch_no=batch_reference)
+    _notify_new_donation(db, current_user, rows[0].donation_id, batch_reference, batch_reference)
+    if current_user is None:
+        record_guest_submit(ip)
 
     db.commit()
     for row in rows:
@@ -436,25 +537,42 @@ def create_donation_batch(
 @router.post("/", response_model=PhysicalDonationResponse)
 def create_donation(
     payload: PhysicalDonationCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_current_user_optional),
 ):
-    """Single-item donation, kept for older clients. Same as a batch of one."""
+    """Single-item donation, kept for older clients. Same as a batch of one,
+    with the same guest rules."""
+    try:
+        ip = _guest_gate(payload, request, current_user)
+    except _BotTrap:
+        ref = _new_reference()                     # never saved
+        return PhysicalDonation(
+            donation_id=0, user_id=None, guest_donor_id=None, report_id=payload.report_id,
+            item_id=payload.item_id or 0, packaging=payload.packaging or "",
+            quantity=payload.quantity or 1, estimated_value=payload.estimated_value,
+            handover_method=payload.handover_method, pickup_address=None,
+            qr_reference=ref, batch_reference=ref, status="Pending",
+            created_at=datetime.now(timezone.utc),
+        )
     # F-16: same rule as /donations/batch (UC-D2 alt 2a): only validated
     # reports can receive donations.
     _get_report(db, payload.report_id, require_validated=True)
     _check_service_area(payload)
 
+    item_id = _resolve_item_id(db, payload.item_id, payload.other_item_name, payload.other_item_unit)
+    amounts = line_amounts(db, db.get(Item, item_id), payload)
+    if current_user is None:
+        _guest_db_checks(db, payload, [item_id], [amounts["quantity"]])
     user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
     reference = _new_reference()
 
-    item_id = _resolve_item_id(db, payload.item_id, payload.other_item_name, payload.other_item_unit)
     donation = PhysicalDonation(
         user_id=user_id,
         guest_donor_id=guest_donor_id,
         report_id=payload.report_id,
         item_id=item_id,
-        **line_amounts(db, db.get(Item, item_id), payload),
+        **amounts,
         estimated_value=payload.estimated_value,
         handover_method=payload.handover_method,
         pickup_address=payload.pickup_address,
@@ -471,13 +589,13 @@ def create_donation(
     )
     db.add(donation)
     set_deadline([donation])  # handover deadline (services/donation_expiry.py)
+    apply_hold([donation], current_user)  # NF-006
     db.flush()  # assigns donation_id for the notifications
 
-    if current_user:  # guest donors have no account
-        notify_event(db, current_user.user_id, "donation_submitted_confirm",
-                     "donation", donation.donation_id, batch_no=donation.donation_id)
-    notify_event_many(db, user_ids_with_role(db, ["CSWS Main Office"]),
-                      "donation_submitted", "donation", donation.donation_id, batch_no=donation.qr_reference)
+    _notify_new_donation(db, current_user, donation.donation_id, donation.qr_reference,
+                         donation.donation_id)
+    if current_user is None:
+        record_guest_submit(ip)
 
     db.commit()
     db.refresh(donation)
@@ -715,10 +833,18 @@ def edit_my_entry(
     # A changed donation keeps its original deadline; a declined one that
     # is fixed gets a fresh one from today.
     set_deadline(kept, start=now_utc() if reopened else first.created_at)
+    # NF-006: switching to Door to Door before the email is verified.
+    if before["handover_method"] != payload.handover_method:
+        apply_hold(kept, current_user)
     if (before["handover_method"] != payload.handover_method or before["pickup_days"] != days
             or before["pickup_dates"] != dates
             or before["pickup_lat"] != payload.pickup_lat or before["pickup_lng"] != payload.pickup_lng):
         _drop_from_pickup_runs(db, ref)
+        # NF-007: a new date or place needs a new confirmation call.
+        for r in kept:
+            r.contact_confirmed_at = None
+            r.contact_confirmed_by_user_id = None
+            r.contact_outcome = None
     db.flush()
     log_action(db, current_user, "EDIT DONATION", "physical_donations", kept[0].donation_id,
                old=before, new={
@@ -827,6 +953,7 @@ def door_to_door_pickups(
         .filter(
             PhysicalDonation.handover_method == "Door to Door",
             PhysicalDonation.status == "Pending",
+            not_held(),   # NF-006: waiting for the donor's email code
         )
         .distinct()
         .all()
@@ -863,7 +990,8 @@ def door_to_door_pickups(
             it = items.get(l.item_id)
             unit = it.unit_of_measure if it else ""
             name = it.item_name if it else "Item"
-            summary.append(f"{l.quantity} {unit} {name}".replace("  ", " ").strip())
+            # G-002 (D8): "Rice: 10 packs x 5 kg (Sack)".
+            summary.append(goods_line(l, name, unit))
         out.append({
             "batch_reference": ref,
             "status": _batch_status({l.status for l in lines}),
@@ -922,13 +1050,14 @@ def drop_off_info():
     if lat is None or lng is None:
         lat = lng = None
     return {
-        "name": os.getenv("DROPOFF_NAME", "City of Mandaue City Social Services (CSWS)"),
-        "address": os.getenv("DROPOFF_ADDRESS", "City of Mandaue City Social Services (CSWS), Mandaue City"),
+        # D7: the manuscript's office name (CSWS Main Office).
+        "name": os.getenv("DROPOFF_NAME", "CSWS Main Office"),
+        "address": os.getenv("DROPOFF_ADDRESS", "CSWS Main Office, P.J. Burgos Street, Mandaue City"),
         "hours": os.getenv("DROPOFF_HOURS", "Monday to Friday, 8:00 AM to 5:00 PM"),
         "instructions": os.getenv(
             "DROPOFF_INSTRUCTIONS",
-            "Bring the goods and show your QR code. CSWS will count what "
-            "arrives and record the actual quantity.",
+            "Bring the goods to the CSWS Main Office and show your QR code. "
+            "CSWS will count what arrives and record the actual quantity.",
         ),
         "lat": lat,
         "lng": lng,
@@ -942,7 +1071,10 @@ def drop_off_info():
 @router.get("/pickup-rules")
 def get_pickup_rules():
     area = pickup_area()
-    return {**pickup_rules_view(), "area": {
+    return {**pickup_rules_view(),
+            # NF-004: "blocked" = the app locks Door to Door for guests.
+            "guest_door_to_door": guest_limits.guest_door_to_door(),
+            "area": {
         "name": area["name"], "bbox": area["bbox"],
         "office_lat": area["office"][0], "office_lng": area["office"][1],
         "max_km": area["max_km"],
@@ -1170,6 +1302,11 @@ def my_donations(
     decisions = _latest_decisions(db, [d.donation_id for d in donations])
 
     items = {i.item_id: i for i in db.query(Item).all()}
+    counted = {
+        g.donation_id: g.actual_quantity
+        for g in db.query(ReceivedGoods).filter(
+            ReceivedGoods.donation_id.in_([d.donation_id for d in donations] or [-1])).all()
+    }
     types = {t.disaster_type_id: t.type_name for t in db.query(DisasterType).all()}
     barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
     report_ids = {d.report_id for d in donations}
@@ -1222,6 +1359,12 @@ def my_donations(
             # Shown under the organization's name on its dashboard (Ivan).
             "organization_type": org.organization_type if org else None,
             "account_status": org.status if org else "Active",
+            # NF-008 (D6): Unverified until the Administrator reviews it.
+            "organization_category": org.organization_category if org else None,
+            "verification_state": (("Verified" if org.reviewed_at else "Unverified")
+                                   if org else None),
+            # NF-006 (D4): the "Verify your email to request pickups" banner.
+            "email_verified": getattr(current_user, "email_verified_at", None) is not None,
             # Door to Door: donors "select his/her address" (manuscript 3.1).
             "address": org.address if org else None,
         },
@@ -1245,7 +1388,9 @@ def my_donations(
                 "item_name": items[d.item_id].item_name if d.item_id in items else "Item",
                 "unit": items[d.item_id].unit_of_measure if d.item_id in items else "",
                 "quantity": d.quantity,
-                "packaging": d.packaging,
+                **donated_item_fields(
+                    d, items[d.item_id].unit_of_measure if d.item_id in items else "",
+                    counted.get(d.donation_id)),
                 "handover_method": d.handover_method,
                 "pickup_address": d.pickup_address,
                 "pickup_landmark": d.pickup_landmark,
