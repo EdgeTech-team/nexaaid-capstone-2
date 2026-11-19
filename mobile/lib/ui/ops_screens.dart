@@ -14,6 +14,8 @@ import 'needs_action.dart';
 import 'paged_donation_entries.dart' show searchDebounce;
 import 'paginated_list.dart';
 import 'receipt_count_dialog.dart';
+import 'acknowledgment_screen.dart';
+import 'handover_code.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
 import 'scheduled_deliveries.dart';
@@ -166,6 +168,16 @@ class _DeliveryTimelineState extends State<DeliveryTimeline> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        // J2 / NF-015: the Acknowledgment Receipt once the barangay confirmed.
+        if (_data['status'] == 'Confirmed' && canSeeReceipt(api.role))
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () => openAcknowledgment(context, widget.deliveryId),
+              icon: const Icon(Icons.receipt_long_outlined),
+              label: const Text('View receipt'),
+            ),
+          ),
         if (canUndo)
           Align(
             alignment: Alignment.centerRight,
@@ -618,12 +630,25 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
       confirm: 'Yes, ${deliveryWord(next)}',
     );
     if (v == null || !context.mounted) return;
+    final nav = Navigator.of(context, rootNavigator: true);
+    ApiResult? result;
     await stepWithUndo(
       context,
-      () => api.post('/deliveries/${d['delivery_id']}/advance'),
+      () async =>
+          result = await api.post('/deliveries/${d['delivery_id']}/advance'),
       deliveryId: d['delivery_id'] as int,
       success: 'Delivery #${d['delivery_id']} is now ${deliveryWord(next)}',
     );
+    // J2 / NF-015: arriving gives CSWS Main Office the handover code, once.
+    final body = result?.json;
+    final code = body is Map ? body['handover_code'] : null;
+    if (code != null && nav.mounted) {
+      await showHandoverCode(
+        nav.context,
+        code: '$code',
+        where: '${d['destination_barangay_name'] ?? 'the barangay'}',
+      );
+    }
   }
 
   /// Phase 6: CSWS sends several packed deliveries at once. Only deliveries
@@ -717,45 +742,91 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     );
   }
 
+  /// UC-B1, J1 / NF-009 and J2 / NF-015: the rep counts every item that
+  /// arrived (the count fields start empty; a difference needs a reason),
+  /// types the handover code the staff on site shows, their name and
+  /// position, and signs. The form stays open until the server accepts it.
+  /// This is also the barangay's acknowledgement of the aid.
   Future<void> _confirmReceipt(BuildContext context, Map d) async {
-    final v = await formDialog(
+    final id = d['delivery_id'] as int;
+    ApiResult? sent;
+    final counted = await showReceiptCountDialog(
       context,
-      title: 'Confirm receipt',
+      title: 'Count and confirm receipt',
       message:
-          'Confirm that delivery #${d['delivery_id']} arrived. This is also '
-          'your barangay\'s acknowledgement of the aid. If it is '
-          'incomplete you can wait until it is resolved (UC-B1 4a).',
-      fields: const [],
-      confirm: 'Confirm receipt',
+          'Count what arrived for delivery #$id and enter the number for '
+          'every item. Then enter the handover code the CSWS staff shows '
+          'you, your name and position, and sign. Confirming is also your '
+          'barangay\'s acknowledgement of the aid.',
+      deliveries: [CountTarget.fromDelivery(d)],
+      submit: (c) async => sent = await sendWithProof(
+        c,
+        (proof) => api.post(
+          '/deliveries/$id/confirm-receipt',
+          body: {...c.deliveryBody(id), ...proof},
+        ),
+      ),
     );
-    if (v == null || !context.mounted) return;
+    if (counted == null || sent == null || !context.mounted) return;
+    final done = sent!;
     await act(
       context,
-      () => api.post(
-        '/deliveries/${d['delivery_id']}/confirm-receipt',
-        body: const {},
-      ),
-      success: 'Receipt confirmed and aid acknowledged. Fulfillment updated.',
+      () async => done,
+      success: counted.hasDifference
+          ? 'Receipt confirmed with differences. CSWS Main Office was told.'
+          : 'Receipt confirmed and aid acknowledged. Fulfillment updated.',
     );
   }
 
-  /// Barangay rep: one tap for every delivery of a trip that arrived here.
+  /// Barangay rep: count every delivery of a trip that arrived here, then
+  /// confirm them together with one handover code and one signature for
+  /// the stop (J1 / NF-009, J2 / NF-015: all or nothing). [n] is the number
+  /// shown on the trip card; the list is loaded fresh.
   Future<void> _confirmTrip(BuildContext context, int tripId, int n) async {
-    final v = await formDialog(
-      context,
-      title: 'Confirm all $n deliveries?',
-      message:
-          'Trip #$tripId brought $n deliveries to your barangay. Confirm only '
-          'if everything arrived. If something is missing, confirm the '
-          'deliveries one by one instead.',
-      fields: const [],
-      confirm: 'Confirm all',
+    final r = await api.get(
+      '/deliveries/',
+      query: {
+        'trip_id': '$tripId',
+        'status': 'Delivered',
+        'limit': '100',
+        'offset': '0',
+      },
     );
-    if (v == null || !context.mounted) return;
+    if (!context.mounted) return;
+    if (!r.ok) {
+      await act(context, () async => r, success: '');
+      return;
+    }
+    final rows = (r.json as List).cast<Map>();
+    if (rows.isEmpty) return;
+    ApiResult? sent;
+    final counted = await showReceiptCountDialog(
+      context,
+      title: 'Count trip #$tripId',
+      message:
+          'Trip #$tripId brought ${rows.length} deliveries to your barangay. '
+          'Count every item of each one, then enter the handover code, your '
+          'name and position, and sign once for all of them. They are '
+          'confirmed together: if one count is not accepted, none is saved.',
+      deliveries: [for (final d in rows) CountTarget.fromDelivery(d)],
+      submit: (c) async => sent = await sendWithProof(
+        c,
+        (proof) => api.post(
+          '/trips/$tripId/confirm-receipt',
+          body: {...c.tripBody(), ...proof},
+        ),
+      ),
+    );
+    if (counted == null || sent == null || !context.mounted) return;
+    final done = sent!;
     await act(
       context,
-      () => api.post('/trips/$tripId/confirm-receipt', body: const {}),
-      success: '$n deliveries confirmed and acknowledged. Fulfillment updated.',
+      () async => done,
+      success: counted.hasDifference
+          ? '${rows.length} deliveries confirmed with differences. '
+                'CSWS Main Office was told.'
+          : '${rows.length} deliveries confirmed and acknowledged. '
+                'Fulfillment updated.',
     );
   }
 
@@ -1336,6 +1407,31 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                     onPressed: () => _advance(context, d, next),
                     icon: const Icon(Icons.arrow_forward),
                     label: Text('Mark ${deliveryWord(next)}'),
+                  ),
+                // J2 / NF-015: a new handover code for the staff on site
+                // (CSWS Main Office, or the DRRMO user who carried it).
+                if (status == 'Delivered' &&
+                    (api.role == Roles.cswsMain ||
+                        (drrmo && request != null && request['mine'] == true)))
+                  OutlinedButton.icon(
+                    onPressed: () => newHandoverCode(
+                      context,
+                      d['delivery_id'] as int,
+                      where: '$barangayName',
+                    ),
+                    icon: const Icon(Icons.pin_outlined),
+                    label: const Text('Handover code'),
+                  ),
+                // J2 / NF-015: the Acknowledgment Receipt once confirmed.
+                if (status == 'Confirmed' &&
+                    (barangay ||
+                        api.role == Roles.cswsMain ||
+                        api.role == Roles.admin))
+                  TextButton.icon(
+                    onPressed: () =>
+                        openAcknowledgment(context, d['delivery_id'] as int),
+                    icon: const Icon(Icons.receipt_long_outlined),
+                    label: const Text('View receipt'),
                   ),
                 if (barangay && status == 'Delivered')
                   FilledButton.icon(
@@ -1960,9 +2056,11 @@ Future<void> moveDrrmoDelivery(BuildContext context, Map r) async {
     confirm: pickup ? 'Yes, on the way' : 'Yes, it arrived',
   );
   if (v == null || !context.mounted) return;
+  final nav = Navigator.of(context, rootNavigator: true);
+  ApiResult? result;
   await stepWithUndo(
     context,
-    () => api.post(
+    () async => result = await api.post(
       '/drrmo/requests/${r['request_id']}/${pickup ? 'picked-up' : 'delivered'}',
     ),
     deliveryId: r['delivery_id'] as int,
@@ -1970,6 +2068,16 @@ Future<void> moveDrrmoDelivery(BuildContext context, Map r) async {
         ? 'Delivery #${r['delivery_id']} is on the way'
         : 'Delivery #${r['delivery_id']} arrived. Request completed.',
   );
+  // J2 / NF-015: the DRRMO user who carried it gets a handover code to show
+  // the barangay representative.
+  if (!pickup && result?.ok == true && nav.mounted) {
+    await newHandoverCode(
+      nav.context,
+      r['delivery_id'] as int,
+      where: '${r['destination'] ?? 'the barangay'}',
+      ask: false,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

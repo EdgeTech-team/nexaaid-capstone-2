@@ -1,11 +1,13 @@
 """
 core/uploads.py — rules for what can be uploaded, by whom, and how
 registration attaches a file to a new account.
- 
+
 Used by:
   - api/v1/upload_routes.py   (POST/GET /uploads)
   - registration (adviser items 2 and 2.1): claim_registration_files()
   - Mariquit, barangay donation QR (adviser item 7): purpose "barangay_donation_qr"
+  - Mariquit, proof of receipt (J2 / NF-015): purposes "receipt_signature"
+    and "receipt_slip_photo"
 """
 
 import hashlib
@@ -39,7 +41,7 @@ JPEG, PNG, PDF = "image/jpeg", "image/png", "application/pdf"
 EXTENSION = {JPEG: "jpg", PNG: "png", PDF: "pdf"}
 LABEL = {JPEG: "JPG", PNG: "PNG", PDF: "PDF"}
 
-#Refuse "decompression bombs": tiny files that expand to huge images. 
+#Refuse "decompression bombs": tiny files that expand to huge images.
 Image.MAX_IMAGE_PIXELS = 40_000_000  # 40 megapixels, about 8k x 5k. The default is 89 million, which is too high.
 
 
@@ -48,15 +50,22 @@ class Purpose:
     visibility: str             #private | public
     types: frozenset
     roles: Optional[Tuple[str, ...]]    #None = anyone, even before logging in.
-    
+    # J2 / NF-015: a smaller cap than MAX_UPLOAD_MB for this purpose, checked
+    # on the saved (re-encoded) bytes. None = MAX_UPLOAD_MB only.
+    max_bytes: Optional[int] = None
+
 DOCS = frozenset({JPEG, PNG, PDF})
 IMAGES = frozenset({JPEG, PNG})
 
+# J2 / NF-015: who confirms a receipt. The Administrator stays until J4
+# (only the Barangay Receiving Representative confirms).
+RECEIPT_SIGNERS = ("Barangay Receiving Representative", "Administrator")
+
 PURPOSES = {
-    #UC-D1 step 3 / alt 6a: donor's valid ID, front and back. 
+    #UC-D1 step 3 / alt 6a: donor's valid ID, front and back.
     "id_front": Purpose("private", DOCS, None),
     "id_back": Purpose("private", DOCS, None),
-    #UC-R1 / UC-A2 alt 4a: organization legitimacy documents 
+    #UC-R1 / UC-A2 alt 4a: organization legitimacy documents
     "legitimacy_document": Purpose ("private", DOCS, None),
     #UC-A1: staff member's employee ID card. Uploaded by the Administrator,
     #then handed to the new account (transfer_upload) so the staff member
@@ -66,11 +75,32 @@ PURPOSES = {
     #NexaAid never processes money (manucsript limitation)
     "barangay_donation_qr": Purpose(
         "public", IMAGES,
-        ("Barangay Receiving Representative", "CSWS Disaster Unit", "Administrator"),    
+        ("Barangay Receiving Representative", "CSWS Disaster Unit", "Administrator"),
         ),
+    # J2 / NF-015 (team agreement A2): the representative's e-signature,
+    # drawn on the app's signature pad and saved as a small PNG.
+    "receipt_signature": Purpose(
+        "private", frozenset({PNG}), RECEIPT_SIGNERS, max_bytes=300 * 1024,
+    ),
+    # J2 / NF-015: optional photo of the stamped paper acknowledgment slip
+    # (a document only: no photos of goods or people, no seal image).
+    "receipt_slip_photo": Purpose(
+        "private", IMAGES, RECEIPT_SIGNERS, max_bytes=1024 * 1024,
+    ),
 }
 
-    
+# J2 / NF-015: files that are part of an official record (an Acknowledgment
+# Receipt). Never removed by a clean-up, even if they lost their owner.
+RECORD_PURPOSES = ("receipt_signature", "receipt_slip_photo")
+
+
+def size_label(n: int) -> str:
+    """1048576 -> '1 MB', 307200 -> '300 KB'."""
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):g} MB"
+    return f"{n // 1024} KB"
+
+
 def file_url(file_id:str) -> str:
     return f"/uploads/{file_id}"
 
@@ -79,7 +109,7 @@ def hash_token(token:str) -> str:
 
 
 
-def read_limited(fileobj) -> bytes: 
+def read_limited(fileobj) -> bytes:
     data = fileobj.read(MAX_BYTES + 1)
     if not data:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "The file is empty")
@@ -113,13 +143,13 @@ def clean_image(data: bytes, content_type: str) -> bytes:
             out = io.BytesIO()
             if content_type == JPEG:
                 img.convert("RGB").save(out,"JPEG", quality=88, optimize=True)
-            else: 
+            else:
                 img.save(out, "PNG", optimize=True)
             return out.getvalue()
     except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError):
         # UC-D1 alt 6a: "If the ID is invalid or unreadable, the system asks for re-upload."
         raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, 
+            status.HTTP_400_BAD_REQUEST,
             "The image could not be read. Please take or choose the photo again.",
         )
 
@@ -148,8 +178,8 @@ def local_path(db: Session, up: Upload) -> Optional[Path]:
 def _as_utc(dt: datetime) -> datetime:
     # SQLite (tests) returns naive UTC datetimes; Postgres returns aware ones.
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
- 
- 
+
+
 def claim_upload(
     db: Session,
     file_id: str,
@@ -158,12 +188,12 @@ def claim_upload(
     allowed_purposes: Iterable[str],
 ) -> Upload:
     """Attach a file uploaded before the account existed to that account.
- 
+
     Registration flow (Hoyohoy): the app uploads first and gets
     {file_id, claim_token}; the register request sends both back; the
     router creates the user, then calls this and stores file_url(file_id)
     in users.id_document_url / organizations.legitimacy_document_url.
- 
+
     The token proves the caller is the one who uploaded the file, so a
     leaked or guessed file_id alone can't be attached to another account.
     Every failure gives the same message, so nothing leaks about the file.
@@ -190,8 +220,8 @@ def claim_upload(
     up.claim_token_hash = None  # single use
     up.claimed_at = datetime.now(timezone.utc)
     return up
- 
- 
+
+
 def claim_registration_files(db: Session, user, refs: dict) -> dict:
     """Claim every file of one registration for the new account.
 
@@ -254,11 +284,16 @@ def purge_unclaimed(db: Session, older_than: timedelta = PURGE_UNCLAIMED_AFTER) 
     account was deleted (RA 10173: don't keep personal data longer than
     needed). Runs on every upload made before login and in the donation
     expiry job, so no scheduler is needed. Deletes the row, its copy in
-    upload_blobs and the file on this machine. Does not commit."""
+    upload_blobs and the file on this machine. Does not commit.
+
+    J2 / NF-015: files of an Acknowledgment Receipt (RECORD_PURPOSES) are
+    never purged, even if their owner is gone; receipts reference them with
+    ON DELETE RESTRICT."""
     cutoff = datetime.now(timezone.utc) - older_than
     rows = (
         db.query(Upload.upload_id, Upload.storage_key)
-        .filter(Upload.owner_user_id.is_(None), Upload.created_at < cutoff)
+        .filter(Upload.owner_user_id.is_(None), Upload.created_at < cutoff,
+                Upload.purpose.notin_(RECORD_PURPOSES))
         .all()
     )
     if not rows:
