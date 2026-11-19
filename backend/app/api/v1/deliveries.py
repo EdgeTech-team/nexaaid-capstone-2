@@ -51,6 +51,7 @@ from services.delivery_allocation import allocate_delivery, chosen_refs, ready_d
 from services.delivery_notices import tell_barangay_prepared, tell_donors, tell_status
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from services import handover
+from services import shortfall
 from services import acknowledgment as ack_receipts
 from core.uploads import EXTENSION, local_path
 from fastapi.responses import FileResponse
@@ -60,11 +61,13 @@ from schemas.delivery import (
     DeliveryBatchAdvance,
     DeliveryCreate,
     DeliveryResponse,
+    DiscrepancyReview,
     HandoverCodeResponse,
     ReceiptConfirm,
     ReceiptConfirmResponse,
     ReceiptProof,
     ReportFulfillmentResponse,
+    ShortDelivery,
 )
 
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
@@ -363,6 +366,48 @@ def _drrmo_actions(db: Session, user, now) -> list:
          "ids": [r.request_id for r in mine
                  if r.delivery_id in ds and ds[r.delivery_id].status == "In Transit"]},
     ]
+
+
+# J5 / NF-010 (team agreement A3): short deliveries and CSWS Main Office's
+# review of their cause (services/shortfall.py). Declared before
+# /{delivery_id}, so "discrepancies" is never read as a delivery id.
+@router.get("/discrepancies", response_model=List[ShortDelivery])
+def list_discrepancies(
+    response: Response,
+    reviewed: Optional[bool] = Query(default=None, description="true: reviewed only; false: still to review"),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+    # NF-003: the shared paged list sends offset; skip still works.
+    offset: Optional[int] = Query(default=None, ge=0),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office", "admin")),
+):
+    """Confirmed deliveries where the barangay counted less than CSWS sent
+    on at least one line, each with its short lines (the rep's reason and
+    note), the receipt date and the review. CSWS Main Office reviews them;
+    the Administrator only reads. The number of matches is in
+    X-Total-Count."""
+    query = shortfall.short_deliveries_query(db, reviewed)
+    response.headers[TOTAL_HEADER] = str(query.order_by(None).count())
+    start = offset if offset is not None else skip
+    return shortfall.views(db, query.offset(start).limit(limit).all())
+
+
+@router.post("/{delivery_id}/discrepancy-review", response_model=ShortDelivery)
+def review_discrepancy(
+    delivery_id: int,
+    payload: DiscrepancyReview,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role("csws_main_office")),
+):
+    """J5 / NF-010: CSWS Main Office records why a short delivery came up
+    short (A3). 404 no delivery; 409 not Confirmed or no short line. A new
+    review replaces the earlier cause; the audit log keeps both. No stock is
+    restored and fulfillment and priority are unchanged."""
+    delivery = db.get(Delivery, delivery_id)
+    if delivery is None or delivery.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    return shortfall.review(db, delivery, payload.cause, payload.note, current_user)
 
 
 # Retrieve one

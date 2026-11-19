@@ -19,6 +19,7 @@ import 'handover_code.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
 import 'scheduled_deliveries.dart';
+import 'short_deliveries_screen.dart' show openShortDeliveries;
 import 'item_amounts.dart';
 
 const _deliverySteps = ['Preparing', 'In Transit', 'Delivered', 'Confirmed'];
@@ -967,6 +968,15 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                   ? null
                   : () => setState(() => dates = null),
             ),
+            // J5 / NF-010: short deliveries (CSWS Main Office reviews,
+            // the Administrator only reads).
+            if (!barangay &&
+                (api.role == Roles.cswsMain || api.role == Roles.admin))
+              ActionChip(
+                avatar: const Icon(Icons.fact_check_outlined, size: 18),
+                label: const Text('Short deliveries'),
+                onPressed: () => openShortDeliveries(context),
+              ),
             if (_filtered)
               TextButton(
                 onPressed: _clearFilters,
