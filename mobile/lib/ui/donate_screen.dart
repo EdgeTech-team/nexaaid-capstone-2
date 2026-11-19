@@ -5,23 +5,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../api.dart' show ApiResult;
 import 'disaster_art.dart';
 import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
 import 'form_draft.dart';
 import 'input_formatters.dart';
 import 'location_picker.dart';
+import 'login_screen.dart' show showLoginPopup;
+import 'register_screen.dart' show showRegisterPopup;
 import 'pickup_days.dart';
 import 'qr_save.dart';
 import 'quantity_units.dart';
+import 'verify_email_sheet.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'widgets.dart';
 
 // Fallback drop-off details, shown only when GET /donations/drop-off-info
 // cannot be reached. The real values live in the backend .env
 // (DROPOFF_NAME, DROPOFF_ADDRESS, DROPOFF_HOURS, DROPOFF_LAT, DROPOFF_LNG).
-const storageAddress =
-    'City of Mandaue City Social Services (CSWS), P.J. Burgos Street, Mandaue City';
+const storageAddress = 'CSWS Main Office, P.J. Burgos Street, Mandaue City';
 const storageHours = 'Monday to Friday, 8:00 AM to 5:00 PM';
 
 // Per-item fulfillment (Oct 2026, docs/architecture/per-item-fulfillment.md).
@@ -107,6 +110,10 @@ class _ItemInfo {
 /// One item line on the donation form.
 class _Line {
   String? itemId;
+
+  /// D7: already part of the donation being edited (saved with PUT); new
+  /// lines added in the Edit form go to POST /items (Batch 2, 3 ...).
+  bool existing = false;
 
   /// To scroll to this item and put the cursor in its quantity (a tapped
   /// "Still needed" item, or one that is already in the donation).
@@ -270,18 +277,65 @@ class _DonateScreenState extends State<DonateScreen> {
   final guestName = TextEditingController();
   final guestPhone = TextEditingController();
   bool guestConsent = false; // F-09: RA 10173 consent for guests
+  // NF-005 (D2): a field people never see. Bots fill in every field; the
+  // server then answers as if saved and keeps nothing.
+  final _website = TextEditingController();
 
   bool busy = false;
 
   bool get _editing => widget.edit != null;
   bool get _adding => widget.addTo != null;
 
+  /// D7: the pledged items can still be changed as a whole (all waiting or
+  /// declined, nothing added later or removed). Otherwise the Edit form
+  /// only adds new items, and the addition history stays as it is.
+  static bool _wholeEditable(Map e) {
+    final items = (e['items'] as List? ?? const []).cast<Map>();
+    return items.isNotEmpty &&
+        items.every(
+          (i) =>
+              const {'Pending', 'Cancelled'}.contains(i['status'] ?? 'Pending'),
+        ) &&
+        !items.any(
+          (i) =>
+              ((i['addition_no'] as num?) ?? 1) > 1 ||
+              i['removed_by_donor'] == true,
+        );
+  }
+
+  bool get _linesLocked => _editing && !_wholeEditable(widget.edit!);
+
+  /// NF-004: a guest, and the server says Door to Door is for accounts.
+  bool get _guestPickupLocked =>
+      !api.loggedIn && pickupRules.guestDoorToDoorBlocked;
+
+  /// Sign in or register without losing this donation: it is kept, and
+  /// the donor home reopens this form after the sign-in, with Door to Door
+  /// chosen (resumeGuestDonation).
+  Future<void> _goSignUp({required bool register}) async {
+    await rememberGuestDonation(_report, {
+      ..._snapshot(),
+      'handover': 'Door to Door',
+    });
+    if (!mounted) return;
+    if (register) {
+      await showRegisterPopup(context, org: false);
+    } else {
+      await showLoginPopup(context);
+    }
+  }
+
   /// Fill the form from the donation being changed.
   void _fillFromEntry(Map e) {
     lines
       ..forEach((l) => l.dispose())
       ..clear();
-    for (final i in (e['items'] as List? ?? const []).cast<Map>()) {
+    // D7: pledged items that can't change are listed read-only; the form
+    // starts with one new line for the items being added.
+    final pledged = _wholeEditable(e)
+        ? (e['items'] as List? ?? const []).cast<Map>()
+        : const <Map>[];
+    for (final i in pledged) {
       final l = _lineFromEntryItem(i);
       final value =
           (i['estimated_value'] as num?) ??
@@ -309,7 +363,9 @@ class _DonateScreenState extends State<DonateScreen> {
   /// breakdown (pack_count, per_pack, size_label); older ones only a total
   /// in the base unit, which opens as that many single items of 1 kg / 1 L.
   _Line _lineFromEntryItem(Map i) {
-    final l = _Line()..itemId = '${i['item_id']}';
+    final l = _Line()
+      ..itemId = '${i['item_id']}'
+      ..existing = true;
     var info = _infoOf(l);
     final packs = i['pack_count'] ?? i['quantity'];
     l.packs.text = packs == null ? '' : '$packs';
@@ -475,7 +531,9 @@ class _DonateScreenState extends State<DonateScreen> {
           ..clear()
           ..addAll(restored);
       }
-      handover = d.str('handover') == 'Door to Door'
+      handover =
+          d.str('handover') == 'Door to Door' &&
+              (api.loggedIn || !pickupRules.guestDoorToDoorBlocked)
           ? 'Door to Door'
           : 'Drop Off';
       pickupLandmark.text = d.str('landmark');
@@ -569,6 +627,7 @@ class _DonateScreenState extends State<DonateScreen> {
     pickupNotes.dispose();
     guestName.dispose();
     guestPhone.dispose();
+    _website.dispose();
     super.dispose();
   }
 
@@ -586,12 +645,93 @@ class _DonateScreenState extends State<DonateScreen> {
   }
 
   void _snack(String msg, {bool error = false}) {
+    // Testing (Nov 18): problems read as a caution (amber), not as a red
+    // system error.
+    final caution = StatusColors.of('On Hold', Theme.of(context).brightness);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: error ? Theme.of(context).colorScheme.error : null,
-        content: Text(msg),
+        backgroundColor: error ? caution.bg : null,
+        content: Text(msg, style: error ? TextStyle(color: caution.fg) : null),
       ),
     );
+  }
+
+  /// Guest limits (services/guest_limits.py) explained in a sheet with a
+  /// way forward, instead of an error message. True when [r] was one.
+  Future<bool> _explainGuestLimit(ApiResult r) async {
+    if (api.loggedIn ||
+        !(r.status == 429 || r.status == 409 || r.status == 422)) {
+      return false;
+    }
+    final text = r.errorText;
+    final blocked = text.contains('Door to Door is for registered donors');
+    final onePickup = blocked || text.contains('one Door to Door pickup');
+    final known =
+        onePickup ||
+        text.contains('donations waiting') ||
+        text.contains('last 24 hours') ||
+        text.contains('large donations') ||
+        text.contains('Too many guest donations');
+    if (!known) return false;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final t = Theme.of(ctx).textTheme;
+        final cs = Theme.of(ctx).colorScheme;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Space.lg, 0, Space.lg, Space.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Icon(Icons.shield_outlined, size: 36, color: cs.primary),
+                Gaps.v8,
+                Text(
+                  blocked
+                      ? 'Door to Door needs an account'
+                      : onePickup
+                      ? 'One pickup at a time'
+                      : 'This donation can\'t be sent yet',
+                  textAlign: TextAlign.center,
+                  style: t.titleLarge,
+                ),
+                Gaps.v8,
+                Text(text, textAlign: TextAlign.center, style: t.bodyMedium),
+                Gaps.v16,
+                if (onePickup) ...[
+                  FilledButton.icon(
+                    key: const ValueKey('switch-drop-off'),
+                    onPressed: () => Navigator.pop(ctx, 'drop'),
+                    icon: const Icon(Icons.store_mall_directory_outlined),
+                    label: const Text('Switch to Drop Off'),
+                  ),
+                  Gaps.v8,
+                ],
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.pop(ctx, 'register'),
+                  icon: const Icon(Icons.person_add_alt_1_outlined),
+                  label: const Text('Register an account'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    if (!mounted) return true;
+    if (choice == 'drop') {
+      setState(() => handover = 'Drop Off');
+      _saveDraft();
+    } else if (choice == 'register') {
+      await _goSignUp(register: true);
+    }
+    return true;
   }
 
   Future<void> _choosePickupDates(FormFieldState<Set<DateTime>> field) async {
@@ -856,6 +996,7 @@ class _DonateScreenState extends State<DonateScreen> {
     }
     // Adding items needs a login and sends no personal data (no F-09 consent).
     if (_adding) return _submitAdditions();
+    if (_editing) return _submitEdit();
     if (!api.loggedIn && !_editing && !guestConsent) {
       _snack(
         'Please agree to the processing of your personal data (RA 10173).',
@@ -864,6 +1005,100 @@ class _DonateScreenState extends State<DonateScreen> {
       return;
     }
 
+    setState(() => busy = true);
+    final body = <String, dynamic>{
+      ..._detailsBody([for (final l in lines.reversed) l]),
+      'report_id': _report['id'],
+      if (!api.loggedIn && !_editing)
+        'guest_donor': {
+          'full_name': guestName.text.trim(),
+          'contact_number': guestPhone.text.trim(),
+          'consent': guestConsent,
+        },
+      // NF-005: only a bot fills in the hidden field.
+      if (_website.text.isNotEmpty) 'website': _website.text,
+    };
+    final r = await api.post('/donations/batch', body: body);
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (!r.ok && await _explainGuestLimit(r)) return;
+    if (!mounted) return;
+    if (!r.ok || r.json is! Map) {
+      _snack(
+        r.status == 0 ? 'Cannot reach the server' : r.errorText,
+        error: true,
+      );
+      return;
+    }
+    _draft?.clear(); // submitted: the draft is no longer needed
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => DonationReceipt(
+          batch: Map<String, dynamic>.from(r.json as Map),
+          reportTitle: '${_report['disaster']} in ${_report['barangay']}',
+        ),
+      ),
+    );
+  }
+
+  /// D7 (Edit donation): one form, one save. The pledged lines that changed
+  /// go to PUT /donations/entries/{ref} (with the handover and pickup), the
+  /// new lines to POST /donations/entries/{ref}/items as a new batch, so the
+  /// addition history rules stay as they are. When the pledged items can no
+  /// longer change as a whole, only the new lines are sent.
+  Future<void> _submitEdit() async {
+    final ref = '${widget.edit!['batch_reference']}';
+    final path = '/donations/entries/${Uri.encodeComponent(ref)}';
+    final pledged = [
+      for (final l in lines.reversed)
+        if (l.existing) l,
+    ];
+    final fresh = [
+      for (final l in lines.reversed)
+        if (!l.existing) l,
+    ];
+    if (_linesLocked && fresh.isEmpty) {
+      _snack('Add an item first. Pledged items stay as they are.', error: true);
+      return;
+    }
+    setState(() => busy = true);
+    ApiResult? r;
+    var addedLater = fresh;
+    if (!_linesLocked) {
+      // Every pledged line was removed from the form: the new ones replace
+      // them in the same save.
+      final whole = pledged.isEmpty ? fresh : pledged;
+      if (pledged.isEmpty) addedLater = const [];
+      r = await api.put(path, body: _detailsBody(whole));
+    }
+    if ((r == null || r.ok) && addedLater.isNotEmpty) {
+      r = await api.post(
+        '$path/items',
+        body: {
+          'items': [for (final l in addedLater) l.toJson(_infoOf(l)!)],
+        },
+      );
+    }
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (r == null || !r.ok) {
+      _snack(
+        r == null || r.status == 0 ? 'Cannot reach the server' : r.errorText,
+        error: true,
+      );
+      return;
+    }
+    _snack('Donation updated. Same QR code.');
+    final view = r.json is Map ? r.json as Map : const {};
+    if (view['awaiting_email'] == true && mounted) {
+      await showVerifyEmailSheet(context);
+      if (!mounted) return;
+    }
+    Navigator.of(context).pop(true);
+  }
+
+  /// Handover, pickup and the given item lines, as the server reads them.
+  Map<String, dynamic> _detailsBody(List<_Line> items) {
     final door = handover == 'Door to Door';
     final addressText = pickupAddress.text.trim();
     final landmarkText = pickupLandmark.text.trim();
@@ -872,9 +1107,7 @@ class _DonateScreenState extends State<DonateScreen> {
     final place = picked != null && picked!.address == addressText
         ? picked!
         : PickedAddress(addressText);
-    setState(() => busy = true);
-    final body = <String, dynamic>{
-      if (!_editing) 'report_id': _report['id'],
+    return <String, dynamic>{
       'handover_method': handover,
       if (door) ...{
         'pickup_address': addressText,
@@ -894,43 +1127,8 @@ class _DonateScreenState extends State<DonateScreen> {
         if (pickupNotes.text.trim().isNotEmpty)
           'pickup_notes': pickupNotes.text.trim(),
       },
-      'items': [for (final l in lines.reversed) l.toJson(_infoOf(l)!)],
-      if (!api.loggedIn && !_editing)
-        'guest_donor': {
-          'full_name': guestName.text.trim(),
-          'contact_number': guestPhone.text.trim(),
-          'consent': guestConsent,
-        },
+      'items': [for (final l in items) l.toJson(_infoOf(l)!)],
     };
-    final r = _editing
-        ? await api.put(
-            '/donations/entries/${Uri.encodeComponent('${widget.edit!['batch_reference']}')}',
-            body: body,
-          )
-        : await api.post('/donations/batch', body: body);
-    if (!mounted) return;
-    setState(() => busy = false);
-    if (!r.ok || r.json is! Map) {
-      _snack(
-        r.status == 0 ? 'Cannot reach the server' : r.errorText,
-        error: true,
-      );
-      return;
-    }
-    if (_editing) {
-      _snack('Donation updated. Same QR code.');
-      Navigator.of(context).pop(true);
-      return;
-    }
-    _draft?.clear(); // submitted: the draft is no longer needed
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(
-        builder: (_) => DonationReceipt(
-          batch: Map<String, dynamic>.from(r.json as Map),
-          reportTitle: '${_report['disaster']} in ${_report['barangay']}',
-        ),
-      ),
-    );
   }
 
   // -------------------------------------------------------------------------
@@ -1759,12 +1957,15 @@ class _DonateScreenState extends State<DonateScreen> {
                       : 'What are you donating?',
                   subtitle: _adding
                       ? 'These items join your donation as a new batch.'
+                      : _editing
+                      ? 'Change your items or add more. New items keep the same QR code.'
                       : 'Add every item you are giving. They all share one QR code.',
                 ),
+                if (_linesLocked) _pledgedItems(),
                 // Concerns Nov 4: the button is at the top and new items
                 // appear right under it (newest first).
                 AppButton(
-                  'Add another item',
+                  _editing ? '+ Add item' : 'Add another item',
                   icon: Icons.add,
                   variant: AppButtonVariant.secondary,
                   expand: true,
@@ -1775,11 +1976,74 @@ class _DonateScreenState extends State<DonateScreen> {
 
                 // Adding to a donation: only the items. Handover, pickup
                 // and donor details stay as they are.
-                if (!_adding) ..._handoverSections(door),
+                if (!_adding && !_linesLocked) ..._handoverSections(door),
+                // NF-005: hidden from people (and from screen readers).
+                Offstage(
+                  child: ExcludeSemantics(
+                    child: TextField(
+                      key: const ValueKey('website'),
+                      controller: _website,
+                      enableInteractiveSelection: false,
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  /// D7: the pledged items, read-only, when only new items can be added.
+  Widget _pledgedItems() {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final e = widget.edit!;
+    final items = (e['items'] as List? ?? const []).cast<Map>().where(
+      (i) => i['removed_by_donor'] != true,
+    );
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: Space.sm),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Already in ${e['batch_reference']}',
+            style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          Gaps.v4,
+          Text(
+            'These stay as they are, so CSWS keeps their history. New '
+            'items join the same QR code and '
+            '${e['handover_method'] == 'Door to Door' ? 'pickup' : 'drop-off'}.',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v8,
+          for (final i in items)
+            Padding(
+              padding: const EdgeInsets.only(bottom: Space.xs),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.lock_outline,
+                    size: 16,
+                    color: cs.onSurfaceVariant,
+                  ),
+                  Gaps.h8,
+                  Expanded(
+                    child: Text(
+                      '${i['item_name']} · '
+                      '${i['amount_text'] ?? '${i['quantity']} ${i['unit'] ?? ''}'.trim()}'
+                      '${(i['packaging'] ?? '').toString().isEmpty ? '' : ' (${i['packaging']})'}',
+                      style: t.bodyMedium,
+                    ),
+                  ),
+                  StatusChip('${i['status']}'),
+                ],
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -1824,7 +2088,7 @@ class _DonateScreenState extends State<DonateScreen> {
                                 'rest of your donation'
                                 '${when == null ? '' : ' ($when)'}.'
                           : 'Same QR code. Bring these together with the rest '
-                                'of your donation to the CSWS office.',
+                                'of your donation to the CSWS Main Office.',
                       style: t.bodyMedium,
                     ),
                   ],
@@ -1885,7 +2149,7 @@ class _DonateScreenState extends State<DonateScreen> {
     _ChoiceTile(
       icon: Icons.store_mall_directory_outlined,
       title: 'Drop Off',
-      subtitle: 'Bring the goods to the CSWS office yourself.',
+      subtitle: 'Bring the goods to the CSWS Main Office yourself.',
       selected: !door,
       onTap: () {
         setState(() => handover = 'Drop Off');
@@ -1893,16 +2157,41 @@ class _DonateScreenState extends State<DonateScreen> {
       },
     ),
     Gaps.v8,
-    _ChoiceTile(
-      icon: Icons.local_shipping_outlined,
-      title: 'Door to Door',
-      subtitle: 'CSWS picks up the goods from your address.',
-      selected: door,
-      onTap: () {
-        setState(() => handover = 'Door to Door');
-        _saveDraft();
-      },
-    ),
+    if (_guestPickupLocked)
+      // NF-004: shown, locked; tapping it explains how to get a pickup.
+      Opacity(
+        key: const ValueKey('door-to-door-locked'),
+        opacity: 0.6,
+        child: _ChoiceTile(
+          icon: Icons.lock_outline,
+          title: 'Door to Door',
+          subtitle:
+              'For registered donors. Sign in or register to request a pickup.',
+          selected: false,
+          onTap: () => _goSignUp(register: true),
+        ),
+      )
+    else
+      _ChoiceTile(
+        icon: Icons.local_shipping_outlined,
+        title: 'Door to Door',
+        subtitle: 'CSWS picks up the goods from your address.',
+        selected: door,
+        onTap: () {
+          setState(() => handover = 'Door to Door');
+          _saveDraft();
+        },
+      ),
+    // Guests: why Door to Door needs an account (blocked), or why only one
+    // pickup can wait (limited), and the way to get more.
+    if (!api.loggedIn && (_guestPickupLocked || door)) ...[
+      Gaps.v8,
+      _GuestPickupNote(
+        locked: _guestPickupLocked,
+        onRegister: () => _goSignUp(register: true),
+        onSignIn: () => _goSignUp(register: false),
+      ),
+    ],
     Gaps.v12,
     AnimatedSwitcher(
       duration: Motion.normal,
@@ -1924,6 +2213,76 @@ class _DonateScreenState extends State<DonateScreen> {
       _guestCard(),
     ],
   ];
+}
+
+/// NF-004: why guests can't choose Door to Door (GUEST_DOOR_TO_DOOR=blocked).
+const guestPickupBlockedText =
+    'Door to Door is for registered donors. It keeps our pickup team safe '
+    'and makes sure every pickup address is real. Registering takes about '
+    '2 minutes: you\'ll need a valid ID (front and back) and your email. '
+    'Your donation stays filled in.';
+
+/// Same reason the server gives (services/guest_limits.GUEST_ONE_PICKUP).
+const guestPickupLimitText =
+    'For NexaAid security and the safety of our pickup team, a guest can '
+    'have only one Door to Door pickup waiting at a time. Register an '
+    'account to request more pickups.';
+
+/// A guest asking for Door to Door: why only one pickup can wait at a time,
+/// and how to get more (register or sign in).
+class _GuestPickupNote extends StatelessWidget {
+  final bool locked;
+  final VoidCallback onRegister;
+  final VoidCallback onSignIn;
+  const _GuestPickupNote({
+    required this.locked,
+    required this.onRegister,
+    required this.onSignIn,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    return Container(
+      key: const ValueKey('guest-pickup-note'),
+      padding: const EdgeInsets.all(Space.md),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(Radii.md),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.shield_outlined, color: cs.onSurfaceVariant),
+              Gaps.h12,
+              Expanded(
+                child: Text(
+                  locked ? guestPickupBlockedText : guestPickupLimitText,
+                  style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+          Wrap(
+            spacing: Space.xs,
+            children: [
+              TextButton(
+                onPressed: onRegister,
+                child: Text(
+                  locked ? 'Register (takes 2 minutes)' : 'Register an account',
+                ),
+              ),
+              TextButton(onPressed: onSignIn, child: const Text('Sign in')),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// "① What are you donating?" numbered section title.
@@ -2164,19 +2523,21 @@ class _DonationReceiptState extends State<DonationReceipt> {
   Widget _guestWarning() {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
+    // Testing (Nov 18): a reminder in amber, not a red error.
+    final caution = StatusColors.of('On Hold', Theme.of(context).brightness);
     return Container(
       margin: const EdgeInsets.only(bottom: Space.md),
       padding: const EdgeInsets.all(Space.md),
       decoration: BoxDecoration(
-        color: _saved ? cs.secondaryContainer : cs.errorContainer,
+        color: _saved ? cs.secondaryContainer : caution.bg,
         borderRadius: BorderRadius.circular(Radii.md),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            _saved ? Icons.check_circle_outline : Icons.warning_amber_rounded,
-            color: _saved ? cs.onSecondaryContainer : cs.onErrorContainer,
+            _saved ? Icons.check_circle_outline : Icons.qr_code_2,
+            color: _saved ? cs.onSecondaryContainer : caution.fg,
           ),
           Gaps.h12,
           Expanded(
@@ -2187,7 +2548,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
                         'not kept in any account, and you will need it to hand '
                         'over your goods.',
               style: t.bodyMedium?.copyWith(
-                color: _saved ? cs.onSecondaryContainer : cs.onErrorContainer,
+                color: _saved ? cs.onSecondaryContainer : caution.fg,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -2242,6 +2603,14 @@ class _DonationReceiptState extends State<DonationReceipt> {
             padding: EdgeInsets.fromLTRB(side, Space.lg, side, Space.xl),
             children: [
               if (_guest) _guestWarning(),
+              // NF-006 (D4): a Door to Door pickup waiting for the email code.
+              if (batch['awaiting_email'] == true) ...[
+                EmailHoldNote(
+                  onVerified: () =>
+                      setState(() => batch['awaiting_email'] = false),
+                ),
+                Gaps.v12,
+              ],
               const Icon(
                 Icons.check_circle,
                 color: AppColors.success,
@@ -2256,7 +2625,7 @@ class _DonationReceiptState extends State<DonationReceipt> {
               Gaps.v4,
               Text(
                 'For ${widget.reportTitle}. '
-                '${dropOff ? 'Show this QR code at the CSWS office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
+                '${dropOff ? 'Show this QR code at the CSWS Main Office.' : 'Show this QR code to the CSWS team when they pick up your goods.'}',
                 textAlign: TextAlign.center,
                 style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
               ),
@@ -2464,6 +2833,58 @@ Future<void> reopenUnsavedGuestReceipt(BuildContext context) async {
   Navigator.of(context).push(
     MaterialPageRoute(
       builder: (_) => DonationReceipt(batch: batch, reportTitle: title),
+    ),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// NF-004: a guest who wants Door to Door signs in or registers without losing
+// the donation. The form is kept here (guest draft) and reopened by the donor
+// home right after the sign-in, under the new account's draft.
+// ---------------------------------------------------------------------------
+const _resumeKey = 'resume_guest_donation';
+
+Future<void> rememberGuestDonation(
+  Map<String, dynamic> report,
+  Map<String, dynamic> draft,
+) async {
+  try {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _resumeKey,
+      jsonEncode({'report': report, 'draft': draft}),
+    );
+  } catch (_) {}
+}
+
+/// Call from the donor / organization home: reopens the guest's donation
+/// once, with what they typed and Door to Door chosen.
+Future<void> resumeGuestDonation(BuildContext context) async {
+  if (!api.loggedIn) return;
+  Map<String, dynamic>? saved;
+  try {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString(_resumeKey);
+    if (raw == null) return;
+    await p.remove(_resumeKey);
+    saved = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+  } catch (_) {
+    return;
+  }
+  final report = Map<String, dynamic>.from(saved['report'] as Map);
+  final draft = Map<String, dynamic>.from(saved['draft'] as Map);
+  // The form loads its draft under the signed-in account's key.
+  FormDraft('donate:${report['id']}').flushNow(draft);
+  final lookups = await api.lookupsResult();
+  if (!context.mounted) return;
+  final names = Names(
+    lookups.ok && lookups.json is Map
+        ? Map<String, dynamic>.from(lookups.json as Map)
+        : <String, dynamic>{},
+  );
+  await Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => DonateScreen(report: report, names: names),
     ),
   );
 }

@@ -147,6 +147,27 @@ def submit_pickup_request(
                        f"The donor chose {pickup_days_label(first.pickup_days)}.",
             )
 
+    # NF-006 (D4): a donor who has not verified the email is not on the map.
+    from services.email_hold import held_refs
+    held = sorted(held_refs(db, payload.batch_references))
+    if held:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{', '.join(held)} is waiting for the donor to verify their email.",
+        )
+    # NF-007 (D5): every stop needs a "Called – confirmed" (Reached) call first.
+    unconfirmed = [
+        ref for ref in payload.batch_references
+        if not any(l.status == "Pending" and l.contact_outcome == "Reached" for l in by_ref[ref])
+    ]
+    if unconfirmed:
+        raise HTTPException(
+            status_code=409,
+            detail=("Call these stops first (Called – confirmed): "
+                    f"{', '.join(unconfirmed)}."),
+            headers={"X-Unconfirmed-Stops": ",".join(unconfirmed)},
+        )
+
     for req in (db.query(LogisticsRequest)
                 .filter(LogisticsRequest.request_type == "Pickup",
                         LogisticsRequest.status.in_(OPEN)).all()):

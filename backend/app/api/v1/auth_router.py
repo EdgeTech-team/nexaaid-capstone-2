@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from core.audit import log_action
-from core.auth import hash_password
+from core.auth import get_current_user, hash_password
 from core.config import settings
 from core.database import get_db
 from core.email import send_email
@@ -19,6 +19,8 @@ from models.user_rbac_model import User
 from models.role_model import Role
 from models.organization_model import Organization
 from models.password_reset_model import PasswordResetToken
+from models.email_verification_model import EmailVerificationCode
+from pydantic import BaseModel, Field
 from schemas.user_schema import (
     DonorRegisterRequest, ForgotPasswordRequest, ResetPasswordRequest, UserResponse,
 )
@@ -131,13 +133,14 @@ def register_organization(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    """UC-A2: the organization registers, is validated automatically
-    (Capstone 2 adviser comment 1.3) and does not wait for the
+    """UC-A2: the organization registers and does not wait for the
     Administrator: the app signs it in right after registering and it goes
-    straight to its dashboard. The supporting document is optional (comment
+    straight to its dashboard (comment 1.3, team decision F). NF-008 (D6):
+    it starts Unverified until the Administrator reviews it; the contact
+    person's government ID is required for every type, and Government types
+    also need one supporting document (optional for the others, comment
     1.1). The registration form no longer asks for a registration number;
-    the field is still accepted here and stored as NULL when missing. The
-    Administrator reviews the registration afterwards."""
+    the field is still accepted here and stored as NULL when missing."""
     if _email_taken(db, payload.contact_email):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
     # The organization's login name. Optional for the API, required by the app.
@@ -157,6 +160,7 @@ def register_organization(
     new_org = Organization(
         org_name=payload.org_name,
         organization_type=payload.organization_type_label,
+        organization_category=payload.category,
         address=payload.address,
         contact_person=payload.contact_person,
         registration_no=payload.registration_no,
@@ -175,6 +179,7 @@ def register_organization(
         password_hash=hash_password(payload.password),
         contact_number=payload.contact_number,
         username=payload.username,
+        id_type=payload.id_type,
         role_id=org_role.role_id,
         organization_id=new_org.organization_id,
         terms_accepted_at=datetime.now(timezone.utc),
@@ -184,16 +189,22 @@ def register_organization(
     # here, so the message names both.
     _flush_or_409(db, "Email or username already registered")
 
-    # Adviser comment 1.1: the supporting document is optional. Some
-    # organization types (e.g. churches) have no documents.
+    # NF-008: the contact person's government ID, like an individual donor
+    # (the back is found later through the uploads table). The supporting
+    # document: required for Government types (the schema checks), optional
+    # for the others (adviser comment 1.1: e.g. churches have none).
+    refs = {"id_front": payload.id_front, "id_back": payload.id_back}
     if payload.legitimacy_document is not None:
-        files = claim_registration_files(db, new_user, {
-            "legitimacy_document": payload.legitimacy_document,
-        })
+        refs["legitimacy_document"] = payload.legitimacy_document
+    files = claim_registration_files(db, new_user, refs)
+    new_user.id_document_url = file_url(files["id_front"].file_id)
+    if "legitimacy_document" in files:
         new_org.legitimacy_document_url = file_url(files["legitimacy_document"].file_id)
 
     log_action(db, new_user, "REGISTER ORGANIZATION", "organizations", new_org.organization_id, new={
         "org_name": new_org.org_name,
+        "organization_type": new_org.organization_type,
+        "organization_category": new_org.organization_category,
         "email": new_user.email,
         "consent_ra10173": True,
     }, request=request)
@@ -330,3 +341,123 @@ def reset_password(
     notify_event(db, user.user_id, "account_password_changed", "user", user.user_id)
     db.flush()
     return {"detail": "Password updated. You can now log in."}
+
+
+# ---------------------------------------------------------------------------
+# NF-006 (D4): verify the account email once (agreement A4).
+# Same pattern as forgot password: a 6-digit code, stored hashed
+# (_code_hash), valid VERIFY_CODE_MINUTES, MAX_VERIFY_ATTEMPTS wrong tries,
+# at most MAX_VERIFY_CODES_PER_HOUR codes an hour. Registration still signs
+# in at once; only Door to Door pickups wait for it (services/email_hold.py).
+# ---------------------------------------------------------------------------
+VERIFY_CODE_MINUTES = 15
+MAX_VERIFY_ATTEMPTS = 5
+MAX_VERIFY_CODES_PER_HOUR = 5
+
+
+class VerifyEmailConfirm(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+def _verified_reply(user: User) -> dict:
+    return {"detail": "Your email is verified.", "email_verified": True,
+            "email_verified_at": user.email_verified_at.isoformat() if user.email_verified_at else None}
+
+
+def _verify_codes_last_hour(db: Session, user_id: int):
+    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    return db.query(EmailVerificationCode).filter(
+        EmailVerificationCode.user_id == user_id,
+        EmailVerificationCode.created_at > since,
+    )
+
+
+@router.post("/verify-email/send")
+def send_email_verification(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Email a 6-digit code to the signed-in account's own address."""
+    if current_user.email_verified_at is not None:
+        return _verified_reply(current_user)
+    if _verify_codes_last_hour(db, current_user.user_id).count() >= MAX_VERIFY_CODES_PER_HOUR:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many codes this hour. Use the last code we sent, or try again later.",
+        )
+    now = datetime.now(timezone.utc)
+    # Only the newest code works.
+    db.query(EmailVerificationCode).filter(
+        EmailVerificationCode.user_id == current_user.user_id,
+        EmailVerificationCode.used_at.is_(None),
+    ).update({"used_at": now})
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    db.add(EmailVerificationCode(
+        user_id=current_user.user_id,
+        code_hash=_code_hash(code),
+        expires_at=now + timedelta(minutes=VERIFY_CODE_MINUTES),
+    ))
+    background_tasks.add_task(
+        send_email, current_user.email, "Your NexaAid email verification code",
+        f"Hello {current_user.first_name},\n\n"
+        f"Your NexaAid verification code is {code}. It expires in {VERIFY_CODE_MINUTES} minutes.\n\n"
+        "Enter it in the app to confirm your email. You only do this once; after that "
+        "CSWS can pick up your Door to Door donations.\n\n"
+        "If you did not ask for this, you can ignore this email.\n\nNexaAid",
+    )
+    db.commit()
+    return {"detail": f"We sent a 6-digit code to {current_user.email}.",
+            "email_verified": False, "expires_in_minutes": VERIFY_CODE_MINUTES}
+
+
+@router.post("/verify-email/confirm")
+def confirm_email_verification(
+    payload: VerifyEmailConfirm,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Check the code. Once it matches, the account is verified for good and
+    every Door to Door donation still waiting goes to the CSWS pickup map,
+    with its handover deadline counted from now."""
+    if current_user.email_verified_at is not None:
+        return {**_verified_reply(current_user), "released": []}
+    token = (
+        db.query(EmailVerificationCode)
+        .filter(EmailVerificationCode.user_id == current_user.user_id,
+                EmailVerificationCode.used_at.is_(None))
+        .order_by(EmailVerificationCode.created_at.desc(), EmailVerificationCode.code_id.desc())
+        .first()
+    )
+    if token is None:
+        raise HTTPException(status_code=400, detail="No code is waiting. Ask for a new code.")
+    if token.attempts >= MAX_VERIFY_ATTEMPTS:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail="Too many wrong codes. Ask for a new code.")
+    now = datetime.now(timezone.utc)
+    expires = token.expires_at
+    if expires.tzinfo is None:  # SQLite (tests) returns naive datetimes
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < now:
+        raise HTTPException(status_code=400, detail="This code expired. Ask for a new code.")
+    if not hmac.compare_digest(token.code_hash, _code_hash(payload.code)):
+        token.attempts += 1
+        db.commit()  # get_db rolls back when an error is raised, so save the wrong guess first
+        if token.attempts >= MAX_VERIFY_ATTEMPTS:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                                detail="Too many wrong codes. Ask for a new code.")
+        left = MAX_VERIFY_ATTEMPTS - token.attempts
+        raise HTTPException(status_code=400,
+                            detail=f"Wrong code. {left} tr{'ies' if left != 1 else 'y'} left.")
+
+    from services.email_hold import release_holds
+    token.used_at = now
+    current_user.email_verified_at = now
+    released = release_holds(db, current_user)
+    log_action(db, current_user, "VERIFY EMAIL", "users", current_user.user_id,
+               new={"email_verified_at": now.isoformat(), "pickups_released": released},
+               request=request)
+    db.commit()
+    db.refresh(current_user)
+    return {**_verified_reply(current_user), "released": released}

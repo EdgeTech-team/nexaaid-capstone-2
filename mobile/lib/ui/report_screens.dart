@@ -1855,9 +1855,31 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
   late ReportView view = ReportViewMemory.read(_list, _defaults);
   int _loads = 0;
   int? _highlight; // report the notification is about, shown first
+  // Reports being validated right now: the button shows a spinner and a
+  // second tap is ignored (validating notifies every donor, which can take
+  // a few seconds on the hosted database).
+  final Set<int> _validating = {};
 
   @override
   String get homeTab => 'Validate';
+
+  Future<void> _validate(Map<String, dynamic> r) async {
+    final id = r['report_id'] as int;
+    if (_validating.contains(id)) return;
+    setState(() => _validating.add(id));
+    final res = await act(
+      context,
+      () => api.post('/reports/$id/validate'),
+      success: 'Report #$id validated and published to donors',
+    );
+    if (!mounted) return;
+    setState(() {
+      _validating.remove(id);
+      // Validated now, or already validated by an earlier tap or another
+      // Administrator: either way it leaves the Pending list.
+      if (res.ok || res.status == 400 || res.status == 409) _loads++;
+    });
+  }
 
   @override
   void applyHomeTarget(HomeTarget target) {
@@ -1983,14 +2005,21 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
                     child: const Text('Reject'),
                   ),
                   FilledButton.icon(
-                    onPressed: () => act(
-                      context,
-                      () => api.post('/reports/${r['report_id']}/validate'),
-                      success:
-                          'Report #${r['report_id']} validated and published to donors',
+                    onPressed: _validating.contains(r['report_id'])
+                        ? null
+                        : () => _validate(r),
+                    icon: _validating.contains(r['report_id'])
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check),
+                    label: Text(
+                      _validating.contains(r['report_id'])
+                          ? 'Validating…'
+                          : 'Validate',
                     ),
-                    icon: const Icon(Icons.check),
-                    label: const Text('Validate'),
                   ),
                 ]
               : status == 'Rejected'
@@ -2161,6 +2190,41 @@ class DashboardScreen extends StatelessWidget {
                 label: 'Est. value of donations',
                 value: pesos(b['total_estimated_value']) ?? 'PHP 0',
                 icon: Icons.payments_outlined,
+              ),
+              // NF-008 (D6): organizations the Administrator verified.
+              StatCard(
+                label: 'Verified organizations',
+                value: '${s['verified_organizations'] ?? 0}',
+                icon: Icons.verified_outlined,
+                color: AppColors.success,
+                onTap: () => showModalBottomSheet<void>(
+                  context: context,
+                  showDragHandle: true,
+                  builder: (_) => SafeArea(
+                    child: ListView(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      children: [
+                        const Text(
+                          'Verified organizations',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        for (final n
+                            in (s['verified_organization_names'] as List? ??
+                                const []))
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.apartment_outlined),
+                            title: Text('$n'),
+                            trailing: const StatusChip(
+                              'Confirmed',
+                              label: 'Verified',
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ]),
             const SizedBox(height: 12),

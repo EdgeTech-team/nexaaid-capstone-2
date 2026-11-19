@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from services.item_quantities import donated_item_fields
 from sqlalchemy.orm import Session
 
 from core.database import get_db
@@ -128,6 +129,10 @@ def find_by_qr(
         "report_id": d.report_id,
         "report_label": _report_labels(db, {d.report_id}).get(d.report_id),
         "actual_quantity_received": received.actual_quantity if received else None,
+        # G-002 (D8)
+        **{k: v for k, v in donated_item_fields(
+            d, item.unit_of_measure if item else "",
+            received.actual_quantity if received else None).items() if k != "packaging"},
         "created_at": d.created_at,
     }
 

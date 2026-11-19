@@ -509,6 +509,8 @@ class PhysicalDonationCreate(_ItemFields, _PickupFields):
 
     report_id: int
     guest_donor: Optional[GuestDonorInfo] = None  # Only present for non-logged-in donors
+    # NF-005 (D2) bot trap: a form field people never see. Filled in = a bot.
+    website: Optional[str] = Field(default=None, max_length=500)
 
 
 class DonationLine(_ItemFields):
@@ -523,6 +525,8 @@ class DonationBatchCreate(_PickupFields):
     report_id: int
     items: List[DonationLine] = Field(min_length=1, max_length=30)
     guest_donor: Optional[GuestDonorInfo] = None  # Only present for non-logged-in donors
+    # NF-005 (D2) bot trap: a form field people never see. Filled in = a bot.
+    website: Optional[str] = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
     def check_pickup_time_given(self):
