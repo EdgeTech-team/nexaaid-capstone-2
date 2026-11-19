@@ -9,6 +9,8 @@ import 'package:mobile/ui/register_screen.dart';
 import 'package:mobile/ui/upload_field.dart';
 import 'package:mobile/ui/validators.dart';
 
+import 'step_form_helpers.dart';
+
 Future<void> _pump(WidgetTester tester, Widget child) async {
   // Tall screen so the whole form is built (ListView builds lazily).
   tester.view.physicalSize = const Size(800, 5000);
@@ -17,6 +19,7 @@ Future<void> _pump(WidgetTester tester, Widget child) async {
   await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: child));
 }
 
+// UI redesign: the button is on the last step (open it first).
 AppButton _registerButton(WidgetTester tester) =>
     tester.widget<AppButton>(find.byKey(const ValueKey('register-button')));
 
@@ -64,13 +67,19 @@ void main() {
     tester,
   ) async {
     await _pump(tester, const RegisterScreen(org: false));
+    await openStep(tester, 'Password');
     expect(_registerButton(tester).onPressed, isNull);
+    await openStep(tester, 'About you');
 
-    // Two required uploads and consent are on the form.
-    expect(find.byType(UploadField), findsNWidgets(2));
-    expect(find.text('Valid ID (front)'), findsOneWidget);
-    expect(find.text('Valid ID (back)'), findsOneWidget);
-    expect(find.byKey(const ValueKey('consent')), findsOneWidget);
+    // Two required uploads and consent are on the form (UI redesign: on
+    // the Valid ID and Password steps).
+    expect(find.byType(UploadField, skipOffstage: false), findsNWidgets(2));
+    expect(find.text('Valid ID (front)', skipOffstage: false), findsOneWidget);
+    expect(find.text('Valid ID (back)', skipOffstage: false), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('consent'), skipOffstage: false),
+      findsOneWidget,
+    );
 
     // Name is capitalized while typing; the phone stops at 11 digits.
     await _type(tester, 'first_name', 'maria clara');
@@ -81,31 +90,42 @@ void main() {
     // Every text field valid + consent, but no ID photos -> still disabled.
     await _type(tester, 'last_name', 'dela cruz');
     await _type(tester, 'email', 'maria@example.com');
+    await openStep(tester, 'Password');
     await _type(tester, 'password', 'Relief#2026ok');
     await _type(tester, 'confirm_password', 'Relief#2026ok');
     await tester.ensureVisible(find.byKey(const ValueKey('consent')));
     await tester.tap(find.byKey(const ValueKey('consent')));
     await tester.pump();
     expect(_registerButton(tester).onPressed, isNull);
+    // The last step says what is still missing.
+    expect(find.textContaining('Valid ID'), findsWidgets);
+    expect(find.byKey(const ValueKey('register-missing')), findsOneWidget);
   });
 
   testWidgets('Password field has the eye toggle and live rules', (
     tester,
   ) async {
     await _pump(tester, const RegisterScreen(org: false));
+    await openStep(tester, 'Password');
     expect(find.byTooltip('Show password'), findsNWidgets(2));
   });
 
   testWidgets('Organization form (NF-008): grouped types, contact ID, '
       'document required for Government only', (tester) async {
     await _pump(tester, const RegisterScreen(org: true));
-    // The contact person's government ID, front and back, like a donor.
-    expect(find.text("Contact person's government ID"), findsOneWidget);
-    expect(find.byType(UploadField), findsNWidgets(2));
+    // The contact person's government ID, front and back, like a donor
+    // (UI redesign: on the Contact person step).
+    expect(
+      find.text("Contact person's government ID", skipOffstage: false),
+      findsOneWidget,
+    );
+    expect(find.byType(UploadField, skipOffstage: false), findsNWidgets(2));
     expect(find.text('Organization type'), findsOneWidget);
     expect(find.text('Please specify the type'), findsNothing);
     expect(find.text('Contact person'), findsOneWidget);
+    await openStep(tester, 'Log in details');
     expect(_registerButton(tester).onPressed, isNull);
+    await openStep(tester, 'Organization');
 
     // One dropdown, grouped Government / Non-government.
     await tester.tap(find.text('Organization type'));
@@ -115,7 +135,7 @@ void main() {
     await tester.tap(find.text('Barangay / Barangay Council').last);
     await tester.pumpAndSettle();
     // Government: the supporting document is required (no "(optional)").
-    expect(find.byType(UploadField), findsNWidgets(3));
+    expect(find.byType(UploadField, skipOffstage: false), findsNWidgets(3));
     expect(find.textContaining('Supporting document'), findsWidgets);
     expect(find.textContaining('Supporting document (optional)'), findsNothing);
 

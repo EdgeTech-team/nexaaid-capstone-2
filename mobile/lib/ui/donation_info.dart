@@ -638,15 +638,19 @@ class _BarangayInfoEditorState extends State<_BarangayInfoEditor> {
           return ErrorView.forStatus(r.status, r.errorText, onRetry: _reload);
         }
         final children = [
-          if (!widget.embedded)
-            PageHeader(
-              'Donation info: ${r.json['barangay_name']}',
+          if (!widget.embedded) ...[
+            // UI redesign: the teal header of every tab.
+            HeroHeader(
+              title: 'Donation info: ${r.json['barangay_name']}',
               subtitle:
                   'Ways donors can send money directly to your barangay. '
                   'Add one entry per GCash, Maya or bank account. '
                   'NexaAid only shows them; it never handles the money.',
+              bleed: Space.md,
+              bleedTop: Space.md,
             ),
-          SectionHeader('Payment methods'),
+          ],
+          const RedesignSection('Payment methods'),
           if (methods.isEmpty)
             const DonationInfoCard(info: null, title: 'No payment methods yet')
           else

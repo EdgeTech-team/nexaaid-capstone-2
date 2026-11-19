@@ -7,11 +7,15 @@
 /// Profile > Design system gallery in the app to see every component.
 library;
 
+export 'components/app_icons.dart';
+export 'components/brand.dart';
 export 'components/controls.dart';
 export 'components/display.dart';
 export 'components/feedback.dart';
 export 'components/motion.dart';
 export 'components/nav.dart';
+export 'components/redesign.dart';
+export 'components/sort.dart';
 export 'components/toast.dart';
 export 'status.dart';
 export 'theme.dart';

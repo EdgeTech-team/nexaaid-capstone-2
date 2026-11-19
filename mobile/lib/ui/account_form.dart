@@ -95,6 +95,9 @@ class AccountForm extends StatefulWidget {
 
 class AccountFormState extends State<AccountForm> {
   final _form = GlobalKey<FormState>();
+
+  /// UI redesign: the create form in steps; back to step 1 after a save.
+  final _steps = GlobalKey<SteppedFormState>();
   late final Map<String, TextEditingController> c;
   late String? role;
   String? brgyId;
@@ -189,6 +192,7 @@ class AccountFormState extends State<AccountForm> {
         _uploadKey++;
       });
       _form.currentState!.reset();
+      _steps.currentState?.goTo(0);
     } else {
       Navigator.pop(context);
     }
@@ -232,25 +236,7 @@ class AccountFormState extends State<AccountForm> {
     final fullName = '${u?['first_name'] ?? ''} ${u?['last_name'] ?? ''}'
         .trim();
 
-    return Form(
-      key: _form,
-      autovalidateMode: AutovalidateMode.onUserInteraction,
-      child: ListView(
-        padding: Space.page,
-        children: [
-          if (creating)
-            const PageHeader(
-              'New internal account',
-              subtitle: 'Office-based roles only (UC-A1). Donors and organizations register themselves.',
-            )
-          else
-            Padding(
-              padding: const EdgeInsets.only(bottom: Space.md),
-              child: Text(
-                'Editing ${fullName.isEmpty ? u!['email'] : fullName} · $currentRole',
-                style: t.titleMedium,
-              ),
-            ),
+    final roleSection = [
           if (isStaff) ...[
             _Section(
               title: 'Role and assignment',
@@ -296,6 +282,8 @@ class AccountFormState extends State<AccountForm> {
             ),
             Gaps.v12,
           ],
+    ];
+    final personal = [
           _Section(
             title: 'Personal details',
             icon: Icons.person_outline,
@@ -332,6 +320,8 @@ class AccountFormState extends State<AccountForm> {
               ),
             ],
           ),
+    ];
+    final cardSection = [
           // Oct 11 notes (Dave): the separate "Employee ID" number field was
           // dropped; the employee ID card is what proves the staff member
           // works in the office.
@@ -404,15 +394,66 @@ class AccountFormState extends State<AccountForm> {
               ),
             ),
           ],
-          Gaps.v24,
-          AppButton(
-            creating ? 'Create account' : 'Save changes',
-            key: const ValueKey('account-save'),
-            icon: creating ? Icons.person_add_alt_1 : Icons.check,
-            loading: busy,
-            expand: true,
-            onPressed: _submit,
+    ];
+    Widget save(VoidCallback? showFirstError) => AppButton(
+      creating ? 'Create account' : 'Save changes',
+      key: const ValueKey('account-save'),
+      icon: creating ? Icons.person_add_alt_1 : Icons.check,
+      loading: busy,
+      expand: true,
+      onPressed: () {
+        final sent = _submit();
+        showFirstError?.call();
+        sent.ignore();
+      },
+    );
+
+    // UI redesign: a new account is made in steps with a progress bar;
+    // editing keeps one page (every field at once).
+    if (creating) {
+      return Form(
+        key: _form,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: SteppedForm(
+          key: _steps,
+          padding: Space.page,
+          header: const [
+            // Inside Accounts, under its teal header.
+            RedesignSection(
+              'New internal account',
+              first: true,
+              subtitle:
+                  'Office-based roles only (UC-A1). Donors and organizations '
+                  'register themselves.',
+            ),
+          ],
+          steps: [
+            FormStep('Role', roleSection),
+            FormStep('Personal details', personal),
+            FormStep('Employee ID', cardSection),
+          ],
+          submit: (context, showFirstError) => save(showFirstError),
+        ),
+      );
+    }
+    return Form(
+      key: _form,
+      autovalidateMode: AutovalidateMode.onUserInteraction,
+      child: ListView(
+        padding: Space.page,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: Space.md),
+            child: Text(
+              'Editing ${fullName.isEmpty ? u!['email'] : fullName} · $currentRole',
+              style: t.titleMedium,
+            ),
           ),
+          ...roleSection,
+          ...personal,
+          ...cardSection,
+          Gaps.v24,
+          save(null),
           Gaps.v24,
         ],
       ),

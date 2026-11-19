@@ -223,24 +223,9 @@ class SectionTitle extends StatelessWidget {
   final Widget? trailing;
   const SectionTitle(this.text, {super.key, this.trailing});
 
+  /// UI redesign: the same section title as the new screens.
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              text,
-              style: Theme.of(context).textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ),
-          ?trailing,
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => RedesignSection(text, action: trailing);
 }
 
 /// Old one-line empty state. New code: use EmptyView with a title, a

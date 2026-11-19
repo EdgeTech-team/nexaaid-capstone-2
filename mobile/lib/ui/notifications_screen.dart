@@ -461,7 +461,9 @@ class ReportSheet extends StatelessWidget {
               label: 'Why it was sent back',
               child: Text(
                 '$reason',
-                style: t.bodyLarge?.copyWith(color: const Color(0xFFC62828)),
+                style: t.bodyLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
               ),
             ),
 

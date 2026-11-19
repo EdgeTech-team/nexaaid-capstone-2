@@ -12,7 +12,8 @@ abstract final class AppColors {
   static const harborMist = Color(0xFFD5ECE9);
 
   /// Life-vest yellow: reserved for "Donate" actions so they stand out.
-  static const vest = Color(0xFFF5B82E);
+  /// UI redesign (Nov 2026): a little less saturated (was 0xFFF5B82E).
+  static const vest = Color(0xFFEEC25A);
   static const vestInk = Color(0xFF3A2A00); // text/icons on vest
 
   /// Deep teal ink for text on light backgrounds.
@@ -22,8 +23,40 @@ abstract final class AppColors {
   static const paper = Color(0xFFF5F8F7);
   static const night = Color(0xFF0E1B1A);
 
+  /// UI redesign: cards, inputs and sheets are a very light off-white, never
+  /// pure white, and text on teal is off-white too (easier on the eyes).
+  static const surface = Color(0xFFFBFCFC);
+  static const onDark = Color(0xFFF4F8F7);
+
   static const success = Color(0xFF2E8B3E);
-  static const danger = Color(0xFFC0362C);
+  /// UI redesign: slightly softer red (was 0xFFC0362C), still 5.3:1 on the card color.
+  static const danger = Color(0xFFB8423A);
+}
+
+/// A status color pair: [fg] for text and icons, [bg] for the soft tint
+/// behind them. In dark mode the tint is the same hue at low opacity.
+class Tint {
+  final Color fg;
+  final Color bg;
+  const Tint(this.fg, this.bg);
+
+  Color fgFor(Brightness b) =>
+      b == Brightness.dark ? Color.lerp(fg, Colors.white, 0.45)! : fg;
+  Color bgFor(Brightness b) =>
+      b == Brightness.dark ? fg.withValues(alpha: 0.24) : bg;
+}
+
+/// UI redesign: the tints of icon tiles, badges and count pills. Each [Tint.fg]
+/// passes 4.5:1 on its [Tint.bg]. Meaning, not decoration:
+/// amber = waiting, blue = moving / info, red = late or failed,
+/// green = done, teal = NexaAid / neutral action, neutral = no state.
+abstract final class AppTints {
+  static const amber = Tint(Color(0xFFB54708), Color(0xFFFFFAEB));
+  static const blue = Tint(Color(0xFF175CD3), Color(0xFFEFF8FF));
+  static const red = Tint(Color(0xFFB42318), Color(0xFFFEF3F2));
+  static const green = Tint(Color(0xFF067647), Color(0xFFECFDF3));
+  static const teal = Tint(AppColors.harborDeep, AppColors.harborMist);
+  static const neutral = Tint(Color(0xFF475467), Color(0xFFF2F4F7));
 }
 
 /// 8-point spacing scale. Use these instead of arbitrary numbers.

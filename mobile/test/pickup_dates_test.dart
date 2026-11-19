@@ -16,6 +16,8 @@ import 'package:mobile/ui/pickup_days.dart';
 import 'package:mobile/ui/pickup_plan.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
+import 'step_form_helpers.dart';
+
 final _lookups = <String, dynamic>{
   'items': [
     {
@@ -202,6 +204,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      await openStep(tester, 'Handover'); // UI redesign: in steps
       // Nov 1: Address (map suggestions) comes first, Landmark is typed.
       final address = find.byType(AddressAutocompleteField);
       final landmark = find.widgetWithText(TextFormField, 'Landmark');
