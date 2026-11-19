@@ -134,13 +134,18 @@ void main() {
           expect(find.textContaining('pcs Bottled water'), findsNothing);
           expect(find.text('1 item removed by the donor'), findsOneWidget);
           expect(find.text('Bottled water: Expired stock'), findsOneWidget);
+          // D7: one "Edit donation" (the form adds items; items added
+          // later keep their history, so pledged ones open read-only).
           expect(
-            find.text('Want to add more?'),
+            find.text('Change or add items?'),
             open ? findsOneWidget : findsNothing,
           );
-          expect(find.text('Add items'), open ? findsOneWidget : findsNothing);
-          // Still waiting: it can be cancelled (never deleted). Items were
-          // added later, so the whole-list edit is not offered.
+          expect(
+            find.text('Edit donation'),
+            open ? findsOneWidget : findsNothing,
+          );
+          expect(find.text('Add items'), findsNothing);
+          // Still waiting: it can be cancelled (never deleted).
           expect(find.text('Cancel donation'), findsOneWidget);
           expect(find.text('Delete donation'), findsNothing);
           expect(find.text('Update details'), findsNothing);
@@ -192,9 +197,10 @@ void main() {
     await http.runWithClient(() async {
       await tester.pumpWidget(_app(DonationDetailScreen(entry: plain)));
       await tester.pumpAndSettle();
-      expect(find.text('Want to add more?'), findsOneWidget);
-      expect(find.text('Update details'), findsOneWidget);
-      expect(find.text('Edit donation'), findsNothing);
+      // D7: one action instead of Add items + Update details.
+      expect(find.text('Change or add items?'), findsOneWidget);
+      expect(find.text('Edit donation'), findsOneWidget);
+      expect(find.text('Update details'), findsNothing);
       expect(find.byTooltip('Remove Rice'), findsNothing); // the only item
       final cancelBtn = tester.widget<OutlinedButton>(
         find.ancestor(

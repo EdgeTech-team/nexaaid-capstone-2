@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'expiry_widgets.dart';
+import 'item_amounts.dart';
 import 'widgets.dart';
 
 /// Appendix H 4.4 View donation records / 4.5 Monitor donation status.
@@ -573,6 +574,9 @@ class DonationEntryCard extends StatelessWidget {
               _Meta(Icons.qr_code_2, '${e['batch_reference']}'),
               if (e['donor'] != null)
                 _Meta(Icons.person_outline, '${e['donor']}'),
+              // NF-008 (D6): an organization the Administrator verified.
+              if (e['donor'] != null && e['organization_verified'] == true)
+                const StatusChip('Confirmed', label: 'Verified'),
               _Meta(Icons.local_shipping_outlined, '${e['handover_method']}'),
               _Meta(Icons.event_outlined, niceDate(e['created_at'])),
             ],
@@ -587,6 +591,22 @@ class DonationEntryCard extends StatelessWidget {
           if ((e['on_hold_items'] as num? ?? 0) > 0) ...[
             Gaps.v8,
             const StatusChip('On Hold'),
+          ],
+          // NF-011 (D3) for CSWS: "Guest – not yet received" or "Email not
+          // verified" until the pledge can be trusted.
+          if (e['donor'] != null && e['pledge_flag'] != null) ...[
+            Gaps.v8,
+            StatusChip('On Hold', label: '${e['pledge_flag']}'),
+          ],
+          // NF-006 (D4): Door to Door waiting for the donor's email code.
+          if (e['awaiting_email'] == true) ...[
+            Gaps.v8,
+            StatusChip(
+              'Pending',
+              label: e['donor'] != null
+                  ? 'Off the pickup map until the email is verified'
+                  : 'Enter the code from your email',
+            ),
           ],
           // Oct 23: seen without scanning: the donor removed items (why).
           if ((e['removed_items'] as num? ?? 0) > 0) ...[
@@ -624,19 +644,13 @@ class DonationEntryCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // G-002 (D8): "Rice · 10 packs x 5 kg", then packaging and
+                // the quantities that exist (declared, counted, at barangay).
                 Text(
-                  '${i['quantity']} ${i['unit'] ?? ''} ${i['item_name']}'
-                      .replaceAll(RegExp(r'\s+'), ' '),
+                  '${i['item_name']} · ${itemAmount(i)}',
                   style: t.bodyMedium,
                 ),
-                Text(
-                  [
-                    if (i['packaging'] != null) '${i['packaging']}',
-                    if (i['actual_quantity_received'] != null)
-                      '${i['actual_quantity_received']} received',
-                  ].join(' · '),
-                  style: muted,
-                ),
+                Text(itemQuantities(i), style: muted),
                 if (i['hold_reason'] != null)
                   Text('On hold: ${i['hold_reason']}', style: muted),
                 if (AddedLaterTag.applies(i))

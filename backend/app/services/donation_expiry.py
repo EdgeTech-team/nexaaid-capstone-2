@@ -212,9 +212,15 @@ def expire_overdue(db: Session, now: Optional[datetime] = None) -> dict:
         PhysicalDonation.status == OPEN, PhysicalDonation.expires_at <= now
     ).with_for_update(skip_locked=True).all()
     expired_batches = _by_batch(overdue)
+    # NF-006 (D4): a Door to Door donation whose donor never verified the
+    # email expires after 48 hours with its own reason.
+    from models.user_rbac_model import User
+    from services.email_hold import expiry_reason
     for ref, rows in expired_batches.items():
         how = "brought to the CSWS office" if rows[0].handover_method == "Drop Off" else "collected"
-        reason = f"Not {how} by {nice_date(rows[0].expires_at)}."
+        account = db.get(User, rows[0].user_id) if rows[0].user_id else None
+        reason = (expiry_reason(rows[0], account)
+                  or f"Not {how} by {nice_date(rows[0].expires_at)}.")
         close_rows(rows, "Expired", reason, user_id=None, when=now)
         if rows[0].user_id:
             notify_event(db, rows[0].user_id, "donation_expired", "donation",

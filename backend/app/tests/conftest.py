@@ -314,3 +314,34 @@ def _no_geocoder(monkeypatch):
         raise ConnectionError("no network in tests")
 
     monkeypatch.setattr(routes, "_reverse_props", offline)
+
+# ---------------------------------------------------------------------------
+# NF-006 (D4): accounts made by the tests count as email-verified, like the
+# accounts the migration backfilled, so tests written before email
+# verification keep their Door to Door pickups on the map. Tests of the
+# verification itself use the `unverified_accounts` fixture.
+# ---------------------------------------------------------------------------
+from sqlalchemy import event  # noqa: E402
+
+_AUTO_VERIFY = {"on": True}
+
+
+@event.listens_for(User, "before_insert")
+def _verify_test_accounts(mapper, connection, target):
+    if _AUTO_VERIFY["on"] and target.email_verified_at is None:
+        from datetime import datetime, timezone
+        target.email_verified_at = datetime.now(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _auto_verify_accounts():
+    _AUTO_VERIFY["on"] = True
+    yield
+    _AUTO_VERIFY["on"] = True
+
+
+@pytest.fixture()
+def unverified_accounts():
+    """Accounts created from here on start with email_verified_at NULL."""
+    _AUTO_VERIFY["on"] = False
+    yield
