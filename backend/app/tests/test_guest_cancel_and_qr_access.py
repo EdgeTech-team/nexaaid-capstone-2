@@ -40,7 +40,9 @@ def test_guest_phone_check_stops_after_five_wrong_tries(api, monkeypatch):
     assert blocked.status_code == 429 and blocked.headers["Retry-After"]
     assert client.post(f"/donations/entries/{ref.lower()}/cancel", json=RIGHT).status_code == 429
     # The limit is per donation: another guest donation is not affected.
-    ok(client.post(f"/donations/entries/{_guest_ref(client, rid)}/cancel", json=RIGHT))
+    # (Another report: NF-005 refuses the same number + report + item in 24 h.)
+    ok(client.post(f"/donations/entries/{_guest_ref(client, _report(client, t))}/cancel",
+                   json=RIGHT))
     # 15 minutes later the guest can cancel.
     later = auth._now() + auth.LOGIN_WINDOW_SECONDS + 1
     monkeypatch.setattr(auth, "_now", lambda: later)

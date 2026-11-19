@@ -12,6 +12,14 @@ POST /donations/pickup-plan/not-home
      The picker found nobody home. The stop moves to the donor's next
      allowed day after that date. The donor (if registered) is told.
 
+POST /donations/entries/{ref}/contact-check        (NF-007, D5)
+     Staff called the donor to confirm the stop: Reached / No answer /
+     Wrong number. A pickup run cannot be sent while one of its stops has
+     no Reached call (409 listing them, POST /logistics/pickup-requests).
+     Wrong number cancels the entry ("Contact number not reachable"); a
+     second No answer in a row moves the stop to the donor's next date.
+     CSWS Main Office, DRRMO and the Administrator.
+
 "Mark picked up" is the existing receiving flow (scan the QR / open the
 entry): the picker's count is saved in received_goods.actual_quantity,
 separate from what the donor declared (manuscript limitation 3).
@@ -20,14 +28,14 @@ Same roles as GET /donations/pickups: CSWS Main Office and Administrator.
 Donors, DRRMO and the Disaster Unit get 403.
 """
 from datetime import date, datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.audit import log_action
-from core.auth import require_role
+from core.auth import has_role, require_role
 from core.database import get_db
 from core.notifications import notify
 from models.barangay_model import Barangay
@@ -42,14 +50,18 @@ from schemas.physical_donation_schema import (
     pickup_area,
     pickup_rules,
 )
-from services.donation_expiry import entry_expiry_info, expire_overdue
+from services.donation_expiry import close_rows, entry_expiry_info, expire_overdue, now_utc
+from services.email_hold import not_held
+from services.item_quantities import donated_item_fields
 from services.pickup_barangay import barangay_finder
 from services.pickup_planner import Donation, plan, planner_config
 from services.pickup_zones import ZONES, zone_of
 from api.v1.donation_routes import (
     PICKUP_ROLES,
+    _batch_rows,
     _distance_view,
     _donor_info,
+    _drop_from_pickup_runs,
     _iso,
     _num,
     _report_label,
@@ -78,7 +90,8 @@ def _waiting(db: Session) -> list:
         r[0]
         for r in db.query(PhysicalDonation.batch_reference)
         .filter(PhysicalDonation.handover_method == "Door to Door",
-                PhysicalDonation.status == "Pending")
+                PhysicalDonation.status == "Pending",
+                not_held())   # NF-006: waiting for the donor's email code
         .distinct()
         .all()
     ]
@@ -139,8 +152,10 @@ def _waiting(db: Session) -> list:
                 {
                     "item_name": items[l.item_id].item_name if l.item_id in items else "Item",
                     "unit": items[l.item_id].unit_of_measure if l.item_id in items else "",
-                    "packaging": l.packaging,
                     "quantity": l.quantity,
+                    # G-002 (D8): packaging, "10 packs x 5 kg", declared.
+                    **donated_item_fields(
+                        l, items[l.item_id].unit_of_measure if l.item_id in items else ""),
                 }
                 for l in pending
             ],
@@ -171,9 +186,27 @@ def _waiting(db: Session) -> list:
                 },
                 **distance,
                 **_donor_info(db, first),
+                # NF-007 (D5): the confirmation call for this stop.
+                **contact_view(spot),
             },
         ))
     return out
+
+
+def contact_view(row: PhysicalDonation) -> dict:
+    return {
+        "contact_outcome": row.contact_outcome,
+        "contact_confirmed_at": _iso(row.contact_confirmed_at),
+        "contact_confirmed": row.contact_outcome == "Reached",
+    }
+
+
+def clear_contact(rows) -> None:
+    """A new date or place needs a new confirmation call."""
+    for r in rows:
+        r.contact_confirmed_at = None
+        r.contact_confirmed_by_user_id = None
+        r.contact_outcome = None
 
 
 @router.get("/pickup-plan")
@@ -234,6 +267,7 @@ def mark_not_home(
         if r.pickup_not_home_date is None or r.pickup_not_home_date < day:
             r.pickup_not_home_date = day
         by_ref.setdefault(r.batch_reference, []).append(r)
+    clear_contact(rows)   # NF-007: the next date needs a new call
 
     label = day.strftime("%a, %b ") + str(day.day)
     for ref, lines in by_ref.items():
@@ -251,3 +285,75 @@ def mark_not_home(
             )
     db.commit()
     return {"batch_references": sorted(by_ref), "not_home_date": day.isoformat()}
+
+# ---------------------------------------------------------------------------
+# NF-007 (D5): call to confirm every pickup stop
+# ---------------------------------------------------------------------------
+CONTACT_ROLES = ("CSWS Main Office", "DRRMO Logistics Support", "Administrator")
+CONTACT_OUTCOMES = ("Reached", "No answer", "Wrong number")
+WRONG_NUMBER_REASON = "Contact number not reachable"
+
+
+class ContactCheckRequest(BaseModel):
+    outcome: Literal[CONTACT_OUTCOMES]
+    # The date the stop was planned for. A second No answer moves the stop
+    # after it. Defaults to today (Philippine time).
+    planned_date: Optional[date] = None
+
+
+@router.post("/entries/{reference}/contact-check")
+def contact_check(
+    reference: str,
+    payload: ContactCheckRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(*CONTACT_ROLES)),
+):
+    """Record the call that confirms a Door to Door stop (Reached / No
+    answer / Wrong number) on every item still waiting."""
+    rows = _batch_rows(db, reference)
+    pending = [r for r in rows if r.status == "Pending"]
+    ref = rows[0].batch_reference
+    if not pending or pending[0].handover_method != "Door to Door":
+        raise HTTPException(status_code=409,
+                            detail=f"{ref} has no Door to Door pickup still waiting.")
+    before = pending[0].contact_outcome
+    now = now_utc()
+    for r in pending:
+        r.contact_confirmed_at = now
+        r.contact_confirmed_by_user_id = current_user.user_id
+        r.contact_outcome = payload.outcome
+
+    result = {"batch_reference": ref, "contact_outcome": payload.outcome,
+              "contact_confirmed_at": _iso(now), "cancelled": False, "moved": False,
+              "not_home_date": None}
+    first = pending[0]
+    if payload.outcome == "Wrong number":
+        close_rows(pending, "Cancelled", WRONG_NUMBER_REASON, user_id=current_user.user_id)
+        _drop_from_pickup_runs(db, ref)
+        result["cancelled"] = True
+        if first.user_id:
+            notify(db, first.user_id, "pickup_contact_unreachable", "Pickup cancelled",
+                   f"CSWS could not reach you at your contact number for donation {ref}, "
+                   "so the pickup was cancelled. Update your contact number and donate "
+                   "again, or bring it to the CSWS office.",
+                   "donation", first.donation_id)
+    elif payload.outcome == "No answer" and before == "No answer":
+        # Second No answer in a row: the stop moves to the donor's next date.
+        day = payload.planned_date or _today()
+        for r in pending:
+            if r.pickup_not_home_date is None or r.pickup_not_home_date < day:
+                r.pickup_not_home_date = day
+        clear_contact(pending)
+        _drop_from_pickup_runs(db, ref)
+        result.update(moved=True, contact_outcome=None, not_home_date=day.isoformat())
+        if first.user_id:
+            notify(db, first.user_id, "pickup_contact_no_answer", "We could not reach you",
+                   f"CSWS called twice about the pickup of donation {ref} but nobody "
+                   "answered. We will plan it on your next pickup date and call again.",
+                   "donation", first.donation_id)
+    log_action(db, current_user, "PICKUP CONTACT CHECK", "physical_donations", first.donation_id,
+               old={"contact_outcome": before},
+               new={"batch_reference": ref, "contact_outcome": payload.outcome,
+                    "cancelled": result["cancelled"], "moved": result["moved"]})
+    db.commit()
+    return result

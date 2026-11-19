@@ -327,6 +327,10 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
                 _goScan();
               }
             : null,
+        onContactCheck: (d, outcome) async {
+          Navigator.pop(sheet);
+          await _contactCheck(d, outcome);
+        },
         onNotHome: _canReceive
             ? () async {
                 Navigator.pop(sheet);
@@ -357,6 +361,50 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
   }
 
   /// Nobody home: the stop moves to the donors' next allowed day.
+  /// NF-007 (D5): record the confirmation call. Wrong number cancels the
+  /// donation; a second No answer moves the stop to the donor's next date.
+  Future<void> _contactCheck(PlanDonation d, String outcome) async {
+    if (outcome == 'Wrong number') {
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          title: const Text('Wrong number?'),
+          content: Text(
+            '${d.ref} is cancelled ("Contact number not reachable") and leaves '
+            'the pickup map. Registered donors are told in the app.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Back'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Cancel pickup'),
+            ),
+          ],
+        ),
+      );
+      if (yes != true || !mounted) return;
+    }
+    final r = await act(
+      context,
+      () => api.post(
+        '/donations/entries/${Uri.encodeComponent(d.ref)}/contact-check',
+        body: {'outcome': outcome},
+      ),
+      success: switch (outcome) {
+        'Reached' => 'Called – confirmed',
+        'Wrong number' => 'Pickup cancelled: number not reachable',
+        _ => 'No answer saved',
+      },
+    );
+    if (r.ok && r.json is Map && r.json['moved'] == true && mounted) {
+      AppToast.info(context, 'No answer twice: moved to the next pickup day.');
+    }
+    if (r.ok && mounted) await _load();
+  }
+
   Future<void> _notHome(PlanStop s) async {
     final next = s.nextDate == null ? null : planDateLabel(s.nextDate!);
     final yes = await showDialog<bool>(
@@ -1443,6 +1491,11 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
     final t = Theme.of(context).textTheme;
     final nothing = _trucks == 0 && _volunteers == 0 && _pushcarts == 0;
     final stops = widget.stops;
+    // NF-007 (D5): the run can't start while a stop is not confirmed.
+    final toCall = [
+      for (final s in stops)
+        if (!s.contactConfirmed) s,
+    ];
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
       child: SafeArea(
@@ -1452,6 +1505,36 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text('Request DRRMO logistics support', style: t.titleLarge),
+              if (toCall.isNotEmpty) ...[
+                Gaps.v8,
+                Container(
+                  key: const ValueKey('stops-to-call'),
+                  padding: const EdgeInsets.all(Space.sm),
+                  decoration: BoxDecoration(
+                    color: cs.errorContainer,
+                    borderRadius: BorderRadius.circular(Radii.md),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Call these stops first (Called – confirmed):',
+                        style: t.titleSmall?.copyWith(
+                          color: cs.onErrorContainer,
+                        ),
+                      ),
+                      for (final s in toCall)
+                        Text(
+                          '• ${s.area}: ${[for (final d in s.donations)
+                            if (!d.contactConfirmed) '${d.donor} ${d.contact}'.trim()].join(', ')}',
+                          style: t.bodyMedium?.copyWith(
+                            color: cs.onErrorContainer,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
               Gaps.v4,
               Text(
                 'For the Door to Door run on ${planDateLabel(widget.day)}. '
@@ -1537,7 +1620,7 @@ class _RunRequestSheetState extends State<_RunRequestSheet> {
                 icon: Icons.send,
                 expand: true,
                 loading: _busy,
-                onPressed: nothing || _busy ? null : _send,
+                onPressed: nothing || _busy || toCall.isNotEmpty ? null : _send,
               ),
             ],
           ),

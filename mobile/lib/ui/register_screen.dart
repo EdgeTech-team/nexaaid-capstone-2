@@ -12,9 +12,12 @@ import 'widgets.dart';
 /// UC-D1 Register Individual Donor (adviser item 2) and organization
 /// registration (UC-A2).
 ///
-/// Capstone 2 adviser comments 1.1 and 1.3: the supporting document is
-/// optional for every organization type and is hidden for Government (which
-/// is verified through a separate pathway). The organization no longer
+/// NF-008 (D6): the organization type is a fixed grouped list (Government /
+/// Non-government). Every organization uploads the contact person's
+/// government ID; Government types also upload one supporting document,
+/// which stays optional for the others (adviser comment 1.1). The
+/// organization signs in at once and is Unverified until the Administrator
+/// reviews it (comment 1.3). The organization no longer
 /// enters a registration number. Both donor and organization accounts are
 /// validated automatically and sign in right after registering. The
 /// Administrator's view is for review only.
@@ -69,21 +72,29 @@ Future<void> showRegisterPopup(
   await showLoginPopup(context);
 }
 
-/// Same list as backend ORGANIZATION_TYPES.
-const organizationTypes = [
-  'NGO',
-  'Religious',
-  'Civic',
-  'Private/CSR',
-  'Academic',
-  'Government',
-  'Other',
+/// NF-008 (D6): same lists as backend schemas/organization_schema.py
+/// (GOVERNMENT_TYPES, NON_GOVERNMENT_TYPES), shown as one grouped dropdown.
+const governmentTypes = [
+  'Barangay / Barangay Council',
+  'City or Municipal Government Office',
+  'National Government Agency',
+  'Public School or State University',
+  'Government-Owned or Controlled Corporation',
 ];
+const otherOrganizationType = 'Other (specify)';
+const nonGovernmentTypes = [
+  'Non-Profit / NGO / Foundation',
+  'Religious Organization',
+  'Private Company or Business',
+  'Private School or University',
+  'Civic or Community Group',
+  otherOrganizationType, // counted as Non-government
+];
+const organizationTypes = [...governmentTypes, ...nonGovernmentTypes];
 
-/// Same list as backend TYPES_WITHOUT_REGISTRATION. These organization types
-/// are not registered like private organizations, so the supporting document
-/// is hidden for them.
-const organizationTypesWithoutRegistration = ['Government'];
+/// 'Government' or 'Non-government' (organizations.organization_category).
+String organizationCategory(String? type) =>
+    governmentTypes.contains(type) ? 'Government' : 'Non-government';
 
 /// D3: Terms and Conditions shown in the dialog. Edit the wording with the
 /// team and the adviser before the consultation.
@@ -158,7 +169,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Map<String, String? Function()> get _rules => {
     if (widget.org) ...{
       'org_name': () => Validators.orgName(c('org_name').text),
-      'org_type_other': () => orgType == 'Other'
+      'org_type_other': () => orgType == otherOrganizationType
           ? Validators.text(
               c('org_type_other').text,
               'Organization type',
@@ -191,16 +202,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ),
   };
 
-  /// True when the supporting document field is shown: any chosen type
-  /// except Government. It is optional.
-  bool get _showDocs =>
-      orgType != null &&
-      !organizationTypesWithoutRegistration.contains(orgType);
+  /// NF-008 (D6): the supporting document shows once a type is chosen. It
+  /// is required for Government types and optional for the others.
+  bool get _showDocs => orgType != null;
+  bool get _docRequired => organizationCategory(orgType) == 'Government';
 
-  /// Organizations never need to upload anything. Donors need the front and
-  /// back of a valid ID.
+  /// Donors, and NF-008 (D6) the organization's contact person, upload the
+  /// front and back of a government ID; Government types also need the
+  /// supporting document.
   bool get _filesReady =>
-      widget.org ? true : (idFront != null && idBack != null);
+      idFront != null &&
+      idBack != null &&
+      (!widget.org || !_docRequired || legitimacyDoc != null);
 
   bool get _valid =>
       _rules.values.every((rule) => rule() == null) &&
@@ -237,7 +250,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ...common,
                 'org_name': v('org_name'),
                 'organization_type': orgType,
-                'organization_type_other': orgType == 'Other'
+                'organization_type_other': orgType == otherOrganizationType
                     ? v('org_type_other')
                     : null,
                 // Optional: only sent when filled in.
@@ -247,9 +260,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 'contact_email': c('email').text.trim(),
                 // The organization's login name, saved in lowercase.
                 'username': v('username').toLowerCase(),
-                // Optional: only sent when the organization uploaded one.
+                // Required for Government types, optional for the others.
                 if (_showDocs && legitimacyDoc != null)
                   'legitimacy_document': _ref(legitimacyDoc!),
+                // NF-008 (D6): the contact person's government ID.
+                'id_front': _ref(idFront!),
+                'id_back': _ref(idBack!),
               },
             )
           : api.post(
@@ -316,24 +332,43 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _dropdown(
-    String label,
-    String? value,
-    List<String> options,
-    ValueChanged<String?> onChanged,
-  ) {
+  /// NF-008 (D6): one dropdown, grouped Government / Non-government.
+  Widget _typeDropdown() {
+    DropdownMenuItem<String> header(String text) => DropdownMenuItem<String>(
+      value: '#$text',
+      enabled: false,
+      child: Text(
+        text.toUpperCase(),
+        style: Theme.of(context).textTheme.labelSmall
+            ?.copyWith(fontWeight: FontWeight.w700, letterSpacing: 0.8),
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: Space.md),
       child: DropdownButtonFormField<String>(
-        key: ValueKey('dropdown-$label'),
-        initialValue: value,
+        key: const ValueKey('dropdown-Organization type'),
+        initialValue: orgType,
         isExpanded: true,
-        decoration: InputDecoration(labelText: label),
+        decoration: const InputDecoration(labelText: 'Organization type'),
+        selectedItemBuilder: (context) => [
+          for (final o in [
+            '#Government',
+            ...governmentTypes,
+            '#Non-government',
+            ...nonGovernmentTypes,
+          ])
+            Text(o.startsWith('#') ? '' : o, overflow: TextOverflow.ellipsis),
+        ],
         items: [
-          for (final o in options) DropdownMenuItem(value: o, child: Text(o)),
+          header('Government'),
+          for (final o in governmentTypes)
+            DropdownMenuItem(value: o, child: Text(o)),
+          header('Non-government'),
+          for (final o in nonGovernmentTypes)
+            DropdownMenuItem(value: o, child: Text(o)),
         ],
         validator: (x) => x == null ? 'Please choose one' : null,
-        onChanged: (x) => setState(() => onChanged(x)),
+        onChanged: (x) => setState(() => orgType = x),
       ),
     );
   }
@@ -538,29 +573,34 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 icon: Icons.apartment,
                 formatters: orgNameFormatters,
               ),
-              _dropdown('Organization type', orgType, organizationTypes, (x) {
-                orgType = x;
-                // Clear the hidden upload when the type does not use it.
-                if (organizationTypesWithoutRegistration.contains(x)) {
-                  legitimacyDoc = null;
-                }
-              }),
-              if (orgType == 'Other')
+              _typeDropdown(),
+              if (orgType == otherOrganizationType)
                 _text('org_type_other', 'Please specify the type'),
               _address(),
-              // Optional for every type except Government (hidden).
+              // NF-008 (D6): required for Government types, optional for
+              // the others.
               if (_showDocs)
-                _upload(
-                  'Supporting document (optional)',
-                  'legitimacy_document',
-                  legitimacyDoc,
-                  (f) => legitimacyDoc = f,
-                  required: false,
-                  helper:
-                      'Upload an SEC, DTI, CDA, DSWD or similar certificate '
-                      'only if you have one. Only the Administrator can see '
-                      'it.',
-                ),
+                _docRequired
+                    ? _upload(
+                        'Supporting document',
+                        'legitimacy_document',
+                        legitimacyDoc,
+                        (f) => legitimacyDoc = f,
+                        helper:
+                            'An authorization or endorsement letter on office '
+                            'letterhead, or the contact person\'s office ID. '
+                            'Only the Administrator can see it.',
+                      )
+                    : _upload(
+                        'Supporting document (optional)',
+                        'legitimacy_document',
+                        legitimacyDoc,
+                        (f) => legitimacyDoc = f,
+                        required: false,
+                        helper:
+                            'Upload an SEC, DTI or CDA registration only if '
+                            'you have one. Only the Administrator can see it.',
+                      ),
               SectionHeader('Contact person'),
             ] else
               SectionHeader('About you'),
@@ -581,9 +621,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
               type: TextInputType.phone,
               formatters: phoneFormatters,
             ),
-            if (!widget.org) ...[
-              _address(),
-              SectionHeader('Valid ID'),
+            if (!widget.org) _address(),
+            // NF-008 (D6): organizations upload the contact person's
+            // government ID too, like an individual donor.
+            ...[
+              SectionHeader(
+                widget.org ? 'Contact person\'s government ID' : 'Valid ID',
+              ),
               _upload(
                 'Valid ID (front)',
                 'id_front',
