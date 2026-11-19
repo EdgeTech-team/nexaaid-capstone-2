@@ -48,7 +48,11 @@ def highest_priority(reports: list) -> Optional[str]:
 
 
 def _still_needed(n: dict) -> int:
-    return max(0, int(n.get("needed") or 0) - int(n.get("pledged") or 0))
+    """J6 / NF-011: needed minus VERIFIED pledges (services/pledge_trust.py).
+    A guest pledge counts once CSWS receives it. Falls back to "pledged"
+    for a row without the split."""
+    verified = n.get("pledged_verified", n.get("pledged"))
+    return max(0, int(n.get("needed") or 0) - int(verified or 0))
 
 
 def _full_row(r: DisasterReport, progress: Optional[dict]) -> dict:
@@ -66,9 +70,12 @@ def _full_row(r: DisasterReport, progress: Optional[dict]) -> dict:
         "description": r.description,
         "priority_level": r.priority_level,
         "fulfillment_percentage": pct,
-        # Same rule as the donate form's chips: needed minus pledged.
+        # Same rule as the donate form's chips: needed minus verified
+        # pledges, plus how many pledges are not confirmed yet (J6).
         "top_needs": [{"item_name": n["item_name"], "unit": n.get("unit"),
-                       "still_needed": _still_needed(n)} for n in top],
+                       "still_needed": _still_needed(n),
+                       "pledged_unverified_count": int(n.get("pledged_unverified_count") or 0)}
+                      for n in top],
         "needs": needs,
         "donatable": validated and pct < 100,
     }

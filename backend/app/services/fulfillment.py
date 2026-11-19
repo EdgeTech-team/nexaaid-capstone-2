@@ -4,7 +4,10 @@ A report lists its needs per item (report_needs), each a whole number in
 the item's base unit. For every need three meters are worked out:
 
   pledged    donations not expired/cancelled (the received amount once
-             CSWS has counted it, the donor's declared amount before)
+             CSWS has counted it, the donor's declared amount before).
+             J6 / NF-011 splits it into pledged_verified and
+             pledged_unverified (services/pledge_trust.py, D3) for the
+             donate form's "still needed" chips only
   confirmed  received by CSWS AND acknowledged by the CMO ("in stock";
              stays counted after the goods are delivered)
   delivered  on deliveries the barangay confirmed receiving (Confirmed):
@@ -39,9 +42,14 @@ from models.item_model import Item
 from models.physical_donation_model import PhysicalDonation
 from models.received_goods_model import ReceivedGoods
 from models.report import DisasterReport, ReportFulfillment, ReportNeed
+from services.pledge_trust import pledge_is_verified, users_by_id
 
 GENERAL = "General needs"
 OPEN_DONATION = ("Pending", "Received", "Confirmed")
+# Amounts worked out per need. The last three (J6 / NF-011) only feed the
+# "still needed" chips; pledged = pledged_verified + pledged_unverified.
+METERS = ("pledged", "confirmed", "delivered",
+          "pledged_verified", "pledged_unverified", "pledged_unverified_count")
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +123,20 @@ def delivered_line():
     )
 
 
+def _zero() -> dict:
+    return {k: 0 for k in METERS}
+
+
 def _totals(db: Session, report_ids: Iterable[int]) -> dict:
-    """{report_id: {item_id: {"pledged", "confirmed", "delivered"}}} in base units."""
+    """{report_id: {item_id: {meter: amount}}} in base units (METERS).
+
+    J6 / NF-011: "pledged" (every open pledge) is split into
+    pledged_verified and pledged_unverified with D3's pledge_is_verified;
+    pledged_unverified_count is the number of unverified pledges. Only the
+    "still needed" chips use the split; the meters and the official %
+    are unchanged."""
     ids = list(set(report_ids))
-    out: dict = defaultdict(lambda: defaultdict(lambda: {"pledged": 0, "confirmed": 0, "delivered": 0}))
+    out: dict = defaultdict(lambda: defaultdict(_zero))
     if not ids:
         return out
     received = dict(
@@ -127,12 +145,20 @@ def _totals(db: Session, report_ids: Iterable[int]) -> dict:
         .filter(PhysicalDonation.report_id.in_(ids))
         .group_by(ReceivedGoods.donation_id).all()
     )
-    for d in (db.query(PhysicalDonation)
-              .filter(PhysicalDonation.report_id.in_(ids),
-                      PhysicalDonation.status.in_(OPEN_DONATION)).all()):
+    donations = (db.query(PhysicalDonation)
+                 .filter(PhysicalDonation.report_id.in_(ids),
+                         PhysicalDonation.status.in_(OPEN_DONATION)).all())
+    accounts = users_by_id(db, (d.user_id for d in donations))
+    for d in donations:
         got = received.get(d.donation_id)
         t = out[d.report_id][d.item_id]
-        t["pledged"] += int(got if got is not None else d.quantity)
+        amount = int(got if got is not None else d.quantity)
+        t["pledged"] += amount
+        if pledge_is_verified(d, accounts.get(d.user_id)):
+            t["pledged_verified"] += amount
+        else:
+            t["pledged_unverified"] += amount
+            t["pledged_unverified_count"] += 1
         if d.status == "Confirmed" and got is not None:
             t["confirmed"] += int(got)
     # J1 / NF-009: what the barangay counted, capped at what was sent.
@@ -160,10 +186,10 @@ def _progress(report: DisasterReport, totals: dict, items: dict) -> dict:
     rows = []
     for n in needs:
         if n.item_id is None:
-            sums = {k: sum(totals[i][k] for i in general_items) for k in ("pledged", "confirmed", "delivered")}
+            sums = {k: sum(totals[i][k] for i in general_items) for k in METERS}
             name, unit = GENERAL, None
         else:
-            sums = dict(totals.get(n.item_id, {"pledged": 0, "confirmed": 0, "delivered": 0}))
+            sums = dict(totals.get(n.item_id, _zero()))
             item = items.get(n.item_id)
             name = item.item_name if item else "Item"
             unit = item.unit_of_measure if item else None
