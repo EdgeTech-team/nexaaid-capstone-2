@@ -27,16 +27,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
-from api.v1.deliveries import check_counts, confirm_receipt, move_to_next_status
+from api.v1.deliveries import check_counts, move_to_next_status, record_receipt, rep_barangay
 from core.audit import log_action
-from core.auth import barangay_scope, require_role
+from core.auth import has_role, require_role
 from core.database import get_db
 from models.barangay_model import Barangay
 from models.delivery import Delivery, DeliveryItem, DeliveryTrip
 from models.item_model import Item
 from models.logistics_request_model import LogisticsRequest
 from models.report import DisasterReport
-from schemas.delivery import ReceiptConfirm, TripReceiptConfirm
+from schemas.delivery import TripReceiptConfirm
+from services import handover
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
 from services.inventory import add_to_stock
@@ -446,9 +447,20 @@ def arrived_at_stop(
             raise HTTPException(status_code=409, detail="Start the trip first.")
         raise HTTPException(status_code=409, detail="This stop is already marked as arrived.")
     for d in moving:
-        move_to_next_status(db, d, current_user)
+        move_to_next_status(db, d, current_user, issue_code=False)
+    db.flush()
+    # J2 / NF-015: one handover code for every delivery waiting at this stop.
+    # In this response once, only for CSWS Main Office staff (not the
+    # Administrator); the server keeps only its hash.
+    group = handover.stop_group(db, moving[0])
+    group_ids = [g.delivery_id for g in group]
+    code = handover.issue(db, group, current_user)
     db.commit()
-    return _trip_view(db, _get_trip(db, trip_id))
+    view = _trip_view(db, _get_trip(db, trip_id))
+    if has_role(current_user, "csws_main_office"):
+        view["handover_code"] = {"barangay_id": barangay_id, "delivery_ids": group_ids,
+                                 "code": code}
+    return view
 
 
 @router.post("/{trip_id}/confirm-receipt")
@@ -456,24 +468,28 @@ def confirm_trip_receipt(
     trip_id: int,
     payload: TripReceiptConfirm,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role("barangay_receiving_rep", "admin")),
+    current_user=Depends(require_role("barangay_receiving_rep")),
 ):
     """Barangay rep: confirm every delivery from this trip that arrived in
     their barangay together (e.g. 3 Banilad reports = 3 deliveries).
 
+    J4 / G-001: the Barangay Receiving Representative only (not the
+    Administrator). No assigned barangay, or no stop of this trip at the
+    rep's barangay, is 403.
+
     J1 / NF-009: the body carries the rep's count for every line of every
-    delivery that arrived: {"deliveries": [{"delivery_id", "items"}],
-    "remarks"}. A remarks-only body is refused (422). Every count is
+    delivery that arrived: {"deliveries": [{"delivery_id", "items"}], ...}.
+    J2 / NF-015: plus one handover code and one signature (name, position,
+    signature_file_id, optional slip_photo_file_id) for the stop, shared by
+    every receipt. A remarks-only body is refused (422). Everything is
     checked before anything is saved, so one wrong line confirms nothing.
-    Each delivery then goes through the normal receipt rules
-    (confirm_receipt, UC-B1): its own receipt and receipt_items, its own
-    notice, fulfillment and priority per report. J3 adds the stop's
-    handover code and signature."""
+    Each delivery is then saved through record_receipt (UC-B1): its own
+    receipt and receipt_items, its own notice, fulfillment per report."""
+    own = rep_barangay(current_user)
     trip = _get_trip(db, trip_id)
-    own = barangay_scope(current_user)
-    mine = [d for d in trip.deliveries if own is None or d.destination_barangay_id == own]
+    mine = [d for d in trip.deliveries if d.destination_barangay_id == own]
     if not mine:
-        raise HTTPException(status_code=404, detail="This trip has no deliveries for your barangay.")
+        raise HTTPException(status_code=403, detail="This trip has no stop at your assigned barangay.")
     ready = {d.delivery_id: d for d in mine if d.status == "Delivered"}
     if not ready:
         raise HTTPException(status_code=409, detail="Nothing to confirm yet: the goods have not arrived.")
@@ -499,16 +515,17 @@ def confirm_trip_receipt(
             detail=("Count every delivery that arrived before confirming. "
                     f"Missing: delivery {', '.join(missing)}."),
         )
+
+    # J2 / NF-015: the stop's one handover code (429 locked, 409 none, 403 wrong).
+    handover.check_code(db, list(ready.values()), payload.handover_code, current_user)
     # All or nothing: every delivery's counts are checked before any is saved.
-    for did, delivery in ready.items():
-        check_counts(delivery, counts[did])
+    counted = {did: check_counts(delivery, counts[did]) for did, delivery in ready.items()}
+    # J2 / NF-015: the one signature (and slip photo) for the stop.
+    handover.check_proof_files(db, payload, current_user)
 
     with_differences = []
-    for did in ready:
-        result = confirm_receipt(
-            did, ReceiptConfirm(items=counts[did], remarks=payload.remarks),
-            db=db, current_user=current_user,
-        )
+    for did, delivery in ready.items():
+        result = record_receipt(db, delivery, counted[did], payload, payload.remarks, current_user)
         if result.receipt.has_discrepancy:
             with_differences.append(did)
     db.commit()

@@ -22,6 +22,10 @@ OVER_REASON = "Over"
 # Largest value a PostgreSQL INTEGER column holds.
 MAX_COUNT = 2_147_483_647
 
+# J2 / NF-015: exactly six ASCII digits ("\d" would also accept other
+# scripts' digits).
+HANDOVER_CODE_PATTERN = r"^[0-9]{6}$"
+
 # Delivery items
 
 class DeliveryItemCreate(BaseModel):
@@ -97,6 +101,18 @@ class DeliveryResponse(BaseModel):
     has_discrepancy: bool = False
 
 
+# J2 / NF-015: the handover code, shown once.
+
+class HandoverCodeResponse(BaseModel):
+    """POST /deliveries/{id}/handover-code (CSWS Main Office, or the DRRMO
+    user on the linked request). The server keeps only a keyed hash, so the
+    code is shown here once. A new code replaces the old one; deliveries of
+    the same trip stop share it."""
+    delivery_ids: List[int]
+    handover_code: str
+    created_at: datetime
+
+
 #receipt confirmation
 
 class ReceiptItemCount(BaseModel):
@@ -108,12 +124,33 @@ class ReceiptItemCount(BaseModel):
     discrepancy_note: Optional[str] = Field(default=None, max_length=500)
 
 
-class ReceiptConfirm(BaseModel):
+class ReceiptProof(BaseModel):
+    """J2 / NF-015 (team agreement A2): proof of receipt, required on every
+    new receipt. Missing or empty fields are refused (422).
+
+    handover_code       the 6 digits the CSWS staff (or DRRMO) on site shows
+    signer_name         full name of the Barangay Receiving Representative
+    signer_position     e.g. "Barangay Secretary"
+    signature_file_id   the signature PNG uploaded with purpose receipt_signature
+    slip_photo_file_id  optional photo of the stamped paper slip (purpose
+                        receipt_slip_photo); no photos of goods or people
+    """
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    handover_code: str = Field(..., pattern=HANDOVER_CODE_PATTERN)
+    signer_name: str = Field(..., min_length=2, max_length=150)
+    signer_position: str = Field(..., min_length=2, max_length=100)
+    signature_file_id: str = Field(..., min_length=1, max_length=36)
+    slip_photo_file_id: Optional[str] = Field(default=None, min_length=1, max_length=36)
+
+
+class ReceiptConfirm(ReceiptProof):
     """Body for Barangay receiving representative confirming a delivery. received_by_user_id
     comes from the authenticated user.
 
     J1 / NF-009: one count for every line of the delivery (items). A line
     that differs from what CSWS sent needs a discrepancy_reason.
+    J2 / NF-015: plus the handover code, name, position and signature.
     """
     items: List[ReceiptItemCount] = Field(..., min_length=1)
     remarks: Optional[str] = None
@@ -125,10 +162,11 @@ class TripDeliveryCounts(BaseModel):
     items: List[ReceiptItemCount] = Field(..., min_length=1)
 
 
-class TripReceiptConfirm(BaseModel):
+class TripReceiptConfirm(ReceiptProof):
     """POST /trips/{id}/confirm-receipt: counts for every delivery that
-    arrived at the rep's barangay. A remarks-only body is refused (422).
-    J3 adds the handover code and signature for the stop."""
+    arrived at the rep's barangay, plus one handover code and one signature
+    for the stop (J2 / NF-015, team decision: the counting half of J3 in J1,
+    the code and signature half in J2). A remarks-only body is refused (422)."""
     deliveries: List[TripDeliveryCounts] = Field(..., min_length=1)
     remarks: Optional[str] = None
 
@@ -155,6 +193,11 @@ class ReceiptResponse(BaseModel):
     # J1 / NF-009: empty for receipts saved before counting started.
     items: List[ReceiptItemResponse] = []
     has_discrepancy: bool = False
+    # J2 / NF-015: no code here, ever; only whether it was verified.
+    reference_no: Optional[str] = None
+    signer_name: Optional[str] = None
+    signer_position: Optional[str] = None
+    handover_verified: bool = False
 
 # Fulfillment (read-only from this module's perspective — recalculated
 # automatically, never edited directly through the API)
@@ -178,3 +221,57 @@ class ReceiptConfirmResponse(BaseModel):
     receipt: ReceiptResponse
     delivery: DeliveryResponse
     fulfillment: ReportFulfillmentResponse
+
+
+# J2 / NF-015: the read-only Acknowledgment Receipt
+# (GET /deliveries/{id}/acknowledgment, services/acknowledgment.py).
+
+class AcknowledgmentLine(BaseModel):
+    """One item as every viewer sees it, donors included."""
+    item_id: int
+    item_name: str
+    unit: Optional[str] = None
+    # Packaging of the donations that went on this line, e.g.
+    # "Sack (50 kg), Box"; None when none is recorded.
+    packaging: Optional[str] = None
+    expected_quantity: int                    # sent by CSWS
+    received_quantity: Optional[int] = None   # counted by the barangay; None before J1
+    discrepancy_reason: Optional[DiscrepancyReason] = None
+
+
+class AcknowledgmentFullLine(AcknowledgmentLine):
+    """Staff and the barangay also see the rep's note on a difference."""
+    discrepancy_note: Optional[str] = None
+
+
+class DonorAcknowledgment(BaseModel):
+    """What a donor whose goods were on the delivery sees: the items, the
+    barangay, the reference no. and the date. No signer, signature, report,
+    code status, remarks, or other donors."""
+    view: Literal["donor"] = "donor"
+    reference_no: str
+    delivery_id: int
+    barangay_name: str
+    received_at: datetime
+    items: List[AcknowledgmentLine]
+
+
+class Acknowledgment(BaseModel):
+    """The full Acknowledgment Receipt: CSWS Main Office, the Disaster Unit,
+    the Administrator, and the rep of that barangay. The signature and slip
+    photo are fetched from the URLs below, with the same role check."""
+    view: Literal["full"] = "full"
+    reference_no: str
+    delivery_id: int
+    barangay_name: str
+    received_at: datetime
+    items: List[AcknowledgmentFullLine]
+    report_id: int
+    report_label: Optional[str] = None
+    signer_name: Optional[str] = None
+    signer_position: Optional[str] = None
+    signature_url: Optional[str] = None
+    slip_photo_url: Optional[str] = None
+    handover_verified: bool = False
+    has_discrepancy: bool = False
+    remarks: Optional[str] = None
