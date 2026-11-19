@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from services.item_quantities import readable_amount
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -25,7 +26,7 @@ def get_dashboard_summary(
     db: Session = Depends(get_db),
     user=Depends(require_role(*DASHBOARD_ROLES)),
 ):
-
+    verified = _verified_orgs(db)
     return DashboardSummary(
         # 9.3 (testing, Oct 18): rejected and withdrawn reports are not
         # counted; they still show in "Reports by status".
@@ -38,7 +39,22 @@ def get_dashboard_summary(
         total_logistics_requests=db.query(func.count(LogisticsRequest.request_id)).scalar() or 0,
         active_organizations=db.query(func.count(Organization.organization_id))
             .filter(Organization.status == "Approved").scalar() or 0,
+        # NF-008 (D6): the Verified badge on the transparency dashboard.
+        verified_organizations=len(verified),
+        verified_organization_names=verified,
     )
+
+
+def _verified_orgs(db: Session) -> list:
+    """Names of verified organizations whose account is active, A to Z."""
+    from models.user_rbac_model import User
+    active = (db.query(User.organization_id)
+              .filter(User.organization_id.isnot(None), User.is_active.isnot(False),
+                      User.deleted_at.is_(None)))
+    return [n for (n,) in db.query(Organization.org_name)
+            .filter(Organization.reviewed_at.isnot(None),
+                    Organization.organization_id.in_(active))
+            .order_by(Organization.org_name).all()]
 
 @router.get("/reports-breakdown", response_model=ReportsBreakdown)
 def get_reports_breakdown(
@@ -191,6 +207,8 @@ def csws_main_dashboard(
                 "unit": unit(d.item_id),
                 "packaging": d.packaging,
                 "declared_quantity": d.quantity,
+                # G-002 (D8)
+                "amount_text": readable_amount(d, unit(d.item_id)),
                 "estimated_value": float(d.estimated_value) if d.estimated_value is not None else None,
                 "handover_method": d.handover_method,
                 "report_label": labels.get(d.report_id),
@@ -248,6 +266,11 @@ def barangay_dashboard(
                 "qr_reference": d.qr_reference,
                 "item_name": items[d.item_id].item_name if d.item_id in items else "Item",
                 "quantity": d.quantity,
+                # G-002 (D8)
+                "unit": items[d.item_id].unit_of_measure if d.item_id in items else "",
+                "packaging": d.packaging,
+                "amount_text": readable_amount(
+                    d, items[d.item_id].unit_of_measure if d.item_id in items else ""),
                 "status": d.status,
                 "report_label": labels.get(d.report_id),
             }

@@ -47,6 +47,10 @@ class PhysicalDonation(Base):
         Index("idx_physical_donations_batch_addition", "batch_reference", "addition_no"),
         # The expiry check looks up Pending rows past their deadline.
         Index("idx_physical_donations_status_expires", "status", "expires_at"),
+        CheckConstraint(
+            "contact_outcome IS NULL OR contact_outcome IN ('Reached', 'No answer', 'Wrong number')",
+            name="chk_physical_donations_contact_outcome",
+        ),
     )
 
     donation_id = Column(Integer, primary_key=True, autoincrement=True)
@@ -109,6 +113,18 @@ class PhysicalDonation(Base):
     close_reason = Column(Text, nullable=True)
     # NULL with closed_at set = closed automatically by the system.
     closed_by_user_id = Column(Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True)
+
+    # NF-007 (D5): the call that confirms a Door to Door stop before the run.
+    # Reached = the run may include it; No answer twice = the stop moves to
+    # the donor's next date; Wrong number = the entry is cancelled. Cleared
+    # when the pickup moves (new date, new address). Migration c8f2a5d1e9b4.
+    contact_confirmed_at = Column(DateTime(timezone=True), nullable=True)
+    contact_confirmed_by_user_id = Column(
+        Integer,
+        ForeignKey("users.user_id", name="fk_physical_donations_contact_by", ondelete="SET NULL"),
+        nullable=True,
+    )
+    contact_outcome = Column(String(20), nullable=True)
 
     guest_donor = relationship("GuestDonor")
     donor = relationship("User", foreign_keys=[user_id])

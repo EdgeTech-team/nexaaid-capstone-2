@@ -154,7 +154,9 @@ void main() {
       expect(find.text('Maria Santos'), findsOneWidget);
       expect(find.text('Helping Hands'), findsOneWidget);
       expect(find.text('Juan Cruz'), findsNothing);
-      expect(find.text('Mark Reviewed'), findsNWidgets(2));
+      // NF-008 (D6): the donor is reviewed; the organization is verified.
+      expect(find.text('Mark Reviewed'), findsOneWidget);
+      expect(find.text('Mark verified'), findsOneWidget);
 
       // Only individual donors
       await tester.tap(find.text('Individual donors'));
