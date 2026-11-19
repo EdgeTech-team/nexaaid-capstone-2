@@ -473,12 +473,16 @@ class _ReceiveScreenState extends State<ReceiveScreen>
       controller: _list,
       onRefresh: () async => _reload(),
       header: [
-        const PageHeader(
-          'Handle Physical Donations',
+        // UI redesign: the teal header of every tab.
+        const HeroHeader(
+          title: 'Handle Physical Donations',
           subtitle:
               'Scan the donor\'s QR code (or search the reference), check '
               'the goods, and record the actual quantity received.',
+          bleed: Space.md,
+          bleedTop: Space.md,
         ),
+        Gaps.v16,
         FilledButton.icon(
           onPressed: _scan,
           style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
@@ -848,64 +852,80 @@ class CswsMainDashboard extends StatelessWidget {
         final inv = (m['inventory_summary'] as List).cast<Map>();
         final entries = (m['donation_entries'] as List).cast<Map>();
         final logs = (m['recent_activity'] as List).cast<Map>();
+        final t = Theme.of(context).textTheme;
+        // UI redesign (layout only, same data and taps): teal header with
+        // "Needs your action" over it, number tiles, then the lists.
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
           children: [
-            PageHeader('CSWS Main Office Dashboard', subtitle: roleLine()),
-            // Phase 6: what Main Office should do next with deliveries.
-            NeedsActionCard(
-              onOpen: (i) => HomeNav.go(
-                context,
-                HomeTarget(
-                  'Deliveries',
-                  view: i['view'] as String?,
-                  id: ((i['ids'] as List?) ?? const []).firstOrNull as int?,
+            HeroHeader(
+              title: 'CSWS Main Office Dashboard',
+              subtitle: roleLine(),
+              bleed: Space.md,
+              // Phase 6: what Main Office should do next with deliveries.
+              overlap: NeedsActionCard(
+                overlap: true,
+                onOpen: (i) => HomeNav.go(
+                  context,
+                  HomeTarget(
+                    'Deliveries',
+                    view: i['view'] as String?,
+                    id: ((i['ids'] as List?) ?? const []).firstOrNull as int?,
+                  ),
                 ),
               ),
             ),
-            const ResponseTimesCard(), // Phase 7
-            StatGrid([
+            const RedesignSection('At a glance'),
+            NumberGrid([
               // Tiles open the tab that lists what they count.
-              StatTile(
-                'Pending donations',
-                '${m['pending_donations']}',
-                Icons.hourglass_top,
-                color: const Color(0xFFEF6C00),
+              NumberTile(
+                icon: Icons.hourglass_top,
+                tint: AppTints.amber,
+                caption: 'Donations',
+                value: '${m['pending_donations']}',
+                label: 'Pending donations',
                 onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
               ),
               // 9.2 (testing, Oct 19): "Due within 3 days" removed. It is
               // not in UC-CM3; expired donations are counted below and are
               // in Records > Expired.
-              StatTile(
-                'Expired or cancelled',
-                '${(m['expired_donations'] ?? 0) + (m['cancelled_donations'] ?? 0)}',
-                Icons.timer_off_outlined,
-                color: StatusColors.base('Expired'),
+              NumberTile(
+                icon: Icons.timer_off_outlined,
+                tint: AppTints.red,
+                caption: 'Donations',
+                value:
+                    '${(m['expired_donations'] ?? 0) + (m['cancelled_donations'] ?? 0)}',
+                label: 'Expired or cancelled',
               ),
-              StatTile(
-                'Entries received',
-                '${m['entries_received']}',
-                Icons.move_to_inbox_outlined,
+              NumberTile(
+                icon: Icons.move_to_inbox_outlined,
+                caption: 'Received',
+                value: '${m['entries_received']}',
+                label: 'Entries received',
                 onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
               ),
-              StatTile(
-                'Total quantity received',
-                '${m['total_quantity_received']}',
-                Icons.inventory_2_outlined,
+              NumberTile(
+                icon: Icons.inventory_2_outlined,
+                caption: 'Received',
+                value: '${m['total_quantity_received']}',
+                label: 'Total quantity received',
                 onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
               ),
-              StatTile(
-                'Deliveries made',
-                '${m['deliveries_made']}',
-                Icons.local_shipping_outlined,
+              NumberTile(
+                icon: Icons.local_shipping_outlined,
+                tint: AppTints.blue,
+                caption: 'Sent out',
+                value: '${m['deliveries_made']}',
+                label: 'Deliveries made',
                 onTap: () =>
                     HomeNav.go(context, const HomeTarget('Deliveries')),
               ),
-              StatTile(
-                'Total quantity distributed',
-                '${m['total_quantity_distributed']}',
-                Icons.outbox_outlined,
-                color: const Color(0xFF2E7D32),
+              NumberTile(
+                icon: Icons.outbox_outlined,
+                tint: AppTints.green,
+                caption: 'Sent out',
+                value: '${m['total_quantity_distributed']}',
+                label: 'Total quantity distributed',
                 // What the barangays received (Confirmed deliveries).
                 onTap: () => HomeNav.go(
                   context,
@@ -913,6 +933,8 @@ class CswsMainDashboard extends StatelessWidget {
                 ),
               ),
             ]),
+            Gaps.v12,
+            const ResponseTimesCard(), // Phase 7
             ScheduledDeliveriesCard(
               deliveries: scheduled,
               onOpen: (d) =>
@@ -920,25 +942,31 @@ class CswsMainDashboard extends StatelessWidget {
               onSeeAll: () =>
                   HomeNav.go(context, const HomeTarget('Deliveries')),
             ),
-            const SectionTitle('Inventory summary'),
+            const RedesignSection('Inventory summary'),
             if (inv.isEmpty) const EmptyState('Inventory is empty.'),
             Card(
+              margin: EdgeInsets.zero,
               child: Column(
                 children: [
                   for (final i in inv)
                     ListTile(
                       dense: true,
-                      leading: const Icon(Icons.warehouse_outlined),
+                      leading: const TintIcon(
+                        Icons.warehouse_outlined,
+                        size: 32,
+                      ),
                       title: Text('${i['item']}'),
                       trailing: Text(
                         '${i['quantity']} ${i['unit']}',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                        style: t.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                 ],
               ),
             ),
-            const SectionTitle('Donation entries'),
+            const RedesignSection('Donation entries'),
             if (entries.isEmpty) const EmptyState('No donations yet.'),
             for (final d in entries)
               Card(
@@ -957,7 +985,7 @@ class CswsMainDashboard extends StatelessWidget {
                   trailing: DonationStatusChip('${d['status']}'),
                 ),
               ),
-            const SectionTitle('Recent activity'),
+            const RedesignSection('Recent activity'),
             ActivityList(logs),
           ],
         );

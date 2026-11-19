@@ -12,6 +12,8 @@ import 'package:mobile/ui/donation_info.dart' show DonationInfoCard;
 import 'package:mobile/ui/needs_progress.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
+import 'step_form_helpers.dart';
+
 final _offline = MockClient((_) async => http.Response('{}', 404));
 
 void main() {
@@ -36,6 +38,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Estimated value (optional)'), findsNothing);
+      await openStep(tester, 'Contact'); // UI redesign: in steps
       final phone = find.widgetWithText(TextFormField, 'Contact number');
       await tester.enterText(phone, '0923123718273172387128937');
       expect(

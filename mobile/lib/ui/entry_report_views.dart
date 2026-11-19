@@ -124,9 +124,9 @@ class EntryReportsList extends StatelessWidget {
         '${received != null && i['counted_quantity'] == null ? ' · received $received' : ''}',
       ),
       trailing: held.contains(i['donation_id'])
-          ? const Badge2(
+          ? Badge2(
               'On hold',
-              Color(0xFFC62828),
+              AppTints.red.fg, // UI redesign: the red status tint
               icon: Icons.pause_circle_outline,
             )
           : DonationStatusChip('${i['status']}'),
