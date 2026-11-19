@@ -218,6 +218,18 @@ void main() {
       await tester.tap(decline);
       await tester.pumpAndSettle();
       expect(find.text('Decline request #1'), findsOneWidget);
+      // UI redesign: a reason is needed before the review step.
+      await tester.tap(find.byKey(const ValueKey('step-next')));
+      await tester.pumpAndSettle();
+      expect(find.text('Required'), findsOneWidget);
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Reason'),
+        'No truck today',
+      );
+      await tester.tap(find.byKey(const ValueKey('step-next')));
+      await tester.pumpAndSettle();
+      expect(find.text('No truck today'), findsOneWidget); // what CSWS reads
+      expect(find.widgetWithText(AppButton, 'Decline'), findsOneWidget);
     }, () => _server);
   });
 
@@ -233,6 +245,9 @@ void main() {
       await tester.tap(accept);
       await tester.pumpAndSettle();
       expect(find.text('Accept request #1'), findsOneWidget);
+      // UI redesign: the time (planned one kept), then Next, then Accept.
+      await tester.tap(find.byKey(const ValueKey('step-next')));
+      await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Accept').last);
       await tester.pumpAndSettle();
       expect(_accepted, isTrue);

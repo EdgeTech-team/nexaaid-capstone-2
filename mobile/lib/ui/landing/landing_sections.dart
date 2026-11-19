@@ -225,19 +225,7 @@ class LandingHeader extends StatelessWidget {
     final brand = Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: AppColors.harbor,
-            borderRadius: BorderRadius.circular(Radii.sm + 2),
-          ),
-          child: const Icon(
-            Icons.volunteer_activism,
-            size: 20,
-            color: Colors.white,
-          ),
-        ),
+        const NexaAidLogoTile(size: 36),
         Gaps.h12,
         Text(
           'NexaAid',

@@ -15,6 +15,8 @@ import 'package:mobile/ui/sms_send_screen.dart';
 import 'package:mobile/ui/widgets.dart' show Names, disasterLabel;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'step_form_helpers.dart';
+
 final _lookups = <String, dynamic>{
   'disaster_types': [
     {'id': 1, 'name': 'Flood'},
@@ -129,6 +131,7 @@ void main() {
         find.widgetWithText(DropdownButtonFormField<String>, 'Barangay'),
         'Looc',
       );
+      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Short incident description'),
         'Leak near the market',
@@ -137,6 +140,7 @@ void main() {
         find.widgetWithText(TextFormField, 'Affected families'),
         '12',
       );
+      await openStep(tester, ReportSteps.needs);
       await _choose(
         tester,
         find.widgetWithText(DropdownButtonFormField<String>, 'Need 1'),
@@ -149,6 +153,7 @@ void main() {
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       expect(sent, isEmpty); // the kind is required
+      // UI redesign: the step with the field in red opens by itself.
       expect(find.text('Required'), findsOneWidget);
       // UAT #6: a pop-up says what is missing.
       expect(find.text('Please complete the form'), findsOneWidget);
@@ -157,6 +162,7 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(_kindField, ' Gas leak ');
+      await openStep(tester, ReportSteps.needs);
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       expect(sent['/reports/']!['disaster_type_id'], 9);
@@ -182,6 +188,7 @@ void main() {
       );
       await tester.tap(find.text('Fill the form from this SMS'));
       await tester.pumpAndSettle();
+      await openStep(tester, ReportSteps.place);
       expect(
         find.descendant(of: _typeField, matching: find.text('Other')),
         findsOneWidget,
