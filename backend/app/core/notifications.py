@@ -81,6 +81,8 @@ EVENTS: dict[str, tuple[str, str]] = {
     "delivery_step_undone": ("Delivery step undone", "{title} is back to: {status}. {who} took back the last step."),
     "delivery_prepared": ("Aid is being prepared", "{title} for {barangay} is being prepared. Planned date: {date}."),
     "delivery_receipt_confirmed": ("Receipt confirmed", "The barangay confirmed receipt for {title}."),
+    # J1 / NF-009: the barangay's count differs from what CSWS sent.
+    "delivery_receipt_discrepancy": ("Received with differences", "{barangay} confirmed {title}, but the count differs from what was sent: {differences}."),
     "delivery_acknowledged": ("Aid acknowledged", "{barangay} acknowledged {title}. This is the final record of the delivery."),
     # Unexpected problems (api/v1/delivery_problems.py)
     "delivery_rescheduled": ("Delivery date changed", "{title} is now set for {date}. {reason}"),
@@ -201,4 +203,3 @@ def logistics_team_ids(db: Session, *also: Optional[int],
     ids = set(user_ids_with_role(db, LOGISTICS_TEAM_ROLES)) | {u for u in also if u}
     ids.discard(exclude_user_id)
     return ids
-

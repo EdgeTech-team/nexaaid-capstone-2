@@ -4,7 +4,11 @@ messages; plus trips: several reports on one truck (api/v1/trips.py).
 
 Example used throughout: 3 reports in Barangay Test (like Banilad) and one
 in Barangay Two (a nearby barangay) leave together on one trip.
+
+J1 / NF-009: confirming receipt sends the barangay's counts
+(tests/receipt_helpers.py).
 """
+from tests.receipt_helpers import ANY_TRIP_COUNTS, full_counts, trip_counts
 from tests.test_inventory_paths import _add_item, _donate, _receive, _stock
 from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
 
@@ -163,8 +167,10 @@ def test_one_trip_for_several_reports_end_to_end(api):
     assert client.post(f"/trips/{tid}/stops/1/arrived", headers=t["csws"]).status_code == 409
 
     # The Barangay Test rep confirms all three at once; the other stop is not theirs.
-    assert client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy2"], json={}).status_code == 409
-    done = ok(client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy"], json={"remarks": "complete"}))
+    assert client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy2"],
+                       json=ANY_TRIP_COUNTS).status_code == 409
+    done = ok(client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy"],
+                          json=trip_counts(client, tid, t["brgy"], remarks="complete")))
     assert len(done["confirmed_deliveries"]) == 3
     from tests.test_inventory_paths import database
     from models.report import ReportFulfillment
@@ -178,7 +184,8 @@ def test_one_trip_for_several_reports_end_to_end(api):
     # Stop 2, then that rep confirms: the trip completes by itself.
     ok(client.post(f"/trips/{tid}/stops/2/arrived", headers=t["csws"]))
     assert ok(client.get(f"/trips/{tid}", headers=t["csws"]))["status"] == "Delivered"
-    ok(client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy2"], json={}))
+    ok(client.post(f"/trips/{tid}/confirm-receipt", headers=t["brgy2"],
+                   json=trip_counts(client, tid, t["brgy2"])))
     final = ok(client.get(f"/trips/{tid}", headers=t["drrmo"]))
     assert final["status"] == "Completed" and final["delivery_counts"]["Confirmed"] == 4
 
@@ -234,4 +241,5 @@ def test_single_deliveries_still_work_without_a_trip(api):
     assert d["trip_id"] is None
     ok(client.post(f"/deliveries/{d['delivery_id']}/advance", headers=t["csws"]))
     ok(client.post(f"/deliveries/{d['delivery_id']}/advance", headers=t["csws"]))
-    ok(client.post(f"/deliveries/{d['delivery_id']}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    ok(client.post(f"/deliveries/{d['delivery_id']}/confirm-receipt", headers=t["brgy"],
+                   json=full_counts(client, d["delivery_id"], t["brgy"])), 201)

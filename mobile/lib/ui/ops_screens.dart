@@ -13,6 +13,7 @@ import 'logistics_cards.dart';
 import 'needs_action.dart';
 import 'paged_donation_entries.dart' show searchDebounce;
 import 'paginated_list.dart';
+import 'receipt_count_dialog.dart';
 import 'report_summary_card.dart' show NeedChips;
 import 'home_nav.dart';
 import 'scheduled_deliveries.dart';
@@ -1128,6 +1129,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
             const SizedBox(height: 6),
             // Testing (Oct 27): the goods stand out, like the donate form.
             if (items.isEmpty) const Text('No items') else NeedChips(items),
+            // J1 / NF-009: what the barangay counted differently.
+            if (d['has_discrepancy'] == true) ReceiptDifferences(d),
             const SizedBox(height: 6),
             Text(
               '${reportName(d['report_label'] ?? names.of('reports', d['report_id'], fallback: 'Report'))}'

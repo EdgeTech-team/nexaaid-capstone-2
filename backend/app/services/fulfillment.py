@@ -7,7 +7,11 @@ the item's base unit. For every need three meters are worked out:
              CSWS has counted it, the donor's declared amount before)
   confirmed  received by CSWS AND acknowledged by the CMO ("in stock";
              stays counted after the goods are delivered)
-  delivered  on deliveries the barangay confirmed receiving (Confirmed)
+  delivered  on deliveries the barangay confirmed receiving (Confirmed):
+             per line, min(received_quantity, expected_quantity) from the
+             barangay's count (receipt_items, J1 / NF-009). Receipts saved
+             before counting started have no count and keep the sent
+             quantity. An over-count never raises the percentage.
 
 Each meter is capped at 100% of the need, so extra rice never makes up for
 missing water. The report's OFFICIAL fulfillment percentage is the average
@@ -27,10 +31,10 @@ from types import SimpleNamespace
 from typing import Iterable, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from models.delivery import Delivery, DeliveryItem
+from models.delivery import Delivery, DeliveryItem, ReceiptItem
 from models.item_model import Item
 from models.physical_donation_model import PhysicalDonation
 from models.received_goods_model import ReceivedGoods
@@ -95,6 +99,22 @@ def _needs_of(report: DisasterReport) -> list:
     return []
 
 
+def delivered_line():
+    """J1 / NF-009 business rule, as SQL: what one line of a Confirmed
+    delivery adds to "delivered". It is the barangay's count, never more
+    than CSWS sent: min(received_quantity, expected_quantity). A line with
+    no count (a receipt saved before counting started) keeps the sent
+    quantity. Use it with DeliveryItem LEFT OUTER JOIN ReceiptItem."""
+    return func.coalesce(
+        case(
+            (ReceiptItem.received_quantity < ReceiptItem.expected_quantity,
+             ReceiptItem.received_quantity),
+            else_=ReceiptItem.expected_quantity,
+        ),
+        DeliveryItem.quantity,
+    )
+
+
 def _totals(db: Session, report_ids: Iterable[int]) -> dict:
     """{report_id: {item_id: {"pledged", "confirmed", "delivered"}}} in base units."""
     ids = list(set(report_ids))
@@ -115,9 +135,11 @@ def _totals(db: Session, report_ids: Iterable[int]) -> dict:
         t["pledged"] += int(got if got is not None else d.quantity)
         if d.status == "Confirmed" and got is not None:
             t["confirmed"] += int(got)
+    # J1 / NF-009: what the barangay counted, capped at what was sent.
     for report_id, item_id, qty in (
-        db.query(Delivery.report_id, DeliveryItem.item_id, func.sum(DeliveryItem.quantity))
+        db.query(Delivery.report_id, DeliveryItem.item_id, func.sum(delivered_line()))
         .join(DeliveryItem, DeliveryItem.delivery_id == Delivery.delivery_id)
+        .outerjoin(ReceiptItem, ReceiptItem.delivery_item_id == DeliveryItem.delivery_item_id)
         .filter(Delivery.report_id.in_(ids), Delivery.status == "Confirmed")
         .group_by(Delivery.report_id, DeliveryItem.item_id).all()
     ):
