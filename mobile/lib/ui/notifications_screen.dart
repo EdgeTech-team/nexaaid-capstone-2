@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../realtime.dart';
+import 'acknowledgment_screen.dart' show openAcknowledgment;
 import 'batch_sheet.dart' show openDonationByQr;
 import 'donor_dashboard.dart';
 import 'home_nav.dart';
@@ -94,6 +95,12 @@ final Map<String, EntityOpener> notificationDestinations = {
       case Roles.drrmo:
         // Phase 6: that delivery, first in the list and outlined.
         _go(c, 'Deliveries', id: id);
+      case Roles.cswsUnit:
+        // J2 / NF-015: the reporter opens the Acknowledgment Receipt.
+        if (event == 'delivery_receipt_confirmed' ||
+            event == 'delivery_receipt_discrepancy') {
+          openAcknowledgment(c, id);
+        }
       default:
         break; // no deliveries page for this role: stay on the inbox
     }

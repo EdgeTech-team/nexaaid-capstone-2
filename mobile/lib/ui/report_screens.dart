@@ -18,6 +18,7 @@ import 'widgets.dart';
 import 'home_nav.dart';
 import 'hazard_barangay_field.dart';
 import 'multi_report.dart';
+import 'sms_original.dart';
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: number limits. Must match the backend
@@ -871,22 +872,24 @@ class _NewReportScreenState extends State<NewReportScreen> {
       if (r.ok) Navigator.of(context).pop(true);
       return;
     }
-    final r = await act(
-      context,
-      () => sms
-          ? api.post(
-              '/reports/sms',
-              body: {
-                ...body,
-                'contact_number': smsSender.text.trim(),
-                'raw_message': smsText.text.trim(),
-              },
-            )
-          : api.post('/reports/', body: {...body, 'source': 'Mobile'}),
-      success: sms
-          ? 'SMS report encoded. It is now pending on the Validate tab.'
-          : 'Report submitted. It is now pending admin validation.',
-    );
+    // J8 / NF-014: encodeSmsReport asks for the reason when the sender is
+    // not a registered Disaster Unit member.
+    final r = sms
+        ? await encodeSmsReport(
+            context,
+            {
+              ...body,
+              'contact_number': smsSender.text.trim(),
+              'raw_message': smsText.text.trim(),
+            },
+            success:
+                'SMS report encoded. It is now pending on the Validate tab.',
+          )
+        : await act(
+            context,
+            () => api.post('/reports/', body: {...body, 'source': 'Mobile'}),
+            success: 'Report submitted. It is now pending admin validation.',
+          );
     if (!mounted) return;
     setState(() {
       busy = false;
@@ -1463,6 +1466,16 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   label: const Text('Add need'),
                 ),
               ),
+              const SizedBox(height: 16),
+              // J7 / NF-012: typos are fixed only before saving.
+              if (sms && !editing) ...[
+                Text(
+                  'Check every field against the SMS now. Once encoded, an '
+                  'SMS report cannot be edited; it can only be rejected '
+                  'with a reason so the Disaster Unit can resend it.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
               ]),
             ],
             submit: (context, showFirstError) => FilledButton.icon(
@@ -1847,13 +1860,15 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
                   icon: const Icon(Icons.block, size: 18),
                   label: const Text('Withdraw'),
                 ),
-                FilledButton.tonalIcon(
-                  onPressed: () => _edit(r),
-                  icon: const Icon(Icons.edit_outlined, size: 18),
-                  label: Text(
-                    r['status'] == 'Rejected' ? 'Fix and resend' : 'Edit',
+                // J7 / NF-012: an SMS report is locked; it is resent.
+                if (r['source'] != 'SMS')
+                  FilledButton.tonalIcon(
+                    onPressed: () => _edit(r),
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: Text(
+                      r['status'] == 'Rejected' ? 'Fix and resend' : 'Edit',
+                    ),
                   ),
-                ),
               ]
             : const [],
       ),
@@ -2023,46 +2038,54 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
         filtered: view.priority != null || view.fulfillment != null,
         onClear: () => _show(view.withFilters(status: status)),
       ),
-      itemBuilder: (context, r, names) => ReportCard(
+      // J7 / NF-012: an SMS report shows the SMS as received beside it.
+      itemBuilder: (context, r, names) => _withSms(
         r,
-        names,
-        highlighted: r['report_id'] == _highlight,
-        actions: status == 'Pending'
-            ? [
-                OutlinedButton(
-                  onPressed: () => _reject(r),
-                  child: const Text('Reject'),
-                ),
-                FilledButton.icon(
-                  onPressed: _validating.contains(r['report_id'])
-                      ? null
-                      : () => _validate(r),
-                  icon: _validating.contains(r['report_id'])
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.check),
-                  label: Text(
-                    _validating.contains(r['report_id'])
-                        ? 'Validating…'
-                        : 'Validate',
+        ReportCard(
+          r,
+          names,
+          highlighted: r['report_id'] == _highlight,
+          actions: status == 'Pending'
+              ? [
+                  OutlinedButton(
+                    onPressed: () => _reject(r),
+                    child: const Text('Reject'),
                   ),
-                ),
-              ]
-            : status == 'Rejected'
-            ? [
-                OutlinedButton.icon(
-                  onPressed: () => _delete(r),
-                  icon: const Icon(Icons.delete_outline),
-                  label: const Text('Delete'),
-                ),
-              ]
-            : const [],
+                  FilledButton.icon(
+                    onPressed: _validating.contains(r['report_id'])
+                        ? null
+                        : () => _validate(r),
+                    icon: _validating.contains(r['report_id'])
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check),
+                    label: Text(
+                      _validating.contains(r['report_id'])
+                          ? 'Validating…'
+                          : 'Validate',
+                    ),
+                  ),
+                ]
+              : status == 'Rejected'
+              ? [
+                  OutlinedButton.icon(
+                    onPressed: () => _delete(r),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete'),
+                  ),
+                ]
+              : const [],
+        ),
       ),
     );
   }
+
+  Widget _withSms(Map r, Widget card) => r['source'] == 'SMS'
+      ? SmsBeside(card: card, reportId: (r['report_id'] as num).toInt())
+      : card;
 }
 
 // UC-A1 account creation moved to account_form.dart (AccountsScreen).

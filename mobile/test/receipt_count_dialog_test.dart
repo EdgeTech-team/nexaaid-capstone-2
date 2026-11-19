@@ -1,10 +1,15 @@
 // J1 / NF-009: the barangay counts every item at receipt. Count fields start
 // empty, a difference needs a reason that fits, and the dialog returns the
 // request bodies for one delivery and for a trip.
+// J2 / NF-015: the same form needs the handover code, the signer's name and
+// position and a signature; a refused confirmation keeps the form open with
+// the server's message.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile/api.dart';
 import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/receipt_count_dialog.dart';
+import 'package:mobile/ui/signature_pad.dart';
 
 const _rice = {
   'delivery_item_id': 11,
@@ -25,9 +30,10 @@ const _water = {
 Future<void> _open(
   WidgetTester tester,
   List<CountTarget> targets,
-  void Function(ReceiptCounts?) done,
-) async {
-  tester.view.physicalSize = const Size(900, 2400);
+  void Function(ReceiptCounts?) done, {
+  Future<ApiResult> Function(ReceiptCounts)? submit,
+}) async {
+  tester.view.physicalSize = const Size(900, 3200);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
   await tester.pumpWidget(
@@ -43,6 +49,7 @@ Future<void> _open(
                     context,
                     title: 'Count',
                     deliveries: targets,
+                    submit: submit,
                   ),
                 );
               },
@@ -54,6 +61,28 @@ Future<void> _open(
     ),
   );
   await tester.tap(find.text('Open'));
+  await tester.pumpAndSettle();
+}
+
+/// J2: the handover code, the signer and a signature.
+Future<void> _fillProof(WidgetTester tester, {String code = '123456'}) async {
+  await tester.enterText(find.byKey(const Key('handover-code')), code);
+  await tester.enterText(find.byKey(const Key('signer-name')), 'Ana Test');
+  await tester.enterText(
+    find.byKey(const Key('signer-position')),
+    'Barangay Secretary',
+  );
+  await tester.ensureVisible(find.byKey(const Key('signature-pad')));
+  await tester.drag(
+    find.byKey(const Key('signature-pad')),
+    const Offset(120, 10),
+  );
+  await tester.pump();
+}
+
+Future<void> _tapConfirm(WidgetTester tester) async {
+  await tester.ensureVisible(find.byKey(const Key('confirm-counts')));
+  await tester.tap(find.byKey(const Key('confirm-counts')));
   await tester.pumpAndSettle();
 }
 
@@ -86,10 +115,10 @@ void main() {
         tester.widget<TextFormField>(find.byKey(Key(key))).controller!.text;
     expect(text('count-11'), isEmpty);
     expect(text('count-12'), isEmpty);
+    expect(text('handover-code'), isEmpty);
     expect(find.text('Sent by CSWS: 50 kg'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('confirm-counts')));
-    await tester.pumpAndSettle();
+    await _tapConfirm(tester);
     expect(find.text('Enter the number you counted'), findsNWidgets(2));
     expect(closed, isFalse);
 
@@ -97,8 +126,8 @@ void main() {
     await tester.enterText(find.byKey(const Key('count-12')), '12');
     await tester.pump();
     expect(find.text('Why is it different?'), findsNothing); // all match
-    await tester.tap(find.byKey(const Key('confirm-counts')));
-    await tester.pumpAndSettle();
+    await _fillProof(tester);
+    await _tapConfirm(tester);
 
     expect(closed, isTrue);
     expect(got!.hasDifference, isFalse);
@@ -108,6 +137,11 @@ void main() {
         {'delivery_item_id': 12, 'received_quantity': 12},
       ],
     });
+    expect(got!.handoverCode, '123456');
+    expect(got!.signerName, 'Ana Test');
+    expect(got!.signerPosition, 'Barangay Secretary');
+    expect(got!.signature.isEmpty, isFalse);
+    expect(got!.slipPhoto, isNull);
   });
 
   testWidgets('a difference needs a reason that fits', (tester) async {
@@ -115,14 +149,14 @@ void main() {
     await _open(tester, const [
       CountTarget(7, 'Delivery #7', [_rice]),
     ], (r) => got = r);
+    await _fillProof(tester);
 
     // Fewer than sent: Short, Damaged or Wrong item.
     await tester.enterText(find.byKey(const Key('count-11')), '40');
     await tester.pump();
     expect(find.text('Why is it different?'), findsOneWidget);
     expect(find.text('You counted 40 kg; CSWS sent 50 kg.'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('confirm-counts')));
-    await tester.pumpAndSettle();
+    await _tapConfirm(tester);
     expect(find.text('Choose a reason'), findsOneWidget);
     expect(got, isNull);
 
@@ -143,8 +177,7 @@ void main() {
     await tester.tap(find.text('Over').last);
     await tester.pumpAndSettle();
     await tester.enterText(find.byKey(const Key('remarks')), 'Extra sack');
-    await tester.tap(find.byKey(const Key('confirm-counts')));
-    await tester.pumpAndSettle();
+    await _tapConfirm(tester);
 
     expect(got!.hasDifference, isTrue);
     expect(got!.deliveryBody(7), {
@@ -179,8 +212,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Short').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('confirm-counts')));
-    await tester.pumpAndSettle();
+    await _fillProof(tester);
+    await _tapConfirm(tester);
 
     expect(got!.tripBody(), {
       'deliveries': [
@@ -202,6 +235,110 @@ void main() {
         },
       ],
     });
+  });
+
+  testWidgets('the handover code, name, position and signature are required', (
+    tester,
+  ) async {
+    ReceiptCounts? got;
+    await _open(tester, const [
+      CountTarget(7, 'Delivery #7', [_rice]),
+    ], (r) => got = r);
+    await tester.enterText(find.byKey(const Key('count-11')), '50');
+    await tester.pump();
+    await _tapConfirm(tester);
+    expect(find.text('Enter the 6-digit code'), findsOneWidget);
+    expect(find.text('Enter your full name'), findsOneWidget);
+    expect(find.text('Enter your position'), findsOneWidget);
+    expect(find.text('Sign in the box'), findsOneWidget);
+    expect(got, isNull);
+
+    await _fillProof(tester, code: '12345'); // five digits only
+    await _tapConfirm(tester);
+    expect(find.text('Enter the 6-digit code'), findsOneWidget);
+    expect(find.text('Sign in the box'), findsNothing);
+
+    await tester.enterText(find.byKey(const Key('handover-code')), '123456');
+    await _tapConfirm(tester);
+    expect(got!.handoverCode, '123456');
+  });
+
+  testWidgets('a refused confirmation keeps the form open with the message', (
+    tester,
+  ) async {
+    ReceiptCounts? got;
+    final answers = [
+      ApiResult(403, {'detail': 'The handover code is not correct.'}, ''),
+      ApiResult(201, {}, ''),
+    ];
+    var calls = 0;
+    await _open(
+      tester,
+      const [
+        CountTarget(7, 'Delivery #7', [_rice]),
+      ],
+      (r) => got = r,
+      submit: (_) async => answers[calls++],
+    );
+    await tester.enterText(find.byKey(const Key('count-11')), '50');
+    await _fillProof(tester);
+    await _tapConfirm(tester);
+    expect(find.text('The handover code is not correct.'), findsOneWidget);
+    expect(got, isNull);
+    // Nothing was cleared: the count is still there.
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const Key('count-11')))
+          .controller!
+          .text,
+      '50',
+    );
+
+    await _tapConfirm(tester);
+    expect(calls, 2);
+    expect(got, isNotNull);
+  });
+
+  testWidgets('the slip photo is optional and warns not to photograph people', (
+    tester,
+  ) async {
+    await _open(tester, const [
+      CountTarget(7, 'Delivery #7', [_rice]),
+    ], (_) {});
+    expect(find.byKey(const Key('slip-photo')), findsOneWidget);
+    expect(find.textContaining('Do not photograph people'), findsOneWidget);
+  });
+
+  testWidgets('the signature pad draws, clears and saves a PNG', (
+    tester,
+  ) async {
+    final pad = SignatureController();
+    addTearDown(pad.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            child: SignaturePad(key: const Key('pad'), controller: pad),
+          ),
+        ),
+      ),
+    );
+    expect(pad.isEmpty, isTrue);
+    expect(find.text('Sign here'), findsOneWidget);
+    await tester.drag(find.byKey(const Key('pad')), const Offset(80, 20));
+    await tester.pump();
+    expect(pad.isEmpty, isFalse);
+    expect(find.text('Sign here'), findsNothing);
+
+    final drawing = pad.drawing;
+    pad.clear();
+    expect(pad.isEmpty, isTrue);
+    expect(drawing.isEmpty, isFalse); // the copy is kept
+
+    final png = await tester.runAsync(drawing.toPng);
+    expect(png, isNotNull);
+    expect(png!.sublist(0, 4), [0x89, 0x50, 0x4E, 0x47]); // "\x89PNG"
   });
 
   testWidgets('a delivery card lists what the barangay counted differently', (

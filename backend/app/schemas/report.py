@@ -300,6 +300,9 @@ class SmsReportIngest(BaseModel):
     """
     contact_number: str = Field(max_length=20)
     raw_message: str
+    # J8 / NF-014: required when the sender number matches no active CSWS
+    # Disaster Unit member (else 422). Ignored for a registered sender.
+    unregistered_sender_reason: Optional[str] = Field(default=None, max_length=500)
 
     disaster_type_id: int
     disaster_type_other: DisasterTypeOther = None
@@ -322,11 +325,16 @@ class SmsReportMetadataResponse(BaseModel):
     raw_message: str
     encoded_by_user_id: int
     encoded_at: datetime
+    # J8 / NF-014: kept for the record; `warning` is set until validated.
+    unregistered_sender_reason: Optional[str] = None
+    warning: Optional[str] = None
 
 
 class SmsReportIngestResponse(BaseModel):
     report: DisasterReportResponse
     sms_metadata: SmsReportMetadataResponse
+    # J8 / NF-014: set when the sender is not a registered member.
+    warning: Optional[str] = None
 
 
 class ReportMonitoringResponse(DisasterReportResponse):

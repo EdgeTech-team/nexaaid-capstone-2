@@ -455,12 +455,21 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  /// What is still missing of a need: needed minus what donors pledged.
+  /// What is still missing of a need: needed minus the VERIFIED pledges
+  /// (J6 / NF-011). A guest pledge counts once CSWS receives it. Older
+  /// servers send only 'pledged'.
   static int _stillNeeded(Map n) => math.max(
     0,
     ((n['needed'] as num?) ?? 0).toInt() -
-        ((n['pledged'] as num?) ?? 0).toInt(),
+        ((n['pledged_verified'] ?? n['pledged']) as num? ?? 0).toInt(),
   );
+
+  /// J6: " · + N unconfirmed pledges" after a chip, or '' when none.
+  static String _unconfirmed(Map n) {
+    final count = ((n['pledged_unverified_count'] as num?) ?? 0).toInt();
+    if (count <= 0) return '';
+    return ' · + $count unconfirmed pledge${count == 1 ? '' : 's'}';
+  }
 
   // Testing fix (UI, Wooind): what was typed survives a refresh or a closed
   // app. One draft per report; not used when changing an existing donation.
@@ -868,10 +877,11 @@ class _DonateScreenState extends State<DonateScreen> {
                 label: Text(
                   inDonation
                       ? '${n['item_name']}: in your donation'
-                      : still > 0
-                      ? '${n['item_name']}: $still of ${n['needed']} $unit'
-                            .trim()
-                      : '${n['item_name']}: fully pledged',
+                      : (still > 0
+                                ? '${n['item_name']}: $still of ${n['needed']} $unit'
+                                      .trim()
+                                : '${n['item_name']}: fully pledged') +
+                            _unconfirmed(n),
                 ),
                 tooltip: inDonation
                     ? '${n['item_name']} is already in your donation'
@@ -1224,10 +1234,11 @@ class _DonateScreenState extends State<DonateScreen> {
                     // Highlighted like the needs on the report cards.
                     NeedChips([
                       for (final n in _reportNeeds)
-                        _stillNeeded(n) > 0
-                            ? '${n['item_name']}: ${_stillNeeded(n)} of '
-                                  '${n['needed']} ${n['unit'] ?? ''}'
-                            : '${n['item_name']}: fully pledged',
+                        (_stillNeeded(n) > 0
+                                ? '${n['item_name']}: ${_stillNeeded(n)} of '
+                                      '${n['needed']} ${n['unit'] ?? ''}'
+                                : '${n['item_name']}: fully pledged') +
+                            _unconfirmed(n),
                     ]),
                 ] else if (needs.isNotEmpty) ...[
                   Gaps.v8,

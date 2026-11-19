@@ -609,6 +609,29 @@ def _own_open_report(db: Session, report_id: int, user, action: str) -> Disaster
     return report
 
 
+# J7 / NF-012 (team agreement Nov 18, 2026, A5): an SMS report is locked.
+# What was encoded always matches the SMS that was received (raw_message is
+# never editable either). Typos are fixed in the encode form before it is
+# saved; after that the Administrator rejects it with a reason and the
+# Disaster Unit resends.
+SMS_REPORT_LOCKED = (
+    "This report came by SMS, so it cannot be edited: it must match the SMS that was "
+    "received. Reject it with a reason so the Disaster Unit can resend."
+)
+
+
+def _refuse_sms_edit(report: DisasterReport) -> None:
+    if report.source == "SMS":
+        raise HTTPException(status_code=409, detail=SMS_REPORT_LOCKED)
+
+
+def _person_name(user) -> Optional[str]:
+    """'First Last' for the audit log (who encoded or validated)."""
+    first = getattr(user, "first_name", None) or ""
+    last = getattr(user, "last_name", None) or ""
+    return f"{first} {last}".strip() or None
+
+
 @router.put("/{report_id}/mine", response_model=DisasterReportResponse)
 def edit_my_report(
     report_id: int,
@@ -619,6 +642,7 @@ def edit_my_report(
     """Correct a report before validation. A rejected report that is
     corrected goes back to the Administrator as Pending."""
     report = _own_open_report(db, report_id, current_user, "edit")
+    _refuse_sms_edit(report)   # J7 / NF-012
     fields = payload.model_dump(exclude={"needs"})
     before = {k: getattr(report, k) for k in fields}
     before["status"] = report.status
@@ -741,6 +765,7 @@ def update_report(
     current_user=Depends(require_role("admin")),
 ):
     report = _get_live_report(db, report_id)
+    _refuse_sms_edit(report)   # J7 / NF-012: SMS reports are rejected, not edited
 
     updates = payload.model_dump(exclude_unset=True)
     needs = updates.pop("needs", None)
@@ -814,6 +839,7 @@ def validate_report(
                    "priority guidance cannot be computed. Reject it so the Disaster Unit can complete it.",
         )
 
+    old_status = report.status
     report.status = "Validated"
     report.validated_by = current_user.user_id
     report.rejection_reason = None
@@ -840,9 +866,11 @@ def validate_report(
     db.refresh(report)
 
     apply_priority(report)
+    # J7 / NF-012: with the Administrator's name and the report's source.
     log_action(db, current_user, "VALIDATE REPORT", "disaster_reports", report.report_id,
-               old={"status": "Pending"},
-               new={"status": "Validated", "priority_level": report.priority_level})
+               old={"status": old_status},
+               new={"status": "Validated", "priority_level": report.priority_level,
+                    "source": report.source, "validated_by": _person_name(current_user)})
 
     # The reporter gets a personal message...
     notify(db, report.user_id, "report_validated",
@@ -948,6 +976,30 @@ def _disaster_unit_member(db: Session, number: Optional[str]):
     )
     return next((u for u in rows if _phone_key(u.contact_number) == key), None)
 
+
+# J8 / NF-014 (team agreement Nov 18, 2026, A5): an SMS from a number that
+# matches no active CSWS Disaster Unit member is refused (422) unless the
+# Administrator gives unregistered_sender_reason. The reason is saved with
+# the SMS and the report shows it as a warning until it is validated.
+UNREGISTERED_SENDER = (
+    "The sender number matches no active CSWS Disaster Unit member. Give a reason "
+    "(unregistered_sender_reason) to encode it anyway."
+)
+
+
+def _sms_warning(meta: SmsReportMetadata, report: DisasterReport) -> Optional[str]:
+    if not meta.unregistered_sender_reason or report.status == "Validated":
+        return None
+    return ("Unregistered sender: the number matches no active CSWS Disaster Unit "
+            f"member. Reason given: {meta.unregistered_sender_reason}")
+
+
+def _sms_meta_view(meta: SmsReportMetadata, report: DisasterReport) -> SmsReportMetadataResponse:
+    view = SmsReportMetadataResponse.model_validate(meta)
+    view.warning = _sms_warning(meta, report)
+    return view
+
+
 @router.post(
     "/sms",
     response_model=SmsReportIngestResponse,
@@ -962,8 +1014,16 @@ def ingest_sms_report(
     # (source "SMS"). It then waits in the validation queue as Pending.
     current_user=Depends(require_role("admin")),
 ):
-    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids", "needs"})
+    report_fields = payload.model_dump(exclude={"contact_number", "raw_message", "sitio_ids", "needs",
+                                                "unregistered_sender_reason"})
     sender = _disaster_unit_member(db, payload.contact_number)
+    # J8 / NF-014: an unregistered sender needs a reason; a registered one
+    # is unchanged (any reason sent with it is ignored).
+    reason = None
+    if sender is None:
+        reason = (payload.unregistered_sender_reason or "").strip() or None
+        if reason is None:
+            raise HTTPException(status_code=422, detail=UNREGISTERED_SENDER)
     report = DisasterReport(
         **report_fields,
         user_id=sender.user_id if sender else current_user.user_id,
@@ -980,16 +1040,33 @@ def ingest_sms_report(
         contact_number=payload.contact_number,
         raw_message=payload.raw_message,
         encoded_by_user_id=current_user.user_id,
+        unregistered_sender_reason=reason,
     )
     db.add(sms_meta)
     db.flush()
     db.refresh(report)
     db.refresh(sms_meta)
 
+    # J7 / NF-012: every encode is audit-logged with the Administrator's
+    # name, the SMS as received and what was encoded from it.
+    log_action(db, current_user, "ENCODE SMS REPORT", "disaster_reports", report.report_id,
+               new={"source": "SMS",
+                    "encoded_by": _person_name(current_user),
+                    "contact_number": payload.contact_number,
+                    "raw_message": payload.raw_message,
+                    "filed_under_user_id": report.user_id,
+                    "disaster_type_id": report.disaster_type_id,
+                    "barangay_id": report.barangay_id,
+                    "affected_families": report.affected_families,
+                    "assistance_needed": report.assistance_needed,
+                    "needs": _needs_log(report),
+                    "unregistered_sender_reason": reason})
+
     # The other Administrators and both CSWS offices hear of the new report.
     _notify_new_report(db, report, current_user.user_id)
 
-    return SmsReportIngestResponse(report=report, sms_metadata=sms_meta)
+    view = _sms_meta_view(sms_meta, report)
+    return SmsReportIngestResponse(report=report, sms_metadata=view, warning=view.warning)
 
 
 # ---------------------------------------------------------------------------
@@ -1008,4 +1085,4 @@ def get_sms_metadata(
     )
     if not meta:
         raise HTTPException(status_code=404, detail="No SMS metadata for this report")
-    return meta
+    return _sms_meta_view(meta, meta.report)

@@ -70,6 +70,7 @@ def test_sms_report_with_several_sitios(admin_client, seed, db_session):
         **_payload(seed, sitio_ids=[2, 3]),
         "contact_number": "09171234567",
         "raw_message": "NEXAAID REPORT\nSITIO: Sitio Two, Sitio Three",
+        "unregistered_sender_reason": "Typed in from a relayed SMS (J8)",   # J8: unregistered number
     })
     assert r.status_code == 201, r.text
     assert r.json()["report"]["sitio_ids"] == [2, 3]
