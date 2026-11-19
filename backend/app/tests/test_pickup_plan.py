@@ -59,7 +59,9 @@ def test_the_plan_has_no_size_or_priority_scores():
         assert gone not in s
     assert "vehicle" not in r and "fullness_pct" not in r["runs"][0]
     assert s["donations"][0]["items"][0] == {
-        "item_name": "Rice", "unit": "", "packaging": "Sack (50 kg)", "quantity": 3, "heavy": True}
+        "item_name": "Rice", "unit": "", "packaging": "Sack (50 kg)", "quantity": 3, "heavy": True,
+        # G-002 (D8): filled in by the route from the donation row.
+        "amount_text": "", "quantity_summary": ""}
 
 
 def test_a_big_donation_is_still_planned():

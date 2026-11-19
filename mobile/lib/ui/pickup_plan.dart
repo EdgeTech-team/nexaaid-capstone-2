@@ -110,17 +110,24 @@ class PlanItem {
   final String packaging;
   final int quantity;
   final bool heavy; // sacks and gallon containers: load first
+  final String amountText; // G-002 (D8): "10 packs x 5 kg"
 
   PlanItem.fromJson(Map j)
     : name = '${j['item_name'] ?? 'Item'}',
       unit = '${j['unit'] ?? ''}',
       packaging = '${j['packaging'] ?? ''}',
       quantity = _int(j['quantity']) ?? 0,
-      heavy = j['heavy'] == true;
+      heavy = j['heavy'] == true,
+      amountText = '${j['amount_text'] ?? ''}'.trim();
 
-  /// "Rice, Sack (50 kg) × 2"
-  String get line =>
-      '$name${packaging.isEmpty ? '' : ', $packaging'} × $quantity';
+  /// G-002 (D8): "Rice · 10 packs x 5 kg (Sack)"; older answers
+  /// "Rice · 50 kg (Sack)".
+  String get line {
+    final amount = amountText.isNotEmpty
+        ? amountText
+        : '$quantity $unit'.trim();
+    return '$name · $amount${packaging.isEmpty ? '' : ' ($packaging)'}';
+  }
 }
 
 /// One donation (one QR code) at a stop.
@@ -160,6 +167,11 @@ class PlanDonation {
   Map? get pickupRequest => raw['pickup_request'] as Map?;
   bool get tooFar => raw['too_far'] == true;
   double? get km => (raw['distance_km'] as num?)?.toDouble();
+
+  /// NF-007 (D5): the call that confirms this stop (Reached / No answer /
+  /// Wrong number), or null when nobody called yet.
+  String? get contactOutcome => raw['contact_outcome'] as String?;
+  bool get contactConfirmed => raw['contact_confirmed'] == true;
 }
 
 /// One place the picker visits.
@@ -219,6 +231,9 @@ class PlanStop {
   bool get far => status == 'far';
   bool get inRun => donations.any((d) => d.pickupRequest != null);
   bool get callDonor => flags.contains('call_donor');
+
+  /// NF-007 (D5): every donor here was called and reached.
+  bool get contactConfirmed => donations.every((d) => d.contactConfirmed);
   bool get missedBefore => flags.contains('missed_before');
   List<String> get refs => [for (final d in donations) d.ref];
   List<PlanItem> get items => [for (final d in donations) ...d.items];
@@ -593,6 +608,10 @@ class StopDetailsSheet extends StatefulWidget {
   final Future<void> Function()? onNotHome;
   final Future<void> Function(PlanDonation d)? onDecline;
 
+  /// NF-007 (D5): "Called – confirmed" with Reached / No answer / Wrong
+  /// number (POST /donations/entries/{ref}/contact-check).
+  final Future<void> Function(PlanDonation d, String outcome)? onContactCheck;
+
   const StopDetailsSheet({
     super.key,
     required this.stop,
@@ -600,6 +619,7 @@ class StopDetailsSheet extends StatefulWidget {
     this.onPickedUp,
     this.onNotHome,
     this.onDecline,
+    this.onContactCheck,
   });
 
   @override
@@ -678,6 +698,15 @@ class _StopDetailsSheetState extends State<StopDetailsSheet> {
                   'Close to the handover deadline'
                   '${s.daysLeft != null ? ' (${s.daysLeft} day${s.daysLeft == 1 ? '' : 's'} left)' : ''}: '
                   'call the donor.',
+            ),
+          // NF-007 (D5): every stop is called before its run is sent.
+          if (!s.contactConfirmed)
+            _Note(
+              icon: Icons.phone_callback_outlined,
+              color: lastChanceInk,
+              text:
+                  'Call to confirm before the run: tap Called – confirmed '
+                  'under each donor.',
             ),
 
           // Items as the donor wrote them
@@ -773,6 +802,9 @@ class _StopDetailsSheetState extends State<StopDetailsSheet> {
               onDecline: d.tooFar && widget.onDecline != null
                   ? () => widget.onDecline!(d)
                   : null,
+              onContactCheck: widget.onContactCheck == null
+                  ? null
+                  : (outcome) => widget.onContactCheck!(d, outcome),
             ),
 
           // Actions
@@ -861,11 +893,13 @@ class _DonationRow extends StatelessWidget {
   final bool showPickedUp;
   final VoidCallback? onPickedUp;
   final VoidCallback? onDecline;
+  final void Function(String outcome)? onContactCheck;
   const _DonationRow({
     required this.d,
     required this.showPickedUp,
     this.onPickedUp,
     this.onDecline,
+    this.onContactCheck,
   });
 
   @override
@@ -904,6 +938,14 @@ class _DonationRow extends StatelessWidget {
               'Note: ${d.notes}',
               style: t.bodySmall?.copyWith(fontStyle: FontStyle.italic),
             ),
+          // NF-007 (D5): the donor's number and the required call.
+          if (d.contact.isNotEmpty)
+            Text(
+              d.contact,
+              style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          if (onContactCheck != null)
+            _CalledStep(d: d, onOutcome: onContactCheck!),
           if (run != null)
             Text(
               'In DRRMO request #${run['request_id']} (${run['status']})',
@@ -928,6 +970,79 @@ class _DonationRow extends StatelessWidget {
                     icon: const Icon(Icons.block, size: 18),
                     label: const Text('Decline: too far'),
                   ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// NF-007 (D5): "Called – confirmed", required for every stop before its
+/// run: Reached, No answer (twice: the stop moves to the next date) or
+/// Wrong number (the donation is cancelled).
+class _CalledStep extends StatelessWidget {
+  final PlanDonation d;
+  final void Function(String outcome) onOutcome;
+  const _CalledStep({required this.d, required this.onOutcome});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final outcome = d.contactOutcome;
+    return Container(
+      key: ValueKey('called-${d.ref}'),
+      margin: const EdgeInsets.only(top: Space.xs),
+      padding: const EdgeInsets.all(Space.sm),
+      decoration: BoxDecoration(
+        color: d.contactConfirmed
+            ? AppColors.success.withValues(alpha: 0.10)
+            : lastChanceInk.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                d.contactConfirmed
+                    ? Icons.check_circle
+                    : Icons.phone_callback_outlined,
+                size: 18,
+                color: d.contactConfirmed ? AppColors.success : lastChanceInk,
+              ),
+              Gaps.h8,
+              Expanded(
+                child: Text(
+                  d.contactConfirmed
+                      ? 'Called – confirmed'
+                      : outcome == 'No answer'
+                      ? 'Called – no answer once. Try again.'
+                      : 'Called – confirmed? (required)',
+                  style: t.labelLarge,
+                ),
+              ),
+            ],
+          ),
+          if (!d.contactConfirmed)
+            Wrap(
+              spacing: Space.xs,
+              children: [
+                TextButton(
+                  onPressed: () => onOutcome('Reached'),
+                  child: const Text('Reached'),
+                ),
+                TextButton(
+                  onPressed: () => onOutcome('No answer'),
+                  child: const Text('No answer'),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: cs.error),
+                  onPressed: () => onOutcome('Wrong number'),
+                  child: const Text('Wrong number'),
+                ),
               ],
             ),
         ],

@@ -26,11 +26,18 @@ EVENTS: dict[str, tuple[str, str]] = {
     "org_approved": ("Organization approved", "Your organization account is now active."),
     "org_rejected": ("Organization registration rejected", "{reason}"),
     # Reports
-    "report_submitted": ("New report submitted", "{title} needs validation."),
-    "report_validated": ("Report validated", "{title} has been validated."),
+    # {title} is the readable label ("Flood in Barangay Looc") and {story}
+    # the plain description (services/report_story.py); {report_no} is the
+    # report number staff look it up by.
+    "report_submitted": ("New report: {title}",
+                         "{story} Report #{report_no} needs validation."),
+    "report_validated": ("Validated: {title}",
+                         "{story} Report #{report_no} is now open for donations."),
     "report_rejected": ("Report rejected", "{title} was rejected. {reason}"),
-    "report_open_for_donations": ("New report needs help", "{title} is now accepting donations."),
-    "report_withdrawn": ("Report withdrawn", "{title} was withdrawn by the Disaster Unit before validation."),
+    "report_open_for_donations": ("{title}: families need your help",
+                                  "{story} Tap to see what they need and donate."),
+    "report_withdrawn": ("Report withdrawn: {title}",
+                         "Report #{report_no} was withdrawn by the Disaster Unit before validation."),
     # Donations
     "donation_submitted": ("New donation submitted", "Donation batch #{batch_no} is awaiting receipt."),
     "donation_submitted_confirm": ("Donation submitted", "Thank you! Your donation #{batch_no} was recorded. Next, CSWS receives it."),

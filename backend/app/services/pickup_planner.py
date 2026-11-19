@@ -77,7 +77,9 @@ DEFAULTS: dict = {
     "minutes_per_extra_donation": 5,
     # Open decision: does the 5:00 PM limit include driving back to CSWS?
     "include_return_trip": False,
-    # Waiting this close to the handover deadline: staff should call.
+    # Waiting this close to the handover deadline: the stop must go soon.
+    # NF-007 (D5): every stop is called before its run anyway
+    # ("call_to_confirm"); this flag only marks the urgent ones.
     "call_donor_days_left": 3,
     # Zones (testing, Oct 31): a stop from another zone joins a day's run
     # only within this distance of a stop already on it (else it waits for
@@ -338,6 +340,10 @@ def plan(
             d.flags.append("in_drrmo_run")
         if d.not_home_date:
             d.flags.append("missed_before")
+        # NF-007 (D5): every stop needs a "Called – confirmed" call before
+        # its run is sent (the deadline flag above stays as it was).
+        if not d.view.get("contact_confirmed"):
+            d.flags.append("call_to_confirm")
 
     follow_up = [d for d in donations if d.lat is None or d.lng is None]
     pinned = [d for d in donations if d.lat is not None and d.lng is not None]
@@ -503,6 +509,9 @@ def donation_view(d: Donation, cfg: dict) -> dict:
                 "unit": i.get("unit") or "",
                 "packaging": i.get("packaging") or "",
                 "quantity": i.get("quantity"),
+                # G-002 (D8)
+                "amount_text": i.get("amount_text") or "",
+                "quantity_summary": i.get("quantity_summary") or "",
                 "heavy": is_heavy(i, cfg),
             }
             for i in d.items
@@ -532,6 +541,8 @@ def stop_view(s: Stop, planned: dict, cfg: dict) -> dict:
         "too_far": any(d.too_far for d in s.donations),
         "distance_km": first.view.get("distance_km"),
         "flags": sorted({f for d in s.donations for f in d.flags}),
+        # NF-007 (D5): every donation at this stop was called and reached.
+        "contact_confirmed": all(d.view.get("contact_confirmed") for d in s.donations),
         "status": planned.get("status", "no_feasible_day"),
         "reason": planned.get("reason"),
         "planned_date": planned.get("planned_date"),
