@@ -251,6 +251,9 @@ class _DonateScreenState extends State<DonateScreen> {
   late Map<String, dynamic> _report = widget.report;
 
   final _form = GlobalKey<FormState>();
+
+  /// UI redesign: the steps of the form (items, handover, guest details).
+  final _steps = GlobalKey<SteppedFormState>();
   final _scroll = ScrollController();
   final lines = <_Line>[_Line()];
   String handover = 'Drop Off';
@@ -1908,7 +1911,14 @@ class _DonateScreenState extends State<DonateScreen> {
                     : Icons.qr_code_2,
                 variant: AppButtonVariant.donate,
                 loading: busy,
-                onPressed: busy ? null : _submit,
+                onPressed: busy
+                    ? null
+                    : () {
+                        final sent = _submit();
+                        // UI redesign: open the step with a field in red.
+                        _steps.currentState?.showFirstError();
+                        sent.ignore();
+                      },
               ),
             ],
           ),
@@ -1944,12 +1954,15 @@ class _DonateScreenState extends State<DonateScreen> {
           child: SingleChildScrollView(
             controller: _scroll,
             padding: EdgeInsets.fromLTRB(side, Space.md, side, Space.xl),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _reportSummary(),
-
-                if (_adding) _addingNote(),
+            // UI redesign: in steps with a progress bar (items, handover,
+            // and the guest's details). Submit stays in the bar below.
+            child: SteppedForm(
+              key: _steps,
+              scrolls: false,
+              padding: EdgeInsets.zero,
+              header: [_reportSummary(), if (_adding) _addingNote()],
+              steps: [
+                FormStep('Items', [
                 _StepHeader(
                   number: 1,
                   title: _adding
@@ -1973,10 +1986,6 @@ class _DonateScreenState extends State<DonateScreen> {
                 ),
                 Gaps.v12,
                 for (var i = 0; i < lines.length; i++) _lineCard(i),
-
-                // Adding to a donation: only the items. Handover, pickup
-                // and donor details stay as they are.
-                if (!_adding && !_linesLocked) ..._handoverSections(door),
                 // NF-005: hidden from people (and from screen readers).
                 Offstage(
                   child: ExcludeSemantics(
@@ -1987,6 +1996,13 @@ class _DonateScreenState extends State<DonateScreen> {
                     ),
                   ),
                 ),
+                ]),
+                // Adding to a donation: only the items. Handover, pickup
+                // and donor details stay as they are.
+                if (!_adding && !_linesLocked)
+                  FormStep('Handover', _handoverSections(door)),
+                if (!_adding && !_linesLocked && !api.loggedIn)
+                  FormStep('Contact', _guestSection()),
               ],
             ),
           ),
@@ -2203,15 +2219,16 @@ class _DonateScreenState extends State<DonateScreen> {
               fallbackHours: storageHours,
             ),
     ),
+  ];
 
-    if (!api.loggedIn) ...[
-      const _StepHeader(
-        number: 3,
-        title: 'Your details',
-        subtitle: 'So CSWS can call or text you about this donation.',
-      ),
-      _guestCard(),
-    ],
+  /// Guests only: name, number and consent (the last step).
+  List<Widget> _guestSection() => [
+    const _StepHeader(
+      number: 3,
+      title: 'Your details',
+      subtitle: 'So CSWS can call or text you about this donation.',
+    ),
+    _guestCard(),
   ];
 }
 

@@ -378,7 +378,8 @@ void main() {
         ]) {
           expect(find.text(label), findsOneWidget, reason: label);
         }
-        expect(find.byType(StatCard), findsNWidgets(4));
+        // UI redesign: number tiles.
+        expect(find.byType(NumberTile), findsNWidgets(4));
         // Donation status: every entry with the status chips, search and
         // sort, each with its full journey; QR only when waiting.
         expect(find.text('Donation status'), findsOneWidget);
@@ -433,7 +434,7 @@ void main() {
       await _pump(tester, const MyGivingScreen());
       expect(find.text('You haven\'t donated yet'), findsOneWidget);
       expect(find.text('Find a barangay to help'), findsOneWidget);
-      expect(find.byType(StatCard), findsNothing);
+      expect(find.byType(NumberTile), findsNothing);
       expect(find.text('Donation status'), findsNothing);
     }, () => _server);
   });

@@ -15,6 +15,8 @@ import 'package:mobile/ui/donate_screen.dart';
 import 'package:mobile/ui/report_screens.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
+import 'step_form_helpers.dart';
+
 Map<String, dynamic> _item(int id, String name, String unit) => {
   'id': id,
   'name': '$name ($unit)',
@@ -119,12 +121,14 @@ void main() {
       expect(find.text('What kind of disaster?'), findsOneWidget);
       expect(find.text('Use suggested'), findsNothing);
 
+      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
         '10',
       );
       await tester.pump();
       // Filled from the template: 6 kg and 40 L per family.
+      await openStep(tester, ReportSteps.needs);
       expect(find.widgetWithText(TextFormField, '60'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
 
@@ -133,18 +137,22 @@ void main() {
       final lastNeed = tester.getTopLeft(find.text('Municipal Water').last).dy;
       expect(addNeed, greaterThan(lastNeed));
 
+      await openStep(tester, ReportSteps.place);
       await _choose(
         tester,
         find.widgetWithText(DropdownButtonFormField<String>, 'Barangay'),
         'Looc',
       );
+      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Short incident description'),
         'Ground opened',
       );
+      await openStep(tester, ReportSteps.needs);
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       expect(sent['/reports/'], isNull); // the disaster name is required
+      // UI redesign: the step with the field in red opens by itself.
       expect(find.text('Required'), findsOneWidget);
       // UAT #6: a pop-up says what is missing.
       expect(find.text('Please complete the form'), findsOneWidget);
@@ -156,6 +164,7 @@ void main() {
         find.widgetWithText(TextFormField, 'What kind of disaster?'),
         'Sinkhole',
       );
+      await openStep(tester, ReportSteps.needs);
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       final body = sent['/reports/']!;
@@ -180,16 +189,20 @@ void main() {
         'Other',
       );
       // No families yet: the preset items are listed without amounts.
+      await openStep(tester, ReportSteps.needs);
+      expect(find.text('Add need'), findsOneWidget); // the needs show
       expect(find.widgetWithText(TextFormField, '60'), findsNothing);
 
       // The reporter changes the list (one more need), then types families.
       await tester.tap(find.text('Add need'));
       await tester.pumpAndSettle();
+      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
         '10',
       );
       await tester.pump();
+      await openStep(tester, ReportSteps.needs);
       expect(find.widgetWithText(TextFormField, '60'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
 
@@ -213,11 +226,13 @@ void main() {
         find.widgetWithText(DropdownButtonFormField<String>, 'Disaster type'),
         'Other',
       );
+      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
         '10',
       );
       await tester.pump();
+      await openStep(tester, ReportSteps.needs);
       await tester.tap(find.text('Add need'));
       await tester.pumpAndSettle();
       await _choose(
@@ -234,20 +249,24 @@ void main() {
         find.widgetWithText(DropdownButtonFormField<String>, 'Need 4'),
         'Tarpaulin',
       );
-      // No standard: 1 per family.
-      expect(find.widgetWithText(TextFormField, '10'), findsNWidgets(2));
+      // No standard: 1 per family (the families field, also 10, is on the
+      // Situation step).
+      expect(find.widgetWithText(TextFormField, '10'), findsOneWidget);
 
       // The reporter types Rice; more families: the rest follows, Rice stays.
       await tester.enterText(find.widgetWithText(TextFormField, '60'), '50');
+      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
         '41',
       );
       await tester.pump();
+      expect(find.widgetWithText(TextFormField, '41'), findsOneWidget);
+      await openStep(tester, ReportSteps.needs);
       expect(find.widgetWithText(TextFormField, '50'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '1640'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '328'), findsOneWidget);
-      expect(find.widgetWithText(TextFormField, '41'), findsNWidgets(2));
+      expect(find.widgetWithText(TextFormField, '41'), findsOneWidget);
     }, () => _server);
   });
 

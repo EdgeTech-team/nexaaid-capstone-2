@@ -24,7 +24,7 @@ Future<void> openDonationByQr(BuildContext context, String reference) async {
   if (!r.ok) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: const Color(0xFFC62828),
+        backgroundColor: AppColors.danger,
         content: Text(r.status == 0 ? 'Cannot reach the server' : r.errorText),
       ),
     );
