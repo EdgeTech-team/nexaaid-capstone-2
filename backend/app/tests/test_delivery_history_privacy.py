@@ -2,6 +2,7 @@
 email, so a barangay rep never sees staff email addresses."""
 import core.database as database
 from models.user_rbac_model import User
+from tests.receipt_helpers import full_counts
 from tests.test_runthrough_gaps import _deliver
 from tests.test_delivery_allocation import _give
 from tests.test_donation_batch import _report
@@ -28,7 +29,7 @@ def test_history_shows_staff_names_not_emails_to_the_barangay(api):
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))   # In Transit
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))   # Delivered
     ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
-                   json={"remarks": "Complete"}), 201)
+                   json=full_counts(client, did, t["brgy"], remarks="Complete")), 201)
 
     csws_name, csws_email = _name_and_email("csws")
     brgy_name, brgy_email = _name_and_email("brgy")

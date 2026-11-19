@@ -13,7 +13,8 @@ Flow, in the words the app uses:
                       most urgent), items and quantities per report
   2. Start trip       every delivery in it goes "In Transit" with one tap
   3. Arrived at stop  every delivery for that barangay becomes "Delivered"
-  4. Barangay rep     confirms receipt (one tap for all of their deliveries)
+  4. Barangay rep     counts every item that arrived and confirms all of
+                      their deliveries together (J1 / NF-009)
   5. Completed        automatically, when every delivery is confirmed
   Undo trip           only while still being prepared: stock goes back
 
@@ -26,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
-from api.v1.deliveries import confirm_receipt, move_to_next_status
+from api.v1.deliveries import check_counts, confirm_receipt, move_to_next_status
 from core.audit import log_action
 from core.auth import barangay_scope, require_role
 from core.database import get_db
@@ -35,7 +36,7 @@ from models.delivery import Delivery, DeliveryItem, DeliveryTrip
 from models.item_model import Item
 from models.logistics_request_model import LogisticsRequest
 from models.report import DisasterReport
-from schemas.delivery import ReceiptConfirm
+from schemas.delivery import ReceiptConfirm, TripReceiptConfirm
 from schemas.physical_donation_schema import MANILA
 from services.delivery_stock import check_stock, report_stock, take_stock
 from services.inventory import add_to_stock
@@ -453,26 +454,66 @@ def arrived_at_stop(
 @router.post("/{trip_id}/confirm-receipt")
 def confirm_trip_receipt(
     trip_id: int,
-    payload: ReceiptConfirm,
+    payload: TripReceiptConfirm,
     db: Session = Depends(get_db),
     current_user=Depends(require_role("barangay_receiving_rep", "admin")),
 ):
     """Barangay rep: confirm every delivery from this trip that arrived in
-    their barangay at once (e.g. 3 Banilad reports = 3 deliveries, one tap).
-    Each one is still confirmed through the normal receipt rules (UC-B1),
-    so fulfillment updates per report."""
+    their barangay together (e.g. 3 Banilad reports = 3 deliveries).
+
+    J1 / NF-009: the body carries the rep's count for every line of every
+    delivery that arrived: {"deliveries": [{"delivery_id", "items"}],
+    "remarks"}. A remarks-only body is refused (422). Every count is
+    checked before anything is saved, so one wrong line confirms nothing.
+    Each delivery then goes through the normal receipt rules
+    (confirm_receipt, UC-B1): its own receipt and receipt_items, its own
+    notice, fulfillment and priority per report. J3 adds the stop's
+    handover code and signature."""
     trip = _get_trip(db, trip_id)
     own = barangay_scope(current_user)
     mine = [d for d in trip.deliveries if own is None or d.destination_barangay_id == own]
     if not mine:
         raise HTTPException(status_code=404, detail="This trip has no deliveries for your barangay.")
-    ready = [d.delivery_id for d in mine if d.status == "Delivered"]
+    ready = {d.delivery_id: d for d in mine if d.status == "Delivered"}
     if not ready:
         raise HTTPException(status_code=409, detail="Nothing to confirm yet: the goods have not arrived.")
-    for delivery_id in ready:
-        confirm_receipt(delivery_id, payload, db=db, current_user=current_user)
+
+    # J1 / NF-009: one set of counts for each delivery that arrived, no more.
+    counts = {}
+    for entry in payload.deliveries:
+        if entry.delivery_id not in ready:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Delivery #{entry.delivery_id} is not waiting for your confirmation on trip #{trip_id}.",
+            )
+        if entry.delivery_id in counts:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Delivery #{entry.delivery_id} is listed twice. Send one set of counts per delivery.",
+            )
+        counts[entry.delivery_id] = entry.items
+    missing = [f"#{did}" for did in ready if did not in counts]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=("Count every delivery that arrived before confirming. "
+                    f"Missing: delivery {', '.join(missing)}."),
+        )
+    # All or nothing: every delivery's counts are checked before any is saved.
+    for did, delivery in ready.items():
+        check_counts(delivery, counts[did])
+
+    with_differences = []
+    for did in ready:
+        result = confirm_receipt(
+            did, ReceiptConfirm(items=counts[did], remarks=payload.remarks),
+            db=db, current_user=current_user,
+        )
+        if result.receipt.has_discrepancy:
+            with_differences.append(did)
     db.commit()
-    return {"trip_id": trip_id, "confirmed_deliveries": ready}
+    return {"trip_id": trip_id, "confirmed_deliveries": list(ready),
+            "with_differences": with_differences}
 
 
 # ---------------------------------------------------------------------------

@@ -4,10 +4,14 @@ Tests for Module 3.10 — Delivery Tracking & Receipt Confirmation.
 Extends the existing seed fixture's reporter/admin/disaster_type/
 barangay/sitio with an Item row (for delivery_items) and a validated
 report (needed before any delivery/fulfillment logic can run).
+
+J1 / NF-009: confirming receipt sends the barangay's count for every line;
+full_counts() counts everything as sent.
 """
 import pytest
 from models.item_model import Item
 from models.inventory_model import Inventory
+from tests.receipt_helpers import full_counts
 
 
 @pytest.fixture()
@@ -84,8 +88,9 @@ def test_cannot_skip_status_stages(admin_client, seed, validated_report_with_ite
 
 def test_cannot_confirm_receipt_before_delivered(admin_client, seed, validated_report_with_item):
     delivery_id = _create_delivery(admin_client, seed, validated_report_with_item).json()["delivery_id"]
-    # Still 'Preparing' — confirming now should be rejected
-    resp = admin_client.post(f"/deliveries/{delivery_id}/confirm-receipt", json={})
+    # Still 'Preparing' — confirming now should be rejected, even with full counts
+    resp = admin_client.post(f"/deliveries/{delivery_id}/confirm-receipt",
+                             json=full_counts(admin_client, delivery_id))
     assert resp.status_code == 409
 
 
@@ -97,7 +102,8 @@ def test_confirm_receipt_recalculates_fulfillment(admin_client, seed, validated_
     admin_client.post(f"/deliveries/{delivery_id}/advance")  # -> In Transit
     admin_client.post(f"/deliveries/{delivery_id}/advance")  # -> Delivered
 
-    resp = admin_client.post(f"/deliveries/{delivery_id}/confirm-receipt", json={"remarks": "All good"})
+    resp = admin_client.post(f"/deliveries/{delivery_id}/confirm-receipt",
+                             json=full_counts(admin_client, delivery_id, remarks="All good"))
     print(resp.json())
     assert resp.status_code == 201
     body = resp.json()
@@ -117,7 +123,8 @@ def test_full_delivery_marks_fulfillment_complete(admin_client, seed, validated_
 
     admin_client.post(f"/deliveries/{delivery_id}/advance")
     admin_client.post(f"/deliveries/{delivery_id}/advance")
-    resp = admin_client.post(f"/deliveries/{delivery_id}/confirm-receipt", json={})
+    resp = admin_client.post(f"/deliveries/{delivery_id}/confirm-receipt",
+                             json=full_counts(admin_client, delivery_id))
 
     assert resp.json()["fulfillment"]["verification_status"] == "Complete"
     assert float(resp.json()["fulfillment"]["fulfillment_percentage"]) == 100.00
@@ -134,7 +141,8 @@ def test_priority_follows_fulfillment(admin_client, seed, validated_report_with_
     half = _create_delivery(admin_client, seed, validated_report_with_item, quantity=50).json()
     for _ in range(2):
         admin_client.post(f"/deliveries/{half['delivery_id']}/advance")
-    admin_client.post(f"/deliveries/{half['delivery_id']}/confirm-receipt", json={})
+    admin_client.post(f"/deliveries/{half['delivery_id']}/confirm-receipt",
+                      json=full_counts(admin_client, half["delivery_id"]))
     mid = admin_client.get(f"/reports/{report_id}").json()
     assert mid["fulfillment_status"] == "Partial"
     assert mid["priority_level"] in ("High", "Medium")
@@ -143,7 +151,8 @@ def test_priority_follows_fulfillment(admin_client, seed, validated_report_with_
     rest = _create_delivery(admin_client, seed, validated_report_with_item, quantity=50).json()
     for _ in range(2):
         admin_client.post(f"/deliveries/{rest['delivery_id']}/advance")
-    admin_client.post(f"/deliveries/{rest['delivery_id']}/confirm-receipt", json={})
+    admin_client.post(f"/deliveries/{rest['delivery_id']}/confirm-receipt",
+                      json=full_counts(admin_client, rest["delivery_id"]))
     after = admin_client.get(f"/reports/{report_id}").json()
     assert after["fulfillment_status"] == "Complete"
     assert after["priority_level"] == "Low"

@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from api.v1.drrmo_router import completion_blocker
 from models.delivery import Delivery
 from models.logistics_request_model import LogisticsRequest
+from tests.receipt_helpers import full_counts
 from tests.test_delivery_allocation import _give
 from tests.test_donation_batch import _report
 from tests.test_pickup_days_and_runs import _activate_everyone
@@ -68,7 +69,8 @@ def test_7_5_support_completes_when_the_goods_arrive(api):
     assert _complete(client, t, req).status_code == 400          # already completed
 
     # The barangay still confirms receipt on its own (UC-B1).
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                   json=full_counts(client, did, t["brgy"])), 201)
     assert _row(client, t, req)["status"] == "Completed"
 
 

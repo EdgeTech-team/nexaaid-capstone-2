@@ -39,6 +39,7 @@ from models.sitio_model import Sitio
 from models.disaster_type_model import DisasterType
 from models.item_model import Item
 from tests.reg_helpers import STRONG_PASSWORD, donor_payload, upload
+from tests.receipt_helpers import ANY_COUNTS, full_counts
 
 PASSWORD = "testpass123"
 
@@ -165,7 +166,7 @@ def test_full_relief_chain_across_all_roles(api):
         "disaster_type_id": 1, "barangay_id": 1, "source": "mobile"}), 201)
     assert mobile["source"] == "Mobile"
 
-    
+
     # dropdown data (public, used by the app instead of typed ids)
     lk = ok(client.get("/lookups"))
     assert lk["disaster_types"] == [{"id": 1, "name": "Flood", "is_location_specific": False}]
@@ -214,7 +215,7 @@ def test_full_relief_chain_across_all_roles(api):
     for d, qty in ((d1, 60), (d2, 5)):
         ok(client.post("/donations/receive", headers=t["csws"],
                        json={"donation_id": d["donation_id"], "actual_quantity": qty}))
-        
+
     assert ok(client.get("/lookups", headers=t["csws"]))["pending_donations"] == []
     assert len(ok(client.get("/lookups", headers=t["cmo"]))["received_donations"]) == 2
     assert ok(client.get("/lookups"))["received_donations"] == []   # F-01: not for guests
@@ -292,15 +293,17 @@ def test_full_relief_chain_across_all_roles(api):
                           headers=t["drrmo"]))["delivery_status"] == "Delivered"
     # public feed (Item 8): nothing is listed until the barangay confirms
     assert ok(client.get("/public/recent-deliveries")) == []
-    assert client.post(f"/deliveries/{did}/confirm-receipt", headers=t["csws"], json={}).status_code == 403
+    assert client.post(f"/deliveries/{did}/confirm-receipt", headers=t["csws"],
+                       json=ANY_COUNTS).status_code == 403
     # Each Barangay Rep only sees / confirms aid for their assigned barangay (UC-B1 3a)
     assert ok(client.get("/deliveries/", headers=t["brgy2"])) == []
     assert client.get(f"/deliveries/{did}", headers=t["brgy2"]).status_code == 404
-    assert client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy2"], json={}).status_code == 403
+    assert client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy2"],
+                       json=ANY_COUNTS).status_code == 403
     assert ok(client.get("/reports/monitoring", headers=t["brgy2"])) == []
     assert len(ok(client.get("/deliveries/", headers=t["brgy"]))) == 1
     receipt = ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
-                             json={"remarks": "Received complete"}), 201)
+                             json=full_counts(client, did, t["brgy"], remarks="Received complete")), 201)
     assert receipt["delivery"]["status"] == "Confirmed"
     assert receipt["fulfillment"]["fulfillment_percentage"] == "50.00"
     assert receipt["fulfillment"]["verification_status"] == "Partial"
@@ -352,7 +355,7 @@ def test_donor_dashboard_and_other_item(api):
     assert client.get("/donations/mine").status_code == 401
 
 
-def test_optional_auth_rejects_deactivated_user(api):   
+def test_optional_auth_rejects_deactivated_user(api):
     client, tokens = api
 
     session = database.SessionLocal()

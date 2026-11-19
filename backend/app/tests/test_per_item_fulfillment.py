@@ -20,6 +20,7 @@ from core import database
 from core.priority_engine import compute_priority
 from models.item_model import Item, ItemSize
 from services.units import line_amounts, to_base
+from tests.receipt_helpers import full_counts
 from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
 
 RICE, WATER = 1, 2
@@ -180,7 +181,8 @@ def test_per_item_fulfillment_through_the_whole_chain(api):
     }), 201)["delivery_id"]
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
-    body = ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    body = ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                          json=full_counts(client, did, t["brgy"])), 201)
 
     # Rice 150/500 = 30%, Water 69/200 = 34.5%, Diapers 0% -> average 21.5%
     f = body["fulfillment"]
@@ -221,7 +223,8 @@ def test_older_apps_still_work_with_one_general_need(api):
         "items": [{"item_id": RICE, "quantity": 50}]}), 201)["delivery_id"]
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
-    body = ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    body = ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                          json=full_counts(client, did, t["brgy"])), 201)
     assert float(body["fulfillment"]["fulfillment_percentage"]) == 50.0
     assert _needs(client, rid)["needs"][0]["delivered"] == 50
 
@@ -253,7 +256,8 @@ def test_editing_needs_and_matching_items_at_receiving(api):
         "items": [{"item_id": RICE, "quantity": 20}]}), 201)["delivery_id"]
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
     ok(client.post(f"/deliveries/{did}/advance", headers=t["csws"]))
-    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"], json={}), 201)
+    ok(client.post(f"/deliveries/{did}/confirm-receipt", headers=t["brgy"],
+                   json=full_counts(client, did, t["brgy"])), 201)
     # Rice 20/40 = 50%, Water 0% -> 25%
     assert ok(client.get(f"/reports/{rid}", headers=t["admin"]))["fulfillment_percentage"] in ("25.00", 25.0)
 

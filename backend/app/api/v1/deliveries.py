@@ -2,7 +2,7 @@
 app/api/v1/deliveries.py
 module 3.10 - Delivery Tracking & Receipt Confirmation (Mariquit)
 
-ASSUMPTIONS TO VERIFY (same caveats as api/v1/reports.py): 
+ASSUMPTIONS TO VERIFY (same caveats as api/v1/reports.py):
 -require_role/get_current_user shape-see the note in reports.py.
 -Role names ("csws_main office", "barangay_receiving_rep", "admin")
 are placeholders- swap for real RBAC role names once Known.
@@ -10,6 +10,8 @@ are placeholders- swap for real RBAC role names once Known.
   record can't be matched to assigned barangay") uses
   users.assigned_barangay_id via core.auth.barangay_scope(). Barangay
   Receiving Representatives also only list/see deliveries to that barangay.
+- J1 / NF-009: confirm_receipt takes the barangay's count for every line
+  (receipt_items); see check_counts().
 """
 
 from datetime import date, datetime, timedelta, timezone
@@ -17,7 +19,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status 
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select as db_select
 from sqlalchemy.orm import Session, joinedload
 
@@ -34,7 +36,7 @@ from models.inventory_model import Inventory
 from models.audit_log_model import AuditLog
 from models.user_rbac_model import User
 from models.report import DisasterReport, ReportFulfillment
-from models.delivery import Delivery, DeliveryItem, Receipt
+from models.delivery import Delivery, DeliveryItem, Receipt, ReceiptItem
 from models.logistics_request_model import LogisticsRequest
 from api.v1.drrmo_router import (
     DRIVER, DRRMO, VEHICLE, complete_on_arrival, drrmo_to_tell, nice_time, note_line,
@@ -49,13 +51,14 @@ from services.delivery_allocation import allocate_delivery, chosen_refs, ready_d
 from services.delivery_notices import tell_barangay_prepared, tell_donors, tell_status
 from services.delivery_views import DELIVERY_SORTS, apply_delivery_filters, delivery_views, status_counts
 from schemas.delivery import (
+    OVER_REASON,
+    SHORT_REASONS,
     DeliveryBatchAdvance,
     DeliveryCreate,
     DeliveryResponse,
     ReceiptConfirm,
     ReceiptConfirmResponse,
     ReportFulfillmentResponse,
-
 )
 
 router = APIRouter(prefix="/deliveries", tags=["deliveries"])
@@ -154,13 +157,13 @@ def create_delivery(
   db.add(delivery)
   db.flush()
 
-  for item_payload in lines: 
+  for item_payload in lines:
     db.add (
       DeliveryItem(
         delivery_id=delivery.delivery_id,
         item_id=item_payload.item_id,
         quantity=item_payload.quantity,
-      
+
       )
     )
 
@@ -517,7 +520,7 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user) -> Delive
     # Timestamped status history (UC-CM2 / delivery module step 3)
     log_action(db, current_user, "UPDATE DELIVERY STATUS", "deliveries", delivery.delivery_id,
                old={"status": old_status}, new={"status": delivery.status})
-   
+
     # Table 36 / Table 37: the goods reached the barangay, so DRRMO's
     # support is done; its summary is recorded and both offices are told.
     told = set()
@@ -629,6 +632,94 @@ def timing_summary(
 
 
 # Confirm receipt — Barangay Receiving Representative
+#
+# J1 / NF-009 (team agreement Nov 18, 2026): the barangay counts every line
+# of the delivery. The count fields start empty, so there is no default.
+#   every line exactly once, nothing else              otherwise 422
+#   count equal to what CSWS sent: no reason, no note  otherwise 422
+#   more than sent: reason "Over"                       otherwise 422
+#   fewer than sent: Short, Damaged or Wrong item       otherwise 422
+# A difference is still Confirmed (has_discrepancy = true); CSWS Main Office
+# and the reporter are told what differs. Fulfillment counts
+# min(received, sent) per line (services/fulfillment.py delivered_line).
+
+
+def _item_label(line: DeliveryItem) -> tuple:
+    """(name, unit) of a delivery line, for messages."""
+    item = line.item
+    if item is None:
+        return f"Item #{line.item_id}", ""
+    return item.item_name, item.unit_of_measure or ""
+
+
+def _amount(quantity: int, unit: str) -> str:
+    return f"{quantity} {unit}".strip()
+
+
+def check_counts(delivery: Delivery, counts) -> list:
+    """J1 / NF-009: check the barangay's counts against what CSWS sent.
+    Returns [(delivery_item, received, reason, note)] in line order, or
+    raises 422 naming the first problem. Changes nothing, so the trip
+    confirmation (api/v1/trips.py) can check every delivery first."""
+    sent = {line.delivery_item_id: line for line in delivery.items}
+    given = {}
+    for c in counts:
+        line = sent.get(c.delivery_item_id)
+        if line is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Line {c.delivery_item_id} is not part of delivery #{delivery.delivery_id}.",
+            )
+        if c.delivery_item_id in given:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{_item_label(line)[0]} was counted twice. Enter one count per item.",
+            )
+        given[c.delivery_item_id] = c
+    lines = sorted(delivery.items, key=lambda line: line.delivery_item_id)
+    missing = [_item_label(line)[0] for line in lines if line.delivery_item_id not in given]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Count every item of delivery #{delivery.delivery_id} before confirming. "
+                    f"Missing: {', '.join(missing)}."),
+        )
+    out = []
+    for line in lines:
+        c = given[line.delivery_item_id]
+        name, unit = _item_label(line)
+        received, sent_qty = c.received_quantity, line.quantity
+        reason = c.discrepancy_reason
+        note = (c.discrepancy_note or "").strip() or None
+        counted = f"{name}: you counted {_amount(received, unit)}, CSWS sent {_amount(sent_qty, unit)}."
+        if received == sent_qty:
+            if reason is not None or note is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{name}: the count matches what CSWS sent, so leave the reason and note empty.",
+                )
+        elif received > sent_qty:
+            if reason != OVER_REASON:
+                raise HTTPException(status_code=422, detail=f'{counted} Choose the reason "Over".')
+        elif reason not in SHORT_REASONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{counted} Choose a reason: Short, Damaged or Wrong item.",
+            )
+        out.append((line, received, reason, note))
+    return out
+
+
+def _differences(counted: list) -> str:
+    """The lines that differ, for the notice:
+    'Rice: 40 of 50 kg (Short); Water: 0 of 12 L (Damaged)'."""
+    parts = []
+    for line, received, reason, _note in counted:
+        if received != line.quantity:
+            name, unit = _item_label(line)
+            parts.append(f"{name}: {received} of {_amount(line.quantity, unit)} ({reason})")
+    return "; ".join(parts)
+
 
 @router.post(
     "/{delivery_id}/confirm-receipt",
@@ -653,7 +744,7 @@ def confirm_receipt(
     # Alt flow 4a: acknowledgment blocked until the delivery has actually
     # arrived — i.e. status must already be 'Delivered'.
 
-    if  delivery.status != "Delivered":
+    if delivery.status != "Delivered":
        raise HTTPException(
           status_code=409,
           detail=f"Cannot confirm receipt-delivery status is"
@@ -669,29 +760,55 @@ def confirm_receipt(
           detail="This delivery is not for your assigned barangay.",
        )
 
+    # J1 / NF-009: every line counted, and a fitting reason on each difference.
+    counted = check_counts(delivery, payload.items)
+    differences = _differences(counted)
+
     receipt = Receipt(
        delivery_id=delivery.delivery_id,
        received_by_user_id=current_user.user_id,
        remarks=payload.remarks
     )
+    for line, received, reason, note in counted:
+        receipt.items.append(ReceiptItem(
+            delivery_item_id=line.delivery_item_id,
+            expected_quantity=line.quantity,
+            received_quantity=received,
+            discrepancy_reason=reason,
+            discrepancy_note=note,
+        ))
 
     db.add(receipt)
     delivery.status = "Confirmed"
     log_action(db, current_user, "CONFIRM RECEIPT", "deliveries", delivery.delivery_id,
-               old={"status": "Delivered"}, new={"status": "Confirmed", "remarks": payload.remarks})
+               old={"status": "Delivered"},
+               new={"status": "Confirmed", "remarks": payload.remarks,
+                    "has_discrepancy": bool(differences),
+                    "counts": [{"delivery_item_id": line.delivery_item_id, "item_id": line.item_id,
+                                "expected": line.quantity, "received": received, "reason": reason}
+                               for line, received, reason, _note in counted]})
     # Testing feedback (Oct 20): confirming receipt is also the barangay's
     # acknowledgement (UC-B1 step 5), so the rep taps once. The
     # "receipt confirmed" notice below reaches the same people.
     log_action(db, current_user, "ACKNOWLEDGE AID", "deliveries", delivery.delivery_id,
                new={"acknowledged": True, "with_receipt": True})
-    
+
     report = db.get(DisasterReport, delivery.report_id)
     recipients = set(user_ids_with_role(db, ["CSWS Main Office"],
                                         exclude_user_id=current_user.user_id))
     if report and report.user_id != current_user.user_id:
         recipients.add(report.user_id)
-    notify_event_many(db, recipients, "delivery_receipt_confirmed", "delivery",
-                      delivery.delivery_id, title=f"Delivery #{delivery.delivery_id}")
+    if differences:
+        # J1 / NF-009: Main Office and the reporter learn what differs
+        # (one notice each, in place of "Receipt confirmed").
+        barangay = (delivery.destination_barangay.barangay_name
+                    if delivery.destination_barangay else "The barangay")
+        notify_event_many(db, recipients, "delivery_receipt_discrepancy", "delivery",
+                          delivery.delivery_id, title=f"Delivery #{delivery.delivery_id}",
+                          barangay=barangay, differences=differences)
+    else:
+        notify_event_many(db, recipients, "delivery_receipt_confirmed", "delivery",
+                          delivery.delivery_id, title=f"Delivery #{delivery.delivery_id}")
     tell_donors(db, delivery, "donation_barangay_confirmed")
     db.flush()
 
