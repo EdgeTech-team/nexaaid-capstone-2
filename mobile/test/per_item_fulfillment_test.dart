@@ -15,6 +15,8 @@ import 'package:mobile/ui/donate_screen.dart';
 import 'package:mobile/ui/report_screens.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
+import 'step_form_helpers.dart';
+
 final _lookups = <String, dynamic>{
   'disaster_types': [
     {'id': 1, 'name': 'Flood'},
@@ -296,6 +298,7 @@ void main() {
           find.widgetWithText(DropdownButtonFormField<String>, 'Barangay'),
           'Looc',
         );
+        await openStep(tester, ReportSteps.situation);
         await tester.enterText(
           find.widgetWithText(TextFormField, 'Short incident description'),
           'River overflowed',
@@ -304,6 +307,7 @@ void main() {
           find.widgetWithText(TextFormField, 'Affected families'),
           '120',
         );
+        await openStep(tester, ReportSteps.needs);
         await _choose(
           tester,
           find.widgetWithText(DropdownButtonFormField<String>, 'Need 1'),
@@ -339,6 +343,7 @@ void main() {
       };
       await http.runWithClient(() async {
         await _pump(tester, Scaffold(body: NewReportScreen(edit: report)));
+        await openStep(tester, ReportSteps.needs);
         expect(find.widgetWithText(TextFormField, '500'), findsOneWidget);
         expect(find.widgetWithText(TextFormField, '200'), findsOneWidget);
         await tester.tap(find.text('Save changes'));

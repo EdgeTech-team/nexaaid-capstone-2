@@ -10,7 +10,6 @@ import 'event_screen.dart';
 import 'landing/about_section.dart';
 import 'landing/landing_screen.dart' show HowItWorksSteps;
 import 'landing/mission_section.dart';
-import 'landing/landing_extras.dart' show kImpactImage;
 import 'donate_screen.dart' show resumeGuestDonation;
 import 'donor_screens.dart' show DonateScreen;
 import 'expiry_widgets.dart' show cancelDonation, cautionButtonStyle;
@@ -147,7 +146,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
             if (profile['email_verified'] == false)
               const _Centered(child: VerifyEmailBanner()),
             _Centered(
-              child: SectionHeader(
+              child: RedesignSection(
                 'Barangays that need help',
                 subtitle: open.isEmpty
                     ? null
@@ -200,7 +199,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SectionHeader(
+                  const RedesignSection(
                     'Latest updates',
                     subtitle: 'New reports and goods that arrived.',
                   ),
@@ -215,7 +214,7 @@ class _DonorDashboardState extends State<DonorDashboard> {
                   ),
 
                   // ---- About NexaAid, like the landing page -------------
-                  const SectionHeader('How NexaAid works'),
+                  const RedesignSection('How NexaAid works'),
                   const HowItWorksSteps(),
                   Gaps.v8,
                   const MissionSection(),
@@ -356,32 +355,10 @@ class _Centered extends StatelessWidget {
   );
 }
 
-/// The relief photo, darkened so white text stays readable. Falls back to
-/// the plain dark color if the image can't load.
-class _HeroPhoto extends StatelessWidget {
-  static const _darken = 0.74;
-  final Alignment alignment;
-  const _HeroPhoto({this.alignment = Alignment.center});
-
-  @override
-  Widget build(BuildContext context) => Stack(
-    fit: StackFit.expand,
-    children: [
-      Image.asset(
-        kImpactImage,
-        fit: BoxFit.cover,
-        alignment: alignment,
-        excludeFromSemantics: true,
-        errorBuilder: (_, _, _) =>
-            const ColoredBox(color: AppColors.harborDeep),
-      ),
-      ColoredBox(color: AppColors.harborDeep.withValues(alpha: _darken)),
-    ],
-  );
-}
-
-/// Like the landing page hero, with a photo: greeting and small totals for
-/// donors; cover photo, logo box and account status for organizations.
+/// The teal top of the donor's main tab (UI redesign, as [HeroHeader] on
+/// the other roles): greeting and small totals for donors; logo box and
+/// account status for organizations. The relief photo it had before is gone
+/// so every role's main tab starts the same way.
 class _DashboardHero extends StatelessWidget {
   final Map profile;
   final Map summary;
@@ -407,7 +384,7 @@ class _DashboardHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    const onHero = Colors.white;
+    const onHero = AppColors.onDark;
     final status = '${profile['account_status'] ?? 'Active'}';
     final pending = isOrg && status != 'Approved' && status != 'Active';
     final first = '${profile['name'] ?? ''}'.split(' ').first;
@@ -415,11 +392,14 @@ class _DashboardHero extends StatelessWidget {
 
     int n(String k) => (summary[k] as num?)?.toInt() ?? 0;
     Widget pill(String text) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(
+        horizontal: Space.sm,
+        vertical: Space.xxs + 2,
+      ),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.16),
+        color: onHero.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(Radii.pill),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+        border: Border.all(color: onHero.withValues(alpha: 0.4)),
       ),
       child: Text(text, style: t.labelLarge?.copyWith(color: onHero)),
     );
@@ -437,7 +417,7 @@ class _DashboardHero extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: AppColors.vest,
                   borderRadius: BorderRadius.circular(Radii.lg),
-                  border: Border.all(color: Colors.white, width: 3),
+                  border: Border.all(color: onHero, width: 3),
                 ),
                 child: Text(
                   initials(orgName),
@@ -519,40 +499,29 @@ class _DashboardHero extends StatelessWidget {
             ],
           ];
 
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: ClipRRect(
-            borderRadius: const BorderRadius.vertical(
-              bottom: Radius.circular(Radii.xl),
-            ),
-            child: _HeroPhoto(
-              alignment: isOrg ? const Alignment(0, -0.3) : Alignment.center,
-            ),
-          ),
-        ),
-        _Centered(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Gaps.v24,
-              ...greeting,
-              if (pending) ...[
-                Gaps.v16,
-                const _Notice(
-                  tone: 'Pending Review',
-                  icon: Icons.hourglass_top,
-                  text:
-                      'Your organization is being reviewed by the '
-                      'administrator. You will be notified once it is '
-                      'approved.',
-                ),
-              ],
-              Gaps.v24,
+    return ColoredBox(
+      color: AppColors.harbor,
+      child: _Centered(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Gaps.v24,
+            ...greeting,
+            if (pending) ...[
+              Gaps.v16,
+              const _Notice(
+                tone: 'Pending Review',
+                icon: Icons.hourglass_top,
+                text:
+                    'Your organization is being reviewed by the '
+                    'administrator. You will be notified once it is '
+                    'approved.',
+              ),
             ],
-          ),
+            Gaps.v24,
+          ],
         ),
-      ],
+      ),
     );
   }
 }

@@ -60,7 +60,7 @@ class _ResponseTimesCardState extends State<ResponseTimesCard> {
     ) => ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
-      leading: Icon(icon),
+      leading: TintIcon(icon, tint: AppTints.blue, size: 32),
       title: Text(label),
       trailing: Text(
         minutes == null ? '-' : spanText(minutes),
@@ -106,7 +106,11 @@ class _ResponseTimesCardState extends State<ResponseTimesCard> {
 /// itself after an action or when a delivery or request changes (live).
 class NeedsActionCard extends StatefulWidget {
   final void Function(Map item) onOpen;
-  const NeedsActionCard({super.key, required this.onOpen});
+
+  /// UI redesign: true when the card sits over a teal [HeroHeader]
+  /// (raised, no space below it).
+  final bool overlap;
+  const NeedsActionCard({super.key, required this.onOpen, this.overlap = false});
 
   @override
   State<NeedsActionCard> createState() => _NeedsActionCardState();
@@ -121,6 +125,14 @@ class _NeedsActionCardState extends State<NeedsActionCard> {
     'new': Icons.mark_email_unread_outlined,
     'today': Icons.today_outlined,
     'on_the_way': Icons.local_shipping_outlined,
+  };
+
+  /// UI redesign: the tint says how urgent a line is. Red = late or
+  /// refused, amber = waiting for you, blue = moving.
+  static Tint _tint(Object? key) => switch (key) {
+    'stuck' || 'declined' => AppTints.red,
+    'packing' || 'new' => AppTints.amber,
+    _ => AppTints.blue,
   };
 
   List<Map>? _items; // null until the first answer
@@ -151,55 +163,36 @@ class _NeedsActionCardState extends State<NeedsActionCard> {
     final items = _items;
     if (items == null) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: AppCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Needs your action', style: t.titleMedium),
-            Gaps.v8,
-            if (items.isEmpty)
-              Row(
-                children: [
-                  Icon(Icons.check_circle_outline, color: cs.primary),
-                  Gaps.h8,
-                  const Expanded(child: Text('All caught up')),
-                ],
-              ),
-            for (final i in items)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                leading: Icon(
-                  _icons[i['key']] ?? Icons.flag_outlined,
-                  color: i['key'] == 'stuck' || i['key'] == 'declined'
-                      ? cs.error
-                      : cs.primary,
-                ),
-                title: Text('${i['label']}'),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CircleAvatar(
-                      radius: 13,
-                      backgroundColor: cs.primaryContainer,
-                      child: Text(
-                        '${i['count']}',
-                        style: t.labelMedium?.copyWith(
-                          color: cs.onPrimaryContainer,
-                        ),
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right),
-                  ],
-                ),
-                onTap: () => widget.onOpen(i),
-              ),
-          ],
-        ),
-      ),
+    final total = items.fold<int>(
+      0,
+      (n, i) => n + ((i['count'] as num?)?.toInt() ?? 0),
     );
+    final card = ActionCard(
+      title: 'Needs your action',
+      count: items.isEmpty ? null : '$total',
+      rows: [
+        if (items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: Space.sm),
+            child: Row(
+              children: [
+                Icon(Icons.check_circle_outline, color: cs.primary),
+                Gaps.h8,
+                const Expanded(child: Text('All caught up')),
+              ],
+            ),
+          ),
+        for (final i in items)
+          ActionRow(
+            icon: _icons[i['key']] ?? Icons.flag_outlined,
+            tint: _tint(i['key']),
+            label: '${i['label']}',
+            count: '${i['count']}',
+            onTap: () => widget.onOpen(i),
+          ),
+      ],
+    );
+    if (widget.overlap) return card;
+    return Padding(padding: const EdgeInsets.only(bottom: 12), child: card);
   }
 }

@@ -19,6 +19,8 @@ import 'package:mobile/ui/verify_email_sheet.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'step_form_helpers.dart';
+
 final _lookups = <String, dynamic>{
   'items': [
     {
@@ -112,6 +114,7 @@ void main() {
         tester,
         DonateScreen(report: _report, names: Names(_lookups)),
       );
+      await openStep(tester, 'Handover'); // UI redesign: in steps
       expect(find.byKey(const ValueKey('door-to-door-locked')), findsOneWidget);
       expect(find.text(guestPickupBlockedText), findsOneWidget);
       expect(find.text('Register (takes 2 minutes)'), findsOneWidget);
@@ -138,6 +141,7 @@ void main() {
         tester,
         DonateScreen(report: _report, names: Names(_lookups)),
       );
+      await openStep(tester, 'Handover'); // UI redesign: in steps
       expect(find.byKey(const ValueKey('door-to-door-locked')), findsNothing);
       await tester.tap(find.text('Door to Door'));
       await tester.pumpAndSettle();
@@ -188,6 +192,7 @@ void main() {
         tester,
         DonateScreen(report: _report, names: Names(_lookups)),
       );
+      await openStep(tester, 'Handover'); // UI redesign: in steps
       expect(find.text('Door to Door'), findsOneWidget);
       expect(find.text(guestPickupLimitText), findsNothing);
     }, () => _Recorder().client);
