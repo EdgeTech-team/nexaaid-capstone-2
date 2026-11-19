@@ -407,19 +407,7 @@ class _RoleHomeState extends State<RoleHome> {
         titleSpacing: Space.md,
         title: Row(
           children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: cs.primary,
-                borderRadius: BorderRadius.circular(Radii.sm),
-              ),
-              child: Icon(
-                Icons.volunteer_activism,
-                size: 18,
-                color: cs.onPrimary,
-              ),
-            ),
+            const NexaAidLogoTile(size: 32),
             Gaps.h12,
             Flexible(
               child: Column(

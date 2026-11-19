@@ -552,9 +552,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
       body: Form(
         key: _form,
         autovalidateMode: AutovalidateMode.onUserInteraction,
-        child: ListView(
+        // UI redesign: the same fields in steps with a progress bar.
+        child: SteppedForm(
           padding: Space.page,
-          children: [
+          header: [
             Text(
               widget.org
                   ? 'Your organization account is active as soon as you '
@@ -565,8 +566,124 @@ class _RegisterScreenState extends State<RegisterScreen> {
               style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
             ),
             Gaps.v16,
-            if (widget.org) ...[
-              SectionHeader('Organization'),
+          ],
+          steps: widget.org ? _orgSteps(context) : _donorSteps(context),
+          submit: (context, showFirstError) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AppButton(
+                widget.org ? 'Submit registration' : 'Create account',
+                key: const ValueKey('register-button'),
+                onPressed: _valid && !busy
+                    ? () {
+                        final sent = _submit();
+                        showFirstError();
+                        sent.ignore();
+                      }
+                    : null,
+                loading: busy,
+                expand: true,
+              ),
+              // The button waits for every step: say which are not done.
+              if (!_valid && _missing.isNotEmpty) ...[
+                Gaps.v8,
+                Text(
+                  'Still to do: ${_missing.join(', ')}.',
+                  key: const ValueKey('register-missing'),
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  bool _ok(List<String> keys) =>
+      keys.every((k) => _rules[k] == null || _rules[k]!() == null);
+
+  /// The steps that still have something missing (for the hint above).
+  List<String> get _missing => widget.org
+      ? [
+          if (!_ok(['org_name', 'org_type_other', 'address']) ||
+              orgType == null ||
+              (_docRequired && legitimacyDoc == null))
+            'Organization',
+          if (!_ok(['first_name', 'last_name', 'email', 'contact_number']) ||
+              idFront == null ||
+              idBack == null)
+            'Contact person',
+          if (!_ok(['username', 'password', 'confirm_password']) ||
+              !consent ||
+              !acceptedTerms)
+            'Log in details',
+        ]
+      : [
+          if (!_ok([
+            'first_name',
+            'last_name',
+            'email',
+            'contact_number',
+            'address',
+          ]))
+            'About you',
+          if (idFront == null || idBack == null) 'Valid ID',
+          if (!_ok(['password', 'confirm_password']) ||
+              !consent ||
+              !acceptedTerms)
+            'Password',
+        ];
+
+  List<Widget> _idUploads() => [
+    _upload('Valid ID (front)', 'id_front', idFront, (f) => idFront = f),
+    _upload(
+      'Valid ID (back)',
+      'id_back',
+      idBack,
+      (f) => idBack = f,
+      helper:
+          'Make sure all text is readable. Only you and the '
+          'Administrator can see your ID.',
+    ),
+  ];
+
+  List<Widget> _passwordFields(BuildContext context) => [
+    _text('password', 'Password', password: true),
+    _passwordRules(context),
+    _text('confirm_password', 'Confirm password', password: true),
+    _consent(context),
+    _terms(context),
+  ];
+
+  List<Widget> _personFields() => [
+    _text('first_name', 'First name', name: true),
+    _text('last_name', 'Last name', name: true),
+    _text(
+      'email',
+      'Email',
+      icon: Icons.mail_outline,
+      type: TextInputType.emailAddress,
+      autofill: const [AutofillHints.email],
+    ),
+    _text(
+      'contact_number',
+      'Mobile number',
+      icon: Icons.phone_outlined,
+      hint: '09171234567',
+      type: TextInputType.phone,
+      formatters: phoneFormatters,
+    ),
+  ];
+
+  List<FormStep> _donorSteps(BuildContext context) => [
+    FormStep('About you', [..._personFields(), _address()]),
+    FormStep('Valid ID', _idUploads()),
+    FormStep('Password', _passwordFields(context)),
+  ];
+
+  List<FormStep> _orgSteps(BuildContext context) => [
+    FormStep('Organization', [
               _text(
                 'org_name',
                 'Organization name',
@@ -601,81 +718,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             'Upload an SEC, DTI or CDA registration only if '
                             'you have one. Only the Administrator can see it.',
                       ),
-              SectionHeader('Contact person'),
-            ] else
-              SectionHeader('About you'),
-            _text('first_name', 'First name', name: true),
-            _text('last_name', 'Last name', name: true),
-            _text(
-              'email',
-              'Email',
-              icon: Icons.mail_outline,
-              type: TextInputType.emailAddress,
-              autofill: const [AutofillHints.email],
-            ),
-            _text(
-              'contact_number',
-              'Mobile number',
-              icon: Icons.phone_outlined,
-              hint: '09171234567',
-              type: TextInputType.phone,
-              formatters: phoneFormatters,
-            ),
-            if (!widget.org) _address(),
-            // NF-008 (D6): organizations upload the contact person's
-            // government ID too, like an individual donor.
-            ...[
-              SectionHeader(
-                widget.org ? 'Contact person\'s government ID' : 'Valid ID',
-              ),
-              _upload(
-                'Valid ID (front)',
-                'id_front',
-                idFront,
-                (f) => idFront = f,
-              ),
-              _upload(
-                'Valid ID (back)',
-                'id_back',
-                idBack,
-                (f) => idBack = f,
-                helper:
-                    'Make sure all text is readable. Only you and the '
-                    'Administrator can see your ID.',
-              ),
-            ],
-            SectionHeader(widget.org ? 'Log in details' : 'Password'),
-            if (widget.org)
-              _text(
-                'username',
-                'Username',
-                icon: Icons.person_outline,
-                helper:
-                    '4 to 30 characters: letters, numbers, underscore or '
-                    'period. Starts with a letter. You can use it or your '
-                    'email to log in.',
-                formatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_.]')),
-                  LengthLimitingTextInputFormatter(30),
-                ],
-                autofill: const [AutofillHints.newUsername],
-              ),
-            _text('password', 'Password', password: true),
-            _passwordRules(context),
-            _text('confirm_password', 'Confirm password', password: true),
-            _consent(context),
-            _terms(context),
-            AppButton(
-              widget.org ? 'Submit registration' : 'Create account',
-              key: const ValueKey('register-button'),
-              onPressed: _valid && !busy ? _submit : null,
-              loading: busy,
-              expand: true,
-            ),
-            Gaps.v24,
-          ],
-        ),
+    ]),
+    FormStep('Contact person', [
+      ..._personFields(),
+      // NF-008 (D6): organizations upload the contact person's
+      // government ID too, like an individual donor.
+      const RedesignSection("Contact person's government ID"),
+      ..._idUploads(),
+    ]),
+    FormStep('Log in details', [
+      _text(
+        'username',
+        'Username',
+        icon: Icons.person_outline,
+        helper:
+            '4 to 30 characters: letters, numbers, underscore or '
+            'period. Starts with a letter. You can use it or your '
+            'email to log in.',
+        formatters: [
+          FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_.]')),
+          LengthLimitingTextInputFormatter(30),
+        ],
+        autofill: const [AutofillHints.newUsername],
       ),
-    );
-  }
+      ..._passwordFields(context),
+    ]),
+  ];
 }

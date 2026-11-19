@@ -114,15 +114,27 @@ class _AcceptDeliveryDialogState extends State<_AcceptDeliveryDialog> {
     }
   }
 
-  void _accept() {
+  /// UI redesign: the dialog in two steps (when, then vehicle and driver).
+  final _steps = GlobalKey<SteppedFormState>();
+
+  /// The time is set and not passed; otherwise says why (step 1).
+  bool _timeOk() {
     final at = DateTime.tryParse(_when ?? '');
     if (at == null) {
       setState(() => _error = 'Pick the date and time');
-      return;
+      return false;
     }
     // Same 5 minutes of grace as the server (AcceptLogisticsRequest).
     if (at.isBefore(DateTime.now().subtract(const Duration(minutes: 5)))) {
       setState(() => _error = 'This time has passed. Pick a later one.');
+      return false;
+    }
+    return true;
+  }
+
+  void _accept() {
+    if (!_timeOk()) {
+      _steps.currentState?.goTo(0);
       return;
     }
     Navigator.pop(context, {
@@ -138,11 +150,14 @@ class _AcceptDeliveryDialogState extends State<_AcceptDeliveryDialog> {
     final t = Theme.of(context).textTheme;
     return AlertDialog(
       title: Text('Accept request #${r['request_id']}'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+        child: SteppedForm(
+          key: _steps,
+          scrolls: false,
+          padding: EdgeInsets.zero,
+          header: [
             Text('${r['needs'] ?? 'Transport support'}', style: t.titleSmall),
             Text('To ${r['destination'] ?? '-'}'),
             if (r['scheduled_date'] != null)
@@ -151,13 +166,17 @@ class _AcceptDeliveryDialogState extends State<_AcceptDeliveryDialog> {
                 style: t.bodySmall,
               ),
             Gaps.v12,
-            DateField(
-              label: 'When DRRMO picks up the goods',
-              value: _when,
-              error: _error,
-              onTap: _pick,
-            ),
-            Gaps.v12,
+          ],
+          steps: [
+            FormStep('When', [
+              DateField(
+                label: 'When DRRMO picks up the goods',
+                value: _when,
+                error: _error,
+                onTap: _pick,
+              ),
+            ], check: _timeOk),
+            FormStep('Vehicle and driver', [
             TextField(
               controller: _vehicle,
               maxLength: 80,
@@ -175,7 +194,17 @@ class _AcceptDeliveryDialogState extends State<_AcceptDeliveryDialog> {
                 prefixIcon: Icon(Icons.person_outline),
               ),
             ),
+            ]),
           ],
+          submit: (context, _) => FilledButton.icon(
+            onPressed: _accept,
+            style: FilledButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+            ),
+            icon: const Icon(Icons.check),
+            label: const Text('Accept'),
+          ),
+        ),
         ),
       ),
       actions: [
@@ -183,10 +212,108 @@ class _AcceptDeliveryDialogState extends State<_AcceptDeliveryDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        FilledButton.icon(
-          onPressed: _accept,
-          icon: const Icon(Icons.check),
-          label: const Text('Accept'),
+      ],
+    );
+  }
+}
+
+/// UC-DR1 / Table 36 alt 3a: DRRMO declines a request, in two steps (UI
+/// redesign): the reason (required, as before), then a check of what CSWS
+/// will see. Returns {'notes': reason}, or null when cancelled.
+Future<Map<String, String>?> showDeclineRequestDialog(
+  BuildContext context,
+  Map r,
+) => showDialog<Map<String, String>>(
+  context: context,
+  builder: (_) => _DeclineRequestDialog(r),
+);
+
+class _DeclineRequestDialog extends StatefulWidget {
+  final Map r;
+  const _DeclineRequestDialog(this.r);
+
+  @override
+  State<_DeclineRequestDialog> createState() => _DeclineRequestDialogState();
+}
+
+class _DeclineRequestDialogState extends State<_DeclineRequestDialog> {
+  final _reason = TextEditingController();
+  final _steps = GlobalKey<SteppedFormState>();
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  void _decline() {
+    final why = _reason.text.trim();
+    if (why.isEmpty) {
+      _steps.currentState?.goTo(0);
+      return;
+    }
+    Navigator.pop(context, {'notes': why});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return AlertDialog(
+      title: Text('Decline request #${widget.r['request_id']}'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: SteppedForm(
+            key: _steps,
+            scrolls: false,
+            padding: EdgeInsets.zero,
+            header: const [
+              Text('CSWS will see the reason and make other arrangements.'),
+              Gaps.v12,
+            ],
+            steps: [
+              FormStep('Reason', [
+                TextFormField(
+                  controller: _reason,
+                  maxLines: 3,
+                  decoration: const InputDecoration(labelText: 'Reason'),
+                  onChanged: (_) => setState(() {}),
+                  validator: (v) =>
+                      (v?.trim() ?? '').isEmpty ? 'Required' : null,
+                ),
+              ]),
+              FormStep('Review', [
+                Text('CSWS Main Office will read:', style: t.bodySmall),
+                Gaps.v4,
+                Container(
+                  padding: const EdgeInsets.all(Space.sm),
+                  decoration: BoxDecoration(
+                    color: AppTints.red.bgFor(Theme.of(context).brightness),
+                    borderRadius: BorderRadius.circular(Radii.md),
+                  ),
+                  child: Text(
+                    _reason.text.trim().isEmpty
+                        ? 'No reason yet.'
+                        : _reason.text.trim(),
+                    style: t.bodyMedium?.copyWith(color: cs.onSurface),
+                  ),
+                ),
+              ]),
+            ],
+            submit: (context, _) => AppButton(
+              'Decline',
+              variant: AppButtonVariant.danger,
+              expand: true,
+              onPressed: _decline,
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
         ),
       ],
     );

@@ -141,6 +141,9 @@ const _other = 'other';
 
 class _NewReportScreenState extends State<NewReportScreen> {
   final _form = GlobalKey<FormState>();
+
+  /// UI redesign: the form in steps; back to step 1 once it was sent.
+  final _steps = GlobalKey<SteppedFormState>();
   String? typeId, brgyId;
 
   /// problema_napud 2.2: one row per sitio hit, '' = not chosen yet. A
@@ -892,6 +895,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
       busy = false;
       if (r.ok) {
         _form.currentState!.reset();
+        _steps.currentState?.goTo(0);
         typeOther.clear();
         desc.clear();
         families.clear();
@@ -1012,6 +1016,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
       busy = false;
       if (r.ok) {
         _form.currentState!.reset();
+        _steps.currentState?.goTo(0);
         typeOther.clear();
         desc.clear();
         eventName.clear();
@@ -1164,11 +1169,19 @@ class _NewReportScreenState extends State<NewReportScreen> {
         return Form(
           key: _form,
           onChanged: _saveDraft,
-          child: ListView(
-            padding: const EdgeInsets.all(20),
-            children: [
-              PageHeader(
-                editing
+          // UI redesign: the same fields, in steps with a progress bar.
+          child: SteppedForm(
+            key: _steps,
+            padding: const EdgeInsets.fromLTRB(
+              Space.md,
+              0,
+              Space.md,
+              Space.lg,
+            ),
+            header: [
+              HeroHeader(
+                bleed: Space.md,
+                title: editing
                     ? 'Edit Report #${widget.edit!['report_id']}'
                     : sms
                     ? 'Encode SMS Report'
@@ -1186,8 +1199,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                           'No internet? Use the SMS report tab to text it to '
                           'the Administrator.',
               ),
-              if (sms) ...[
-                const SectionTitle('SMS as received'),
+              Gaps.v16,
+            ],
+            steps: [
+              if (sms)
+                FormStep('SMS as received', [
                 TextFormField(
                   controller: smsSender,
                   keyboardType: TextInputType.phone,
@@ -1244,7 +1260,13 @@ class _NewReportScreenState extends State<NewReportScreen> {
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Icon(Icons.warning_amber, size: 18),
+                                  Icon(
+                                    Icons.warning_amber,
+                                    size: 18,
+                                    color: AppTints.amber.fgFor(
+                                      Theme.of(context).brightness,
+                                    ),
+                                  ),
                                   const SizedBox(width: 6),
                                   Expanded(child: Text(note)),
                                 ],
@@ -1254,8 +1276,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       ),
                     ),
                   ),
-              ],
-              const SectionTitle('Disaster and location'),
+              ]),
+              FormStep('Disaster and location', [
               LookupDropdown(
                 key: ValueKey('type-$_fills'),
                 list: 'disaster_types',
@@ -1379,10 +1401,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 ),
               ],
               if (!multi) ...[
-                const SectionTitle('Donation info'),
+                const RedesignSection('Donation info'),
                 NewReportDonationInfo(barangayId: brgyId),
               ],
-              const SectionTitle('Situation (DROMIC)'),
+              ]),
+              FormStep('Situation (DROMIC)', [
               TextFormField(
                 controller: desc,
                 maxLines: 3,
@@ -1408,7 +1431,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   onChanged: (_) => setState(() => _refillAuto(names)),
                 ),
               ],
-              const SectionTitle('Assistance needed'),
+              ]),
+              FormStep('Assistance needed', [
               // Concerns Nov 4: the needs fill in by themselves from the
               // disaster type and the families, so there is no "Use
               // suggested" button. "Add need" comes after the list.
@@ -1451,10 +1475,18 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   'with a reason so the Disaster Unit can resend it.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                const SizedBox(height: 8),
               ],
-              FilledButton.icon(
-                onPressed: busy ? null : () => _submit(names),
+              ]),
+            ],
+            submit: (context, showFirstError) => FilledButton.icon(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        final sent = _submit(names);
+                        // validate() already ran: open the step in red.
+                        showFirstError();
+                        await sent;
+                      },
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(50),
                 ),
@@ -1475,7 +1507,6 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       : 'Submit report',
                 ),
               ),
-            ],
           ),
         );
       },
@@ -1527,11 +1558,16 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
       countsPath: '/reports/validated/counts',
       countsQuery: {'priority_level': ?priority},
       header: (counts) => [
-        if (widget.header)
-          PageHeader(
-            'Validated Reports',
+        if (widget.header) ...[
+          // UI redesign: the teal header of every tab.
+          HeroHeader(
+            title: 'Validated Reports',
             subtitle: 'Reports approved by the Administrator • ${roleLine()}',
+            bleed: 20,
+            bleedTop: 20,
           ),
+          Gaps.v16,
+        ],
         // One Filter button and a compact sort (UAT Nov 2026).
         // Fulfillment status and sort for every role (Ivan's note:
         // fulfilled reports are found with the Fulfilled filter, there is
@@ -1777,12 +1813,15 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
       // The report a notification pointed at comes first, outlined.
       focusId: widget.focusId,
       header: (counts) => [
-        PageHeader(
-          'Report Status',
+        HeroHeader(
+          title: 'Report Status',
           subtitle:
               'Fulfillment progress of every report, active and done • '
               '${roleLine()}',
+          bleed: 20,
+          bleedTop: 20,
         ),
+        Gaps.v16,
         // UAT Nov 2026 (M2.5): one Filter button with Validation Status
         // (Rejected reports no longer sink to the bottom), Priorities and
         // Fulfillment Status, and a compact sort.
@@ -1972,7 +2011,13 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
       // The report a notification pointed at comes first, outlined.
       focusId: _highlight,
       header: (counts) => [
-        PageHeader('Report Validation', subtitle: roleLine()),
+        HeroHeader(
+          title: 'Report Validation',
+          subtitle: roleLine(),
+          bleed: 20,
+          bleedTop: 20,
+        ),
+        Gaps.v16,
         // UAT Nov 2026 (M2.3, M3.3): one Filter button instead of the
         // Pending / Validated / Rejected switch and two chip rows.
         // Priorities, fulfillment and sort are for validated reports, as
@@ -2073,16 +2118,14 @@ class DashboardScreen extends StatelessWidget {
         ) {
           final total = rows.fold<int>(0, (a, r) => a + (r['count'] as int));
           return Card(
+            margin: const EdgeInsets.only(bottom: Space.sm),
             child: Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(Space.md),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 10),
+                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  Gaps.v12,
                   if (rows.isEmpty) const Text('No data yet'),
                   for (final r in rows)
                     Padding(
@@ -2095,7 +2138,7 @@ class DashboardScreen extends StatelessWidget {
                           ),
                           Expanded(
                             child: ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
+                              borderRadius: BorderRadius.circular(Radii.pill),
                               child: LinearProgressIndicator(
                                 value: total == 0 ? 0 : r['count'] / total,
                                 minHeight: 10,
@@ -2136,30 +2179,59 @@ class DashboardScreen extends StatelessWidget {
           ),
         );
 
+        // UI redesign (layout only, same data and taps): teal header with
+        // the report numbers over it, number tiles, then the breakdowns.
         return ListView(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
           children: [
-            PageHeader(
-              '${api.role ?? 'System'} Dashboard',
+            HeroHeader(
+              title: '${api.role ?? 'System'} Dashboard',
               subtitle: roleLine(),
+              bleed: Space.md,
+              overlap: ActionCard(
+                title: 'Your reports',
+                rows: [
+                  ActionRow(
+                    // Rejected and withdrawn reports are not counted (backend).
+                    icon: Icons.report_outlined,
+                    tint: AppTints.teal,
+                    label: 'Disaster reports',
+                    count: '${s['total_reports']}',
+                    onTap: reportStatus,
+                  ),
+                  ActionRow(
+                    icon: Icons.pie_chart_outline,
+                    tint: AppTints.green,
+                    label: 'Average fulfillment',
+                    count:
+                        '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
+                    onTap: reportStatus,
+                  ),
+                ],
+              ),
             ),
-            StatCardGrid([
-              StatCard(
-                // Rejected and withdrawn reports are not counted (backend).
-                label: 'Disaster reports',
-                value: '${s['total_reports']}',
-                icon: Icons.report_outlined,
-                onTap: reportStatus,
-              ),
-              StatCard(
-                label: 'Physical donations',
-                value: '${s['total_donations']}',
+            const RedesignSection('At a glance'),
+            NumberGrid([
+              NumberTile(
                 icon: Icons.volunteer_activism_outlined,
+                tint: AppTints.blue,
+                caption: 'Donations',
+                value: '${s['total_donations']}',
+                label: 'Physical donations',
               ),
-              StatCard(
-                label: 'Deliveries',
-                value: '${s['total_deliveries']}',
+              NumberTile(
+                icon: Icons.payments_outlined,
+                tint: AppTints.blue,
+                caption: 'Donations',
+                value: pesos(b['total_estimated_value']) ?? 'PHP 0',
+                label: 'Est. value of donations',
+              ),
+              NumberTile(
                 icon: Icons.local_shipping_outlined,
+                tint: AppTints.blue,
+                caption: 'Logistics',
+                value: '${s['total_deliveries']}',
+                label: 'Deliveries',
                 // The Disaster Unit has no delivery list (Appendix H 8.5):
                 // show the deliveries by status.
                 onTap: () => sheet(
@@ -2167,10 +2239,11 @@ class DashboardScreen extends StatelessWidget {
                   l['deliveries_by_status'] as List,
                 ),
               ),
-              StatCard(
-                label: 'Logistics requests',
-                value: '${s['total_logistics_requests']}',
+              NumberTile(
                 icon: Icons.fire_truck_outlined,
+                caption: 'Logistics',
+                value: '${s['total_logistics_requests']}',
+                label: 'Logistics requests',
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => Scaffold(
@@ -2180,25 +2253,13 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 ),
               ),
-              StatCard(
-                label: 'Average fulfillment',
-                value:
-                    '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
-                icon: Icons.pie_chart_outline,
-                color: AppColors.success,
-                onTap: reportStatus,
-              ),
-              StatCard(
-                label: 'Est. value of donations',
-                value: pesos(b['total_estimated_value']) ?? 'PHP 0',
-                icon: Icons.payments_outlined,
-              ),
               // NF-008 (D6): organizations the Administrator verified.
-              StatCard(
-                label: 'Verified organizations',
-                value: '${s['verified_organizations'] ?? 0}',
+              NumberTile(
                 icon: Icons.verified_outlined,
-                color: AppColors.success,
+                tint: AppTints.green,
+                caption: 'Donors',
+                value: '${s['verified_organizations'] ?? 0}',
+                label: 'Verified organizations',
                 onTap: () => showModalBottomSheet<void>(
                   context: context,
                   showDragHandle: true,
@@ -2207,9 +2268,9 @@ class DashboardScreen extends StatelessWidget {
                       shrinkWrap: true,
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       children: [
-                        const Text(
+                        Text(
                           'Verified organizations',
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                          style: Theme.of(context).textTheme.titleMedium,
                         ),
                         for (final n
                             in (s['verified_organization_names'] as List? ??
@@ -2229,7 +2290,7 @@ class DashboardScreen extends StatelessWidget {
                 ),
               ),
             ]),
-            const SizedBox(height: 12),
+            const RedesignSection('Breakdown'),
             bars(
               'Reports by status',
               b['by_status'] as List,

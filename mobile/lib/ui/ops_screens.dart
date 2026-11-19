@@ -43,7 +43,11 @@ class DeliveryStepper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final at = _deliverySteps.indexOf(status);
-    final on = Theme.of(context).colorScheme.primary;
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final on = cs.primary;
+    // UI redesign: theme colors instead of black/white, so dark mode works.
+    final off = cs.outlineVariant;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -56,14 +60,13 @@ class DeliveryStepper extends StatelessWidget {
               children: [
                 CircleAvatar(
                   radius: 11,
-                  backgroundColor: i <= at ? on : Colors.black12,
+                  backgroundColor: i <= at ? on : cs.surfaceContainerHighest,
                   child: i < at || (i == at && i == _deliverySteps.length - 1)
-                      ? const Icon(Icons.check, size: 14, color: Colors.white)
+                      ? Icon(Icons.check, size: 14, color: cs.onPrimary)
                       : Text(
                           '${i + 1}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: i <= at ? Colors.white : Colors.black54,
+                          style: t.labelSmall?.copyWith(
+                            color: i <= at ? cs.onPrimary : cs.onSurfaceVariant,
                           ),
                         ),
                 ),
@@ -72,18 +75,17 @@ class DeliveryStepper extends StatelessWidget {
                   // "Received by barangay" on two lines so four steps fit.
                   deliveryWord(_deliverySteps[i]).replaceFirst(' by ', ' by\n'),
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: i == at ? FontWeight.w700 : FontWeight.normal,
+                  style: t.labelSmall?.copyWith(
+                    fontWeight: i == at ? FontWeight.w700 : FontWeight.w400,
                   ),
                 ),
                 if (times?[_deliverySteps[i]] != null)
                   Text(
                     _short(times![_deliverySteps[i]]),
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: t.labelSmall?.copyWith(
                       fontSize: 9,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: cs.onSurfaceVariant,
                     ),
                   ),
               ],
@@ -94,7 +96,7 @@ class DeliveryStepper extends StatelessWidget {
               child: Container(
                 height: 2,
                 margin: const EdgeInsets.only(top: 10), // level with the dots
-                color: i < at ? on : Colors.black12,
+                color: i < at ? on : off,
               ),
             ),
         ],
@@ -460,10 +462,14 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
             await pager.refresh();
           },
           header: [
-            const PageHeader(
-              'Delivery Records',
+            // UI redesign: the teal header of every tab.
+            const HeroHeader(
+              title: 'Delivery Records',
               subtitle: 'Every delivery with its tracking status and history.',
+              bleed: Space.md,
+              bleedTop: Space.md,
             ),
+            Gaps.v12,
             Wrap(
               alignment: WrapAlignment.end,
               spacing: Space.xs,
@@ -1052,19 +1058,64 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
               _requests[d['delivery_id']],
             ),
           );
+          // Barangay: trips that arrived with several deliveries, the most
+          // urgent thing on the screen (UI redesign: over the teal header).
+          final tripRows = [
+            for (final e in waitingByTrip.entries)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(0, Space.xs, Space.xs, 0),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const TintIcon(Icons.local_shipping, tint: AppTints.blue),
+                    Gaps.h12,
+                    // Text above the button: fits a narrow phone and large
+                    // text.
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Trip #${e.key} arrived with ${e.value} '
+                            'deliveries for your barangay.',
+                          ),
+                          Gaps.v8,
+                          FilledButton(
+                            onPressed: () =>
+                                _confirmTrip(context, e.key, e.value),
+                            child: const Text('Confirm all'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ];
           return PagedListView(
             controller: pager,
             refresh: Realtime.instance.logistics,
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+            // UI redesign: no top padding, the teal header starts at the top.
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 96),
             header: [
-              PageHeader(
-                barangay ? 'Incoming Aid' : 'Release & Delivery Tracking',
+              HeroHeader(
+                title: barangay ? 'Incoming Aid' : 'Release & Delivery Tracking',
                 subtitle: barangay
                     ? 'Aid for your assigned barangay. Confirm receipt when it '
                           'arrives, then acknowledge it.'
                     : 'Prepare goods from a report\'s inventory, then move the '
                           'status one step at a time.',
+                bleed: Space.md,
+                overlap: tripRows.isEmpty
+                    ? null
+                    : ActionCard(
+                        title: 'Needs your action',
+                        count:
+                            '${waitingByTrip.values.fold<int>(0, (a, n) => a + n)}',
+                        rows: tripRows,
+                      ),
               ),
+              Gaps.v12,
               if (!barangay)
                 Wrap(
                   alignment: WrapAlignment.end,
@@ -1094,31 +1145,6 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                   ],
                 ),
               _filters(context, counts),
-              for (final e in waitingByTrip.entries)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: AppCard(
-                    color: Theme.of(context).colorScheme.primaryContainer,
-                    child: Row(
-                      children: [
-                        const Icon(Icons.local_shipping, size: 28),
-                        Gaps.h12,
-                        Expanded(
-                          child: Text(
-                            'Trip #${e.key} arrived with ${e.value} deliveries '
-                            'for your barangay.',
-                          ),
-                        ),
-                        Gaps.h8,
-                        FilledButton(
-                          onPressed: () =>
-                              _confirmTrip(context, e.key, e.value),
-                          child: const Text('Confirm all'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
               // Phase 6: several deliveries leave together (all or nothing),
               // from the deliveries on this page.
               if (!barangay)
@@ -1186,22 +1212,28 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
     final barangayName =
         d['destination_barangay_name'] ??
         names.of('barangays', d['destination_barangay_id']);
+    final t = Theme.of(context).textTheme;
+    final b = Theme.of(context).brightness;
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: Space.sm),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(Space.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
+                // UI redesign: the tinted icon square of every list card.
+                const TintIcon(
+                  Icons.local_shipping_outlined,
+                  tint: AppTints.blue,
+                  size: 32,
+                ),
+                Gaps.h12,
                 Expanded(
                   child: Text(
                     'Delivery #${d['delivery_id']} to $barangayName',
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
+                    style: t.titleMedium?.copyWith(fontWeight: FontWeight.w700),
                   ),
                 ),
                 StatusChip(status, label: deliveryWord(status)),
@@ -1243,8 +1275,8 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                 child: Row(
                   children: [
                     const Icon(Icons.fire_truck_outlined, size: 16),
-                    const SizedBox(width: 4),
-                    const Text('DRRMO: ', style: TextStyle(fontSize: 12)),
+                    Gaps.h4,
+                    Text('DRRMO: ', style: t.bodySmall),
                     StatusChip(
                       reqStage ?? 'Pending',
                       label: reqStage == 'In Transit' ? 'On the way' : null,
@@ -1262,10 +1294,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                 child: Text(
                   'DRRMO arriving ${niceWhen(request['scheduled_date'])}'
                   '${vehicleAndDriver(request) != null ? '\n${vehicleAndDriver(request)}' : ''}',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
                 ),
               ),
             // Table 36 alt 3a: why DRRMO said no, so CSWS can decide quickly.
@@ -1277,8 +1306,7 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                 child: Text(
                   '${reqStage == 'Declined' ? 'DRRMO said' : 'Cancelled'}: '
                   '${request['reason']}',
-                  style: TextStyle(
-                    fontSize: 12,
+                  style: t.bodySmall?.copyWith(
                     color: reqStage == 'Declined'
                         ? Theme.of(context).colorScheme.error
                         : null,
@@ -1286,16 +1314,17 @@ class _DeliveriesScreenState extends State<DeliveriesScreen>
                 ),
               ),
             if (acknowledged)
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
                 child: Row(
                   children: [
-                    Icon(Icons.verified, size: 16, color: Color(0xFF2E7D32)),
-                    SizedBox(width: 4),
-                    Text(
-                      'Acknowledged by the barangay',
-                      style: TextStyle(fontSize: 12),
+                    Icon(
+                      Icons.verified,
+                      size: 16,
+                      color: AppTints.green.fgFor(b),
                     ),
+                    Gaps.h4,
+                    Text('Acknowledged by the barangay', style: t.bodySmall),
                   ],
                 ),
               ),
@@ -2243,13 +2272,8 @@ class _DrrmoScreenState extends State<DrrmoScreen>
   }
 
   Future<void> _decline(Map r) async {
-    final v = await formDialog(
-      context,
-      title: 'Decline request #${r['request_id']}',
-      message: 'CSWS will see the reason and make other arrangements.',
-      fields: const [DialogField('notes', 'Reason', multiline: true)],
-      confirm: 'Decline',
-    );
+    // UI redesign: the reason, then a check, in steps (logistics_cards).
+    final v = await showDeclineRequestDialog(context, r);
     if (v == null || !mounted) return;
     await act(
       context,
@@ -2467,19 +2491,19 @@ class _DrrmoScreenState extends State<DrrmoScreen>
           'Declined': 'Declined',
           'Cancelled': 'Cancelled by CSWS',
         };
-        StatTile tile(
+        NumberTile tile(
           String label,
           Object? value,
           IconData icon,
           String to, {
-          Color? color,
-        }) => StatTile(
-          label,
-          '${value ?? 0}',
-          icon,
-          color: color,
-          // Concerns Nov 4: a card with nothing in it is never tinted, so
-          // the dashboard does not turn orange when there are no requests.
+          Tint tint = AppTints.teal,
+        }) => NumberTile(
+          icon: icon,
+          tint: tint,
+          value: '${value ?? 0}',
+          label: label,
+          // Concerns Nov 4: a card with nothing in it is never marked, so
+          // the dashboard does not light up when there are no requests.
           selected: stage == to && (num.tryParse('${value ?? 0}') ?? 0) > 0,
           note: stage == to ? 'Showing below' : 'Tap to view',
           onTap: () => _show(to),
@@ -2490,9 +2514,10 @@ class _DrrmoScreenState extends State<DrrmoScreen>
           controller: list,
           scrollController: _scroll,
           refresh: Realtime.instance.logistics,
+          // UI redesign: no top padding, the teal header starts at the top.
           padding: const EdgeInsets.fromLTRB(
             Space.md,
-            Space.md,
+            0,
             Space.md,
             Space.xl,
           ),
@@ -2501,24 +2526,30 @@ class _DrrmoScreenState extends State<DrrmoScreen>
               key: _dashboard,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
-                // Phase 6: new requests, today's pickups, on the way.
-                NeedsActionCard(
-                  onOpen: (i) => _show(
-                    '${i['view'] ?? stage}',
-                    focus:
-                        ((i['ids'] as List?) ?? const []).firstOrNull as int?,
+                // UI redesign: teal header, "Needs your action" over it.
+                HeroHeader(
+                  title: 'DRRMO Logistics Support',
+                  subtitle: roleLine(),
+                  bleed: Space.md,
+                  // Phase 6: new requests, today's pickups, on the way.
+                  overlap: NeedsActionCard(
+                    overlap: true,
+                    onOpen: (i) => _show(
+                      '${i['view'] ?? stage}',
+                      focus:
+                          ((i['ids'] as List?) ?? const []).firstOrNull as int?,
+                    ),
                   ),
                 ),
-                const ResponseTimesCard(), // Phase 7
+                const RedesignSection('Requests by stage'),
                 // 9.6 (testing): each card shows its requests below.
-                StatGrid([
+                NumberGrid([
                   tile(
                     'New requests',
                     dash['pending_requests'],
                     Icons.mark_email_unread_outlined,
                     'Pending',
-                    color: const Color(0xFFEF6C00),
+                    tint: AppTints.amber,
                   ),
                   tile(
                     'Accepted',
@@ -2531,16 +2562,18 @@ class _DrrmoScreenState extends State<DrrmoScreen>
                     dash['in_transit'],
                     Icons.local_shipping_outlined,
                     'In Transit',
-                    color: const Color(0xFF1565C0),
+                    tint: AppTints.blue,
                   ),
                   tile(
                     'Completed',
                     dash['completed'],
                     Icons.done_all,
                     'Completed',
-                    color: const Color(0xFF2E7D32),
+                    tint: AppTints.green,
                   ),
                 ]),
+                Gaps.v12,
+                const ResponseTimesCard(), // Phase 7
                 ScheduledDeliveriesCard(
                   deliveries: scheduled,
                   onOpen: (d) =>
