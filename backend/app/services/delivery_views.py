@@ -166,6 +166,9 @@ def delivery_views(db: Session, deliveries: list) -> list:
     labels = report_labels(db, {d.report_id for d in deliveries})
     times = status_times(db, deliveries)
     counts = receipt_counts(db, deliveries)
+    from services.item_quantities import delivered_item_fields
+    # What the barangay counted per delivery line (J1), for the G-002 fields.
+    at_barangay = {k: c.received_quantity for k, c in counts.items()}
 
     def differs(d) -> bool:
         return any(
@@ -201,6 +204,10 @@ def delivery_views(db: Session, deliveries: list) -> list:
                                           if i.delivery_item_id in counts else None),
                     "discrepancy_reason": (counts[i.delivery_item_id].discrepancy_reason
                                            if i.delivery_item_id in counts else None),
+                    # G-002 (D8): sent, and what the barangay counted (J1).
+                    **delivered_item_fields(
+                        i.quantity, items[i.item_id].unit_of_measure if i.item_id in items else "",
+                        at_barangay.get(i.delivery_item_id)),
                 }
                 for i in d.items
             ],

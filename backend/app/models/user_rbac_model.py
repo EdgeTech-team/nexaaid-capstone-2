@@ -51,5 +51,9 @@ class User(Base):
     # Oct 2026). The row stays (reports/deliveries point at it) but is
     # anonymized, so its email and username can be used again; migration 3e8a6f2c9d15.
     deleted_at = Column(DateTime(timezone=True), nullable=True)
+    # NF-006 (D4): when the user confirmed their email with a code. NULL = not
+    # verified. Verified once per account; only Door to Door pickups need it.
+    # Staff accounts were backfilled as verified. Migration b3d9e1f4a7c2.
+    email_verified_at = Column(DateTime(timezone=True), nullable=True)
 
     role = relationship("Role")

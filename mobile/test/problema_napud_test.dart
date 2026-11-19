@@ -191,8 +191,10 @@ void main() {
       expect(find.byType(Dialog), findsOneWidget);
       expect(find.text('Donation entry'), findsOneWidget);
       expect(find.text('DON-77'), findsOneWidget);
-      expect(find.text('20 kg Rice (Sack)'), findsOneWidget);
-      expect(find.text('10 pcs Water (Box)'), findsOneWidget);
+      // G-002 (D8): readable amount, then packaging and quantities.
+      expect(find.textContaining('Rice · 20 kg'), findsOneWidget);
+      expect(find.textContaining('Sack · Declared 20 kg'), findsOneWidget);
+      expect(find.textContaining('Water · 10 pcs'), findsOneWidget);
       expect(find.textContaining('PHP 12,500'), findsOneWidget);
       // Only these two actions: no Hold / Review / See full details.
       expect(find.text('Acknowledge'), findsOneWidget);
