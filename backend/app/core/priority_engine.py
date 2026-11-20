@@ -59,16 +59,6 @@ def score_affected_families(affected_families):
             return score
     return 0
 
-def score_fulfillment(verification_status):
-
-    if verification_status == "Not Started":
-        return 100
-    elif verification_status == "Partial":
-        return 50
-    elif verification_status == "Complete":
-        return 0
-    else :
-        return 100
 
 def missing_share(fulfillment) -> float:
     """How much of the report's needs is still missing, 0.0 to 1.0, from the
@@ -82,24 +72,6 @@ def missing_share(fulfillment) -> float:
     if pct is None:
         return {"Partial": 0.5}.get(fulfillment.verification_status, 1.0)
     return max(0.0, min(1.0, 1 - float(pct) / 100))
-
-
-def score_estimated_quantity(estimated_quantity):
-
-    if not estimated_quantity or estimated_quantity <= 0:
-        return 0
-
-    if estimated_quantity >= 100:
-        return 100
-    elif estimated_quantity >= 50:
-        return 75
-    elif estimated_quantity >= 25:
-        return 50
-    elif estimated_quantity >= 10:
-        return 25
-    else:
-        return 10
-
 
 def score_disaster_type(report):
 
