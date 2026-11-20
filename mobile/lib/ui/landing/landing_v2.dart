@@ -114,7 +114,9 @@ class _LandingHeroBannerState extends State<LandingHeroBanner> {
                       onPressed: widget.onCreateAccount,
                       icon: const Icon(Icons.favorite_border),
                       label: Text(
-                        short ? 'Register' : 'Register as donor or organization',
+                        short
+                            ? 'Register'
+                            : 'Register as donor or organization',
                       ),
                       style: FilledButton.styleFrom(
                         backgroundColor: AppColors.vest,
@@ -307,11 +309,14 @@ class _HeroCheck extends StatelessWidget {
     children: [
       const Icon(Icons.check, size: 16, color: AppColors.vest),
       Gaps.h4,
-      Text(
-        text,
-        style: Theme.of(
-          context,
-        ).textTheme.bodySmall?.copyWith(color: AppColors.harborMist),
+      // Flexible: on a narrow phone (or with large text) the label wraps
+      // inside the Wrap's line width instead of overflowing the Row.
+      Flexible(
+        child: Text(
+          text,
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: AppColors.harborMist),
+        ),
       ),
     ],
   );
@@ -383,7 +388,9 @@ class _UrgentCard extends StatelessWidget {
                 Positioned(
                   left: 12,
                   top: 12,
-                  child: _OnArt(child: PriorityChip(r['priority_level'] as String?)),
+                  child: _OnArt(
+                    child: PriorityChip(r['priority_level'] as String?),
+                  ),
                 ),
                 Positioned(
                   right: 12,
@@ -395,7 +402,9 @@ class _UrgentCard extends StatelessWidget {
                         vertical: 4,
                       ),
                       child: Text(
-                        total > 1 ? 'Most urgent $rank of $total' : 'Most urgent',
+                        total > 1
+                            ? 'Most urgent $rank of $total'
+                            : 'Most urgent',
                         style: t.labelMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
@@ -434,7 +443,9 @@ class _UrgentCard extends StatelessWidget {
                   FulfillmentBar(
                     delivered: r['total_items_delivered'] as num? ?? 0,
                     needed: r['total_items_needed'] as num? ?? 0,
-                    percent: num.tryParse('${r['fulfillment_percentage'] ?? ''}'),
+                    percent: num.tryParse(
+                      '${r['fulfillment_percentage'] ?? ''}',
+                    ),
                   ),
                   Gaps.v12,
                   AppButton(
@@ -517,7 +528,9 @@ class LandingAboutCollage extends StatelessWidget {
       children: [
         const LandingEyebrow('About NexaAid'),
         Gaps.v8,
-        const LandingTitle('One place for donors and the City\'s relief offices'),
+        const LandingTitle(
+          'One place for donors and the City\'s relief offices',
+        ),
         Gaps.v12,
         Text(
           'NexaAid connects donors with the barangays of Mandaue City after a '
@@ -589,8 +602,7 @@ class LandingAboutCollage extends StatelessWidget {
             width: badge,
             height: badge,
             child: Semantics(
-              label:
-                  '${active ?? 'Loading'} reports need help right now',
+              label: '${active ?? 'Loading'} reports need help right now',
               excludeSemantics: true,
               child: Container(
                 decoration: BoxDecoration(
@@ -700,7 +712,10 @@ class LandingTrustCards extends StatelessWidget {
             child: Icon(c.$1, color: cs.onPrimaryContainer, size: 26),
           ),
           Gaps.v12,
-          Text(c.$2, style: t.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+          Text(
+            c.$2,
+            style: t.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
           Gaps.v4,
           Text(c.$3, style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
         ],
