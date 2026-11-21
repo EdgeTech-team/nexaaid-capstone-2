@@ -9,8 +9,6 @@ import 'package:mobile/ui/register_screen.dart';
 import 'package:mobile/ui/upload_field.dart';
 import 'package:mobile/ui/validators.dart';
 
-import 'step_form_helpers.dart';
-
 Future<void> _pump(WidgetTester tester, Widget child) async {
   // Tall screen so the whole form is built (ListView builds lazily).
   tester.view.physicalSize = const Size(800, 5000);
@@ -18,10 +16,6 @@ Future<void> _pump(WidgetTester tester, Widget child) async {
   addTearDown(tester.view.reset);
   await tester.pumpWidget(MaterialApp(theme: AppTheme.light(), home: child));
 }
-
-// UI redesign: the button is on the last step (open it first).
-AppButton _registerButton(WidgetTester tester) =>
-    tester.widget<AppButton>(find.byKey(const ValueKey('register-button')));
 
 Future<void> _type(WidgetTester tester, String key, String text) async {
   final f = find.descendant(
@@ -63,69 +57,81 @@ void main() {
     expect(Validators.newPassword('Relief#2026ok'), isNull);
   });
 
-  testWidgets('Donor form: button disabled until everything is valid', (
+  AppButton nextButton(WidgetTester tester) =>
+      tester.widget<AppButton>(find.byKey(const ValueKey('register-next')));
+  String stepLabel(WidgetTester tester) => tester
+      .widget<Text>(find.byKey(const ValueKey('register-step-label')))
+      .data!;
+
+  testWidgets('Donor form: steps on the old design, Next waits for the step', (
     tester,
   ) async {
     await _pump(tester, const RegisterScreen(org: false));
-    await openStep(tester, 'Password');
-    expect(_registerButton(tester).onPressed, isNull);
-    await openStep(tester, 'About you');
-
-    // Two required uploads and consent are on the form (UI redesign: on
-    // the Valid ID and Password steps).
+    expect(stepLabel(tester), 'Step 1 of 3');
+    expect(find.text('About you'), findsWidgets);
+    // Only the current step shows: the ID uploads are on step 2.
+    expect(find.byType(UploadField), findsNothing);
     expect(find.byType(UploadField, skipOffstage: false), findsNWidgets(2));
-    expect(find.text('Valid ID (front)', skipOffstage: false), findsOneWidget);
-    expect(find.text('Valid ID (back)', skipOffstage: false), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('consent'), skipOffstage: false),
-      findsOneWidget,
-    );
+    expect(nextButton(tester).onPressed, isNull);
+    expect(find.byKey(const ValueKey('register-step-hint')), findsOneWidget);
 
     // Name is capitalized while typing; the phone stops at 11 digits.
     await _type(tester, 'first_name', 'maria clara');
     expect(_value(tester, 'first_name'), 'Maria Clara');
     await _type(tester, 'contact_number', '09a17-1234567899');
     expect(_value(tester, 'contact_number'), '09171234567');
-
-    // Every text field valid + consent, but no ID photos -> still disabled.
     await _type(tester, 'last_name', 'dela cruz');
+    expect(nextButton(tester).onPressed, isNull); // email still missing
     await _type(tester, 'email', 'maria@example.com');
-    await openStep(tester, 'Password');
-    await _type(tester, 'password', 'Relief#2026ok');
-    await _type(tester, 'confirm_password', 'Relief#2026ok');
-    await tester.ensureVisible(find.byKey(const ValueKey('consent')));
-    await tester.tap(find.byKey(const ValueKey('consent')));
-    await tester.pump();
-    expect(_registerButton(tester).onPressed, isNull);
-    // The last step says what is still missing.
-    expect(find.textContaining('Valid ID'), findsWidgets);
-    expect(find.byKey(const ValueKey('register-missing')), findsOneWidget);
+    expect(nextButton(tester).onPressed, isNotNull);
+
+    await tester.tap(find.byKey(const ValueKey('register-next')));
+    await tester.pumpAndSettle();
+    expect(stepLabel(tester), 'Step 2 of 3');
+    expect(find.text('Valid ID (front)'), findsOneWidget);
+    expect(find.text('Valid ID (back)'), findsOneWidget);
+    // No ID photos yet: Next stays disabled.
+    expect(nextButton(tester).onPressed, isNull);
+
+    // The step names are not buttons: tapping one does not skip ahead.
+    await tester.tap(find.textContaining('Password').first, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(stepLabel(tester), 'Step 2 of 3');
+
+    // Back keeps what was typed.
+    await tester.tap(find.byKey(const ValueKey('register-back')));
+    await tester.pumpAndSettle();
+    expect(stepLabel(tester), 'Step 1 of 3');
+    expect(_value(tester, 'first_name'), 'Maria Clara');
+    expect(find.byKey(const ValueKey('register-button')), findsNothing);
   });
 
   testWidgets('Password field has the eye toggle and live rules', (
     tester,
   ) async {
     await _pump(tester, const RegisterScreen(org: false));
-    await openStep(tester, 'Password');
-    expect(find.byTooltip('Show password'), findsNWidgets(2));
+    // On the last step (built, not shown yet).
+    expect(
+      find.byTooltip('Show password', skipOffstage: false),
+      findsNWidgets(2),
+    );
+    expect(find.byKey(const ValueKey('consent'), skipOffstage: false),
+        findsOneWidget);
   });
 
   testWidgets('Organization form (NF-008): grouped types, contact ID, '
       'document required for Government only', (tester) async {
     await _pump(tester, const RegisterScreen(org: true));
-    // The contact person's government ID, front and back, like a donor
-    // (UI redesign: on the Contact person step).
+    expect(stepLabel(tester), 'Step 1 of 3');
+    // The contact person's valid ID (any valid ID) is on step 2.
     expect(
-      find.text("Contact person's government ID", skipOffstage: false),
+      find.text("Contact person's valid ID", skipOffstage: false),
       findsOneWidget,
     );
-    expect(find.byType(UploadField, skipOffstage: false), findsNWidgets(2));
+    expect(find.byType(UploadField), findsNothing);
     expect(find.text('Organization type'), findsOneWidget);
     expect(find.text('Please specify the type'), findsNothing);
-    expect(find.text('Contact person'), findsOneWidget);
-    await openStep(tester, 'Log in details');
-    expect(_registerButton(tester).onPressed, isNull);
-    await openStep(tester, 'Organization');
+    expect(nextButton(tester).onPressed, isNull);
 
     // One dropdown, grouped Government / Non-government.
     await tester.tap(find.text('Organization type'));
@@ -135,9 +141,12 @@ void main() {
     await tester.tap(find.text('Barangay / Barangay Council').last);
     await tester.pumpAndSettle();
     // Government: the supporting document is required (no "(optional)").
-    expect(find.byType(UploadField, skipOffstage: false), findsNWidgets(3));
+    expect(find.byType(UploadField), findsOneWidget);
     expect(find.textContaining('Supporting document'), findsWidgets);
     expect(find.textContaining('Supporting document (optional)'), findsNothing);
+    await _type(tester, 'org_name', 'Barangay Looc Council');
+    // Still no document: Next waits for it.
+    expect(nextButton(tester).onPressed, isNull);
 
     // "Other (specify)" is Non-government: the document is optional and
     // it asks what kind of organization it is.
@@ -150,6 +159,14 @@ void main() {
       find.textContaining('Supporting document (optional)'),
       findsOneWidget,
     );
+    await _type(tester, 'org_type_other', 'Youth group');
+    // Optional document: the step is complete without it.
+    expect(nextButton(tester).onPressed, isNotNull);
+  });
+
+  test('Terms mention the valid ID and Door to Door', () {
+    expect(termsAndConditionsText, contains('Valid ID and Door to Door'));
+    expect(termsAndConditionsText, contains('fake ID'));
   });
 
   test('UploadedFile keeps the claim token for registration', () {

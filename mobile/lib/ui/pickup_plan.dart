@@ -352,6 +352,12 @@ class PickupPlan {
       if (s.status == 'no_feasible_day') s,
   ];
 
+  /// Door to Door pickups that need CSWS: no pickup day fits ([unplanned])
+  /// or no map pin ([followUp]). The map's "N need attention" and the
+  /// list's "Needs attention" section both use this one rule, so the count
+  /// and the list always agree (the list's day filter does not hide them).
+  int get attentionCount => unplanned.length + followUp.length;
+
   List<PlanStop> get far => [
     for (final s in stops)
       if (s.far) s,

@@ -426,6 +426,15 @@ class _ItemFields(BaseModel):
     size_amount: Optional[Decimal] = Field(default=None, gt=0, le=100_000)
     size_unit: Optional[str] = Field(default=None, max_length=20)
     estimated_value: Optional[Decimal] = Field(default=None, ge=0)
+    # Nov 22: what is inside a kit or set ("Spoon, Fork"). A note only:
+    # it never changes the item, the quantity or fulfillment.
+    contents: Optional[str] = Field(default=None, max_length=300)
+
+    @field_validator("contents")
+    @classmethod
+    def _contents(cls, v: Optional[str]) -> Optional[str]:
+        text = " ".join((v or "").split())
+        return text or None
 
     @field_validator("other_item_unit")
     @classmethod

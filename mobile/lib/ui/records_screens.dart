@@ -59,19 +59,14 @@ class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
   Widget build(BuildContext context) {
     final barangay = api.role == Roles.barangay;
     final top = <Widget>[
-      if (widget.header) ...[
-        // UI redesign: the teal header of every tab.
-        HeroHeader(
-          title: 'Donation Records',
+      if (widget.header)
+        PageHeader(
+          'Donation Records',
           subtitle: barangay
               ? "Donations for your barangay's reports and where each "
                     'one is in the process.'
               : 'Every donation entry and where it is in the process.',
-          bleed: Space.md,
-          bleedTop: Space.md,
         ),
-        Gaps.v16,
-      ],
       // CSWS Main Office scans on its Receive tab.
       if (api.role == Roles.admin) ...[
         AppButton(

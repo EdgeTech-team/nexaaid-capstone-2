@@ -120,6 +120,8 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
     // NF-003: the four cards' numbers come from the server; the donations
     // below are 10 per page (GET /donations/mine/entries).
     return Loader(
@@ -130,16 +132,15 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
         final supported = ((c['supported_reports'] as List?) ?? const [])
             .cast<Map>();
         final all = (c['all'] as num?)?.toInt() ?? 0;
-        // UI redesign: the teal header of every tab (16 = list padding).
         final title = [
-          HeroHeader(
-            title: 'My giving',
-            subtitle: all == 0
-                ? 'Your donations and their deliveries will show here.'
-                : 'Tap a card to see the list.',
-            bleed: Space.md,
-            bleedTop: Space.md,
-          ),
+          Text('My giving', style: t.headlineSmall),
+          if (all == 0) ...[
+            Gaps.v4,
+            Text(
+              'Your donations and their deliveries will show here.',
+              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+          ],
           Gaps.v16,
         ];
         if (all == 0) {
@@ -174,37 +175,37 @@ class _MyGivingScreenState extends State<MyGivingScreen> {
           header: [
             ...title,
             // ---- 1. Four cards, each opens its list -------------------
-            NumberGrid([
-              NumberTile(
+            StatCardGrid([
+              StatCard(
                 label: 'Donations made',
                 value: '${summary['entries'] ?? all}',
                 icon: Icons.volunteer_activism_outlined,
                 onTap: () => _push(const MyDonationsScreen()),
               ),
-              NumberTile(
+              StatCard(
                 label: 'Waiting for drop-off or pickup',
                 value: '${summary['waiting'] ?? 0}',
                 icon: Icons.schedule,
-                tint: AppTints.amber,
+                color: StatusColors.base('Pending'),
                 onTap: () => _push(const MyDonationsScreen(waitingOnly: true)),
               ),
-              NumberTile(
+              StatCard(
                 label: 'In delivery',
                 value: '${summary['on_the_way'] ?? 0}',
                 icon: Icons.local_shipping_outlined,
-                tint: AppTints.blue,
+                color: StatusColors.base('In Transit'),
                 onTap: () => _push(const MyDonationsScreen(onTheWayOnly: true)),
               ),
-              NumberTile(
+              StatCard(
                 label: 'Reports supported',
                 value: '${supported.length}',
                 icon: Icons.campaign_outlined,
-                tint: AppTints.green,
+                color: StatusColors.base('Confirmed'),
                 onTap: () => _push(SupportedReportsScreen(reports: supported)),
               ),
             ]),
             // ---- 2. Donation status -----------------------------------
-            const RedesignSection(
+            const SectionHeader(
               'Donation status',
               subtitle: 'Each donation and where it is now.',
             ),

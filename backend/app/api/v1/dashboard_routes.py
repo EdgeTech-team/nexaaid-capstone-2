@@ -171,13 +171,20 @@ def csws_main_dashboard(
     items = {i.item_id: i for i in db.query(Item).all()}
     labels = _labels(db, {d.report_id for d in donations})
     received_qty = db.query(func.coalesce(func.sum(ReceivedGoods.actual_quantity), 0)).scalar() or 0
+    # Goods of a cancelled delivery went back to stock, so they were not
+    # distributed (and must not be counted twice).
     distributed = (
         db.query(DeliveryItem.item_id, func.sum(DeliveryItem.quantity))
+        .join(delivery, delivery.delivery_id == DeliveryItem.delivery_id)
+        .filter(delivery.status != "Cancelled", delivery.deleted_at.is_(None))
         .group_by(DeliveryItem.item_id).all()
     )
+    # Only items really in stock: a row that went out on deliveries stays
+    # in the table at 0.
     inventory = (
         db.query(Inventory.item_id, func.sum(Inventory.quantity))
-        .group_by(Inventory.item_id).all()
+        .group_by(Inventory.item_id)
+        .having(func.sum(Inventory.quantity) > 0).all()
     )
     unit = lambda i: items[i].unit_of_measure if i in items else ""
     name = lambda i: items[i].item_name if i in items else f"Item #{i}"
@@ -206,6 +213,7 @@ def csws_main_dashboard(
                 "item_name": name(d.item_id),
                 "unit": unit(d.item_id),
                 "packaging": d.packaging,
+                "contents": d.contents,   # a note (Nov 22)
                 "declared_quantity": d.quantity,
                 # G-002 (D8)
                 "amount_text": readable_amount(d, unit(d.item_id)),
@@ -269,6 +277,7 @@ def barangay_dashboard(
                 # G-002 (D8)
                 "unit": items[d.item_id].unit_of_measure if d.item_id in items else "",
                 "packaging": d.packaging,
+                "contents": d.contents,
                 "amount_text": readable_amount(
                     d, items[d.item_id].unit_of_measure if d.item_id in items else ""),
                 "status": d.status,
@@ -378,3 +387,32 @@ def admin_held_donations(
             g["total_items"] = sum(e["total_items"] for e in g["entries"])
             out.append(g)
     return {"held_donation_ids": sorted(held), "reports": out}
+
+
+# ---------------------------------------------------------------------------
+# "Needs your action" on the CMO Representative's Acknowledge screen: the
+# received donations waiting for acknowledgement (Nov 22: the CMO is the
+# only role with this card; the others were removed). A zero count is left
+# out, so an empty list means "All caught up". `view` is the app tab that
+# lists them. Any other role gets an empty list.
+# ---------------------------------------------------------------------------
+from core.auth import get_current_user, has_role  # noqa: E402
+
+
+@router.get("/needs-action")
+def role_needs_action(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    items = []
+    if has_role(user, "cmo_representative"):
+        held = _held_donation_ids(db)
+        # Per donation entry (one QR), like the Acknowledge list.
+        waiting = len({ref for (did, ref) in db.query(PhysicalDonation.donation_id,
+                                                      PhysicalDonation.batch_reference)
+                       .filter(PhysicalDonation.status == "Received") if did not in held})
+        items = [{"key": "acknowledge",
+                  "label": "Received donations waiting for your acknowledgement",
+                  "view": "Acknowledge", "count": waiting}]
+    items = [i for i in items if i["count"]]
+    return {"items": items, "all_caught_up": not items}

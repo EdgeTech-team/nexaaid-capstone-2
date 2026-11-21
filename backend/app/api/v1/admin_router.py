@@ -336,6 +336,55 @@ def delete_user(
     return {"user_id": user.user_id, "deleted": True}
 
 
+class RegistrationDelete(BaseModel):
+    # e.g. "Fake ID", "Invalid document", "Fake ID: photo does not match".
+    reason: str = Field(..., max_length=300)
+
+
+# Registration review: donors and organizations sign in right after they
+# register, so the Administrator checks the valid ID and documents
+# afterwards. A fake ID or invalid document is removed in one step, with a
+# required reason (kept in the audit log and emailed to the person). Staff
+# accounts still use the two-step DELETE /admin/users/{id} above.
+SELF_REGISTERED_ROLES = ("Individual Donor", "Relief Organization")
+
+
+@router.post("/users/{user_id}/delete")
+def delete_registration(
+    user_id: int,
+    payload: RegistrationDelete,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(ADMIN)),
+):
+    reason = " ".join((payload.reason or "").split())
+    if len(reason) < 3:
+        raise HTTPException(status_code=422, detail="Give a reason when you delete an account")
+    user = db.get(User, user_id)
+    if user is None or user.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if user.user_id == current_user.user_id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    role = user.role.role_name if user.role else None
+    if role not in SELF_REGISTERED_ROLES:
+        raise HTTPException(
+            status_code=400,
+            detail="Only donor and organization registrations are deleted here. "
+                   "Deactivate a staff account first, then delete it.")
+    # Captured before the account is anonymized.
+    to, first = user.email, user.first_name
+    delete_account(db, user, current_user, request=request, reason=reason)
+    _queue_email(
+        background_tasks, to, "Your NexaAid account was removed",
+        f"Hello {first},\n\nThe NexaAid Administrator removed your account after "
+        f"reviewing your registration.\n\nReason: {reason}\n\nYou may register again "
+        "with a valid ID and correct documents. If you think this is a mistake, "
+        "contact the City Social Welfare Services office.\n\nNexaAid",
+    )
+    return {"user_id": user.user_id, "deleted": True, "reason": reason}
+
+
 # UC-A2 Review Organization Registrations.
 # Capstone 2 adviser comment 1.3: organizations are validated automatically
 # when they register, so this list is for review only. There is no approve /

@@ -26,7 +26,11 @@ _SHELTER = {"Hygiene Kit": 1, "Blanket": 2, "Sleeping Mat": 1}
 
 
 def _clothing(sets) -> dict:
-    return {"Clothing – Upper": sets, "Clothing – Lower": sets}
+    # Nov 22: one Clothing item (migration c6e0a4b8d2f5). Upper and Lower as
+    # two items counted clothing twice in the priority score (the missing
+    # share is averaged per item). A set is a top and a bottom: 2 pieces.
+    # Which pieces they are is a note on the donation, never an item.
+    return {"Clothing": 2 * sets}
 
 
 NEED_TEMPLATES = {

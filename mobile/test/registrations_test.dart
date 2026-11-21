@@ -71,7 +71,13 @@ http.Response _registrationList(Map<String, String> q) {
   );
 }
 
+final posted = <String>[];
+
 final _server = MockClient((req) async {
+  if (req.method == 'POST') {
+    posted.add('${req.url.path} ${req.body}');
+    return http.Response(jsonEncode({'deleted': true}), 200);
+  }
   if (req.method == 'PATCH') {
     reviewed.add('${req.url.path} ${req.body}');
     return http.Response(jsonEncode({'ok': true}), 200);
@@ -174,6 +180,46 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Juan Cruz'), findsOneWidget);
       expect(find.text('Mark Not Reviewed'), findsOneWidget);
+    }, () => _server);
+  });
+
+  testWidgets('Nov 22: Delete account opens without crashing and needs a '
+      'reason', (tester) async {
+    tester.view.physicalSize = const Size(800, 3000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    Api.instance.token = 'test-token';
+    posted.clear();
+
+    await http.runWithClient(() async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light(),
+          home: const Scaffold(body: RegistrationsScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Individual donors'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('registration-delete')).first);
+      await tester.pumpAndSettle();
+      // The dialog used to crash here (an empty value in the reason list).
+      expect(tester.takeException(), isNull);
+      expect(find.text('Delete Maria Santos?'), findsOneWidget);
+
+      final confirm = find.widgetWithText(FilledButton, 'Delete account');
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(find.text('Choose a reason'), findsOneWidget);
+      expect(posted, isEmpty);
+
+      await tester.tap(find.text('Reason'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Fake ID').last);
+      await tester.pumpAndSettle();
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(posted, ['/admin/users/7/delete {"reason":"Fake ID"}']);
     }, () => _server);
   });
 

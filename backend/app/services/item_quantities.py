@@ -53,6 +53,8 @@ def donated_item_fields(row, unit: str, counted=None, received=None) -> dict:
     """The packaging and quantity fields of one physical_donations row."""
     return {
         "packaging": row.packaging,
+        # Nov 22: what is inside a kit, as the donor wrote it (a note).
+        "contents": getattr(row, "contents", None),
         "amount_text": readable_amount(row, unit),
         "declared_quantity": row.quantity,
         "counted_quantity": counted,

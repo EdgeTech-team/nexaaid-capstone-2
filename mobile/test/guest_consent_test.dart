@@ -8,8 +8,6 @@ import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/donate_screen.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
-import 'step_form_helpers.dart';
-
 final _offline = MockClient((_) async => http.Response('{}', 404));
 
 void main() {
@@ -31,7 +29,6 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await openStep(tester, 'Contact'); // UI redesign: in steps
       final box = find.byKey(const ValueKey('guest-consent'));
       expect(box, findsOneWidget);
       expect(

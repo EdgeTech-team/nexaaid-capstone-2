@@ -90,14 +90,20 @@ router = APIRouter(prefix="/reports", tags=["reports"])
 # act on a new report. The Administrator is included because only admins can
 # validate or reject; the submitter is excluded so they don't notify themselves.
 # ---------------------------------------------------------------------------
-def _notify_new_report(db: Session, report: DisasterReport, exclude_user_id: int) -> None:
+def _new_report_recipients(db: Session, exclude_user_id: int) -> list:
+    return user_ids_with_role(
+        db,
+        ["Administrator", "CSWS Main Office", "CSWS Disaster Unit"],
+        exclude_user_id=exclude_user_id,
+    )
+
+
+def _notify_new_report(db: Session, report: DisasterReport, exclude_user_id: int,
+                       recipients=None) -> None:
+    # recipients: looked up once by POST /reports/batch for all its reports.
     notify_event_many(
         db,
-        user_ids_with_role(
-            db,
-            ["Administrator", "CSWS Main Office", "CSWS Disaster Unit"],
-            exclude_user_id=exclude_user_id,
-        ),
+        recipients if recipients is not None else _new_report_recipients(db, exclude_user_id),
         "report_submitted", "report", report.report_id,
         **_wording(db, report),
     )
@@ -382,8 +388,9 @@ def create_event_reports(
                     "report_ids": [r.report_id for r in reports]})
     # One notification per report, as for single reports (one per event is
     # a possible follow-up, after the Mandaue visit).
+    recipients = list(_new_report_recipients(db, current_user.user_id))
     for report in reports:
-        _notify_new_report(db, report, current_user.user_id)
+        _notify_new_report(db, report, current_user.user_id, recipients)
     db.flush()
     return {"event": event, "reports": reports}
 

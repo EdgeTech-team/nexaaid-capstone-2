@@ -24,7 +24,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, List, Optional, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from core.validators import clean_text
 from models.report import canonical_source
@@ -46,10 +46,24 @@ MAX_AFFECTED_FAMILIES = 20_000
 MAX_ESTIMATED_QUANTITY = 999_999_999
 MAX_TOTAL_QUANTITY = 2_147_483_647
 
-# Accepts 12 or "12" (in case the app sends the text field as a string),
-# rejects letters ("dwadawdas") and decimals (12.5).
-AffectedFamilies = Optional[int]
-EstimatedQuantity = Optional[int]
+def _whole_number(v):
+    """Accepts 12 or "12" (in case the app sends the text field as a
+    string). Rejects letters ("dwadawdas") and every decimal, also one that
+    looks whole: 0.0, 5.0, "5.0" (pydantic alone would turn 5.0 into 5)."""
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().isdigit():
+        return int(v.strip())
+    if isinstance(v, (float, Decimal)) or (isinstance(v, str) and "." in v):
+        raise ValueError("Use a whole number with no decimals (e.g. 5, not 5.0)")
+    return v   # anything else: pydantic's own int error
+
+
+WholeNumber = Annotated[int, BeforeValidator(_whole_number)]
+AffectedFamilies = Annotated[Optional[int], BeforeValidator(_whole_number)]
+EstimatedQuantity = Annotated[Optional[int], BeforeValidator(_whole_number)]
 
 
 def _clean_type_other(v):
@@ -92,7 +106,7 @@ class ReportNeedIn(BaseModel):
     item_id: Optional[int] = None
     other_item_name: Optional[str] = Field(default=None, max_length=150)
     other_item_unit: Optional[str] = Field(default=None, max_length=50)
-    quantity: int = Field(ge=1, le=MAX_ESTIMATED_QUANTITY)
+    quantity: WholeNumber = Field(ge=1, le=MAX_ESTIMATED_QUANTITY)
 
 
 class ReportNeedOut(BaseModel):
@@ -142,7 +156,7 @@ MAX_EVENT_BARANGAYS = 27   # Mandaue City's barangays
 class EventBarangayIn(BaseModel):
     barangay_id: int
     sitio_ids: Optional[List[int]] = None     # empty = the whole barangay
-    affected_families: int = Field(ge=1, le=MAX_AFFECTED_FAMILIES)
+    affected_families: WholeNumber = Field(ge=1, le=MAX_AFFECTED_FAMILIES)
     needs: List[ReportNeedIn] = Field(min_length=1, max_length=30)
 
 

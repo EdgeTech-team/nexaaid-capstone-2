@@ -4,6 +4,7 @@ import 'csws_screens.dart' show ActivityList;
 import 'donation_entries_view.dart' show AddedLaterTag, RemovedItemsNote;
 import 'expiry_widgets.dart';
 import 'input_formatters.dart' show pesos;
+import 'item_amounts.dart' show itemContents;
 import 'location_picker.dart' show formatPickupIso;
 import 'pickup_actions.dart';
 import 'widgets.dart';
@@ -24,7 +25,7 @@ Future<void> openDonationByQr(BuildContext context, String reference) async {
   if (!r.ok) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: AppColors.danger,
+        backgroundColor: const Color(0xFFC62828),
         content: Text(r.status == 0 ? 'Cannot reach the server' : r.errorText),
       ),
     );
@@ -444,6 +445,9 @@ class _BatchSheetState extends State<BatchSheet> {
     final declared = line['pack_count'] != null && line['amount_text'] != null
         ? '${line['amount_text']}'
         : '${line['quantity']} ${line['unit']} · ${line['packaging']}';
+    // Nov 22: what is inside a kit, as the donor wrote it (a note only:
+    // CSWS still counts the kit itself).
+    final inside = itemContents(line);
     final unit = '${(relabel ?? line)['unit'] ?? ''}';
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -468,6 +472,14 @@ class _BatchSheetState extends State<BatchSheet> {
               'Declared: $declared'
               '${line['estimated_value'] != null ? ' · ${pesos(line['estimated_value'])}' : ''}',
             ),
+            if (inside != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  'Includes: $inside',
+                  key: ValueKey('inside-${line['donation_id']}'),
+                ),
+              ),
             if (AddedLaterTag.applies(line))
               Padding(
                 padding: const EdgeInsets.only(top: 4),

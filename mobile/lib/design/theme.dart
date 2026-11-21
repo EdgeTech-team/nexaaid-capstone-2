@@ -32,9 +32,9 @@ abstract final class AppTheme {
           )
         : seeded.copyWith(
             primary: AppColors.harbor,
-            onPrimary: AppColors.onDark,
+            onPrimary: Colors.white,
             surface: AppColors.paper,
-            surfaceContainerLowest: AppColors.surface,
+            surfaceContainerLowest: Colors.white,
             tertiary: AppColors.vest,
             onTertiary: AppColors.vestInk,
             error: AppColors.danger,
@@ -102,7 +102,7 @@ abstract final class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: dark ? cs.surfaceContainerHigh : AppColors.surface,
+        fillColor: dark ? cs.surfaceContainerHigh : Colors.white,
         contentPadding: const EdgeInsets.symmetric(
           horizontal: Space.md,
           vertical: 14,

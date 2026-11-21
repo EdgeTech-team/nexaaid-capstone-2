@@ -61,15 +61,15 @@ def test_an_item_waiting_for_review_is_never_suggested(api):
 
 
 def test_no_municipal_water_and_clothing_in_pieces():
-    """NF-006: every type still has a template, none has Municipal Water,
-    and clothing is two piece items with the same amount per family."""
+    """NF-006: every type still has a template and none has Municipal Water.
+    Nov 22: clothing is ONE item in pieces again (Upper / Lower counted it
+    twice in the priority score): a set per family is 2 pieces."""
     from services.need_templates import NEED_TEMPLATES
     for name in ("Typhoon", "Flood", "Storm Surge", "Earthquake", "Fire", "Tsunami",
                  "Landslide", "Other"):
         assert name in NEED_TEMPLATES, name
     for name, template in NEED_TEMPLATES.items():
         assert "Municipal Water" not in template, name
-        assert "Clothing" not in template, name
-        assert template.get("Clothing – Upper") == template.get("Clothing – Lower"), name
-    assert NEED_TEMPLATES["Fire"]["Clothing – Upper"] == 2
+        assert not any("Upper" in k or "Lower" in k for k in template), name
+    assert NEED_TEMPLATES["Fire"]["Clothing"] == 4      # 2 sets = 4 pieces
 

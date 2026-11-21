@@ -14,7 +14,8 @@ import 'widgets.dart';
 ///
 /// NF-008 (D6): the organization type is a fixed grouped list (Government /
 /// Non-government). Every organization uploads the contact person's
-/// government ID; Government types also upload one supporting document,
+/// valid ID (any valid ID, not only a government one); Government types
+/// also upload one supporting document,
 /// which stays optional for the others (adviser comment 1.1). The
 /// organization signs in at once and is Unverified until the Administrator
 /// reviews it (comment 1.3). The organization no longer
@@ -114,7 +115,12 @@ const termsAndConditionsText =
     'of 2012 (RA 10173) only to verify your registration and coordinate '
     'relief.\n\n'
     '6. Account security. Keep your password private. You are responsible '
-    'for activity under your account.';
+    'for activity under your account.\n\n'
+    '7. Valid ID and Door to Door. Every account uploads a valid ID (for an '
+    'organization, the contact person\'s). Door to Door pickups are only '
+    'for accounts with a valid ID on file, and the pickup team may ask to '
+    'see it. The Administrator may delete an account with a fake ID or an '
+    'invalid document, and will tell you why.';
 
 /// Same list as backend RESERVED_USERNAMES (core/usernames.py).
 const reservedUsernames = [
@@ -162,6 +168,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     for (final x in _c.values) {
       x.dispose();
     }
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -208,7 +215,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool get _docRequired => organizationCategory(orgType) == 'Government';
 
   /// Donors, and NF-008 (D6) the organization's contact person, upload the
-  /// front and back of a government ID; Government types also need the
+  /// front and back of any valid ID; Government types also need the
   /// supporting document.
   bool get _filesReady =>
       idFront != null &&
@@ -263,7 +270,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 // Required for Government types, optional for the others.
                 if (_showDocs && legitimacyDoc != null)
                   'legitimacy_document': _ref(legitimacyDoc!),
-                // NF-008 (D6): the contact person's government ID.
+                // NF-008 (D6): the contact person's valid ID.
                 'id_front': _ref(idFront!),
                 'id_back': _ref(idBack!),
               },
@@ -457,7 +464,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Widget _consent(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final what = widget.org
-        ? 'my contact details and any supporting document I upload'
+        ? "my contact details, the contact person's ID photos and any "
+              'supporting document I upload'
         : 'my contact details and my ID photos';
     return Padding(
       padding: const EdgeInsets.only(bottom: Space.md),
@@ -531,130 +539,118 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    return Scaffold(
-      // In the pop-up, the pop-up itself moves up for the keyboard.
-      resizeToAvoidBottomInset: !widget.popup,
-      appBar: AppBar(
-        automaticallyImplyLeading: !widget.popup,
-        leading: widget.popup
-            ? IconButton(
-                tooltip: 'Close',
-                onPressed: () => Navigator.of(context).maybePop(),
-                icon: const Icon(Icons.close),
-              )
-            : null,
-        title: Text(widget.org ? 'Register organization' : 'Register as donor'),
-      ),
-      body: Form(
-        key: _form,
-        autovalidateMode: AutovalidateMode.onUserInteraction,
-        // UI redesign: the same fields in steps with a progress bar.
-        child: SteppedForm(
-          padding: Space.page,
-          header: [
-            Text(
-              widget.org
-                  ? 'Your organization account is active as soon as you '
-                        'register, and you\'ll go straight to your dashboard. '
-                        'The Administrator may review your details afterward.'
-                  : 'Your account is active right away. The Administrator '
-                        'may review your ID later.',
-              style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-            ),
-            Gaps.v16,
-          ],
-          steps: widget.org ? _orgSteps(context) : _donorSteps(context),
-          submit: (context, showFirstError) => Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              AppButton(
-                widget.org ? 'Submit registration' : 'Create account',
-                key: const ValueKey('register-button'),
-                onPressed: _valid && !busy
-                    ? () {
-                        final sent = _submit();
-                        showFirstError();
-                        sent.ignore();
-                      }
-                    : null,
-                loading: busy,
-                expand: true,
-              ),
-              // The button waits for every step: say which are not done.
-              if (!_valid && _missing.isNotEmpty) ...[
-                Gaps.v8,
-                Text(
-                  'Still to do: ${_missing.join(', ')}.',
-                  key: const ValueKey('register-missing'),
-                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  // ---- steps -------------------------------------------------------------
+  // The old registration design, one step at a time. Next stays disabled
+  // until the step showing is filled in, and the step names can't be tapped,
+  // so no step can be skipped. Every step stays built (only the current one
+  // shows), so typed text and uploaded photos are kept on Back.
+  int _step = 0;
+  final _scroll = ScrollController();
 
   bool _ok(List<String> keys) =>
       keys.every((k) => _rules[k] == null || _rules[k]!() == null);
 
-  /// The steps that still have something missing (for the hint above).
-  List<String> get _missing => widget.org
+  bool get _idsDone => idFront != null && idBack != null;
+
+  List<_RegStep> _steps(BuildContext context) => widget.org
       ? [
-          if (!_ok(['org_name', 'org_type_other', 'address']) ||
-              orgType == null ||
-              (_docRequired && legitimacyDoc == null))
+          _RegStep(
             'Organization',
-          if (!_ok(['first_name', 'last_name', 'email', 'contact_number']) ||
-              idFront == null ||
-              idBack == null)
+            _ok(['org_name', 'org_type_other', 'address']) &&
+                orgType != null &&
+                (!_docRequired || legitimacyDoc != null),
+            [
+              _text(
+                'org_name',
+                'Organization name',
+                icon: Icons.apartment,
+                formatters: orgNameFormatters,
+              ),
+              _typeDropdown(),
+              if (orgType == otherOrganizationType)
+                _text('org_type_other', 'Please specify the type'),
+              _address(),
+              // NF-008 (D6): required for Government types, optional for
+              // the others.
+              if (_showDocs)
+                _docRequired
+                    ? _upload(
+                        'Supporting document',
+                        'legitimacy_document',
+                        legitimacyDoc,
+                        (f) => legitimacyDoc = f,
+                        helper:
+                            'Required for government offices: an '
+                            'authorization or endorsement letter on office '
+                            'letterhead, or the contact person\'s office ID. '
+                            'Only the Administrator can see it.',
+                      )
+                    : _upload(
+                        'Supporting document (optional)',
+                        'legitimacy_document',
+                        legitimacyDoc,
+                        (f) => legitimacyDoc = f,
+                        required: false,
+                        helper:
+                            'Upload an SEC, DTI or CDA registration only if '
+                            'you have one. Only the Administrator can see it.',
+                      ),
+            ],
+          ),
+          _RegStep(
             'Contact person',
-          if (!_ok(['username', 'password', 'confirm_password']) ||
-              !consent ||
-              !acceptedTerms)
+            _ok(['first_name', 'last_name', 'email', 'contact_number']) &&
+                _idsDone,
+            [
+              ..._personFields(),
+              // The contact person uploads any valid ID, like a donor.
+              SectionHeader('Contact person\'s valid ID'),
+              ..._idUploads(),
+            ],
+          ),
+          _RegStep(
             'Log in details',
+            _ok(['username', 'password', 'confirm_password']) &&
+                consent &&
+                acceptedTerms,
+            [
+              _text(
+                'username',
+                'Username',
+                icon: Icons.person_outline,
+                helper:
+                    '4 to 30 characters: letters, numbers, underscore or '
+                    'period. Starts with a letter. You can use it or your '
+                    'email to log in.',
+                formatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_.]')),
+                  LengthLimitingTextInputFormatter(30),
+                ],
+                autofill: const [AutofillHints.newUsername],
+              ),
+              ..._passwordFields(context),
+            ],
+          ),
         ]
       : [
-          if (!_ok([
-            'first_name',
-            'last_name',
-            'email',
-            'contact_number',
-            'address',
-          ]))
+          _RegStep(
             'About you',
-          if (idFront == null || idBack == null) 'Valid ID',
-          if (!_ok(['password', 'confirm_password']) ||
-              !consent ||
-              !acceptedTerms)
+            _ok([
+              'first_name',
+              'last_name',
+              'email',
+              'contact_number',
+              'address',
+            ]),
+            [..._personFields(), _address()],
+          ),
+          _RegStep('Valid ID', _idsDone, _idUploads()),
+          _RegStep(
             'Password',
+            _ok(['password', 'confirm_password']) && consent && acceptedTerms,
+            _passwordFields(context),
+          ),
         ];
-
-  List<Widget> _idUploads() => [
-    _upload('Valid ID (front)', 'id_front', idFront, (f) => idFront = f),
-    _upload(
-      'Valid ID (back)',
-      'id_back',
-      idBack,
-      (f) => idBack = f,
-      helper:
-          'Make sure all text is readable. Only you and the '
-          'Administrator can see your ID.',
-    ),
-  ];
-
-  List<Widget> _passwordFields(BuildContext context) => [
-    _text('password', 'Password', password: true),
-    _passwordRules(context),
-    _text('confirm_password', 'Confirm password', password: true),
-    _consent(context),
-    _terms(context),
-  ];
 
   List<Widget> _personFields() => [
     _text('first_name', 'First name', name: true),
@@ -676,72 +672,207 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ),
   ];
 
-  List<FormStep> _donorSteps(BuildContext context) => [
-    FormStep('About you', [..._personFields(), _address()]),
-    FormStep('Valid ID', _idUploads()),
-    FormStep('Password', _passwordFields(context)),
+  /// Any valid ID with a photo (not only a government ID). Required for
+  /// donors (Door to Door pickup safety) and for an organization's contact
+  /// person.
+  List<Widget> _idUploads() => [
+    _upload(
+      'Valid ID (front)',
+      'id_front',
+      idFront,
+      (f) => idFront = f,
+      helper:
+          'Any valid ID with your photo and name, e.g. a national ID, '
+          'driver\'s license, passport, postal, school or company ID.',
+    ),
+    _upload(
+      'Valid ID (back)',
+      'id_back',
+      idBack,
+      (f) => idBack = f,
+      helper:
+          'Make sure all text is readable. Only you and the '
+          'Administrator can see your ID.',
+    ),
   ];
 
-  List<FormStep> _orgSteps(BuildContext context) => [
-    FormStep('Organization', [
-              _text(
-                'org_name',
-                'Organization name',
-                icon: Icons.apartment,
-                formatters: orgNameFormatters,
-              ),
-              _typeDropdown(),
-              if (orgType == otherOrganizationType)
-                _text('org_type_other', 'Please specify the type'),
-              _address(),
-              // NF-008 (D6): required for Government types, optional for
-              // the others.
-              if (_showDocs)
-                _docRequired
-                    ? _upload(
-                        'Supporting document',
-                        'legitimacy_document',
-                        legitimacyDoc,
-                        (f) => legitimacyDoc = f,
-                        helper:
-                            'An authorization or endorsement letter on office '
-                            'letterhead, or the contact person\'s office ID. '
-                            'Only the Administrator can see it.',
-                      )
-                    : _upload(
-                        'Supporting document (optional)',
-                        'legitimacy_document',
-                        legitimacyDoc,
-                        (f) => legitimacyDoc = f,
-                        required: false,
-                        helper:
-                            'Upload an SEC, DTI or CDA registration only if '
-                            'you have one. Only the Administrator can see it.',
-                      ),
-    ]),
-    FormStep('Contact person', [
-      ..._personFields(),
-      // NF-008 (D6): organizations upload the contact person's
-      // government ID too, like an individual donor.
-      const RedesignSection("Contact person's government ID"),
-      ..._idUploads(),
-    ]),
-    FormStep('Log in details', [
-      _text(
-        'username',
-        'Username',
-        icon: Icons.person_outline,
-        helper:
-            '4 to 30 characters: letters, numbers, underscore or '
-            'period. Starts with a letter. You can use it or your '
-            'email to log in.',
-        formatters: [
-          FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9_.]')),
-          LengthLimitingTextInputFormatter(30),
-        ],
-        autofill: const [AutofillHints.newUsername],
-      ),
-      ..._passwordFields(context),
-    ]),
+  List<Widget> _passwordFields(BuildContext context) => [
+    _text('password', 'Password', password: true),
+    _passwordRules(context),
+    _text('confirm_password', 'Confirm password', password: true),
+    _consent(context),
+    _terms(context),
   ];
+
+  void _goTo(int i) {
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _step = i);
+    if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final steps = _steps(context);
+    final at = _step.clamp(0, steps.length - 1);
+    final last = at == steps.length - 1;
+    final done = steps[at].done;
+    return Scaffold(
+      // In the pop-up, the pop-up itself moves up for the keyboard.
+      resizeToAvoidBottomInset: !widget.popup,
+      appBar: AppBar(
+        automaticallyImplyLeading: !widget.popup,
+        leading: widget.popup
+            ? IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.close),
+              )
+            : null,
+        title: Text(widget.org ? 'Register organization' : 'Register as donor'),
+      ),
+      body: Form(
+        key: _form,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: SingleChildScrollView(
+          controller: _scroll,
+          padding: Space.page,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                widget.org
+                    ? 'Your organization account is active as soon as you '
+                          'register, and you\'ll go straight to your '
+                          'dashboard. The Administrator may review your '
+                          'details afterward.'
+                    : 'Your account is active right away. The Administrator '
+                          'may review your ID later.',
+                style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Gaps.v16,
+              _StepBar(step: at, titles: [for (final s in steps) s.title]),
+              SectionHeader(steps[at].title),
+              for (var i = 0; i < steps.length; i++)
+                Offstage(
+                  offstage: i != at,
+                  child: TickerMode(
+                    enabled: i == at,
+                    child: ExcludeFocus(
+                      excluding: i != at,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: steps[i].children,
+                      ),
+                    ),
+                  ),
+                ),
+              Row(
+                children: [
+                  if (at > 0) ...[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        key: const ValueKey('register-back'),
+                        onPressed: busy ? null : () => _goTo(at - 1),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(48),
+                        ),
+                        icon: const Icon(Icons.arrow_back),
+                        label: const Text('Back'),
+                      ),
+                    ),
+                    Gaps.h12,
+                  ],
+                  Expanded(
+                    flex: 2,
+                    child: last
+                        ? AppButton(
+                            widget.org ? 'Submit registration' : 'Create account',
+                            key: const ValueKey('register-button'),
+                            onPressed: _valid && !busy ? _submit : null,
+                            loading: busy,
+                            expand: true,
+                          )
+                        : AppButton(
+                            'Next',
+                            key: const ValueKey('register-next'),
+                            icon: Icons.arrow_forward,
+                            onPressed: done ? () => _goTo(at + 1) : null,
+                            expand: true,
+                          ),
+                  ),
+                ],
+              ),
+              if (!done) ...[
+                Gaps.v8,
+                Text(
+                  last
+                      ? 'Fill in every field and tick both boxes to finish.'
+                      : 'Fill in every required field on this step to '
+                            'continue.',
+                  key: const ValueKey('register-step-hint'),
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ],
+              Gaps.v24,
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RegStep {
+  final String title;
+
+  /// True when every required field of this step is filled in and valid.
+  final bool done;
+  final List<Widget> children;
+  const _RegStep(this.title, this.done, this.children);
+}
+
+/// "Step 2 of 3" with a bar and the step names. Display only: the names
+/// can't be tapped, so a step can't be skipped.
+class _StepBar extends StatelessWidget {
+  final int step;
+  final List<String> titles;
+  const _StepBar({required this.step, required this.titles});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final n = titles.length;
+    return Semantics(
+      liveRegion: true,
+      label: 'Step ${step + 1} of $n: ${titles[step]}',
+      excludeSemantics: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Step ${step + 1} of $n',
+            key: const ValueKey('register-step-label'),
+            style: t.labelLarge?.copyWith(color: cs.primary),
+          ),
+          Gaps.v8,
+          LinearProgressIndicator(
+            value: (step + 1) / n,
+            minHeight: 4,
+            backgroundColor: cs.surfaceContainerHighest,
+          ),
+          Gaps.v8,
+          Text(
+            [
+              for (var i = 0; i < n; i++)
+                '${i < step ? '✓' : '${i + 1}.'} ${titles[i]}',
+            ].join('   '),
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
 }

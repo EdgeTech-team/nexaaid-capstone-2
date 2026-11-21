@@ -233,10 +233,7 @@ class AddressAutocompleteFieldState extends State<AddressAutocompleteField> {
                     ),
                   )
                 : _picked
-                ? Icon(
-                    Icons.check_circle,
-                    color: AppTints.green.fgFor(Theme.of(context).brightness),
-                  )
+                ? const Icon(Icons.check_circle, color: Color(0xFF2E7D32))
                 : null,
           ),
         ),
@@ -552,7 +549,7 @@ Future<DateTime?> pickPreferredPickup(
   if (problem != null) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: AppColors.danger,
+        backgroundColor: const Color(0xFFC62828),
         content: Text(problem),
       ),
     );
@@ -651,7 +648,7 @@ class _DropOffCardState extends State<DropOffCard> {
                               child: const Icon(
                                 Icons.location_pin,
                                 size: 40,
-                                color: AppColors.danger,
+                                color: Color(0xFFC62828),
                               ),
                             ),
                           ],

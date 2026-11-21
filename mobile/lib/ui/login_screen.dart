@@ -106,7 +106,11 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         ),
         const SizedBox(height: 8),
-        const Center(child: NexaAidLogoTile(size: 76)),
+        CircleAvatar(
+          radius: 38,
+          backgroundColor: cs.primaryContainer,
+          child: Icon(Icons.volunteer_activism, size: 40, color: cs.primary),
+        ),
         const SizedBox(height: 14),
         Text(
           'NexaAid',

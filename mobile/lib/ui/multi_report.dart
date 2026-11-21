@@ -31,18 +31,6 @@ const _months = [
 String defaultEventName(String disaster, DateTime day) =>
     '$disaster – ${_months[day.month - 1]} ${day.day}, ${day.year}';
 
-/// A per-family amount as typed ("6", "0.2", "1.25") in hundredths
-/// (600, 20, 125). Null when it is not a number above 0 with at most two
-/// decimals. Whole hundredths keep the rounding exact (no 0.1 + 0.2 issues).
-int? perFamilyHundredths(String text) {
-  final m = RegExp(r'^(\d{1,7})(?:\.(\d{1,2}))?$').firstMatch(text.trim());
-  if (m == null) return null;
-  final whole = int.parse(m.group(1)!);
-  final frac = int.parse((m.group(2) ?? '').padRight(2, '0'));
-  final value = whole * 100 + frac;
-  return value > 0 ? value : null;
-}
-
 /// One barangay's amount: ceil(families x per-family). 40 x 0.2 = 8,
 /// 41 x 0.2 = 8.2 -> 9.
 int barangayQuantity(int families, int hundredths) =>
@@ -55,30 +43,486 @@ int hundredthsOf(num value) => (value * 100).round();
 String withCommas(int n) =>
     n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
 
-/// 6 -> "6", 0.1 -> "0.1", 0.25 -> "0.25" (template amounts in the form).
-String formatPerFamily(num value) {
-  final hundredths = (value * 100).round();
-  final whole = hundredths ~/ 100;
-  final frac = hundredths % 100;
-  if (frac == 0) return '$whole';
-  return frac % 10 == 0
-      ? '$whole.${frac ~/ 10}'
-      : '$whole.${'$frac'.padLeft(2, '0')}';
+/// One item of a barangay's report in the preview: whole quantity + unit.
+class PreviewNeed {
+  final String item;
+  final int quantity;
+  final String unit;
+  const PreviewNeed(this.item, this.quantity, this.unit);
 }
 
-/// Validator of the "Per family" field.
-String? perFamilyError(String? v) {
-  if ((v ?? '').trim().isEmpty) return 'Enter an amount per family';
-  return perFamilyHundredths(v!) == null
-      ? 'A number above 0, up to 2 decimals (e.g. 0.5)'
-      : null;
+/// One barangay (= one report) in the preview.
+class PreviewBarangay {
+  final String name;
+  final int families;
+  final List<PreviewNeed> needs;
+  const PreviewBarangay(this.name, this.families, this.needs);
 }
 
-/// Typing filter for the "Per family" field: digits and one dot.
-final perFamilyInput = <TextInputFormatter>[
-  FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-  LengthLimitingTextInputFormatter(10),
-];
+/// "Several barangays": the check before submitting. A full-screen page
+/// with the totals first, then one card per barangay: its name highlighted,
+/// its affected families, and the items it needs (whole numbers, already
+/// rounded up). Returns true when the reporter taps Submit.
+Future<bool> showMultiReportPreview(
+  BuildContext context, {
+  required String eventName,
+  required String disaster,
+  required List<PreviewBarangay> barangays,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => Dialog.fullscreen(
+      child: MultiReportPreview(
+        eventName: eventName,
+        disaster: disaster,
+        barangays: barangays,
+      ),
+    ),
+  );
+  return ok == true;
+}
+
+class MultiReportPreview extends StatelessWidget {
+  final String eventName;
+  final String disaster;
+  final List<PreviewBarangay> barangays;
+  const MultiReportPreview({
+    super.key,
+    required this.eventName,
+    required this.disaster,
+    required this.barangays,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final n = barangays.length;
+    final families = barangays.fold<int>(0, (a, b) => a + b.families);
+    // Totals per item over every barangay, in the order of the needs.
+    final totals = <String, (int, String)>{};
+    for (final b in barangays) {
+      for (final need in b.needs) {
+        final was = totals[need.item];
+        totals[need.item] = ((was?.$1 ?? 0) + need.quantity, need.unit);
+      }
+    }
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          tooltip: 'Back to the form',
+          onPressed: () => Navigator.pop(context, false),
+          icon: const Icon(Icons.close),
+        ),
+        title: const Text('Check before submitting'),
+      ),
+      body: ListView(
+        key: const ValueKey('multi-preview'),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          Text(eventName, style: t.titleLarge),
+          Gaps.v4,
+          Text(
+            '$disaster · $n barangays · ${withCommas(families)} affected '
+            'families',
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v8,
+          Text(
+            'Each barangay is saved as its own report. The Administrator '
+            'validates each one before donors see it.',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v16,
+          Card(
+            key: const ValueKey('multi-preview-totals'),
+            color: cs.surfaceContainerHighest,
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Total for all $n barangays', style: t.titleSmall),
+                  Gaps.v8,
+                  for (final e in totals.entries)
+                    _ItemLine(e.key, e.value.$1, e.value.$2),
+                ],
+              ),
+            ),
+          ),
+          Gaps.v16,
+          for (final b in barangays) ...[
+            Card(
+              key: ValueKey('multi-preview-${b.name}'),
+              margin: EdgeInsets.zero,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: cs.outlineVariant),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // The barangay, highlighted, with its families.
+                  Container(
+                    color: cs.primaryContainer,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.place, color: cs.onPrimaryContainer),
+                        Gaps.h8,
+                        Expanded(
+                          child: Text(
+                            b.name,
+                            style: t.titleMedium?.copyWith(
+                              color: cs.onPrimaryContainer,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: cs.surface,
+                            borderRadius: BorderRadius.circular(99),
+                          ),
+                          child: Text(
+                            '${withCommas(b.families)} '
+                            '${b.families == 1 ? 'family' : 'families'}',
+                            style: t.labelLarge?.copyWith(color: cs.primary),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Needed items',
+                          style: t.labelMedium?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                        Gaps.v4,
+                        for (final need in b.needs)
+                          _ItemLine(need.item, need.quantity, need.unit),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Gaps.v12,
+          ],
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  child: const Text('Back to edit'),
+                ),
+              ),
+              Gaps.h12,
+              Expanded(
+                flex: 2,
+                child: FilledButton.icon(
+                  key: const ValueKey('multi-preview-submit'),
+                  onPressed: () => Navigator.pop(context, true),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  icon: const Icon(Icons.send),
+                  label: Text('Submit $n reports'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One saved report of a "Several barangays" submission.
+class SubmittedReport {
+  final int reportId;
+  final PreviewBarangay barangay;
+  const SubmittedReport(this.reportId, this.barangay);
+}
+
+/// After "Several barangays" is submitted: every saved report in one
+/// sortable, searchable list. Returns true for "View report status".
+Future<bool> showMultiReportSubmitted(
+  BuildContext context, {
+  required String eventName,
+  required List<SubmittedReport> reports,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => Dialog.fullscreen(
+      child: MultiReportSubmitted(eventName: eventName, reports: reports),
+    ),
+  );
+  return ok == true;
+}
+
+enum _SubmittedSort { families, name, number }
+
+class MultiReportSubmitted extends StatefulWidget {
+  final String eventName;
+  final List<SubmittedReport> reports;
+  const MultiReportSubmitted({
+    super.key,
+    required this.eventName,
+    required this.reports,
+  });
+
+  @override
+  State<MultiReportSubmitted> createState() => _MultiReportSubmittedState();
+}
+
+class _MultiReportSubmittedState extends State<MultiReportSubmitted> {
+  var _sort = _SubmittedSort.families;
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  List<SubmittedReport> get _shown {
+    final q = _search.text.trim().toLowerCase();
+    final rows = [
+      for (final r in widget.reports)
+        if (q.isEmpty || r.barangay.name.toLowerCase().contains(q)) r,
+    ];
+    rows.sort(
+      (a, b) => switch (_sort) {
+        _SubmittedSort.families => b.barangay.families.compareTo(
+          a.barangay.families,
+        ),
+        _SubmittedSort.name => a.barangay.name.compareTo(b.barangay.name),
+        _SubmittedSort.number => a.reportId.compareTo(b.reportId),
+      },
+    );
+    return rows;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final n = widget.reports.length;
+    final families = widget.reports.fold<int>(
+      0,
+      (a, r) => a + r.barangay.families,
+    );
+    final shown = _shown;
+    return Scaffold(
+      appBar: AppBar(
+        leading: IconButton(
+          tooltip: 'Close',
+          onPressed: () => Navigator.pop(context, false),
+          icon: const Icon(Icons.close),
+        ),
+        title: const Text('Reports submitted'),
+      ),
+      body: ListView(
+        key: const ValueKey('multi-submitted'),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          Row(
+            children: [
+              Icon(Icons.check_circle, color: cs.primary, size: 32),
+              Gaps.h12,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(widget.eventName, style: t.titleLarge),
+                    Text(
+                      '$n reports · ${withCommas(families)} affected families',
+                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Gaps.v8,
+          Text(
+            'Each report is Pending until the Administrator validates it. '
+            'Follow them on Reports › Status.',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          Gaps.v16,
+          if (n > 6) ...[
+            TextField(
+              key: const ValueKey('multi-submitted-search'),
+              controller: _search,
+              onChanged: (_) => setState(() {}),
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                hintText: 'Search a barangay',
+                isDense: true,
+              ),
+            ),
+            Gaps.v8,
+          ],
+          Row(
+            children: [
+              Text('Sort by', style: t.labelLarge),
+              Gaps.h8,
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      for (final (s, label) in const [
+                        (_SubmittedSort.families, 'Most families'),
+                        (_SubmittedSort.name, 'Name A–Z'),
+                        (_SubmittedSort.number, 'Report no.'),
+                      ])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: ChoiceChip(
+                            label: Text(label),
+                            selected: _sort == s,
+                            onSelected: (_) => setState(() => _sort = s),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Gaps.v8,
+          if (shown.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                'No barangay matches "${_search.text.trim()}".',
+                textAlign: TextAlign.center,
+                style: t.bodyMedium,
+              ),
+            ),
+          for (final r in shown)
+            Card(
+              key: ValueKey('multi-submitted-${r.reportId}'),
+              margin: const EdgeInsets.only(bottom: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: cs.outlineVariant),
+              ),
+              child: ExpansionTile(
+                shape: const Border(),
+                leading: CircleAvatar(
+                  backgroundColor: cs.primaryContainer,
+                  child: Icon(Icons.place, color: cs.onPrimaryContainer),
+                ),
+                title: Text(
+                  r.barangay.name,
+                  style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  'Report #${r.reportId} · '
+                  '${withCommas(r.barangay.families)} '
+                  '${r.barangay.families == 1 ? 'family' : 'families'}',
+                ),
+                trailing: Chip(
+                  label: const Text('Pending'),
+                  visualDensity: VisualDensity.compact,
+                  backgroundColor: cs.secondaryContainer,
+                  side: BorderSide.none,
+                ),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                children: [
+                  for (final need in r.barangay.needs)
+                    _ItemLine(need.item, need.quantity, need.unit),
+                ],
+              ),
+            ),
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  child: const Text('New report'),
+                ),
+              ),
+              Gaps.h12,
+              Expanded(
+                flex: 2,
+                child: FilledButton.icon(
+                  key: const ValueKey('multi-submitted-status'),
+                  onPressed: () => Navigator.pop(context, true),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  icon: const Icon(Icons.monitor_heart_outlined),
+                  label: const Text('View report status'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Rice ........ 720 kg" (item left, whole quantity right).
+class _ItemLine extends StatelessWidget {
+  final String item;
+  final int quantity;
+  final String unit;
+  const _ItemLine(this.item, this.quantity, this.unit);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(child: Text(item, style: t.bodyMedium)),
+          Text(
+            '${withCommas(quantity)} $unit'.trim(),
+            style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 /// The barangays of the form, with what was typed for each:
 /// barangay id -> affected families field.
@@ -86,7 +530,7 @@ typedef BarangayRows = Map<String, TextEditingController>;
 
 /// One barangay's totals as a short line, e.g. "Rice 720 kg · Water 2,400 L"
 /// (null = nothing to show yet). Given by the report form.
-typedef BarangayPreview = String? Function(int families);
+typedef BarangayPreview = String? Function(String id, int families);
 
 /// The barangay part of the form in "Several barangays" mode.
 ///
@@ -279,17 +723,54 @@ class _MultiBarangayPickerState extends State<MultiBarangayPicker> {
           ),
           if (picked.isNotEmpty) ...[
             Gaps.v16,
-            Text('Affected families per barangay', style: t.titleSmall),
+            Text('Affected families in each barangay', style: t.titleSmall),
             Text(
-              'Leave a barangay blank to skip it.',
+              _summary(picked),
+              key: const ValueKey('multi-summary'),
               style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
             Gaps.v8,
-            for (final b in picked) _row(b, prone),
+            Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: cs.outlineVariant),
+                borderRadius: BorderRadius.circular(Radii.md),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var i = 0; i < picked.length; i++) ...[
+                    if (i > 0) const Divider(height: 1),
+                    _row(picked[i], prone),
+                  ],
+                ],
+              ),
+            ),
           ],
         ],
       ),
     );
+  }
+
+  /// "3 barangays · 2 with families (240 in all). A barangay left blank is
+  /// skipped."
+  String _summary(List<Map<String, dynamic>> picked) {
+    var filled = 0;
+    var families = 0;
+    for (final b in picked) {
+      final n = int.tryParse(widget.rows['${b['id']}']?.text.trim() ?? '') ?? 0;
+      if (n > 0) {
+        filled++;
+        families += n;
+      }
+    }
+    final count =
+        '${picked.length} '
+        '${picked.length == 1 ? 'barangay' : 'barangays'}';
+    return filled == 0
+        ? '$count chosen. Type the affected families of each; a barangay '
+              'left blank is skipped.'
+        : '$count · $filled with families (${withCommas(families)} in all). '
+              'A barangay left blank is skipped.';
   }
 
   Widget _row(Map b, Set<String> prone) {
@@ -298,12 +779,12 @@ class _MultiBarangayPickerState extends State<MultiBarangayPicker> {
     final id = '${b['id']}';
     final controller = widget.rows[id]!;
     final families = int.tryParse(controller.text.trim()) ?? 0;
-    final preview = families > 0 ? widget.preview?.call(families) : null;
+    final preview = families > 0 ? widget.preview?.call(id, families) : null;
     final untagged =
         _locationSpecific && prone.isNotEmpty && !prone.contains(id);
     return Padding(
       key: ValueKey('fam-row-$id'),
-      padding: const EdgeInsets.only(bottom: Space.xs),
+      padding: const EdgeInsets.fromLTRB(12, 8, 0, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -314,7 +795,10 @@ class _MultiBarangayPickerState extends State<MultiBarangayPicker> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${b['name']}', style: t.bodyLarge),
+                    Text(
+                      '${b['name']}',
+                      style: t.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+                    ),
                     if (untagged)
                       Text(
                         'Not tagged as prone to $_typeName',
@@ -356,13 +840,33 @@ class _MultiBarangayPickerState extends State<MultiBarangayPicker> {
               ),
             ],
           ),
+          // What this barangay will ask for, one chip per item.
           if (preview != null)
             Padding(
-              padding: const EdgeInsets.only(top: 2, right: 48),
-              child: Text(
-                preview,
+              padding: const EdgeInsets.only(top: 6, right: 48),
+              child: Wrap(
                 key: ValueKey('preview-$id'),
-                style: t.bodySmall?.copyWith(color: cs.primary),
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final part in preview.split(' · '))
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: cs.primaryContainer.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: Text(
+                        part,
+                        style: t.bodySmall?.copyWith(
+                          color: cs.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
         ],

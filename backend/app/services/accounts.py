@@ -120,9 +120,11 @@ def _redact_audit_logs(db, user, org_done: bool) -> int:
     return changed
 
 
-def delete_account(db, user, by, request=None, source=None) -> None:
+def delete_account(db, user, by, request=None, source=None, reason=None) -> None:
     """Anonymize `user`, log it under `by`. The caller checks the rules
-    (admin only, not yourself, deactivated first). The caller commits."""
+    (admin only, not yourself, deactivated first). The caller commits.
+    `reason` (e.g. "Fake ID") is kept in the DELETE ACCOUNT audit entry; it
+    describes the documents, not the person, so it is not redacted."""
     old = {"role": user.role.role_name if user.role else None}   # F-08: no name or email copied
     now = datetime.now(timezone.utc)
     user.first_name = "Deleted"
@@ -162,6 +164,8 @@ def delete_account(db, user, by, request=None, source=None) -> None:
            "redacted_audit_entries": redacted, "organization_anonymized": org_done}
     if source:
         new["source"] = source
+    if reason:
+        new["reason"] = reason
     log_action(db, by, "DELETE ACCOUNT", "users", user.user_id, old=old, new=new, request=request)
     db.flush()  # rows gone first; a file is never deleted while its row remains
     for key in keys:

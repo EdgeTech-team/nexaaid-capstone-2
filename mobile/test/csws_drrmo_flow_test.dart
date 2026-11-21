@@ -50,9 +50,6 @@ void main() {
       'scheduled_date': planned.toIso8601String(),
     });
     expect(find.text('Accept request #7'), findsOneWidget);
-    // UI redesign: step 1 the time (planned one kept), step 2 the truck.
-    await tester.tap(find.byKey(const ValueKey('step-next')));
-    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).at(0), ' Truck 2 ');
     await tester.tap(find.text('Accept'));
     await tester.pumpAndSettle();
@@ -73,11 +70,9 @@ void main() {
           .toIso8601String(),
     });
     expect(find.text('Tap to pick the date and time'), findsOneWidget);
-    // UI redesign: Next checks the time before the vehicle step opens.
-    await tester.tap(find.byKey(const ValueKey('step-next')));
+    await tester.tap(find.text('Accept'));
     await tester.pumpAndSettle();
     expect(find.text('Pick the date and time'), findsOneWidget);
-    expect(find.text('Accept'), findsNothing); // still on step 1
     expect(find.text('Accept request #8'), findsOneWidget); // still open
     expect(_result, isNull);
   });

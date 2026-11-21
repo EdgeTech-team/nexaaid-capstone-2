@@ -27,6 +27,7 @@ from models.logistics_request_model import LogisticsRequest
 from models.user_rbac_model import User
 from services.fulfillment import progress_for_reports
 from services.report_feed import feed_row
+from services.items import listed_items
 from services.need_templates import item_per_family, need_templates
 from services.units import dimension, units_for
 
@@ -117,7 +118,8 @@ def get_lookups(
              "size_units": units_for(i.unit_of_measure),
              "sizes": [{"id": z.size_id, "label": z.label, "amount": float(z.amount)}
                        for z in i.sizes]}
-            for i in db.query(Item).filter(Item.active.is_(True), Item.pending_review.is_(False)).order_by(Item.item_name).all()
+            for i in listed_items(db.query(Item).filter(
+                Item.active.is_(True), Item.pending_review.is_(False)).order_by(Item.item_name).all())
 
         ],
         # Staff only (F-01): every report, with its status. Filled below.

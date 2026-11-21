@@ -465,6 +465,73 @@ def _notify_new_donation(db: Session, current_user: Optional[User], first_id: in
 # ---------------------------------------------------------------------------
 # UC-D2 step 6: create a donation
 # ---------------------------------------------------------------------------
+def _create_entry(db: Session, payload, current_user: Optional[User], ip: Optional[str],
+                  lines: list, *, single: bool) -> list:
+    """UC-D2 step 6, shared by POST /donations/batch and POST /donations/
+    (single item, older clients). `lines` are the item lines (for the
+    single endpoint, the payload itself). All rows are saved together or
+    none are (alt 3a: no QR for an incomplete entry). Returns the saved
+    rows, committed and refreshed.
+
+    The two endpoints differ only in what `single` switches: the single
+    donation's QR reference has no "-1" suffix, and its notifications carry
+    the donation id as the confirmation number (unchanged behavior)."""
+    # F-16: only validated reports can receive donations (UC-D2 alt 2a).
+    _get_report(db, payload.report_id, require_validated=True)
+    _check_service_area(payload)
+
+    resolved = []
+    for line in lines:
+        item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
+        # quantity (base unit) + packaging + breakdown (services/units.py)
+        resolved.append((line, item_id, line_amounts(db, db.get(Item, item_id), line)))
+    if current_user is None:
+        _guest_db_checks(db, payload, [i for _, i, _ in resolved],
+                         [a["quantity"] for _, _, a in resolved])
+    user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
+
+    reference = _new_reference()
+    rows = []
+    for n, (line, item_id, amounts) in enumerate(resolved, start=1):
+        row = PhysicalDonation(
+            user_id=user_id,
+            guest_donor_id=guest_donor_id,
+            report_id=payload.report_id,
+            item_id=item_id,
+            **amounts,
+            estimated_value=line.estimated_value,
+            contents=line.contents,   # a note only (Nov 22)
+            handover_method=payload.handover_method,
+            pickup_address=payload.pickup_address,
+            pickup_lat=payload.pickup_lat,
+            pickup_lng=payload.pickup_lng,
+            pickup_landmark=payload.pickup_landmark,
+            pickup_notes=payload.pickup_notes,
+            pickup_days=encode_pickup_days(payload.pickup_days),
+            pickup_dates=encode_pickup_dates(payload.pickup_dates),
+            preferred_pickup_at=payload.preferred_pickup_at,
+            qr_reference=reference if single else f"{reference}-{n}",
+            batch_reference=reference,
+            status="Pending",
+        )
+        db.add(row)
+        rows.append(row)
+    set_deadline(rows)  # handover deadline (services/donation_expiry.py)
+    apply_hold(rows, current_user)  # NF-006: Door to Door waits for the email code
+    db.flush()  # assigns donation_id for the notifications
+
+    first = rows[0]
+    _notify_new_donation(db, current_user, first.donation_id, first.qr_reference if single else reference,
+                         first.donation_id if single else reference)
+    if current_user is None:
+        record_guest_submit(ip)
+
+    db.commit()
+    for row in rows:
+        db.refresh(row)
+    return rows
+
+
 @router.post("/batch", status_code=201)
 def create_donation_batch(
     payload: DonationBatchCreate,
@@ -482,55 +549,7 @@ def create_donation_batch(
         return {"batch_reference": ref, "qr_image_base64": _qr_b64(ref), "status": "Pending",
                 "report_id": payload.report_id, "handover_method": payload.handover_method,
                 "total_items": len(payload.items), "items": []}
-    _get_report(db, payload.report_id, require_validated=True)
-    _check_service_area(payload)
-
-    lines = []
-    for line in payload.items:
-        item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
-        # quantity (base unit) + packaging + breakdown (services/units.py)
-        lines.append((line, item_id, line_amounts(db, db.get(Item, item_id), line)))
-    if current_user is None:
-        _guest_db_checks(db, payload, [i for _, i, _ in lines],
-                         [a["quantity"] for _, _, a in lines])
-    user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
-
-    batch_reference = _new_reference()
-    rows = []
-    for n, (line, item_id, amounts) in enumerate(lines, start=1):
-        row = PhysicalDonation(
-            user_id=user_id,
-            guest_donor_id=guest_donor_id,
-            report_id=payload.report_id,
-            item_id=item_id,
-            **amounts,
-            estimated_value=line.estimated_value,
-            handover_method=payload.handover_method,
-            pickup_address=payload.pickup_address,
-            pickup_lat=payload.pickup_lat,
-            pickup_lng=payload.pickup_lng,
-            pickup_landmark=payload.pickup_landmark,
-            pickup_notes=payload.pickup_notes,
-            pickup_days=encode_pickup_days(payload.pickup_days),
-            pickup_dates=encode_pickup_dates(payload.pickup_dates),
-            preferred_pickup_at=payload.preferred_pickup_at,
-            qr_reference=f"{batch_reference}-{n}",
-            batch_reference=batch_reference,
-            status="Pending",
-        )
-        db.add(row)
-        rows.append(row)
-    set_deadline(rows)  # handover deadline (services/donation_expiry.py)
-    apply_hold(rows, current_user)  # NF-006: Door to Door waits for the email code
-    db.flush()  # assigns donation_id for the notifications
-
-    _notify_new_donation(db, current_user, rows[0].donation_id, batch_reference, batch_reference)
-    if current_user is None:
-        record_guest_submit(ip)
-
-    db.commit()
-    for row in rows:
-        db.refresh(row)
+    rows = _create_entry(db, payload, current_user, ip, payload.items, single=False)
     return _batch_view(db, rows, staff=False)
 
 
@@ -555,51 +574,7 @@ def create_donation(
             qr_reference=ref, batch_reference=ref, status="Pending",
             created_at=datetime.now(timezone.utc),
         )
-    # F-16: same rule as /donations/batch (UC-D2 alt 2a): only validated
-    # reports can receive donations.
-    _get_report(db, payload.report_id, require_validated=True)
-    _check_service_area(payload)
-
-    item_id = _resolve_item_id(db, payload.item_id, payload.other_item_name, payload.other_item_unit)
-    amounts = line_amounts(db, db.get(Item, item_id), payload)
-    if current_user is None:
-        _guest_db_checks(db, payload, [item_id], [amounts["quantity"]])
-    user_id, guest_donor_id = _donor_ids(db, current_user, payload.guest_donor)
-    reference = _new_reference()
-
-    donation = PhysicalDonation(
-        user_id=user_id,
-        guest_donor_id=guest_donor_id,
-        report_id=payload.report_id,
-        item_id=item_id,
-        **amounts,
-        estimated_value=payload.estimated_value,
-        handover_method=payload.handover_method,
-        pickup_address=payload.pickup_address,
-        pickup_lat=payload.pickup_lat,
-        pickup_lng=payload.pickup_lng,
-        pickup_landmark=payload.pickup_landmark,
-        pickup_notes=payload.pickup_notes,
-        pickup_days=encode_pickup_days(payload.pickup_days),
-        pickup_dates=encode_pickup_dates(payload.pickup_dates),
-        preferred_pickup_at=payload.preferred_pickup_at,
-        qr_reference=reference,
-        batch_reference=reference,
-        status="Pending",
-    )
-    db.add(donation)
-    set_deadline([donation])  # handover deadline (services/donation_expiry.py)
-    apply_hold([donation], current_user)  # NF-006
-    db.flush()  # assigns donation_id for the notifications
-
-    _notify_new_donation(db, current_user, donation.donation_id, donation.qr_reference,
-                         donation.donation_id)
-    if current_user is None:
-        record_guest_submit(ip)
-
-    db.commit()
-    db.refresh(donation)
-    return donation
+    return _create_entry(db, payload, current_user, ip, [payload], single=True)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -685,6 +660,7 @@ def add_items_to_entry(
             item_id=item_id,
             **line_amounts(db, db.get(Item, item_id), line),
             estimated_value=line.estimated_value,
+            contents=line.contents,   # a note only (Nov 22)
             handover_method=base.handover_method,
             pickup_address=base.pickup_address,
             pickup_lat=base.pickup_lat,
@@ -797,6 +773,7 @@ def edit_my_entry(
         for field, value in line_amounts(db, db.get(Item, row.item_id), line).items():
             setattr(row, field, value)
         row.estimated_value = line.estimated_value
+        row.contents = line.contents
         row.handover_method = payload.handover_method
         row.pickup_address = payload.pickup_address
         row.pickup_lat = payload.pickup_lat

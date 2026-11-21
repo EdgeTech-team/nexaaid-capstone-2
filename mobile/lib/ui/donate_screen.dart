@@ -11,6 +11,8 @@ import 'donation_info.dart' show ReportDonationInfo;
 import 'expiry_widgets.dart' show ExpiryNote;
 import 'form_draft.dart';
 import 'input_formatters.dart';
+import 'item_amounts.dart' show itemContents;
+import 'kit_contents.dart';
 import 'location_picker.dart';
 import 'login_screen.dart' show showLoginPopup;
 import 'register_screen.dart' show showRegisterPopup;
@@ -131,6 +133,10 @@ class _Line {
   final otherName = TextEditingController();
   final otherUnit = TextEditingController();
 
+  /// Nov 22: what is inside a kit (chips + typed extras). A note only.
+  final contents = <String>{};
+  final contentsOther = TextEditingController();
+
   int? get packCount => int.tryParse(packs.text.trim());
   int? get perPackValue => perPack ?? int.tryParse(perPackOther.text.trim());
 
@@ -199,7 +205,16 @@ class _Line {
     } else if (!info.counted)
       'size_id': int.parse(sizeId!),
     'estimated_value': ThousandsFormatter.parse(value.text),
+    'contents': ?_contentsText(),
   };
+
+  /// What is inside, when this line is a kit (null otherwise).
+  List<String>? kitOptions;
+  String? _contentsText() {
+    final options = kitOptions;
+    if (options == null) return null;
+    return joinKitContents(contents, contentsOther.text, options);
+  }
 
   void dispose() {
     packs.dispose();
@@ -209,6 +224,7 @@ class _Line {
     value.dispose();
     otherName.dispose();
     otherUnit.dispose();
+    contentsOther.dispose();
   }
 }
 
@@ -251,9 +267,6 @@ class _DonateScreenState extends State<DonateScreen> {
   late Map<String, dynamic> _report = widget.report;
 
   final _form = GlobalKey<FormState>();
-
-  /// UI redesign: the steps of the form (items, handover, guest details).
-  final _steps = GlobalKey<SteppedFormState>();
   final _scroll = ScrollController();
   final lines = <_Line>[_Line()];
   String handover = 'Drop Off';
@@ -328,6 +341,38 @@ class _DonateScreenState extends State<DonateScreen> {
     }
   }
 
+  /// A guest tapped the locked Door to Door choice: ask them to register
+  /// first. Register opens the registration pop-up (the same stepped form
+  /// as the landing page), and the donation stays filled in.
+  Future<void> _askToRegister() async {
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const ValueKey('guest-register-prompt'),
+        icon: const Icon(Icons.local_shipping_outlined),
+        title: const Text('Register to request a pickup'),
+        content: const Text(guestPickupBlockedText),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Not now'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'signin'),
+            child: const Text('Sign in'),
+          ),
+          FilledButton(
+            key: const ValueKey('guest-register-prompt-register'),
+            onPressed: () => Navigator.pop(ctx, 'register'),
+            child: const Text('Register'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return;
+    await _goSignUp(register: choice == 'register');
+  }
+
   /// Fill the form from the donation being changed.
   void _fillFromEntry(Map e) {
     lines
@@ -385,6 +430,12 @@ class _DonateScreenState extends State<DonateScreen> {
       // A retired item (e.g. "Rice (sacks, old)"): choose the current one.
       l.itemId = null;
       return l;
+    }
+    final kit = _kitOptionsOf(l);
+    if (kit != null) {
+      final (chosen, other) = splitKitContents('${i['contents'] ?? ''}', kit);
+      l.contents.addAll(chosen);
+      l.contentsOther.text = other;
     }
     final per = (i['per_pack'] as num?)?.toInt() ?? 1;
     if (_perPackChoices.contains(per)) {
@@ -1256,6 +1307,16 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
+  /// The usual contents of the line's item when it is a kit (Kitchen Set,
+  /// Hygiene Kit, Medicine Kit), else null. Kept on the line for toJson.
+  List<String>? _kitOptionsOf(_Line l) {
+    String? name;
+    for (final it in widget.names.rows('items')) {
+      if ('${it['id']}' == l.itemId) name = '${it['item_name'] ?? it['name']}';
+    }
+    return l.kitOptions = kitContentsFor(name);
+  }
+
   Widget _lineCard(int i) {
     final l = lines[i];
     final cs = Theme.of(context).colorScheme;
@@ -1384,6 +1445,15 @@ class _DonateScreenState extends State<DonateScreen> {
               ),
               Gaps.v12,
               _totalNote(l, info),
+              if (_kitOptionsOf(l) case final kit?) ...[
+                Gaps.v16,
+                KitContentsPicker(
+                  options: kit,
+                  chosen: l.contents,
+                  other: l.contentsOther,
+                  onChanged: () => setState(() {}),
+                ),
+              ],
             ],
             // Testing feedback (Oct 20): guests don't give an estimated value.
             if (api.loggedIn) ...[
@@ -1825,6 +1895,21 @@ class _DonateScreenState extends State<DonateScreen> {
               ),
             ],
           ),
+          Gaps.v8,
+          Row(
+            key: const ValueKey('door-to-door-agreement'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.badge_outlined, size: 16, color: cs.onSurfaceVariant),
+              Gaps.h8,
+              Expanded(
+                child: Text(
+                  doorToDoorAgreementText,
+                  style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1922,14 +2007,7 @@ class _DonateScreenState extends State<DonateScreen> {
                     : Icons.qr_code_2,
                 variant: AppButtonVariant.donate,
                 loading: busy,
-                onPressed: busy
-                    ? null
-                    : () {
-                        final sent = _submit();
-                        // UI redesign: open the step with a field in red.
-                        _steps.currentState?.showFirstError();
-                        sent.ignore();
-                      },
+                onPressed: busy ? null : _submit,
               ),
             ],
           ),
@@ -1965,15 +2043,12 @@ class _DonateScreenState extends State<DonateScreen> {
           child: SingleChildScrollView(
             controller: _scroll,
             padding: EdgeInsets.fromLTRB(side, Space.md, side, Space.xl),
-            // UI redesign: in steps with a progress bar (items, handover,
-            // and the guest's details). Submit stays in the bar below.
-            child: SteppedForm(
-              key: _steps,
-              scrolls: false,
-              padding: EdgeInsets.zero,
-              header: [_reportSummary(), if (_adding) _addingNote()],
-              steps: [
-                FormStep('Items', [
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _reportSummary(),
+
+                if (_adding) _addingNote(),
                 _StepHeader(
                   number: 1,
                   title: _adding
@@ -1997,6 +2072,10 @@ class _DonateScreenState extends State<DonateScreen> {
                 ),
                 Gaps.v12,
                 for (var i = 0; i < lines.length; i++) _lineCard(i),
+
+                // Adding to a donation: only the items. Handover, pickup
+                // and donor details stay as they are.
+                if (!_adding && !_linesLocked) ..._handoverSections(door),
                 // NF-005: hidden from people (and from screen readers).
                 Offstage(
                   child: ExcludeSemantics(
@@ -2007,13 +2086,6 @@ class _DonateScreenState extends State<DonateScreen> {
                     ),
                   ),
                 ),
-                ]),
-                // Adding to a donation: only the items. Handover, pickup
-                // and donor details stay as they are.
-                if (!_adding && !_linesLocked)
-                  FormStep('Handover', _handoverSections(door)),
-                if (!_adding && !_linesLocked && !api.loggedIn)
-                  FormStep('Contact', _guestSection()),
               ],
             ),
           ),
@@ -2062,7 +2134,8 @@ class _DonateScreenState extends State<DonateScreen> {
                     child: Text(
                       '${i['item_name']} · '
                       '${i['amount_text'] ?? '${i['quantity']} ${i['unit'] ?? ''}'.trim()}'
-                      '${(i['packaging'] ?? '').toString().isEmpty ? '' : ' (${i['packaging']})'}',
+                      '${(i['packaging'] ?? '').toString().isEmpty ? '' : ' (${i['packaging']})'}'
+                      '${itemContents(i) == null ? '' : '\nIncludes: ${itemContents(i)}'}',
                       style: t.bodyMedium,
                     ),
                   ),
@@ -2195,7 +2268,7 @@ class _DonateScreenState extends State<DonateScreen> {
           subtitle:
               'For registered donors. Sign in or register to request a pickup.',
           selected: false,
-          onTap: () => _goSignUp(register: true),
+          onTap: _askToRegister,
         ),
       )
     else
@@ -2230,18 +2303,25 @@ class _DonateScreenState extends State<DonateScreen> {
               fallbackHours: storageHours,
             ),
     ),
-  ];
 
-  /// Guests only: name, number and consent (the last step).
-  List<Widget> _guestSection() => [
-    const _StepHeader(
-      number: 3,
-      title: 'Your details',
-      subtitle: 'So CSWS can call or text you about this donation.',
-    ),
-    _guestCard(),
+    if (!api.loggedIn) ...[
+      const _StepHeader(
+        number: 3,
+        title: 'Your details',
+        subtitle: 'So CSWS can call or text you about this donation.',
+      ),
+      _guestCard(),
+    ],
   ];
 }
+
+/// Door to Door agreement: pickups are only for accounts with a valid ID on
+/// file, for the safety of the pickup team (and of the donor).
+const doorToDoorAgreementText =
+    'Door to Door agreement: pickups are only for registered donors with a '
+    'valid ID on file. The pickup team may ask to see that ID before '
+    'collecting the goods. An account with a fake or invalid ID is removed '
+    'and its pickups are not made.';
 
 /// NF-004: why guests can't choose Door to Door (GUEST_DOOR_TO_DOOR=blocked).
 const guestPickupBlockedText =
@@ -2727,7 +2807,14 @@ class _DonationReceiptState extends State<DonationReceipt> {
                           color: cs.primary,
                         ),
                         title: Text('${items[i]['item_name']}'),
-                        subtitle: Text('${items[i]['packaging']}'),
+                        // Nov 22: what is inside a kit (a note).
+                        subtitle: Text(
+                          [
+                            '${items[i]['packaging']}',
+                            if (itemContents(items[i]) case final inside?)
+                              'Includes: $inside',
+                          ].join('\n'),
+                        ),
                         trailing: Text(
                           '${items[i]['quantity']} ${items[i]['unit'] ?? ''}'
                               .trim(),
