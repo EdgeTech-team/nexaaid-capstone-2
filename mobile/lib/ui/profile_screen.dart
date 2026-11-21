@@ -63,22 +63,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _page(BuildContext context, {required Widget account}) {
+    final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
     return ValueListenableBuilder<bool>(
       valueListenable: ProfileScreen.devToolsShown,
       builder: (context, devTools, _) => ListView(
         padding: Space.page,
         children: [
-          // UI redesign: the teal header of every tab. Ivan: light / dark
-          // mode stays in the top-right corner.
-          const HeroHeader(
-            title: 'Settings',
-            subtitle: 'Manage your account',
-            trailing: SunMoonToggle(),
-            bleed: Space.md,
-            bleedTop: Space.md,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Semantics(
+                      header: true,
+                      child: Text(
+                        'Settings',
+                        style: t.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      'Manage your account',
+                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              // Ivan: light / dark mode in the top-right corner.
+              const SunMoonToggle(),
+            ],
           ),
-          Gaps.v16,
+          Gaps.v24,
           account,
           if (api.loggedIn) ...[Gaps.v16, const _SecurityCard()],
           Gaps.v16,

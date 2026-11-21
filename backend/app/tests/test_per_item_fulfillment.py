@@ -242,9 +242,11 @@ def test_editing_needs_and_matching_items_at_receiving(api):
     assert [(n["item_name"], n["quantity"]) for n in edited["needs"]] == [("Rice", 40), ("Drinking Water", 40)]
     ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
 
-    # A donor types "Bigas"; CSWS receives it as Rice, so it counts for Rice.
+    # A donor types "Dinorado" (a kind of rice); CSWS receives it as Rice, so
+    # it counts for Rice. ("Bigas" itself now maps to Rice at once:
+    # services/items.ITEM_ALIASES, migration f3b8d1c5a9e7.)
     d = ok(client.post("/donations/", headers=t["donor"], json={
-        "report_id": rid, "other_item_name": "Bigas", "other_item_unit": "kg",
+        "report_id": rid, "other_item_name": "Dinorado", "other_item_unit": "kg",
         "pack_count": 2, "size_amount": 10, "size_unit": "kg", "handover_method": "Drop Off"}))
     assert d["quantity"] == 20 and d["item_id"] != RICE
     ok(client.post("/donations/receive", headers=t["csws"],

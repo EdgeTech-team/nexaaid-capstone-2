@@ -30,15 +30,22 @@ const maxAffectedFamilies = 20000;
 const maxEstimatedQuantity = 999999999;
 const _maxTotalQuantity = 2147483647;
 
-/// Only digits can be typed (no letters, dots, minus signs), up to 6 digits.
+/// Whole numbers only. A typed or pasted dot, letter or minus sign is
+/// refused (the field keeps what it had). digitsOnly used to strip them, so
+/// a pasted "2.5" quietly became 25.
+final _digitsOrNothing = TextInputFormatter.withFunction(
+  (old, value) => RegExp(r'^\d*$').hasMatch(value.text) ? value : old,
+);
+
+/// Affected families: up to 6 digits.
 final _wholeNumberInput = <TextInputFormatter>[
-  FilteringTextInputFormatter.digitsOnly,
+  _digitsOrNothing,
   LengthLimitingTextInputFormatter(6),
 ];
 
 /// How many of one need: up to 9 digits (see [maxEstimatedQuantity]).
 final _quantityInput = <TextInputFormatter>[
-  FilteringTextInputFormatter.digitsOnly,
+  _digitsOrNothing,
   LengthLimitingTextInputFormatter(9),
 ];
 
@@ -46,10 +53,14 @@ final _quantityInput = <TextInputFormatter>[
 String _withCommas(int n) =>
     n.toString().replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
 
-/// Validator: a whole number from 1 to [max].
+/// Validator: a whole number from 1 to [max]. 0, 0.0 and 2.5 are refused.
 String? Function(String?) _wholeNumber(int max) => (v) {
-  final n = int.tryParse(v?.trim() ?? '');
-  if (n == null || n <= 0) return 'Enter a number above 0';
+  final text = v?.trim() ?? '';
+  if (text.contains('.') || text.contains(',')) {
+    return 'Whole numbers only (no decimals)';
+  }
+  final n = int.tryParse(text);
+  if (n == null || n <= 0) return 'Enter a whole number above 0';
   if (n > max) return 'Maximum is ${_withCommas(max)}';
   return null;
 };
@@ -141,9 +152,6 @@ const _other = 'other';
 
 class _NewReportScreenState extends State<NewReportScreen> {
   final _form = GlobalKey<FormState>();
-
-  /// UI redesign: the form in steps; back to step 1 once it was sent.
-  final _steps = GlobalKey<SteppedFormState>();
   String? typeId, brgyId;
 
   /// problema_napud 2.2: one row per sitio hit, '' = not chosen yet. A
@@ -167,6 +175,16 @@ class _NewReportScreenState extends State<NewReportScreen> {
   /// Only for a new report typed in the app, not SMS or a correction.
   bool multi = false;
   final BarangayRows multiRows = {};
+
+  /// Nov 22: each barangay has its own needs list (whole quantities), as if
+  /// it were reported on its own. Barangay id -> its needs.
+  final multiNeeds = <String, List<_Need>>{};
+
+  List<_Need> _needsOf(String id) =>
+      multiNeeds.putIfAbsent(id, () => [_Need()]);
+
+  int _familiesOf(String id) =>
+      int.tryParse(multiRows[id]?.text.trim() ?? '') ?? 0;
   final eventName = TextEditingController();
   bool get _canMulti => !editing && !sms;
 
@@ -212,16 +230,19 @@ class _NewReportScreenState extends State<NewReportScreen> {
     'multi': multi,
     'multi_rows': {for (final e in multiRows.entries) e.key: e.value.text},
     'event_name': eventName.text,
-    'needs': [
-      for (final n in needs)
-        {
-          'item_id': n.itemId,
-          'qty': n.qty.text,
-          'auto': n.auto,
-          'other_name': n.otherName.text,
-          'other_unit': n.otherUnit.text,
-        },
-    ],
+    'needs': [for (final n in needs) _needMap(n)],
+    'multi_needs': {
+      for (final e in multiNeeds.entries)
+        e.key: [for (final n in e.value) _needMap(n)],
+    },
+  };
+
+  static Map<String, dynamic> _needMap(_Need n) => {
+    'item_id': n.itemId,
+    'qty': n.qty.text,
+    'auto': n.auto,
+    'other_name': n.otherName.text,
+    'other_unit': n.otherUnit.text,
   };
 
   void _saveDraft() => _draft?.save(_snapshot);
@@ -266,21 +287,32 @@ class _NewReportScreenState extends State<NewReportScreen> {
     }
     eventName.text = d.str('event_name');
     _smsLen = smsText.text.length; // a restored SMS is not a new paste
-    final restored = <_Need>[];
-    for (final m in d.maps('needs')) {
+    _Need fromMap(Map<String, dynamic> m) {
       final id = m.strOrNull('item_id');
-      final need = _Need()
-        ..itemId = id == _other || known('items', id) ? id : null;
-      need.qty.text = m.str('qty');
-      need.auto = m['auto'] == true;
-      need.otherName.text = m.str('other_name');
-      need.otherUnit.text = m.str('other_unit');
-      restored.add(need);
+      return _Need()
+        ..itemId = id == _other || known('items', id) ? id : null
+        ..qty.text = m.str('qty')
+        ..auto = m['auto'] == true
+        ..otherName.text = m.str('other_name')
+        ..otherUnit.text = m.str('other_unit');
     }
+
+    final restored = [for (final m in d.maps('needs')) fromMap(m)];
     if (restored.isNotEmpty) {
       needs
         ..clear()
         ..addAll(restored);
+    }
+    multiNeeds.clear();
+    if (d['multi_needs'] is Map) {
+      for (final e in (d['multi_needs'] as Map).entries) {
+        if (!multiRows.containsKey('${e.key}') || e.value is! List) continue;
+        final list = [
+          for (final m in e.value as List)
+            if (m is Map) fromMap(Map<String, dynamic>.from(m)),
+        ];
+        if (list.isNotEmpty) multiNeeds['${e.key}'] = list;
+      }
     }
     _fills++; // the dropdowns rebuild with these values
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -310,6 +342,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
       sitioRows = [''];
       _fillNotes = const [];
       multiRows.clear();
+      multiNeeds.clear();
+      _suggestedForAll = false;
       eventName.clear();
       _fills++;
     });
@@ -382,40 +416,90 @@ class _NewReportScreenState extends State<NewReportScreen> {
     return null;
   }
 
-  /// The needs as last filled from a template, to tell whether the reporter
-  /// changed them since. Untouched suggestions follow the disaster type and
-  /// the number of families; edited ones are left alone.
-  String? _templateSnapshot;
-
-  String get _needsSnapshot =>
-      needs.map((n) => '${n.itemId}:${n.qty.text.trim()}').join(',');
-
-  bool get _needsBlank => needs.every(
+  /// Nothing typed or chosen in [list] yet.
+  static bool _blank(List<_Need> list) => list.every(
     (n) =>
         n.itemId == null &&
         n.qty.text.trim().isEmpty &&
         n.otherName.text.trim().isEmpty,
   );
 
-  bool get _needsUntouched =>
-      _needsBlank || _needsSnapshot == _templateSnapshot;
+  /// Nothing typed or chosen in the needs of the current mode yet.
+  bool get _needsBlank =>
+      multi ? multiNeeds.values.every(_blank) : _blank(needs);
 
-  /// Fills the needs list with the template of the chosen disaster type,
-  /// each amount per family x affected families, rounded up. Without a
-  /// family count the amounts are left for the reporter to type.
+  /// "Use suggested needs" replaces the list (in "Several barangays", every
+  /// barangay's list); lists with something in them are replaced only
+  /// after the reporter agrees.
+  Future<void> _useSuggested(Names names) async {
+    if (!_needsBlank) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Replace the current needs?'),
+          content: const Text(
+            'The items you entered will be replaced with the suggested '
+            'needs. You can still edit or remove each one afterwards.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep my items'),
+            ),
+            FilledButton(
+              key: const ValueKey('suggested-replace'),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Replace'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+    setState(() => _applyTemplate(names));
+    _saveDraft();
+  }
+
+  /// "Use suggested needs": fills the needs list with the template of the
+  /// chosen disaster type, each amount per family x affected families,
+  /// rounded up. Without a family count the amounts are left to type.
+  /// Optional: nothing is filled until the reporter taps the button.
   void _applyTemplate(Names names) {
     final t = _templateFor(names);
     if (t == null) return;
-    needs
-      ..clear()
-      ..addAll([
-        for (final line in (t['items'] as List).cast<Map>())
-          _Need()..itemId = '${line['item_id']}',
-      ]);
-    for (final n in needs) {
-      _autoFill(n, names);
+    if (multi) {
+      // Each barangay its own list, sized to its own families.
+      _suggestedForAll = true;
+      for (final id in multiRows.keys) {
+        multiNeeds[id] = _templateLines(t);
+      }
+    } else {
+      needs
+        ..clear()
+        ..addAll(_templateLines(t));
     }
-    _templateSnapshot = _needsSnapshot;
+    _refillAuto(names);
+  }
+
+  /// The template's items as suggested lines (amounts filled by _autoFill).
+  static List<_Need> _templateLines(Map<String, dynamic> t) => [
+    for (final line in (t['items'] as List).cast<Map>())
+      _Need()
+        ..itemId = '${line['item_id']}'
+        ..auto = true,
+  ];
+
+  /// "Several barangays": "Use suggested needs" was tapped, so a barangay
+  /// picked afterwards gets its own suggested list too (not an empty one).
+  bool _suggestedForAll = false;
+
+  /// Barangays picked after "Use suggested needs" get the suggested list.
+  void _suggestForNewBarangays(Names names) {
+    final t = _templateFor(names);
+    if (!_suggestedForAll || t == null) return;
+    for (final id in multiRows.keys) {
+      if (!multiNeeds.containsKey(id)) multiNeeds[id] = _templateLines(t);
+    }
   }
 
   /// How much of an item one affected family gets, in hundredths (600 = 6,
@@ -437,30 +521,33 @@ class _NewReportScreenState extends State<NewReportScreen> {
     return 100;
   }
 
-  /// UAT Nov 10: fills a need's amount by itself.
-  ///   One barangay:      ceil(affected families x per family)
-  ///   Several barangays: the per-family amount; each barangay's total is
-  ///                      ceil(its families x per family) (see _multiNeeds).
-  /// Only for a need with an item and an amount the reporter did not type.
-  void _autoFill(_Need n, Names names) {
-    if (n.itemId == null) return;
-    if (!n.auto && n.qty.text.trim().isNotEmpty) return; // typed: keep it
+  /// The amount of a suggested need (added by "Use suggested needs"):
+  /// ceil(the barangay's affected families x per family), a whole number.
+  /// In "Several barangays" each barangay uses its own families.
+  /// Nov 22: only suggested needs the reporter has not touched. A need the
+  /// reporter added, typed in or cleared is never filled by the app, so an
+  /// emptied field stays empty (it used to come back as 15).
+  void _autoFill(_Need n, Names names, int fams) {
+    if (n.itemId == null || !n.auto) return;
     final pf = _perFamily(n, names);
-    if (multi) {
-      n.qty.text = formatPerFamily(pf / 100);
-    } else {
-      final fams = int.tryParse(families.text.trim()) ?? 0;
-      n.qty.text = fams > 0
-          ? '${barangayQuantity(fams, pf).clamp(1, maxEstimatedQuantity)}'
-          : '';
-    }
-    n.auto = true;
+    n.qty.text = fams > 0
+        ? '${barangayQuantity(fams, pf).clamp(1, maxEstimatedQuantity)}'
+        : '';
   }
 
   /// Every amount the app filled follows the new families / type.
   void _refillAuto(Names names) {
-    for (final n in needs) {
-      _autoFill(n, names);
+    if (multi) {
+      for (final e in multiNeeds.entries) {
+        for (final n in e.value) {
+          _autoFill(n, names, _familiesOf(e.key));
+        }
+      }
+    } else {
+      final fams = int.tryParse(families.text.trim()) ?? 0;
+      for (final n in needs) {
+        _autoFill(n, names, fams);
+      }
     }
   }
 
@@ -616,10 +703,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
   /// Concerns2 follow-up: the same item can't be listed twice
   /// (it showed up as "Medicine Kit: 1 boxes, Medicine Kit: 2 boxes").
   /// Returns the earlier need number that already has this item, or null.
-  int? _duplicateOf(int i) {
-    final n = needs[i];
+  int? _duplicateOf(List<_Need> list, int i) {
+    final n = list[i];
     for (var j = 0; j < i; j++) {
-      final o = needs[j];
+      final o = list[j];
       if (n.itemId == null || o.itemId != n.itemId) continue;
       if (n.itemId != _other) return j + 1;
       final a = n.otherName.text.trim().toLowerCase();
@@ -639,83 +726,46 @@ class _NewReportScreenState extends State<NewReportScreen> {
 
   int get _multiCount => _multiFamilies.length;
 
-  /// Switches between one and several barangays. The amounts change meaning
-  /// (total vs per family): suggested ones are filled in again, typed ones
-  /// are cleared so nothing is sent with the wrong meaning.
+  /// Switches between one and several barangays. Nov 22: amounts are
+  /// whole quantities in both modes (each barangay has its own list), so
+  /// nothing typed changes meaning or is cleared.
   void _setMulti(bool value, Names names) {
     if (value == multi) return;
-    // A typed amount means something else in the other mode (a total vs
-    // per family), so every amount is suggested again from the per-family
-    // standard; the reporter is told when typed ones were replaced.
-    final typed = needs.any((n) => !n.auto && n.qty.text.trim().isNotEmpty);
     setState(() {
       multi = value;
-      for (final n in needs) {
-        n.auto = true;
-      }
       _refillAuto(names);
     });
     _saveDraft();
-    if (typed) {
-      AppToast.info(
-        context,
-        value
-            ? 'Amounts are now per family and were filled in again. '
-                  'Check them.'
-            : 'Amounts are now totals and were filled in again. Check them.',
-      );
-    }
   }
 
-  /// "Several barangays": one barangay's totals, e.g. "Rice 720 kg ·
-  /// Drinking Water 2,400 L" (families x per family, rounded up).
-  String? _barangayPreview(int families, Names names) {
+  /// "Several barangays": one barangay's items as a short line under its
+  /// families, e.g. "Rice 720 kg · Drinking Water 2,400 L".
+  String? _barangayPreview(String id, Names names) {
     final parts = [
-      for (final n in needs)
-        if (n.itemId != null && perFamilyHundredths(n.qty.text) != null)
+      for (final n in multiNeeds[id] ?? const <_Need>[])
+        if (n.itemId != null && int.tryParse(n.qty.text.trim()) != null)
           '${_needName(n, names)} '
-                  '${withCommas(barangayQuantity(families, perFamilyHundredths(n.qty.text)!))} '
+                  '${withCommas(int.parse(n.qty.text.trim()))} '
                   '${_needUnit(n, names)}'
               .trim(),
     ];
     return parts.isEmpty ? null : parts.join(' · ');
   }
 
-  /// "Several barangays": under a need, its total for all the barangays
-  /// and the equation, e.g. "Total 1,440 kg = 120 × 6 + 80 × 6 + 40 × 6".
-  Widget _multiTotalLine(_Need n, Names names) {
-    final pf = perFamilyHundredths(n.qty.text);
-    final rows = _multiFamilies;
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    if (pf == null || rows.isEmpty) {
-      return Container(
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.only(top: 6),
-        child: Text(
-          'Each barangay gets its families × this amount, rounded up.',
-          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-        ),
-      );
-    }
-    final unit = _needUnit(n, names);
-    final total = rows.fold<int>(
-      0,
-      (a, r) => a + barangayQuantity(r.value, pf),
-    );
-    final each = formatPerFamily(pf / 100);
-    final equation = rows.length <= 4
-        ? rows.map((r) => '${r.value} × $each').join(' + ')
-        : '${rows.length} barangays × their families × $each';
-    return Container(
-      alignment: Alignment.centerLeft,
-      padding: const EdgeInsets.only(top: 6),
-      child: Text(
-        'Total ${withCommas(total)} $unit = $equation'.trim(),
-        key: ValueKey('need-total-${n.itemId}'),
-        style: t.bodySmall?.copyWith(color: cs.primary),
-      ),
-    );
+  /// What is missing in one needs list, e.g. "Need 2: choose an item".
+  /// [where] names the barangay in "Several barangays".
+  List<String> _missingNeeds(List<_Need> list, Names names, {String? where}) {
+    final at = where == null ? '' : '$where, ';
+    return [
+      for (var i = 0; i < list.length; i++)
+        if (list[i].itemId == null ||
+            (list[i].itemId == _other && _needName(list[i], names).isEmpty))
+          '${at}Need ${i + 1}: choose an item'
+        else if (_wholeNumber(maxEstimatedQuantity)(list[i].qty.text) != null)
+          '${at}Enter a quantity for ${_needName(list[i], names)}'
+        else if (_duplicateOf(list, i) case final dup?)
+          '${at}Need ${i + 1}: already in Need $dup',
+    ];
   }
 
   /// UAT post-meeting #6: when something is missing, say what in a pop-up
@@ -741,23 +791,18 @@ class _NewReportScreenState extends State<NewReportScreen> {
       }
     }
     if (desc.text.trim().isEmpty) out.add('Short incident description');
-    for (var i = 0; i < needs.length; i++) {
-      final n = needs[i];
-      final name = _needName(n, names);
-      if (n.itemId == null || (n.itemId == _other && name.isEmpty)) {
-        out.add('Need ${i + 1}: choose an item');
-        continue;
-      }
-      final bad = multi
-          ? perFamilyError(n.qty.text) != null
-          : _wholeNumber(maxEstimatedQuantity)(n.qty.text) != null;
-      if (bad) {
-        out.add(
-          multi
-              ? 'Enter how many $name per family'
-              : 'Enter a quantity for $name',
+    if (multi) {
+      for (final row in _multiFamilies) {
+        out.addAll(
+          _missingNeeds(
+            _needsOf(row.key),
+            names,
+            where: names.of('barangays', row.key),
+          ),
         );
       }
+    } else {
+      out.addAll(_missingNeeds(needs, names));
     }
     return out;
   }
@@ -801,7 +846,9 @@ class _NewReportScreenState extends State<NewReportScreen> {
 
   Future<void> _submit(Names names) async {
     final valid = _form.currentState!.validate();
-    if (!valid || (multi && _multiCount < 2)) {
+    // The pop-up's own checks too: in "Several barangays" a collapsed
+    // barangay's needs are checked here.
+    if (!valid || _missing(names).isNotEmpty) {
       await _showMissing(names);
       return;
     }
@@ -895,7 +942,6 @@ class _NewReportScreenState extends State<NewReportScreen> {
       busy = false;
       if (r.ok) {
         _form.currentState!.reset();
-        _steps.currentState?.goTo(0);
         typeOther.clear();
         desc.clear();
         families.clear();
@@ -911,22 +957,23 @@ class _NewReportScreenState extends State<NewReportScreen> {
         _fills++;
       }
     });
-    if (r.ok) _draft?.clear(); // submitted: the draft is no longer needed
+    if (!r.ok) return _noAnswer(r);
+    _draft?.clear(); // submitted: the draft is no longer needed
+    _openStatus(
+      reportId: r.json is Map ? (r.json['report_id'] as num?)?.toInt() : null,
+    );
   }
 
-  /// NF-003: each barangay's amounts, families x per family, rounded up.
-  List<Map<String, dynamic>> _multiNeeds(int families, Names names) => [
-    for (final n in needs)
+  /// NF-003 / Nov 22: one barangay's own needs, whole quantities.
+  List<Map<String, dynamic>> _multiNeeds(String id, Names names) => [
+    for (final n in _needsOf(id))
       {
         if (n.itemId == _other) ...{
           'other_item_name': n.otherName.text.trim(),
           'other_item_unit': _needUnit(n, names),
         } else
           'item_id': int.parse(n.itemId!),
-        'quantity': barangayQuantity(
-          families,
-          perFamilyHundredths(n.qty.text)!,
-        ),
+        'quantity': int.parse(n.qty.text.trim()),
       },
   ];
 
@@ -938,55 +985,34 @@ class _NewReportScreenState extends State<NewReportScreen> {
     final name = eventName.text.trim().isEmpty
         ? defaultEventName(label, DateTime.now())
         : eventName.text.trim();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Submit ${rows.length} reports?'),
-        content: SizedBox(
-          width: 420,
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              Text(
-                '$name. One report per barangay; the Administrator '
-                'validates each one.',
-              ),
-              const SizedBox(height: 12),
-              for (final r in rows) ...[
-                Text(
-                  '${names.of('barangays', r.key)} · ${r.value} families',
-                  style: Theme.of(ctx).textTheme.titleSmall,
-                ),
-                Text(
-                  [
-                    for (final n in needs)
-                      '${_needName(n, names)}: ${barangayQuantity(r.value, perFamilyHundredths(n.qty.text)!)} ${_needUnit(n, names)}'
-                          .trim(),
-                  ].join(', '),
-                ),
-                const SizedBox(height: 8),
-              ],
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Back'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: Text('Submit ${rows.length} reports'),
-          ),
-        ],
-      ),
+    // A clean check of every barangay before anything is saved: its name,
+    // its affected families and the whole-number amounts it will ask for.
+    final preview = {
+      for (final r in rows)
+        r.key: PreviewBarangay(names.of('barangays', r.key), r.value, [
+          for (final n in _needsOf(r.key))
+            PreviewNeed(
+              _needName(n, names),
+              int.parse(n.qty.text.trim()),
+              _needUnit(n, names),
+            ),
+        ]),
+    };
+    final ok = await showMultiReportPreview(
+      context,
+      eventName: name,
+      disaster: label,
+      barangays: preview.values.toList(),
     );
-    if (ok != true || !mounted) return;
+    if (!ok || !mounted) return;
     setState(() => busy = true);
     final r = await act(
       context,
       () => api.post(
         '/reports/batch',
+        // Nov 22: one report per barangay can take longer than the usual
+        // 20 seconds (it showed "Cannot reach the server" while saving).
+        timeout: const Duration(minutes: 2),
         body: {
           'disaster_type_id': int.parse(typeId!),
           'disaster_type_other': _typeIsOther(names)
@@ -1002,7 +1028,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
               {
                 'barangay_id': int.parse(row.key),
                 'affected_families': row.value,
-                'needs': _multiNeeds(row.value, names),
+                'needs': _multiNeeds(row.key, names),
               },
           ],
         },
@@ -1011,12 +1037,21 @@ class _NewReportScreenState extends State<NewReportScreen> {
           '${rows.length} reports submitted as one event. Each is pending '
           'admin validation.',
     );
+    // Nov 22: the saved reports in one list, then on to Reports › Status.
+    final saved = [
+      if (r.ok && r.json is Map && r.json['reports'] is List)
+        for (final x in (r.json['reports'] as List).cast<Map>())
+          if (preview['${x['barangay_id']}'] case final b?)
+            SubmittedReport((x['report_id'] as num).toInt(), b),
+    ];
+    final savedName = r.ok && r.json is Map && r.json['event'] is Map
+        ? '${r.json['event']['event_name'] ?? name}'
+        : name;
     if (!mounted) return;
     setState(() {
       busy = false;
       if (r.ok) {
         _form.currentState!.reset();
-        _steps.currentState?.goTo(0);
         typeOther.clear();
         desc.clear();
         eventName.clear();
@@ -1024,6 +1059,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
           c.dispose();
         }
         multiRows.clear();
+        multiNeeds.clear();
+        _suggestedForAll = false;
         needs
           ..clear()
           ..add(_Need());
@@ -1031,11 +1068,289 @@ class _NewReportScreenState extends State<NewReportScreen> {
         _fills++;
       }
     });
-    if (r.ok) _draft?.clear();
+    if (!r.ok) return _noAnswer(r);
+    _draft?.clear();
+    if (saved.isEmpty) return _openStatus();
+    final view = await showMultiReportSubmitted(
+      context,
+      eventName: savedName,
+      reports: saved,
+    );
+    if (view && mounted) _openStatus();
   }
 
-  Widget _needRow(int i, Names names) {
-    final n = needs[i];
+  /// After submitting: Reports › Status, on the Pending reports (the
+  /// Disaster Unit follows its reports there). The Administrator encoding
+  /// an SMS stays on the form for the next one.
+  void _openStatus({int? reportId}) {
+    if (!mounted || sms || editing) return;
+    HomeNav.go(context, HomeTarget('Reports', view: 'Pending', id: reportId));
+  }
+
+  /// Nov 22: no answer from the server (slow connection or a time-out).
+  /// The reports may still have been saved, so the reporter checks Report
+  /// Status before sending them again (no duplicates). The form keeps what
+  /// was typed in case they really were not saved. Other errors (a wrong
+  /// field) keep the reporter on the form, with the server's message.
+  Future<void> _noAnswer(ApiResult r) async {
+    if (r.status != 0 || !mounted || sms || editing) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.wifi_off_outlined),
+        title: const Text('No answer from the server'),
+        content: const Text(
+          'Your reports may already be saved. Check Report Status before '
+          'you submit again, so nothing is reported twice. What you typed '
+          'is still in the form.',
+        ),
+        actions: [
+          FilledButton(
+            key: const ValueKey('no-answer-status'),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Check Report Status'),
+          ),
+        ],
+      ),
+    );
+    _openStatus();
+  }
+
+  /// The disaster type's name for the suggestion texts.
+  String _templateName(Names names, Map<String, dynamic> t) =>
+      _typeIsOther(names) ? 'other disasters' : '${t['name']}';
+
+  /// "Suggested needs (optional)": tells the reporter NexaAid has a starting
+  /// list for the disaster type; the button adds it.
+  Widget _suggestedCard(Names names) {
+    final t = _templateFor(names);
+    final theme = Theme.of(context);
+    final noFamilies = multi
+        ? _multiCount == 0
+        : (int.tryParse(families.text.trim()) ?? 0) <= 0;
+    final String text;
+    if (typeId == null) {
+      text = 'Choose a disaster type to see the suggested needs for it.';
+    } else if (t == null) {
+      text =
+          'There are no suggested needs for this type of disaster. Add '
+          'the items the families need below.';
+    } else {
+      text =
+          'Start faster: NexaAid has a ready-made list of what families '
+          'usually need after ${_templateName(names, t)}, sized to '
+          '${multi ? "each barangay's own families" : 'the families you report'}.'
+          '${noFamilies ? ' Enter the affected families first so the amounts can be worked out.' : ''}';
+    }
+    return Card(
+      key: const ValueKey('suggested-needs'),
+      margin: const EdgeInsets.only(bottom: 12),
+      color: theme.colorScheme.primaryContainer.withValues(alpha: 0.35),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.lightbulb_outline,
+                  size: 20,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Suggested needs (optional)',
+                  style: theme.textTheme.titleSmall,
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(text, style: theme.textTheme.bodySmall),
+            if (t != null) ...[
+              const SizedBox(height: 10),
+              FilledButton.tonalIcon(
+                key: const ValueKey('use-suggested'),
+                onPressed: () => _useSuggested(names),
+                icon: const Icon(Icons.playlist_add),
+                label: const Text('Use suggested needs'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Below the needs: what the suggested needs are, in plain words, and a
+  /// note to use them with care (no item list, no formula).
+  Widget _suggestedHowTo(Names names) {
+    final theme = Theme.of(context);
+    final small = theme.textTheme.bodySmall;
+    return Container(
+      key: const ValueKey('suggested-how'),
+      margin: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: theme.colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 18,
+                color: theme.colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'About suggested needs',
+                  style: theme.textTheme.titleSmall,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Suggested needs are built from relief standards, such as the '
+            'DSWD family food pack, so you never have to start from a blank '
+            'form. They grow with the number of affected families and give '
+            'you a complete first draft in one tap.',
+            style: small,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Use them with care: they are a starting point, not an '
+            'assessment of this disaster. Check every item against what the '
+            'families actually need, and change or remove anything that does '
+            'not fit before you submit.',
+            style: small?.copyWith(fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// "Several barangays" (Nov 22): one card per barangay with families,
+  /// always open, holding its own needs as if it were reported on its own.
+  Widget _multiNeedsSection(Names names) {
+    final rows = _multiFamilies;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    if (rows.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Text(
+          'Enter the affected families of each barangay above. Each one then '
+          'gets its own needs list, just like a one-barangay report.',
+          style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Text(
+            'Each barangay is its own report with its own needs. Change '
+            'the items of any barangay below.',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+        ),
+        for (final row in rows)
+          Builder(
+            builder: (context) {
+              final list = _needsOf(row.key);
+              final name = names.of('barangays', row.key);
+              final items = list.where((n) => n.itemId != null).length;
+              return Card(
+                key: ValueKey('multi-needs-${row.key}'),
+                margin: const EdgeInsets.only(bottom: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(color: cs.outlineVariant),
+                ),
+                clipBehavior: Clip.antiAlias,
+                // Nov 22: always open, like the one-barangay form: the
+                // barangay's name on top, its needs under it.
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      color: cs.primaryContainer,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.place, color: cs.onPrimaryContainer),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: t.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: cs.onPrimaryContainer,
+                                  ),
+                                ),
+                                Text(
+                                  '${withCommas(row.value)} '
+                                  '${row.value == 1 ? 'family' : 'families'} · '
+                                  '$items ${items == 1 ? 'item' : 'items'}',
+                                  style: t.bodySmall?.copyWith(
+                                    color: cs.onPrimaryContainer,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (var i = 0; i < list.length; i++)
+                            _needRow(list, i, names),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: OutlinedButton.icon(
+                              key: ValueKey('multi-add-${row.key}'),
+                              onPressed: () {
+                                setState(() => list.add(_Need()));
+                                _saveDraft();
+                              },
+                              icon: const Icon(Icons.add),
+                              label: const Text('Add another item'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+      ],
+    );
+  }
+
+  /// One need of [list] (the report's needs, or one barangay's in
+  /// "Several barangays"): item, whole quantity, unit.
+  Widget _needRow(List<_Need> list, int i, Names names) {
+    final n = list[i];
     final unit = _needUnit(n, names);
     return Card(
       key: ObjectKey(n),
@@ -1062,25 +1377,31 @@ class _NewReportScreenState extends State<NewReportScreen> {
                         child: Text('Other…'),
                       ),
                     ],
+                    // Another item on a suggested line: its suggested
+                    // amount was for the old item, so it is cleared.
                     onChanged: (v) => setState(() {
+                      if (n.auto && v != n.itemId) {
+                        n
+                          ..auto = false
+                          ..qty.clear();
+                      }
                       n.itemId = v;
-                      _autoFill(n, names);
                     }),
                     validator: (v) {
                       if (v == null) return 'Choose an item';
                       if (v == _other) return null; // checked on the name
-                      final dup = _duplicateOf(i);
+                      final dup = _duplicateOf(list, i);
                       return dup == null
                           ? null
                           : 'Already in Need $dup. Change the amount there.';
                     },
                   ),
                 ),
-                if (needs.length > 1)
+                if (list.length > 1)
                   IconButton(
                     tooltip: 'Remove this need',
                     onPressed: () {
-                      setState(() => needs.removeAt(i));
+                      setState(() => list.removeAt(i));
                       _saveDraft();
                     },
                     icon: const Icon(Icons.close),
@@ -1097,7 +1418,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       decoration: const InputDecoration(labelText: 'Item'),
                       validator: (v) {
                         if ((v ?? '').trim().isEmpty) return 'Required';
-                        final dup = _duplicateOf(i);
+                        final dup = _duplicateOf(list, i);
                         return dup == null ? null : 'Already in Need $dup';
                       },
                     ),
@@ -1115,34 +1436,20 @@ class _NewReportScreenState extends State<NewReportScreen> {
             ],
             const SizedBox(height: 10),
             TextFormField(
-              key: ValueKey('qty-$multi'),
               controller: n.qty,
-              keyboardType: multi
-                  ? const TextInputType.numberWithOptions(decimal: true)
-                  : TextInputType.number,
-              inputFormatters: multi ? perFamilyInput : _quantityInput,
+              keyboardType: TextInputType.number,
+              inputFormatters: _quantityInput,
               decoration: InputDecoration(
-                labelText: multi ? 'How many per family?' : 'How many?',
-                suffixText: unit.isEmpty
-                    ? null
-                    : multi
-                    ? '$unit / family'
-                    : unit,
-                helperText: multi
-                    ? 'e.g. 6, or 0.2 for 1 per 5 families'
-                    : null,
+                labelText: 'Quantity needed',
+                suffixText: unit.isEmpty ? null : unit,
+                helperText: 'Whole numbers only',
               ),
-              validator: multi
-                  ? perFamilyError
-                  : _wholeNumber(maxEstimatedQuantity),
-              // Typed by the reporter: no longer follows the families.
-              // Cleared: filled in again by the app.
-              onChanged: (v) => setState(() {
-                n.auto = v.trim().isEmpty;
-                if (n.auto) _autoFill(n, names);
-              }),
+              validator: _wholeNumber(maxEstimatedQuantity),
+              // Typed or cleared by the reporter: it is theirs now and no
+              // longer follows the families. An empty field stays empty
+              // (and the form will not submit until it has an amount).
+              onChanged: (_) => setState(() => n.auto = false),
             ),
-            if (multi && n.itemId != null) _multiTotalLine(n, names),
           ],
         ),
       ),
@@ -1169,19 +1476,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
         return Form(
           key: _form,
           onChanged: _saveDraft,
-          // UI redesign: the same fields, in steps with a progress bar.
-          child: SteppedForm(
-            key: _steps,
-            padding: const EdgeInsets.fromLTRB(
-              Space.md,
-              0,
-              Space.md,
-              Space.lg,
-            ),
-            header: [
-              HeroHeader(
-                bleed: Space.md,
-                title: editing
+          child: ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              PageHeader(
+                editing
                     ? 'Edit Report #${widget.edit!['report_id']}'
                     : sms
                     ? 'Encode SMS Report'
@@ -1195,15 +1494,12 @@ class _NewReportScreenState extends State<NewReportScreen> {
                     ? 'Paste the text the Disaster Unit sent, tap Fill, then '
                           'check every field before saving. It is saved as '
                           'Pending; validate it on the Validate tab.'
-                    : 'Saved as Pending until the Administrator validates it. '
-                          'No internet? Use the SMS report tab to text it to '
-                          'the Administrator.',
+                    : 'Your report stays Pending until the Administrator '
+                          'checks and validates it. No internet? Send it by '
+                          'text from the SMS report tab.',
               ),
-              Gaps.v16,
-            ],
-            steps: [
-              if (sms)
-                FormStep('SMS as received', [
+              if (sms) ...[
+                const SectionTitle('SMS as received'),
                 TextFormField(
                   controller: smsSender,
                   keyboardType: TextInputType.phone,
@@ -1260,13 +1556,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Icon(
-                                    Icons.warning_amber,
-                                    size: 18,
-                                    color: AppTints.amber.fgFor(
-                                      Theme.of(context).brightness,
-                                    ),
-                                  ),
+                                  const Icon(Icons.warning_amber, size: 18),
                                   const SizedBox(width: 6),
                                   Expanded(child: Text(note)),
                                 ],
@@ -1276,24 +1566,19 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       ),
                     ),
                   ),
-              ]),
-              FormStep('Disaster and location', [
+              ],
+              const SectionTitle('Disaster and location'),
               LookupDropdown(
                 key: ValueKey('type-$_fills'),
                 list: 'disaster_types',
                 label: 'Disaster type',
                 value: typeId,
                 names: names,
+                // Nov 22: nothing is filled in by itself. Suggested needs
+                // already in the list follow the new type's standard.
                 onChanged: (v) => setState(() {
-                  final untouched = _needsUntouched;
                   typeId = v;
-                  if (untouched) {
-                    _applyTemplate(names);
-                  } else {
-                    // Changed list: kept, but amounts the app filled follow
-                    // the new type's per-family standard.
-                    _refillAuto(names);
-                  }
+                  _refillAuto(names);
                 }),
               ),
               if (_typeIsOther(names)) ...[
@@ -1344,9 +1629,14 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   typeId: typeId,
                   rows: multiRows,
                   maxFamilies: maxAffectedFamilies,
-                  preview: (families) => _barangayPreview(families, names),
+                  preview: (id, _) => _barangayPreview(id, names),
+                  // New families: the suggested amounts follow them. A
+                  // barangay picked after "Use suggested needs" gets them.
                   onChanged: () {
-                    setState(() {});
+                    setState(() {
+                      _suggestForNewBarangays(names);
+                      _refillAuto(names);
+                    });
                     _saveDraft();
                   },
                 ),
@@ -1401,16 +1691,17 @@ class _NewReportScreenState extends State<NewReportScreen> {
                 ),
               ],
               if (!multi) ...[
-                const RedesignSection('Donation info'),
+                const SectionTitle('Donation info'),
                 NewReportDonationInfo(barangayId: brgyId),
               ],
-              ]),
-              FormStep('Situation (DROMIC)', [
+              const SectionTitle('What happened'),
               TextFormField(
                 controller: desc,
                 maxLines: 3,
                 decoration: const InputDecoration(
-                  labelText: 'Short incident description',
+                  labelText: 'What happened? (short description)',
+                  helperText:
+                      'e.g. Flooding up to waist level in 3 sitios since 6 AM.',
                 ),
                 validator: (v) => (v ?? '').trim().isEmpty ? 'Required' : null,
               ),
@@ -1423,7 +1714,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   decoration: InputDecoration(
                     labelText: 'Affected families',
                     helperText:
-                        'Numbers only, up to ${_withCommas(maxAffectedFamilies)}',
+                        'Whole number, up to ${_withCommas(maxAffectedFamilies)}',
                   ),
                   validator: _wholeNumber(maxAffectedFamilies),
                   // UAT Nov 10: every need the app filled (preset or added)
@@ -1431,41 +1722,28 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   onChanged: (_) => setState(() => _refillAuto(names)),
                 ),
               ],
-              ]),
-              FormStep('Assistance needed', [
-              // Concerns Nov 4: the needs fill in by themselves from the
-              // disaster type and the families, so there is no "Use
-              // suggested" button. "Add need" comes after the list.
-              if (_templateFor(names) case final t?)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.auto_awesome_outlined, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Filled in with the basic needs for '
-                          '${_typeIsOther(names) ? 'any disaster' : t['name']}, '
-                          'per affected family. Change them as needed.',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ),
-                    ],
+              const SectionTitle('What the families need'),
+              // Nov 22: the suggested needs are optional. Nothing is filled
+              // in until the reporter taps "Use suggested needs".
+              _suggestedCard(names),
+              if (multi)
+                _multiNeedsSection(names)
+              else ...[
+                for (var i = 0; i < needs.length; i++)
+                  _needRow(needs, i, names),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      setState(() => needs.add(_Need()));
+                      _saveDraft();
+                    },
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add another item'),
                   ),
                 ),
-              for (var i = 0; i < needs.length; i++) _needRow(i, names),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() => needs.add(_Need()));
-                    _saveDraft();
-                  },
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add need'),
-                ),
-              ),
+              ],
+              if (_templateFor(names) != null) _suggestedHowTo(names),
               const SizedBox(height: 16),
               // J7 / NF-012: typos are fixed only before saving.
               if (sms && !editing) ...[
@@ -1475,18 +1753,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   'with a reason so the Disaster Unit can resend it.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+                const SizedBox(height: 8),
               ],
-              ]),
-            ],
-            submit: (context, showFirstError) => FilledButton.icon(
-                onPressed: busy
-                    ? null
-                    : () async {
-                        final sent = _submit(names);
-                        // validate() already ran: open the step in red.
-                        showFirstError();
-                        await sent;
-                      },
+              FilledButton.icon(
+                onPressed: busy ? null : () => _submit(names),
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(50),
                 ),
@@ -1507,6 +1777,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
                       : 'Submit report',
                 ),
               ),
+            ],
           ),
         );
       },
@@ -1558,16 +1829,11 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
       countsPath: '/reports/validated/counts',
       countsQuery: {'priority_level': ?priority},
       header: (counts) => [
-        if (widget.header) ...[
-          // UI redesign: the teal header of every tab.
-          HeroHeader(
-            title: 'Validated Reports',
+        if (widget.header)
+          PageHeader(
+            'Validated Reports',
             subtitle: 'Reports approved by the Administrator • ${roleLine()}',
-            bleed: 20,
-            bleedTop: 20,
           ),
-          Gaps.v16,
-        ],
         // One Filter button and a compact sort (UAT Nov 2026).
         // Fulfillment status and sort for every role (Ivan's note:
         // fulfilled reports are found with the Fulfilled filter, there is
@@ -1813,15 +2079,12 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
       // The report a notification pointed at comes first, outlined.
       focusId: widget.focusId,
       header: (counts) => [
-        HeroHeader(
-          title: 'Report Status',
+        PageHeader(
+          'Report Status',
           subtitle:
               'Fulfillment progress of every report, active and done • '
               '${roleLine()}',
-          bleed: 20,
-          bleedTop: 20,
         ),
-        Gaps.v16,
         // UAT Nov 2026 (M2.5): one Filter button with Validation Status
         // (Rejected reports no longer sink to the bottom), Priorities and
         // Fulfillment Status, and a compact sort.
@@ -2011,13 +2274,7 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
       // The report a notification pointed at comes first, outlined.
       focusId: _highlight,
       header: (counts) => [
-        HeroHeader(
-          title: 'Report Validation',
-          subtitle: roleLine(),
-          bleed: 20,
-          bleedTop: 20,
-        ),
-        Gaps.v16,
+        PageHeader('Report Validation', subtitle: roleLine()),
         // UAT Nov 2026 (M2.3, M3.3): one Filter button instead of the
         // Pending / Validated / Rejected switch and two chip rows.
         // Priorities, fulfillment and sort are for validated reports, as
@@ -2118,14 +2375,16 @@ class DashboardScreen extends StatelessWidget {
         ) {
           final total = rows.fold<int>(0, (a, r) => a + (r['count'] as int));
           return Card(
-            margin: const EdgeInsets.only(bottom: Space.sm),
             child: Padding(
-              padding: const EdgeInsets.all(Space.md),
+              padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: Theme.of(context).textTheme.titleMedium),
-                  Gaps.v12,
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 10),
                   if (rows.isEmpty) const Text('No data yet'),
                   for (final r in rows)
                     Padding(
@@ -2138,7 +2397,7 @@ class DashboardScreen extends StatelessWidget {
                           ),
                           Expanded(
                             child: ClipRRect(
-                              borderRadius: BorderRadius.circular(Radii.pill),
+                              borderRadius: BorderRadius.circular(4),
                               child: LinearProgressIndicator(
                                 value: total == 0 ? 0 : r['count'] / total,
                                 minHeight: 10,
@@ -2179,59 +2438,30 @@ class DashboardScreen extends StatelessWidget {
           ),
         );
 
-        // UI redesign (layout only, same data and taps): teal header with
-        // the report numbers over it, number tiles, then the breakdowns.
         return ListView(
-          padding: const EdgeInsets.fromLTRB(Space.md, 0, Space.md, Space.md),
+          padding: const EdgeInsets.all(20),
           children: [
-            HeroHeader(
-              title: '${api.role ?? 'System'} Dashboard',
+            PageHeader(
+              '${api.role ?? 'System'} Dashboard',
               subtitle: roleLine(),
-              bleed: Space.md,
-              overlap: ActionCard(
-                title: 'Your reports',
-                rows: [
-                  ActionRow(
-                    // Rejected and withdrawn reports are not counted (backend).
-                    icon: Icons.report_outlined,
-                    tint: AppTints.teal,
-                    label: 'Disaster reports',
-                    count: '${s['total_reports']}',
-                    onTap: reportStatus,
-                  ),
-                  ActionRow(
-                    icon: Icons.pie_chart_outline,
-                    tint: AppTints.green,
-                    label: 'Average fulfillment',
-                    count:
-                        '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
-                    onTap: reportStatus,
-                  ),
-                ],
-              ),
             ),
-            const RedesignSection('At a glance'),
-            NumberGrid([
-              NumberTile(
-                icon: Icons.volunteer_activism_outlined,
-                tint: AppTints.blue,
-                caption: 'Donations',
-                value: '${s['total_donations']}',
+            StatCardGrid([
+              StatCard(
+                // Rejected and withdrawn reports are not counted (backend).
+                label: 'Disaster reports',
+                value: '${s['total_reports']}',
+                icon: Icons.report_outlined,
+                onTap: reportStatus,
+              ),
+              StatCard(
                 label: 'Physical donations',
+                value: '${s['total_donations']}',
+                icon: Icons.volunteer_activism_outlined,
               ),
-              NumberTile(
-                icon: Icons.payments_outlined,
-                tint: AppTints.blue,
-                caption: 'Donations',
-                value: pesos(b['total_estimated_value']) ?? 'PHP 0',
-                label: 'Est. value of donations',
-              ),
-              NumberTile(
-                icon: Icons.local_shipping_outlined,
-                tint: AppTints.blue,
-                caption: 'Logistics',
-                value: '${s['total_deliveries']}',
+              StatCard(
                 label: 'Deliveries',
+                value: '${s['total_deliveries']}',
+                icon: Icons.local_shipping_outlined,
                 // The Disaster Unit has no delivery list (Appendix H 8.5):
                 // show the deliveries by status.
                 onTap: () => sheet(
@@ -2239,11 +2469,10 @@ class DashboardScreen extends StatelessWidget {
                   l['deliveries_by_status'] as List,
                 ),
               ),
-              NumberTile(
-                icon: Icons.fire_truck_outlined,
-                caption: 'Logistics',
-                value: '${s['total_logistics_requests']}',
+              StatCard(
                 label: 'Logistics requests',
+                value: '${s['total_logistics_requests']}',
+                icon: Icons.fire_truck_outlined,
                 onTap: () => Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => Scaffold(
@@ -2253,13 +2482,25 @@ class DashboardScreen extends StatelessWidget {
                   ),
                 ),
               ),
+              StatCard(
+                label: 'Average fulfillment',
+                value:
+                    '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
+                icon: Icons.pie_chart_outline,
+                color: AppColors.success,
+                onTap: reportStatus,
+              ),
+              StatCard(
+                label: 'Est. value of donations',
+                value: pesos(b['total_estimated_value']) ?? 'PHP 0',
+                icon: Icons.payments_outlined,
+              ),
               // NF-008 (D6): organizations the Administrator verified.
-              NumberTile(
-                icon: Icons.verified_outlined,
-                tint: AppTints.green,
-                caption: 'Donors',
-                value: '${s['verified_organizations'] ?? 0}',
+              StatCard(
                 label: 'Verified organizations',
+                value: '${s['verified_organizations'] ?? 0}',
+                icon: Icons.verified_outlined,
+                color: AppColors.success,
                 onTap: () => showModalBottomSheet<void>(
                   context: context,
                   showDragHandle: true,
@@ -2268,9 +2509,9 @@ class DashboardScreen extends StatelessWidget {
                       shrinkWrap: true,
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       children: [
-                        Text(
+                        const Text(
                           'Verified organizations',
-                          style: Theme.of(context).textTheme.titleMedium,
+                          style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                         for (final n
                             in (s['verified_organization_names'] as List? ??
@@ -2290,7 +2531,7 @@ class DashboardScreen extends StatelessWidget {
                 ),
               ),
             ]),
-            const RedesignSection('Breakdown'),
+            const SizedBox(height: 12),
             bars(
               'Reports by status',
               b['by_status'] as List,

@@ -2,16 +2,11 @@
   import 'package:flutter/services.dart';
 
   import '../tokens.dart';
-  import 'app_icons.dart';
 
   class FloatingNavItem {
     final IconData icon;
     final String label;
-
-    /// UI redesign: the [AppIcon] name to draw instead of [icon]. Null keeps
-    /// the Material icon.
-    final String? art;
-    const FloatingNavItem(this.icon, this.label, {this.art});
+    const FloatingNavItem(this.icon, this.label);
   }
 
   /// Floating dark pill navigation that spans the screen width, with the
@@ -112,23 +107,16 @@
                   width: FloatingNavBar._circle,
                   height: FloatingNavBar._circle,
                   decoration: BoxDecoration(
-                    color: selected ? AppColors.onDark : Colors.transparent,
+                    color: selected ? Colors.white : Colors.transparent,
                     shape: BoxShape.circle,
                   ),
-                  child: item.art != null && AppIcon.has(item.art!)
-                      ? AppIcon(
-                          item.art!,
-                          color: selected
-                              ? AppColors.ink
-                              : AppColors.onDark.withValues(alpha: 0.85),
-                        )
-                      : Icon(
-                          item.icon,
-                          size: 24,
-                          color: selected
-                              ? AppColors.ink
-                              : Colors.white.withValues(alpha: 0.85),
-                        ),
+                  child: Icon(
+                    item.icon,
+                    size: 24,
+                    color: selected
+                        ? AppColors.ink
+                        : Colors.white.withValues(alpha: 0.85),
+                  ),
                 ),
               ),
             ),

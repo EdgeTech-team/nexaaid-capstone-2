@@ -21,8 +21,16 @@ from models.notification import Notification
 # event -> (title, message template). Missing {placeholders} render as "".
 EVENTS: dict[str, tuple[str, str]] = {
     # Organizations
-    "org_registered": ("New organization registered", "{name} registered. Tap to review."),
-    "donor_registered": ("New donor registered", "{name} registered as an individual donor. Tap to review."),
+    # Accounts sign in right away, so the Administrator is reminded to check
+    # the ID and documents (and delete the account, with a reason, if fake).
+    "org_registered": ("New organization registered",
+                       "{name} registered. Tap to review: check the contact person's valid ID "
+                       "and the supporting document. Delete the account with a reason "
+                       "(e.g. Fake ID, Invalid document) if they are not genuine."),
+    "donor_registered": ("New donor registered",
+                         "{name} registered as an individual donor. Tap to review: check the "
+                         "valid ID (needed for Door to Door pickups). Delete the account with a "
+                         "reason (e.g. Fake ID) if it is not genuine."),
     "org_approved": ("Organization approved", "Your organization account is now active."),
     "org_rejected": ("Organization registration rejected", "{reason}"),
     # Reports

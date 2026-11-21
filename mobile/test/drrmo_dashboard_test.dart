@@ -80,19 +80,6 @@ final _server = MockClient((req) async {
       'Accepted': _accepted ? 2 : 1,
     },
     '/deliveries/' => <Object>[],
-    '/deliveries/needs-action' => {
-      'items': [
-        if (!_accepted)
-          {
-            'key': 'new',
-            'label': 'New requests to accept or decline',
-            'view': 'Pending',
-            'ids': [1],
-            'count': 1,
-          },
-      ],
-      'all_caught_up': _accepted,
-    },
     '/deliveries/timing/summary' => {'accepted': 0, 'trips': 0, 'days': 30},
     _ => {'detail': 'not mocked: $path'},
   };
@@ -199,14 +186,11 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('A "Needs your action" line shows that request', (
-    tester,
-  ) async {
+  testWidgets('Nov 22: no "Needs your action" card (CMO only)', (tester) async {
     await http.runWithClient(() async {
       await _pumpPhone(tester);
-      await tester.tap(find.text('New requests to accept or decline'));
-      await tester.pumpAndSettle();
-      _onScreen(tester, find.text('Request #1 · Delivery'));
+      expect(find.text('Needs your action'), findsNothing);
+      expect(find.text('DRRMO Logistics Support'), findsOneWidget);
     }, () => _server);
   });
 
@@ -218,18 +202,6 @@ void main() {
       await tester.tap(decline);
       await tester.pumpAndSettle();
       expect(find.text('Decline request #1'), findsOneWidget);
-      // UI redesign: a reason is needed before the review step.
-      await tester.tap(find.byKey(const ValueKey('step-next')));
-      await tester.pumpAndSettle();
-      expect(find.text('Required'), findsOneWidget);
-      await tester.enterText(
-        find.widgetWithText(TextFormField, 'Reason'),
-        'No truck today',
-      );
-      await tester.tap(find.byKey(const ValueKey('step-next')));
-      await tester.pumpAndSettle();
-      expect(find.text('No truck today'), findsOneWidget); // what CSWS reads
-      expect(find.widgetWithText(AppButton, 'Decline'), findsOneWidget);
     }, () => _server);
   });
 
@@ -245,9 +217,6 @@ void main() {
       await tester.tap(accept);
       await tester.pumpAndSettle();
       expect(find.text('Accept request #1'), findsOneWidget);
-      // UI redesign: the time (planned one kept), then Next, then Accept.
-      await tester.tap(find.byKey(const ValueKey('step-next')));
-      await tester.pumpAndSettle();
       await tester.tap(find.widgetWithText(FilledButton, 'Accept').last);
       await tester.pumpAndSettle();
       expect(_accepted, isTrue);

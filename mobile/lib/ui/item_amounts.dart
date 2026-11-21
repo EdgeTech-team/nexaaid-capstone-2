@@ -6,10 +6,21 @@
 // (services/item_quantities.py); older answers only quantity and unit.
 
 /// "10 packs x 5 kg", or "50 kg" when the server sent no breakdown.
+/// Nov 22: a kit with contents adds them, "2 kits · Includes: Spoon, Fork",
+/// so CSWS and the barangay see what came in (a note only).
 String itemAmount(Map i) {
   final text = '${i['amount_text'] ?? ''}'.trim();
-  if (text.isNotEmpty) return text;
-  return '${i['quantity'] ?? ''} ${i['unit'] ?? ''}'.trim();
+  final amount = text.isNotEmpty
+      ? text
+      : '${i['quantity'] ?? ''} ${i['unit'] ?? ''}'.trim();
+  final inside = itemContents(i);
+  return inside == null ? amount : '$amount · Includes: $inside';
+}
+
+/// What is inside a kit, as the donor wrote it, or null.
+String? itemContents(Map i) {
+  final text = '${i['contents'] ?? ''}'.trim();
+  return i['contents'] == null || text.isEmpty ? null : text;
 }
 
 String _n(Object? v) {

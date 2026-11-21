@@ -7,8 +7,6 @@ import 'package:mobile/ui/account_form.dart';
 import 'package:mobile/ui/upload_field.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 
-import 'step_form_helpers.dart';
-
 final _names = Names({
   'barangays': [
     {'id': 1, 'name': 'Tipolo'},
@@ -86,21 +84,13 @@ void main() {
   ) async {
     await _pump(tester, AccountForm(names: _names));
     // Oct 11 notes (Dave): only the card, no separate employee ID number.
-    expect(
-      find.byKey(const ValueKey('account-employee'), skipOffstage: false),
-      findsNothing,
-    );
-    // UI redesign: in steps; the card is on the last one.
-    expect(find.byType(UploadField, skipOffstage: false), findsOneWidget);
-    expect(find.text('Temporary password', skipOffstage: false), findsOneWidget);
-    expect(find.text('Assigned barangay', skipOffstage: false), findsNothing);
+    expect(find.byKey(const ValueKey('account-employee')), findsNothing);
+    expect(find.byType(UploadField), findsOneWidget);
+    expect(find.text('Temporary password'), findsOneWidget);
+    expect(find.text('Assigned barangay'), findsNothing);
 
-    await openStep(tester, 'Employee ID');
     await tester.tap(find.byKey(const ValueKey('account-save')));
-    await tester.pumpAndSettle();
-    // The empty name and email are in red, so their step opens first.
-    expect(find.byKey(const ValueKey('account-first')), findsOneWidget);
-    await openStep(tester, 'Employee ID');
+    await tester.pump();
     expect(find.text('Required'), findsOneWidget); // the card
   });
 

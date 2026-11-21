@@ -628,18 +628,14 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
         key: ValueKey('sms-form-$_epoch'),
         padding: const EdgeInsets.all(20),
         children: [
-          // UI redesign: the teal header of every tab.
-          const HeroHeader(
-            title: 'Prepare an SMS Report',
+          const PageHeader(
+            'Prepare an SMS Report',
             subtitle:
                 'For when there is no internet. Fill this in to make a text in '
                 'the NexaAid format and send it from your phone to the '
                 'Administrator. They review and encode it as a report, then '
                 'validate it.',
-            bleed: 20,
-            bleedTop: 20,
           ),
-          Gaps.v16,
           const Padding(
             padding: EdgeInsets.only(bottom: 12),
             child: Row(
@@ -787,7 +783,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               ),
             ),
           ],
-          const SectionTitle('Situation (DROMIC)'),
+          const SectionTitle('What happened'),
           TextFormField(
             controller: families,
             keyboardType: TextInputType.number,

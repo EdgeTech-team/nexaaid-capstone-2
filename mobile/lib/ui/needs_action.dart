@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult;
 import '../realtime.dart';
+import 'home_nav.dart';
 import 'widgets.dart';
 
 /// "45 min", "1 h 20 min", "2 days" for the response times.
@@ -60,7 +61,7 @@ class _ResponseTimesCardState extends State<ResponseTimesCard> {
     ) => ListTile(
       dense: true,
       contentPadding: EdgeInsets.zero,
-      leading: TintIcon(icon, tint: AppTints.blue, size: 32),
+      leading: Icon(icon),
       title: Text(label),
       trailing: Text(
         minutes == null ? '-' : spanText(minutes),
@@ -99,48 +100,28 @@ class _ResponseTimesCardState extends State<ResponseTimesCard> {
   }
 }
 
-/// "Needs your action" (GET /deliveries/needs-action) at the top of the CSWS
-/// Main Office and DRRMO home screens: what to do next, as counts. Zero
-/// counts are hidden; with nothing to do it says "All caught up". Tapping a
-/// line calls [onOpen] with it ({key, label, count, view, ids}). Reloads by
-/// itself after an action or when a delivery or request changes (live).
-class NeedsActionCard extends StatefulWidget {
-  final void Function(Map item) onOpen;
-
-  /// UI redesign: true when the card sits over a teal [HeroHeader]
-  /// (raised, no space below it).
-  final bool overlap;
-  const NeedsActionCard({super.key, required this.onOpen, this.overlap = false});
+/// "Needs your action" on the CMO Representative's Acknowledge screen
+/// (GET /dashboard/needs-action): the received donations waiting for
+/// acknowledgement, as a count. With nothing to do it says "All caught up".
+/// Tapping the line opens the tab that lists them. Reloads by itself after
+/// an action or a live change. Nov 22: the CMO is the only role with it.
+class RoleNeedsActionCard extends StatefulWidget {
+  const RoleNeedsActionCard({super.key});
 
   @override
-  State<NeedsActionCard> createState() => _NeedsActionCardState();
+  State<RoleNeedsActionCard> createState() => _RoleNeedsActionCardState();
 }
 
-class _NeedsActionCardState extends State<NeedsActionCard> {
-  static const _icons = {
-    'packing': Icons.inventory_2_outlined,
-    'declined': Icons.report_gmailerrorred_outlined,
-    'stuck': Icons.warning_amber_rounded,
-    'arrived': Icons.where_to_vote_outlined,
-    'new': Icons.mark_email_unread_outlined,
-    'today': Icons.today_outlined,
-    'on_the_way': Icons.local_shipping_outlined,
-  };
-
-  /// UI redesign: the tint says how urgent a line is. Red = late or
-  /// refused, amber = waiting for you, blue = moving.
-  static Tint _tint(Object? key) => switch (key) {
-    'stuck' || 'declined' => AppTints.red,
-    'packing' || 'new' => AppTints.amber,
-    _ => AppTints.blue,
-  };
-
+class _RoleNeedsActionCardState extends State<RoleNeedsActionCard> {
   List<Map>? _items; // null until the first answer
 
   Future<void> _load() async {
-    final ApiResult r = await api.get('/deliveries/needs-action');
+    final ApiResult r = await api.get('/dashboard/needs-action');
     if (!mounted || !r.ok || r.json is! Map) return;
-    setState(() => _items = ((r.json as Map)['items'] as List).cast<Map>());
+    final items = (r.json as Map)['items'];
+    // An answer without a list (an older server) shows nothing.
+    if (items is! List) return;
+    setState(() => _items = items.whereType<Map>().toList());
   }
 
   @override
@@ -163,36 +144,53 @@ class _NeedsActionCardState extends State<NeedsActionCard> {
     final items = _items;
     if (items == null) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
-    final total = items.fold<int>(
-      0,
-      (n, i) => n + ((i['count'] as num?)?.toInt() ?? 0),
+    final t = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Needs your action', style: t.titleMedium),
+            Gaps.v8,
+            if (items.isEmpty)
+              Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: cs.primary),
+                  Gaps.h8,
+                  const Expanded(child: Text('All caught up')),
+                ],
+              ),
+            for (final i in items)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                leading: Icon(Icons.flag_outlined, color: cs.primary),
+                title: Text('${i['label']}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircleAvatar(
+                      radius: 13,
+                      backgroundColor: cs.primaryContainer,
+                      child: Text(
+                        '${i['count']}',
+                        style: t.labelMedium?.copyWith(
+                          color: cs.onPrimaryContainer,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right),
+                  ],
+                ),
+                onTap: () {
+                  final to = '${i['view'] ?? ''}';
+                  if (to.isNotEmpty) HomeNav.go(context, HomeTarget(to));
+                },
+              ),
+          ],
+        ),
+      ),
     );
-    final card = ActionCard(
-      title: 'Needs your action',
-      count: items.isEmpty ? null : '$total',
-      rows: [
-        if (items.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: Space.sm),
-            child: Row(
-              children: [
-                Icon(Icons.check_circle_outline, color: cs.primary),
-                Gaps.h8,
-                const Expanded(child: Text('All caught up')),
-              ],
-            ),
-          ),
-        for (final i in items)
-          ActionRow(
-            icon: _icons[i['key']] ?? Icons.flag_outlined,
-            tint: _tint(i['key']),
-            label: '${i['label']}',
-            count: '${i['count']}',
-            onTap: () => widget.onOpen(i),
-          ),
-      ],
-    );
-    if (widget.overlap) return card;
-    return Padding(padding: const EdgeInsets.only(bottom: 12), child: card);
   }
 }

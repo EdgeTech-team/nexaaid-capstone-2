@@ -7,7 +7,8 @@ test step (PR #110 follow-ups)."""
 import re
 from pathlib import Path
 
-SEED = (Path(__file__).resolve().parents[3] / "database" / "seeds" / "demo_seed.sql").read_text()
+SEED = (Path(__file__).resolve().parents[3] / "database" / "seeds" / "demo_seed.sql").read_text(
+    encoding="utf-8")
 
 
 def _section(start: str, end: str) -> str:
@@ -24,12 +25,13 @@ def test_the_seed_does_not_bring_back_removed_items():
     assert "Municipal Water" not in sql
     assert "MC Water" not in sql
     items = _sql(_section("INSERT INTO items", "INSERT INTO item_sizes"))
-    assert not re.search(r"\(\s*'Clothing'\s*,", items)      # old Clothing (packs)
+    assert not re.search(r"'Clothing'\s*,\s*'Clothing'\s*,\s*'packs'", items)   # old Clothing (packs)
 
-def test_the_seed_adds_clothing_upper_and_lower_once():
+def test_the_seed_adds_one_clothing_item_once():
     items = _section("INSERT INTO items", "INSERT INTO item_sizes")
-    for name in ("Clothing – Upper", "Clothing – Lower"):   # en dash, as in b5e1f7a3c8d2
-        assert items.count(f"('{name}', 'Clothing', 'pcs')") == 1, name
+    # Nov 22 (c6e0a4b8d2f5): one Clothing item in pieces, not Upper / Lower.
+    assert items.count("('Clothing',         'Clothing', 'pcs')") == 1
+    assert "Upper" not in items and "Lower" not in items
     # Insert-if-missing, so running the seed twice adds nothing.
     assert "WHERE NOT EXISTS (SELECT 1 FROM items i WHERE lower(i.item_name) = lower(v.item_name))" in items
 

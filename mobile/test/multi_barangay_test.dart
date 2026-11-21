@@ -73,31 +73,13 @@ void main() {
   setUpAll(() => AppTheme.useGoogleFonts = false);
 
   group('per-family amounts', () {
-    test('are read in hundredths, up to 2 decimals, above 0', () {
-      expect(perFamilyHundredths('6'), 600);
-      expect(perFamilyHundredths('0.2'), 20);
-      expect(perFamilyHundredths(' 1.25 '), 125);
-      expect(perFamilyHundredths('0'), isNull);
-      expect(perFamilyHundredths('0.00'), isNull);
-      expect(perFamilyHundredths('1.234'), isNull);
-      expect(perFamilyHundredths('abc'), isNull);
-      expect(perFamilyHundredths(''), isNull);
-    });
-
     test('each barangay gets ceil(families x per family)', () {
-      expect(barangayQuantity(40, perFamilyHundredths('0.2')!), 8);
-      expect(barangayQuantity(41, perFamilyHundredths('0.2')!), 9);
-      expect(barangayQuantity(120, perFamilyHundredths('6')!), 720);
-      expect(barangayQuantity(3, perFamilyHundredths('0.1')!), 1);
-      expect(barangayQuantity(10, perFamilyHundredths('0.1')!), 1);
-      expect(barangayQuantity(11, perFamilyHundredths('0.1')!), 2);
-    });
-
-    test('template amounts show without trailing zeros', () {
-      expect(formatPerFamily(6), '6');
-      expect(formatPerFamily(0.1), '0.1');
-      expect(formatPerFamily(0.25), '0.25');
-      expect(formatPerFamily(0.05), '0.05');
+      expect(barangayQuantity(40, 20), 8);
+      expect(barangayQuantity(41, 20), 9);
+      expect(barangayQuantity(120, 600), 720);
+      expect(barangayQuantity(3, 10), 1);
+      expect(barangayQuantity(10, 10), 1);
+      expect(barangayQuantity(11, 10), 2);
     });
 
     test('the suggested event name is the type and the date', () {
@@ -158,7 +140,8 @@ void main() {
         theme: AppTheme.light(),
         home: _Harness(
           '1',
-          preview: (families) => 'Rice ${barangayQuantity(families, 600)} kg',
+          preview: (_, families) =>
+              'Rice ${barangayQuantity(families, 600)} kg',
         ),
       ),
     );
@@ -314,5 +297,116 @@ void main() {
       expect(find.textContaining('Awaiting validation'), findsOneWidget);
       expect(find.text('Details'), findsNothing); // guest
     }, () => server);
+  });
+
+  testWidgets('the preview shows each barangay, its families and its '
+      'whole-number items, with the totals first', (tester) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    bool? sent;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async => sent = await showMultiReportPreview(
+              context,
+              eventName: 'Earthquake – Nov 21, 2026',
+              disaster: 'Earthquake',
+              barangays: const [
+                PreviewBarangay('Casili', 120, [
+                  PreviewNeed('Rice', 720, 'kg'),
+                  PreviewNeed('Medicine Kit', 24, 'kits'),
+                ]),
+                PreviewBarangay('Looc', 41, [
+                  PreviewNeed('Rice', 246, 'kg'),
+                  PreviewNeed('Medicine Kit', 9, 'kits'),
+                ]),
+              ],
+            ),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Check before submitting'), findsOneWidget);
+    expect(
+      find.textContaining('2 barangays · 161 affected families'),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('multi-preview-Casili')), findsOneWidget);
+    expect(find.text('120 families'), findsOneWidget);
+    expect(find.text('41 families'), findsOneWidget);
+    expect(find.text('966 kg'), findsOneWidget); // total of Rice
+    expect(find.text('33 kits'), findsOneWidget);
+    expect(find.text('720 kg'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('multi-preview-submit')));
+    await tester.pumpAndSettle();
+    expect(sent, isTrue);
+  });
+
+  testWidgets('after submitting: every report in one list, sorted by most '
+      'families, then A-Z or report number, with a search box', (tester) async {
+    tester.view.physicalSize = const Size(900, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    bool? status;
+    const names = [
+      'Alang-Alang',
+      'Bakilid',
+      'Banilad',
+      'Basak',
+      'Cabancalan',
+      'Canduman',
+      'Casili',
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light(),
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async => status = await showMultiReportSubmitted(
+              context,
+              eventName: 'Earthquake – Nov 22, 2026',
+              reports: [
+                for (var i = 0; i < names.length; i++)
+                  SubmittedReport(
+                    100 + i,
+                    PreviewBarangay(names[i], 10 + i * 7 % 5, const [
+                      PreviewNeed('Rice', 60, 'kg'),
+                    ]),
+                  ),
+              ],
+            ),
+            child: const Text('Open'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reports submitted'), findsOneWidget);
+    expect(find.textContaining('7 reports'), findsOneWidget);
+    double y(String name) => tester.getTopLeft(find.text(name)).dy;
+    // Most families first (Bakilid 12 > Alang-Alang 10).
+    expect(y('Bakilid'), lessThan(y('Alang-Alang')));
+    await tester.tap(find.text('Name A–Z'));
+    await tester.pumpAndSettle();
+    expect(y('Alang-Alang'), lessThan(y('Bakilid')));
+    await tester.enterText(
+      find.byKey(const ValueKey('multi-submitted-search')),
+      'cas',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Casili'), findsOneWidget);
+    expect(find.text('Bakilid'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('multi-submitted-status')));
+    await tester.pumpAndSettle();
+    expect(status, isTrue);
   });
 }

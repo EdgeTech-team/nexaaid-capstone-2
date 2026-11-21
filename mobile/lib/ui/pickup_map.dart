@@ -970,14 +970,14 @@ class _PickupMapScreenState extends State<PickupMapScreen> {
               selected: s.id == _selected,
               onTap: () => _openStop(s),
             ),
-          if (p.unplanned.isNotEmpty || p.followUp.isNotEmpty) ...[
+          if (p.attentionCount > 0) ...[
             Gaps.v8,
             TextButton.icon(
+              key: const ValueKey('need-attention'),
               onPressed: () => _setListMode(true),
               icon: const Icon(Icons.error_outline, size: 18),
               label: Text(
-                '${p.unplanned.length + p.followUp.length} need attention · '
-                'open the list',
+                '${p.attentionCount} need attention · open the list',
               ),
             ),
           ],

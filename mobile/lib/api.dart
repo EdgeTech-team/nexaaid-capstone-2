@@ -260,6 +260,7 @@ class Api extends ChangeNotifier {
     Map<String, dynamic>? body,
     Map<String, String>? form,
     Map<String, String>? query,
+    Duration timeout = const Duration(seconds: 20),
   }) async {
     try {
       var uri = Uri.parse('$baseUrl$path');
@@ -281,7 +282,7 @@ class Api extends ChangeNotifier {
         req.body = jsonEncode(body);
       }
 
-      final streamed = await req.send().timeout(const Duration(seconds: 20));
+      final streamed = await req.send().timeout(timeout);
 
       final res = await http.Response.fromStream(streamed);
 
@@ -324,8 +325,13 @@ class Api extends ChangeNotifier {
   Future<ApiResult> get(String path, {Map<String, String>? query}) =>
       send('GET', path, query: query);
 
-  Future<ApiResult> post(String path, {Map<String, dynamic>? body}) =>
-      send('POST', path, body: body ?? {});
+  /// [timeout]: longer for a request that saves many rows at once (e.g.
+  /// POST /reports/batch, one report per barangay).
+  Future<ApiResult> post(
+    String path, {
+    Map<String, dynamic>? body,
+    Duration timeout = const Duration(seconds: 20),
+  }) => send('POST', path, body: body ?? {}, timeout: timeout);
 
   Future<ApiResult> patch(String path, {Map<String, dynamic>? body}) =>
       send('PATCH', path, body: body ?? {});

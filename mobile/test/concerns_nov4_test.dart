@@ -1,6 +1,6 @@
-// Concerns Nov 4: the report form fills the needs by itself for every
-// disaster type, "Other" too (no "Use suggested" button), and "Add need"
-// comes after the list. ("Other" asking what the disaster is: Ivan's
+// Report form needs (Nov 22): nothing fills in by itself. "Use suggested
+// needs" adds the disaster type's template ("Other" too) when the reporter
+// wants it, and "Add need" comes after the list. ("Other" asking what the disaster is: Ivan's
 // disaster_type_other_test.dart.) On the donate form "Add another
 // item" is at the top and new items appear right under it.
 import 'dart:convert';
@@ -14,8 +14,6 @@ import 'package:mobile/design/design.dart';
 import 'package:mobile/ui/donate_screen.dart';
 import 'package:mobile/ui/report_screens.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
-
-import 'step_form_helpers.dart';
 
 Map<String, dynamic> _item(int id, String name, String unit) => {
   'id': id,
@@ -34,6 +32,7 @@ final _lookups = <String, dynamic>{
   ],
   'barangays': [
     {'id': 1, 'name': 'Looc'},
+    {'id': 2, 'name': 'Casili'},
   ],
   'sitios': <Object>[],
   'items': [
@@ -74,6 +73,13 @@ final _server = MockClient((req) async {
       'items': <Object>[],
     },
     '/reports/' => {'report_id': 5},
+    '/reports/batch' => {
+      'event': {'event_name': 'Sinkhole - Nov 22, 2026'},
+      'reports': [
+        {'report_id': 11, 'barangay_id': 1},
+        {'report_id': 12, 'barangay_id': 2},
+      ],
+    },
     _ => null,
   };
   return body == null
@@ -105,13 +111,15 @@ void main() {
   });
   tearDown(() => Api.instance.token = null);
 
-  testWidgets('Other: type the disaster; needs fill in by themselves', (
-    tester,
-  ) async {
+  testWidgets('Other: type the disaster; the suggested needs are optional '
+      'and added with "Use suggested needs"', (tester) async {
     Api.instance.role = Roles.cswsUnit;
     addTearDown(() => Api.instance.role = null);
     await http.runWithClient(() async {
       await _pump(tester, const Scaffold(body: NewReportScreen()));
+      // Before a type: the card says to choose one, no button yet.
+      expect(find.byKey(const ValueKey('suggested-needs')), findsOneWidget);
+      expect(find.byKey(const ValueKey('use-suggested')), findsNothing);
       expect(find.text('What kind of disaster?'), findsNothing);
       await _choose(
         tester,
@@ -119,40 +127,46 @@ void main() {
         'Other',
       );
       expect(find.text('What kind of disaster?'), findsOneWidget);
-      expect(find.text('Use suggested'), findsNothing);
+      // Nothing is filled in by itself: one empty need.
+      expect(find.text('Need 2'), findsNothing);
+      expect(find.text('Suggested needs (optional)'), findsOneWidget);
+      // About suggested needs, at the bottom: words only, no list.
+      expect(find.byKey(const ValueKey('suggested-how')), findsOneWidget);
+      expect(find.text('About suggested needs'), findsOneWidget);
+      expect(find.textContaining('per family'), findsNothing);
 
-      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
         '10',
       );
       await tester.pump();
+      expect(find.widgetWithText(TextFormField, '60'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('use-suggested')));
+      await tester.pumpAndSettle();
       // Filled from the template: 6 kg and 40 L per family.
-      await openStep(tester, ReportSteps.needs);
       expect(find.widgetWithText(TextFormField, '60'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
 
       // "Add need" comes after the needs.
-      final addNeed = tester.getTopLeft(find.text('Add need')).dy;
+      final addNeed = tester.getTopLeft(find.text('Add another item')).dy;
       final lastNeed = tester.getTopLeft(find.text('Municipal Water').last).dy;
       expect(addNeed, greaterThan(lastNeed));
 
-      await openStep(tester, ReportSteps.place);
       await _choose(
         tester,
         find.widgetWithText(DropdownButtonFormField<String>, 'Barangay'),
         'Looc',
       );
-      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
-        find.widgetWithText(TextFormField, 'Short incident description'),
+        find.widgetWithText(
+          TextFormField,
+          'What happened? (short description)',
+        ),
         'Ground opened',
       );
-      await openStep(tester, ReportSteps.needs);
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       expect(sent['/reports/'], isNull); // the disaster name is required
-      // UI redesign: the step with the field in red opens by itself.
       expect(find.text('Required'), findsOneWidget);
       // UAT #6: a pop-up says what is missing.
       expect(find.text('Please complete the form'), findsOneWidget);
@@ -164,7 +178,6 @@ void main() {
         find.widgetWithText(TextFormField, 'What kind of disaster?'),
         'Sinkhole',
       );
-      await openStep(tester, ReportSteps.needs);
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
       final body = sent['/reports/']!;
@@ -177,8 +190,10 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('UAT #6: preset amounts still blank fill in once the families '
-      'are typed, even after the list was changed', (tester) async {
+  testWidgets('Nov 22: an emptied quantity stays empty and blocks the '
+      'submit; Use suggested asks before replacing typed needs', (
+    tester,
+  ) async {
     Api.instance.role = Roles.cswsUnit;
     addTearDown(() => Api.instance.role = null);
     await http.runWithClient(() async {
@@ -188,35 +203,51 @@ void main() {
         find.widgetWithText(DropdownButtonFormField<String>, 'Disaster type'),
         'Other',
       );
-      // No families yet: the preset items are listed without amounts.
-      await openStep(tester, ReportSteps.needs);
-      expect(find.text('Add need'), findsOneWidget); // the needs show
-      expect(find.widgetWithText(TextFormField, '60'), findsNothing);
-
-      // The reporter changes the list (one more need), then types families.
-      await tester.tap(find.text('Add need'));
-      await tester.pumpAndSettle();
-      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
-        '10',
+        '15',
       );
       await tester.pump();
-      await openStep(tester, ReportSteps.needs);
-      expect(find.widgetWithText(TextFormField, '60'), findsOneWidget);
-      expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
-
-      // The empty extra need is reported in the pop-up, nothing is sent.
+      await _choose(
+        tester,
+        find.widgetWithText(DropdownButtonFormField<String>, 'Need 1'),
+        'Tarpaulin',
+      );
+      final qty = find.widgetWithText(TextFormField, 'Quantity needed');
+      // Choosing an item fills nothing in.
+      expect(tester.widget<TextFormField>(qty).controller!.text, '');
+      await tester.enterText(qty, '15');
+      await tester.pump();
+      await tester.enterText(qty, '');
+      await tester.pump();
+      // Erased: it stays erased (it used to come back as 15).
+      expect(tester.widget<TextFormField>(qty).controller!.text, '');
       await tester.tap(find.text('Submit report'));
       await tester.pumpAndSettle();
-      expect(find.text('Please complete the form'), findsOneWidget);
-      expect(find.text('Need 3: choose an item'), findsOneWidget);
       expect(sent['/reports/'], isNull);
+      expect(find.text('Please complete the form'), findsOneWidget);
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      // Use suggested needs: the reporter is asked first.
+      await tester.tap(find.byKey(const ValueKey('use-suggested')));
+      await tester.pumpAndSettle();
+      expect(find.text('Replace the current needs?'), findsOneWidget);
+      await tester.tap(find.text('Keep my items'));
+      await tester.pumpAndSettle();
+      expect(find.text('Tarpaulin'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('use-suggested')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('suggested-replace')));
+      await tester.pumpAndSettle();
+      expect(find.text('Tarpaulin'), findsNothing);
+      expect(find.widgetWithText(TextFormField, '90'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '600'), findsOneWidget);
     }, () => _server);
   });
 
-  testWidgets('UAT Nov 10: an added need fills in too, follows the '
-      'families, and keeps an amount the reporter typed', (tester) async {
+  testWidgets('Suggested amounts follow the families until the reporter '
+      'types one; an added need is never filled in', (tester) async {
     Api.instance.role = Roles.cswsUnit;
     addTearDown(() => Api.instance.role = null);
     await http.runWithClient(() async {
@@ -226,47 +257,126 @@ void main() {
         find.widgetWithText(DropdownButtonFormField<String>, 'Disaster type'),
         'Other',
       );
-      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
         '10',
       );
       await tester.pump();
-      await openStep(tester, ReportSteps.needs);
-      await tester.tap(find.text('Add need'));
+      // An empty list: no "Replace?" question.
+      await tester.tap(find.byKey(const ValueKey('use-suggested')));
+      await tester.pumpAndSettle();
+      expect(find.text('Replace the current needs?'), findsNothing);
+      await tester.tap(find.text('Add another item'));
       await tester.pumpAndSettle();
       await _choose(
         tester,
         find.widgetWithText(DropdownButtonFormField<String>, 'Need 3'),
         'Canned Goods',
       );
-      // Not in the preset: the item's own standard, 8 cans x 10 families.
-      expect(find.widgetWithText(TextFormField, '80'), findsOneWidget);
-      await tester.tap(find.text('Add need'));
-      await tester.pumpAndSettle();
-      await _choose(
-        tester,
-        find.widgetWithText(DropdownButtonFormField<String>, 'Need 4'),
-        'Tarpaulin',
-      );
-      // No standard: 1 per family (the families field, also 10, is on the
-      // Situation step).
-      expect(find.widgetWithText(TextFormField, '10'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '80'), findsNothing);
 
-      // The reporter types Rice; more families: the rest follows, Rice stays.
+      // The reporter types Rice; more families: water follows, Rice stays.
       await tester.enterText(find.widgetWithText(TextFormField, '60'), '50');
-      await openStep(tester, ReportSteps.situation);
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Affected families'),
         '41',
       );
       await tester.pump();
-      expect(find.widgetWithText(TextFormField, '41'), findsOneWidget);
-      await openStep(tester, ReportSteps.needs);
       expect(find.widgetWithText(TextFormField, '50'), findsOneWidget);
       expect(find.widgetWithText(TextFormField, '1640'), findsOneWidget);
-      expect(find.widgetWithText(TextFormField, '328'), findsOneWidget);
-      expect(find.widgetWithText(TextFormField, '41'), findsOneWidget);
+    }, () => _server);
+  });
+
+  testWidgets('Several barangays: each barangay gets its own needs, sized '
+      'to its own families, and is sent with whole quantities', (tester) async {
+    Api.instance.role = Roles.cswsUnit;
+    addTearDown(() => Api.instance.role = null);
+    await http.runWithClient(() async {
+      await _pump(tester, const Scaffold(body: NewReportScreen()));
+      await _choose(
+        tester,
+        find.widgetWithText(DropdownButtonFormField<String>, 'Disaster type'),
+        'Other',
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'What kind of disaster?'),
+        'Sinkhole',
+      );
+      await tester.tap(find.text('Several barangays'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('barangay-dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Select all barangays'));
+      await tester.pump();
+      await tester.tap(find.text('Done (2 selected)'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const ValueKey('families-1')), '10');
+      await tester.enterText(find.byKey(const ValueKey('families-2')), '3');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('multi-needs-1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('multi-needs-2')), findsOneWidget);
+
+      // One tap: each barangay its own list from its own families.
+      await tester.tap(find.byKey(const ValueKey('use-suggested')));
+      await tester.pumpAndSettle();
+      expect(
+        find.widgetWithText(TextFormField, '60'),
+        findsOneWidget,
+      ); // 10 x 6
+      expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, '18'), findsOneWidget); // 3 x 6
+      expect(find.widgetWithText(TextFormField, '120'), findsOneWidget);
+      expect(find.text('Amount per family'), findsNothing);
+
+      // Casili only: remove the water, Looc keeps it.
+      final casili = find.byKey(const ValueKey('multi-needs-2'));
+      await tester.tap(
+        find
+            .descendant(
+              of: casili,
+              matching: find.byTooltip('Remove this need'),
+            )
+            .last,
+      );
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextFormField, '120'), findsNothing);
+      expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
+
+      await tester.enterText(
+        find.widgetWithText(
+          TextFormField,
+          'What happened? (short description)',
+        ),
+        'Ground opened',
+      );
+      await tester.tap(find.textContaining('Submit 2 reports'));
+      await tester.pumpAndSettle();
+      expect(find.text('Check before submitting'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('multi-preview-submit')));
+      await tester.pumpAndSettle();
+      final body = sent['/reports/batch']!;
+      expect(
+        body['barangays'],
+        unorderedEquals([
+          {
+            'barangay_id': 1,
+            'affected_families': 10,
+            'needs': [
+              {'item_id': 1, 'quantity': 60},
+              {'item_id': 2, 'quantity': 400},
+            ],
+          },
+          {
+            'barangay_id': 2,
+            'affected_families': 3,
+            'needs': [
+              {'item_id': 1, 'quantity': 18},
+            ],
+          },
+        ]),
+      );
+      // The saved reports in one list.
+      expect(find.text('Reports submitted'), findsOneWidget);
     }, () => _server);
   });
 

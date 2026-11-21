@@ -11,6 +11,7 @@ import 'paginated_list.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
 import 'item_amounts.dart';
+import 'needs_action.dart' show RoleNeedsActionCard;
 
 // ---------------------------------------------------------------------------
 // CMO Representative (UC-C1 / UC-C2, City Confirmation Module).
@@ -28,10 +29,8 @@ import 'item_amounts.dart';
 // second acknowledgement, and the button is disabled while it is sent.
 // ---------------------------------------------------------------------------
 
-// UI redesign: the status tints of the design system (amber = waiting,
-// green = done) instead of fixed colors, so dark mode works too.
-const _amber = AppTints.amber;
-const _green = AppTints.green;
+const _amber = Color(0xFFB7791F);
+const _green = Color(0xFF2E7D32);
 
 const _months = [
   'Jan',
@@ -135,16 +134,23 @@ String _amount(Map i) {
 /// Text that matches the search box: reference, items, donor, place.
 // ----- shared pieces -----------------------------------------------------------
 
-/// Icon on a soft tinted square (UI redesign [TintIcon]), used for card
-/// leads and section icons.
+/// Round icon on a soft tint, used for card leads and section icons.
 class _Badge extends StatelessWidget {
   final IconData icon;
-  final Tint tint;
+  final Color color;
   final double size;
-  const _Badge(this.icon, this.tint, {this.size = 44});
+  const _Badge(this.icon, this.color, {this.size = 44});
 
   @override
-  Widget build(BuildContext context) => TintIcon(icon, tint: tint, size: size);
+  Widget build(BuildContext context) => Container(
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.14),
+      shape: BoxShape.circle,
+    ),
+    child: Icon(icon, color: color, size: size * 0.5),
+  );
 }
 
 /// One donation entry in a list: reference, status, place, items, when,
@@ -183,7 +189,7 @@ class CmoEntryCard extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _Badge(Icons.qr_code_2, AppTints.teal, size: 40),
+              _Badge(Icons.qr_code_2, cs.primary, size: 40),
               Gaps.h12,
               Expanded(
                 child: Column(
@@ -290,7 +296,7 @@ class _Line extends StatelessWidget {
 /// A large tappable row: icon, title, one line of help, arrow.
 class _NavTile extends StatelessWidget {
   final IconData icon;
-  final Tint color;
+  final Color color;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
@@ -496,87 +502,79 @@ class _CmoScreenState extends State<CmoScreen>
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
     return Loader(
       key: ValueKey(_loads),
       load: [() => api.get('/cmo/dashboard')],
       builder: (context, data) {
         final dash = data[0] as Map;
-        final waiting = (dash['needs_review_entries'] as num?)?.toInt() ?? 0;
+        final waiting = dash['needs_review_entries'] ?? 0;
         final held = (dash['on_hold_entries'] as num?)?.toInt() ?? 0;
         return PagedListView(
           controller: _queue.controller,
-          // UI redesign: no top padding, the teal header starts at the top.
           padding: const EdgeInsets.fromLTRB(
             Space.md,
-            0,
+            Space.md,
             Space.md,
             Space.xl,
           ),
           header: [
-            // UI redesign (layout only, same data and taps): the two piles
-            // that wait for the CMO sit in "Needs your action" over the
-            // teal header.
-            HeroHeader(
-              title: 'Acknowledge Donations',
+            const PageHeader(
+              'Acknowledge Donations',
               subtitle: 'Review donations received by CSWS.',
-              bleed: Space.md,
-              overlap: ActionCard(
-                title: 'Needs your action',
-                count: '${waiting + held}',
-                rows: [
-                  ActionRow(
-                    icon: Icons.pending_actions_outlined,
-                    tint: _amber,
-                    label: 'Needs review',
-                    count: '$waiting',
-                    onTap: _scrollToQueue,
-                  ),
-                  ActionRow(
-                    icon: Icons.pause_circle_outline,
-                    tint: _amber,
-                    label: 'On hold',
-                    note: held == 0
-                        ? 'No donations on hold.'
-                        : '$held donation${held == 1 ? '' : 's'} '
-                              'waiting for more information.',
-                    count: '$held',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const CmoOnHoldScreen(),
-                      ),
-                    ),
-                  ),
-                  // What is already done today: no arrow, nothing to open
-                  // (as the old tile).
-                  const Divider(height: 1),
-                  ActionRow(
-                    icon: Icons.task_alt,
-                    tint: _green,
-                    label: 'Acknowledged today',
-                    count: '${dash['acknowledged_today_entries'] ?? 0}',
-                  ),
-                ],
-              ),
             ),
-            Gaps.v16,
+            const RoleNeedsActionCard(),
+            StatGrid([
+              StatTile(
+                'Needs review',
+                '$waiting',
+                Icons.pending_actions_outlined,
+                color: _amber,
+                note: 'Awaiting acknowledgement',
+                onTap: _scrollToQueue,
+              ),
+              StatTile(
+                'Acknowledged today',
+                '${dash['acknowledged_today_entries'] ?? 0}',
+                Icons.task_alt,
+                color: _green,
+                note: 'Completed today',
+              ),
+            ]),
+            Gaps.v12,
             _NavTile(
               icon: Icons.history,
-              color: AppTints.teal,
+              color: cs.primary,
               title: 'History',
               subtitle:
                   'Search all acknowledged donations and view past records.',
               onTap: () => HomeNav.go(context, const HomeTarget('History')),
             ),
-            KeyedSubtree(
+            _NavTile(
+              icon: Icons.pause_circle_outline,
+              color: _amber,
+              title: 'On hold',
+              subtitle: held == 0
+                  ? 'No donations on hold.'
+                  : '$held donation${held == 1 ? '' : 's'} '
+                        'waiting for more information.',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const CmoOnHoldScreen()),
+              ),
+            ),
+            Gaps.v8,
+            Row(
               key: _queueKey,
-              child: RedesignSection(
-                'Needs review',
-                action: _resultCount(
+              children: [
+                Expanded(child: Text('Needs review', style: t.titleMedium)),
+                _resultCount(
                   _queue.controller,
                   (n) => '$n result${n == 1 ? '' : 's'}',
                 ),
-              ),
+              ],
             ),
+            Gaps.v8,
             _SearchSort(
               hint: 'Search by donation ID, item or donor',
               onSearch: _queue.search,
@@ -683,8 +681,7 @@ class _CmoReviewScreenState extends State<CmoReviewScreen> {
   /// What was just decided, at the top of the page.
   Widget _result(BuildContext context) {
     final t = Theme.of(context).textTheme;
-    final b = Theme.of(context).brightness;
-    final (tint, icon, title, text) = switch (_decision) {
+    final (color, icon, title, text) = switch (_decision) {
       'Acknowledged' => (
         _green,
         Icons.check_circle,
@@ -713,14 +710,14 @@ class _CmoReviewScreenState extends State<CmoReviewScreen> {
         margin: const EdgeInsets.only(bottom: Space.sm),
         padding: const EdgeInsets.all(Space.sm),
         decoration: BoxDecoration(
-          color: tint.bgFor(b),
+          color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(Radii.md),
-          border: Border.all(color: tint.fgFor(b).withValues(alpha: 0.4)),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: tint.fgFor(b)),
+            Icon(icon, color: color),
             Gaps.h8,
             Expanded(
               child: Column(
@@ -777,7 +774,7 @@ class _CmoReviewScreenState extends State<CmoReviewScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const _Badge(Icons.qr_code_2, AppTints.teal, size: 52),
+                      _Badge(Icons.qr_code_2, cs.primary, size: 52),
                       Gaps.h12,
                       Expanded(
                         child: Column(
@@ -819,17 +816,13 @@ class _CmoReviewScreenState extends State<CmoReviewScreen> {
                   Container(
                     padding: const EdgeInsets.all(Space.sm),
                     decoration: BoxDecoration(
-                      color: _amber.bgFor(Theme.of(context).brightness),
+                      color: _amber.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(Radii.md),
                     ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(
-                          Icons.info_outline,
-                          color: _amber.fgFor(Theme.of(context).brightness),
-                          size: 20,
-                        ),
+                        const Icon(Icons.info_outline, color: _amber, size: 20),
                         Gaps.h8,
                         Expanded(
                           child: Text(
@@ -876,9 +869,9 @@ class _CmoReviewScreenState extends State<CmoReviewScreen> {
                       for (var n = 0; n < items.length; n++) ...[
                         if (n > 0) const Divider(height: 1, indent: 64),
                         ListTile(
-                          leading: const _Badge(
+                          leading: _Badge(
                             Icons.inventory_2_outlined,
-                            AppTints.teal,
+                            cs.primary,
                             size: 40,
                           ),
                           title: Text(
@@ -1216,14 +1209,7 @@ class _CmoHistoryScreenState extends State<CmoHistoryScreen>
         _disasterIds = _ids(snap.data?['disaster_types']);
         _barangayIds = _ids(snap.data?['barangays']);
         final header = <Widget>[
-          // UI redesign: the teal header of every tab.
-          const HeroHeader(
-            title: 'History',
-            subtitle: 'Every donation you acknowledged.',
-            bleed: Space.md,
-            bleedTop: Space.md,
-          ),
-          Gaps.v16,
+          PageHeader('History', subtitle: 'Every donation you acknowledged.'),
           SegmentedButton<String>(
             segments: const [
               ButtonSegment(

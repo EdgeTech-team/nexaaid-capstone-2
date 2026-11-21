@@ -70,6 +70,10 @@ class _PickupListViewState extends State<PickupListView> {
 
   bool _matches(PlanStop s) {
     if (_homeOn != null && !s.availableOn(_homeOn)) return false;
+    return _searchHits(s);
+  }
+
+  bool _searchHits(PlanStop s) {
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
     final text = [
@@ -81,8 +85,8 @@ class _PickupListViewState extends State<PickupListView> {
     return text.contains(q);
   }
 
+  /// Search only: a follow-up needs attention whatever day is chosen.
   bool _matchesFollowUp(PlanDonation d) {
-    if (_homeOn != null && !d.availableOn(_homeOn)) return false;
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return true;
     return [
@@ -185,8 +189,16 @@ class _PickupListViewState extends State<PickupListView> {
     final cs = Theme.of(context).colorScheme;
     final t = Theme.of(context).textTheme;
     final p = widget.plan;
-    final stops = p.stops.where(_matches).toList();
+    // Needs attention (same rule as the map's count, PickupPlan.
+    // attentionCount): every unplanned stop and every stop without a pin,
+    // whatever day is chosen; only the search narrows it.
+    final unplanned = p.unplanned.where(_searchHits).toList()..sort(_byPlan);
     final followUp = p.followUp.where(_matchesFollowUp).toList();
+    final attention = unplanned.length + followUp.length;
+    final stops = p.stops
+        .where((s) => s.status != 'no_feasible_day')
+        .where(_matches)
+        .toList();
     final sections = _sections(stops);
 
     return RefreshIndicator(
@@ -270,10 +282,39 @@ class _PickupListViewState extends State<PickupListView> {
           Gaps.v8,
           Text(
             '${stops.length} stop${stops.length == 1 ? '' : 's'}'
-            '${followUp.isEmpty ? '' : ' · ${followUp.length} without a map pin'}',
+            '${attention == 0 ? '' : ' · $attention need attention'}',
             style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
-          if (stops.isEmpty && followUp.isEmpty)
+          if (attention > 0) ...[
+            SectionHeader(
+              'Needs attention ($attention)',
+              key: const ValueKey('needs-attention-section'),
+              subtitle:
+                  'No pickup day fits the dates the donor is home, or the '
+                  'address has no map pin. Call the donor to sort it out.',
+            ),
+            for (final s in unplanned)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Space.xs),
+                child: StopRow(
+                  stop: s,
+                  number: null,
+                  selected: false,
+                  onTap: () => widget.onOpenStop(s),
+                ),
+              ),
+            for (final d in followUp)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Space.xs),
+                child: FollowUpRow(
+                  d: d,
+                  onOpen: widget.onOpenFollowUp == null
+                      ? null
+                      : () => widget.onOpenFollowUp!(d),
+                ),
+              ),
+          ],
+          if (stops.isEmpty && attention == 0)
             Padding(
               padding: const EdgeInsets.only(top: Space.md),
               child: AppCard(
@@ -299,24 +340,6 @@ class _PickupListViewState extends State<PickupListView> {
                   number: _group == PickupGroup.planned ? s.order : null,
                   selected: false,
                   onTap: () => widget.onOpenStop(s),
-                ),
-              ),
-          ],
-          if (followUp.isNotEmpty) ...[
-            const SectionHeader(
-              'Needs follow-up',
-              subtitle:
-                  'No map pin: the donor typed a landmark without choosing '
-                  'a suggestion. Call to confirm the place.',
-            ),
-            for (final d in followUp)
-              Padding(
-                padding: const EdgeInsets.only(bottom: Space.xs),
-                child: FollowUpRow(
-                  d: d,
-                  onOpen: widget.onOpenFollowUp == null
-                      ? null
-                      : () => widget.onOpenFollowUp!(d),
                 ),
               ),
           ],

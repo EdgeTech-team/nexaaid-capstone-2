@@ -222,11 +222,8 @@ class _ReportsFeedState extends State<ReportsFeed> {
           controller: _list,
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
           header: [
-            // UI redesign: the teal header of every tab.
-            HeroHeader(
-              bleed: Space.md,
-              bleedTop: Space.md,
-              title: done == null
+            PageHeader(
+              done == null
                   ? 'All Reports'
                   : done
                   ? 'Completed Reports'
@@ -239,11 +236,10 @@ class _ReportsFeedState extends State<ReportsFeed> {
                   : 'Reports that still need help. Pick one and pledge '
                         'goods.',
             ),
-            Gaps.v16,
             // Kept from the old screen (Ivan): the two summary cards.
             // Tapping one shows those reports.
-            NumberGrid([
-              NumberTile(
+            StatCardGrid([
+              StatCard(
                 label: done == null
                     ? 'Validated reports'
                     : done
@@ -253,15 +249,14 @@ class _ReportsFeedState extends State<ReportsFeed> {
                 icon: done == true
                     ? Icons.task_alt_outlined
                     : Icons.report_outlined,
-                tint: done == true ? AppTints.green : AppTints.teal,
                 onTap: done == null ? _resetFilters : null,
               ),
               if (done != true)
-                NumberTile(
+                StatCard(
                   label: 'High / critical priority',
                   value: '$urgentCount',
                   icon: Icons.trending_up,
-                  tint: AppTints.red,
+                  color: PriorityColors.base('High'),
                   onTap: done == null
                       ? () => setState(() {
                           quick = _Quick.urgent;

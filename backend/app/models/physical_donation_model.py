@@ -71,6 +71,11 @@ class PhysicalDonation(Base):
     size_amount = Column(Numeric(12, 4), nullable=True)   # one piece, in the base unit
     size_label = Column(String(60), nullable=True)        # "1.5 L bottle", "25 kg sack"
     estimated_value = Column(Numeric(10, 2), nullable=True)
+    # Nov 22: what is inside a kit or set, as the donor wrote it (e.g.
+    # "Spoon, Fork, Plate" for a Kitchen Set). A note for CSWS and the
+    # barangay only: the item stays the kit, so fulfillment, inventory
+    # and the report needs never read it.
+    contents = Column(String(300), nullable=True)
     handover_method = Column(String(20), nullable=False)
     pickup_address = Column(Text, nullable=True)
     # Door to Door map pin (UC-D2 alt 7c, section 3.1 "select his/her address")

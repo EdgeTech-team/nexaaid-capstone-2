@@ -38,84 +38,58 @@ class AdminDashboard extends StatelessWidget {
       builder: (context, data) {
         final m = data[0] as Map;
         final entries = data[1] as Map;
-        final registrations =
-            '${m['pending_registrations'] ?? m['pending_organizations']}';
-        final validations = '${m['pending_validations']}';
-        final toDo =
-            (int.tryParse(registrations) ?? 0) + (int.tryParse(validations) ?? 0);
-        // UI redesign (M9 layout, data unchanged): the two review counts are
-        // the most urgent, so they sit in "Needs your action" over the teal
-        // header; the rest are number tiles. Every tap goes where it did.
         return ListView(
-          padding: EdgeInsets.zero,
+          padding: const EdgeInsets.all(16),
           children: [
-            HeroHeader(
-              title: 'Administrator Dashboard',
-              subtitle: roleLine(),
-              overlap: ActionCard(
-                title: 'Needs your action',
-                count: '$toDo',
-                rows: [
-                  // The Administrator now only reviews organizations (accounts
-                  // activate automatically), so this says "review".
-                  ActionRow(
-                    icon: Icons.apartment_outlined,
-                    label: 'Registrations to review',
-                    count: registrations,
-                    onTap: () => _go(context, 'Accounts', 'registrations'),
-                  ),
-                  ActionRow(
-                    icon: Icons.fact_check_outlined,
-                    label: 'Reports to validate',
-                    count: validations,
-                    onTap: () => _go(context, 'Validate', 'Pending'),
-                  ),
-                ],
+            PageHeader('Administrator Dashboard', subtitle: roleLine()),
+            StatGrid([
+              StatTile(
+                'Active users',
+                '${m['active_users']} / ${m['total_users']}',
+                Icons.people_outline,
+                onTap: () => _go(context, 'Accounts', 'active'),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const RedesignSection('At a glance'),
-                  NumberGrid([
-                    NumberTile(
-                      icon: Icons.people_outline,
-                      caption: 'Accounts',
-                      value: '${m['active_users']} / ${m['total_users']}',
-                      label: 'Active users',
-                      onTap: () => _go(context, 'Accounts', 'active'),
-                    ),
-                    NumberTile(
-                      icon: Icons.verified_outlined,
-                      tint: AppTints.green,
-                      caption: 'Reports',
-                      value: '${m['validated_reports']}',
-                      label: 'Validated reports',
-                      // Validate > Validated has the fulfillment chips and sort.
-                      onTap: () => _go(context, 'Validate', 'Validated'),
-                    ),
-                    // Team rule: count ENTRIES (one per donor submission).
-                    NumberTile(
-                      icon: Icons.volunteer_activism_outlined,
-                      tint: AppTints.blue,
-                      caption: 'Donations',
-                      value: '${entries['total_entries']}',
-                      label: 'Donation entries',
-                      note: '${m['total_donations']} items',
-                      // Records > Donations: every entry with filters and sort.
-                      onTap: () =>
-                          HomeNav.go(context, const HomeTarget('Records')),
-                    ),
-                  ]),
-                  const RedesignSection('Donation entries per report'),
-                  EntrySummaryList(entries),
-                  const RedesignSection('System activity log'),
-                  ActivityList((m['recent_activity'] as List).cast<Map>()),
-                ],
+              // The Administrator now only reviews organizations (accounts
+              // activate automatically), so this says "review", not "approve".
+              StatTile(
+                'Registrations to review',
+                '${m['pending_registrations'] ?? m['pending_organizations']}',
+                Icons.apartment_outlined,
+                color: const Color(0xFFEF6C00),
+                onTap: () => _go(context, 'Accounts', 'registrations'),
               ),
-            ),
+              StatTile(
+                'Reports to validate',
+                '${m['pending_validations']}',
+                Icons.fact_check_outlined,
+                color: const Color(0xFFEF6C00),
+                onTap: () => _go(context, 'Validate', 'Pending'),
+              ),
+              StatTile(
+                'Validated reports',
+                '${m['validated_reports']}',
+                Icons.verified_outlined,
+                color: const Color(0xFF2E7D32),
+                // Validate > Validated has the fulfillment chips and sort.
+                onTap: () => _go(context, 'Validate', 'Validated'),
+              ),
+              // Team rule: count ENTRIES (one per donor submission), not rows.
+              StatTile(
+                'Donation entries',
+                '${entries['total_entries']}',
+                Icons.volunteer_activism_outlined,
+                note: '${m['total_donations']} items · tap to view',
+                // Records > Donations: every entry with filters and sort.
+                onTap: () => HomeNav.go(context, const HomeTarget('Records')),
+              ),
+              // 9.1 (testing, Oct 19): "Held donations" removed. It is not
+              // in the manuscript; held donations are in Records > Needs
+              // attention > On Hold.
+            ]),
+            const SectionTitle('Donation entries per report'),
+            EntrySummaryList(entries),
+            const SectionTitle('System activity log'),
+            ActivityList((m['recent_activity'] as List).cast<Map>()),
           ],
         );
       },
@@ -180,45 +154,10 @@ class _AccountsHubState extends State<AccountsHub>
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // UI redesign: the teal header of every tab, with the section
-        // switch in the card over it.
-        HeroHeader(
-          title: 'Accounts',
-          overlap: Card(
-            margin: EdgeInsets.zero,
-            elevation: 3,
-            shadowColor: Colors.black26,
-            child: _switcher(),
-          ),
-        ),
-        Gaps.v8,
-        // UAT (Nov 14): sections opened once stay loaded when switching.
-        Expanded(
-          child: KeptViews(
-            current: view,
-            builder: (context, v) => switch (v) {
-              'registrations' => RegistrationsScreen(
-                key: ValueKey('registrations-$_focusSeq'),
-                focusType: _focus?.$1,
-                focusId: _focus?.$2,
-              ),
-              'donation' => const BarangayDonationInfoScreen(),
-              'new' => const AccountsScreen(),
-              _ => UsersScreen(
-                key: ValueKey('accounts-$status'),
-                status: status,
-              ),
-            },
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _switcher() => SingleChildScrollView(
-          // Scrolls sideways on narrow phones instead of overflowing.
+        // Scrolls sideways on narrow phones instead of overflowing.
+        SingleChildScrollView(
           scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.all(Space.xs),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child: SegmentedButton<String>(
             showSelectedIcon: false,
             segments: const [
@@ -245,7 +184,29 @@ class _AccountsHubState extends State<AccountsHub>
               AppRoutes.instance.viewChanged(homeTab, view);
             },
           ),
-        );
+        ),
+        // UAT (Nov 14): sections opened once stay loaded when switching.
+        Expanded(
+          child: KeptViews(
+            current: view,
+            builder: (context, v) => switch (v) {
+              'registrations' => RegistrationsScreen(
+                key: ValueKey('registrations-$_focusSeq'),
+                focusType: _focus?.$1,
+                focusId: _focus?.$2,
+              ),
+              'donation' => const BarangayDonationInfoScreen(),
+              'new' => const AccountsScreen(),
+              _ => UsersScreen(
+                key: ValueKey('accounts-$status'),
+                status: status,
+              ),
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class UsersScreen extends StatefulWidget {
@@ -304,9 +265,8 @@ class _UsersScreenState extends State<UsersScreen> {
     return PagedListView(
       controller: _list,
       header: [
-        const RedesignSection(
+        const PageHeader(
           'All accounts',
-          first: true,
           subtitle:
               'Active and deactivated accounts. Tap one to see its '
               'details, edit it, deactivate it, restore it or delete it.',
@@ -380,10 +340,14 @@ class _UsersScreenState extends State<UsersScreen> {
       itemBuilder: (context, u) => Card(
         margin: const EdgeInsets.only(bottom: 8),
         child: ListTile(
-          // UI redesign: tinted icon square (teal = active, grey = off).
-          leading: TintIcon(
-            u['is_active'] == true ? Icons.person : Icons.person_off_outlined,
-            tint: u['is_active'] == true ? AppTints.teal : AppTints.neutral,
+          leading: CircleAvatar(
+            backgroundColor: u['is_active'] == true
+                ? Brand.pinkSoft
+                : Colors.black12,
+            child: Icon(
+              u['is_active'] == true ? Icons.person : Icons.person_off_outlined,
+              color: u['is_active'] == true ? Brand.pink : Colors.grey,
+            ),
           ),
           title: Text('${u['name']}'),
           subtitle: Text(
@@ -410,6 +374,16 @@ class _UsersScreenState extends State<UsersScreen> {
     );
   }
 }
+
+/// Why the Administrator deletes a registration (required, emailed).
+const deleteAccountReasons = [
+  'Fake ID',
+  'Invalid document',
+  'ID does not match the person',
+  'Unreadable ID or document',
+  'Duplicate account',
+  'Other',
+];
 
 /// UC-A2 + Oct 11 notes (Jenises): new registrations of individual donors
 /// and organizations in one list. Accounts are active as soon as they
@@ -589,6 +563,51 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
     if (r.ok && _focus != null && i['id'] == _focus!['id']) _loadFocus();
   }
 
+  /// Registration review: a fake ID or invalid document. The account is
+  /// removed in one step (it signed in right after registering), with a
+  /// required reason that is kept in the audit log and emailed to them.
+  Future<void> _deleteAccount(Map<String, dynamic> i, int accountId) async {
+    final v = await formDialog(
+      context,
+      title: 'Delete ${i['name']}?',
+      message:
+          'The account is removed and can no longer sign in. Its records '
+          'stay, without personal data. The reason is emailed to them. This '
+          'cannot be undone.',
+      fields: const [
+        DialogField(
+          'reason',
+          'Reason',
+          options: deleteAccountReasons,
+        ),
+        DialogField(
+          'details',
+          'Details (optional)',
+          required: false,
+          multiline: true,
+          hint: 'e.g. The ID photo does not match the name.',
+        ),
+      ],
+      confirm: 'Delete account',
+    );
+    if (v == null || !mounted) return;
+    final details = (v['details'] ?? '').trim();
+    final reason = details.isEmpty ? v['reason']! : '${v['reason']}: $details';
+    final r = await act(
+      context,
+      () => api.post(
+        '/admin/users/$accountId/delete',
+        body: {'reason': reason},
+      ),
+      success: '${i['name']} deleted. The reason was emailed.',
+    );
+    if (!mounted || !r.ok) return;
+    if (_focus != null && i['id'] == _focus!['id']) {
+      setState(() => _focus = null);
+    }
+    _list.refresh(fetch: _fetch());
+  }
+
   Widget _card(Map<String, dynamic> i, {bool highlighted = false}) => Padding(
     padding: const EdgeInsets.only(bottom: Space.sm),
     child: _RegistrationCard(
@@ -598,6 +617,7 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
       onReview: (v) => _setReviewed(i, v),
       onVerify: () => _verifyOrg(i),
       onDeactivate: () => _deactivateOrg(i),
+      onDelete: (accountId) => _deleteAccount(i, accountId),
     ),
   );
 
@@ -611,9 +631,8 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
         return PagedListView(
           controller: _list,
           header: [
-            const RedesignSection(
+            const PageHeader(
               'Registrations',
-              first: true,
               subtitle:
                   'Individual donors and organizations. Their accounts are '
                   'active as soon as they register; review each one here.',
@@ -708,12 +727,16 @@ class _RegistrationCard extends StatelessWidget {
   final ValueChanged<bool> onReview;
   final VoidCallback? onVerify;
   final VoidCallback? onDeactivate;
+
+  /// Delete the account (fake ID / invalid document), with its user id.
+  final void Function(int accountId)? onDelete;
   const _RegistrationCard({
     required this.item,
     required this.busy,
     required this.onReview,
     this.onVerify,
     this.onDeactivate,
+    this.onDelete,
     this.highlighted = false,
   });
 
@@ -862,17 +885,41 @@ class _RegistrationCard extends StatelessWidget {
                 ),
             ],
           ),
-          // NF-008 (D6): fake or wrong documents.
-          if (org && state != 'Deactivated' && onDeactivate != null)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: onDeactivate,
-                style: TextButton.styleFrom(foregroundColor: cs.error),
-                icon: const Icon(Icons.block, size: 18),
-                label: const Text('Deactivate'),
-              ),
+          // Accounts sign in right away: check the ID and documents now.
+          if (!reviewed) ...[
+            Gaps.v8,
+            Text(
+              org
+                  ? 'Check the contact person\'s valid ID and the supporting '
+                        'document before marking it verified.'
+                  : 'Check the valid ID (needed for Door to Door pickups) '
+                        'before marking it reviewed.',
+              key: const ValueKey('registration-check-reminder'),
+              style: muted,
             ),
+          ],
+          // NF-008 (D6): fake or wrong documents.
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: Space.xs,
+            children: [
+              if (org && state != 'Deactivated' && onDeactivate != null)
+                TextButton.icon(
+                  onPressed: onDeactivate,
+                  style: TextButton.styleFrom(foregroundColor: cs.error),
+                  icon: const Icon(Icons.block, size: 18),
+                  label: const Text('Deactivate'),
+                ),
+              if (accountId != null && onDelete != null)
+                TextButton.icon(
+                  key: const ValueKey('registration-delete'),
+                  onPressed: () => onDelete!(accountId),
+                  style: TextButton.styleFrom(foregroundColor: cs.error),
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  label: const Text('Delete account'),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -1063,157 +1110,121 @@ class BarangayDashboard extends StatelessWidget {
         final m = data[0] as Map;
         final reports = (m['reports'] as List).cast<Map>();
         final donations = (m['donations'] as List).cast<Map>();
-        final t = Theme.of(context).textTheme;
-        final muted = t.bodySmall?.copyWith(
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        );
-        // UI redesign (layout only, same data and taps): teal header, the
-        // two donation counts that move next over it, then tiles and lists.
         return ListView(
-          padding: EdgeInsets.zero,
+          padding: const EdgeInsets.all(16),
           children: [
-            HeroHeader(
-              title: 'Barangay ${m['barangay'] ?? ''} Dashboard',
+            PageHeader(
+              'Barangay ${m['barangay'] ?? ''} Dashboard',
               subtitle: roleLine(),
-              // 9.7 (testing): each line opens the donations behind it; Aid
-              // acknowledged goes to the Incoming aid tab.
-              overlap: ActionCard(
-                title: 'Aid for your barangay',
-                rows: [
-                  ActionRow(
-                    icon: Icons.hourglass_top,
-                    tint: AppTints.amber,
-                    label: 'Waiting for CMO acknowledgement',
-                    count: '${m['pending_city_confirmation']}',
-                    onTap: () => _openBarangayDonations(
-                      context,
-                      'Waiting for CMO acknowledgement',
-                      donations
-                          .where((d) => d['status'] == 'Received')
-                          .toList(),
-                      icon: Icons.hourglass_top,
-                      empty:
-                          'Donations that CSWS received for your barangay '
-                          "show here until the City Mayor's Office "
-                          'acknowledges them.',
-                    ),
-                  ),
-                  ActionRow(
-                    icon: Icons.task_alt,
-                    tint: AppTints.green,
-                    label: 'Aid acknowledged',
-                    count: '${m['acknowledged']}',
-                    onTap: () =>
-                        HomeNav.go(context, const HomeTarget('Incoming aid')),
-                  ),
-                ],
-              ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.md,
-                0,
-                Space.md,
-                Space.md,
+            // 9.7 (testing): each card opens the donations behind it; Aid
+            // acknowledged goes to the Incoming aid tab.
+            StatGrid([
+              StatTile(
+                'Donations linked to our reports',
+                '${m['donations_linked']}',
+                Icons.volunteer_activism_outlined,
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Donations linked to our reports',
+                  donations,
+                  icon: Icons.volunteer_activism_outlined,
+                  empty:
+                      "When donors give to your barangay's reports, their "
+                      'donations show here.',
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const RedesignSection('Donations'),
-                  NumberGrid([
-                    NumberTile(
-                      icon: Icons.volunteer_activism_outlined,
-                      tint: AppTints.blue,
-                      value: '${m['donations_linked']}',
-                      label: 'Donations linked to our reports',
-                      onTap: () => _openBarangayDonations(
-                        context,
-                        'Donations linked to our reports',
-                        donations,
-                        icon: Icons.volunteer_activism_outlined,
-                        empty:
-                            "When donors give to your barangay's reports, "
-                            'their donations show here.',
-                      ),
-                    ),
-                    NumberTile(
-                      icon: Icons.verified_outlined,
-                      tint: AppTints.green,
-                      value: '${m['confirmed']}',
-                      label: 'Acknowledged by CMO',
-                      onTap: () => _openBarangayDonations(
-                        context,
-                        'Acknowledged by CMO',
-                        donations
-                            .where((d) => d['status'] == 'Confirmed')
-                            .toList(),
-                        icon: Icons.verified_outlined,
-                        empty:
-                            "Donations the City Mayor's Office has "
-                            'acknowledged show here.',
-                      ),
-                    ),
-                  ]),
-                  const RedesignSection('Fulfillment per report'),
-                  if (reports.isEmpty)
-                    const EmptyState('No reports for this barangay.'),
-                  for (final r in reports)
-                    Card(
-                      margin: const EdgeInsets.only(bottom: Space.sm),
-                      child: Padding(
-                        padding: const EdgeInsets.all(Space.md),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    '${r['report_label']}',
-                                    style: t.titleSmall,
-                                  ),
-                                ),
-                                Badge2.status('${r['status']}'),
-                              ],
-                            ),
-                            Text(
-                              '${r['confirmed_donations']} donation(s) '
-                              'acknowledged by the CMO',
-                              style: muted,
-                            ),
-                            Gaps.v8,
-                            Progress(
-                              delivered:
-                                  r['total_items_delivered'] as num? ?? 0,
-                              needed: r['total_items_needed'] as num? ?? 0,
-                              percent: r['fulfillment_percentage'] as num?,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  const RedesignSection('Donation references'),
-                  if (donations.isEmpty) const EmptyState('No donations yet.'),
-                  for (final d in donations)
-                    Card(
-                      margin: const EdgeInsets.only(bottom: Space.xs),
-                      child: ListTile(
-                        dense: true,
-                        title: Text(
-                          '${d['item_name']} · ${itemAmount(d)} · '
-                          '${d['qr_reference']}',
-                        ),
-                        // G-002 (D8)
-                        isThreeLine: true,
-                        subtitle: Text(
-                          '${itemQuantities(d)}\n${d['report_label']}',
-                        ),
-                        trailing: Badge2.status('${d['status']}'),
-                      ),
-                    ),
-                ],
+              StatTile(
+                'Waiting for CMO acknowledgement',
+                '${m['pending_city_confirmation']}',
+                Icons.hourglass_top,
+                color: const Color(0xFFEF6C00),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Waiting for CMO acknowledgement',
+                  donations.where((d) => d['status'] == 'Received').toList(),
+                  icon: Icons.hourglass_top,
+                  empty:
+                      'Donations that CSWS received for your barangay show '
+                      "here until the City Mayor's Office acknowledges them.",
+                ),
               ),
-            ),
+              StatTile(
+                'Acknowledged by CMO',
+                '${m['confirmed']}',
+                Icons.verified_outlined,
+                color: const Color(0xFF2E7D32),
+                onTap: () => _openBarangayDonations(
+                  context,
+                  'Acknowledged by CMO',
+                  donations.where((d) => d['status'] == 'Confirmed').toList(),
+                  icon: Icons.verified_outlined,
+                  empty:
+                      "Donations the City Mayor's Office has acknowledged "
+                      'show here.',
+                ),
+              ),
+              StatTile(
+                'Aid acknowledged',
+                '${m['acknowledged']}',
+                Icons.task_alt,
+                onTap: () =>
+                    HomeNav.go(context, const HomeTarget('Incoming aid')),
+              ),
+            ]),
+            const SectionTitle('Fulfillment per report'),
+            if (reports.isEmpty)
+              const EmptyState('No reports for this barangay.'),
+            for (final r in reports)
+              Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${r['report_label']}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          Badge2.status('${r['status']}'),
+                        ],
+                      ),
+                      Text(
+                        '${r['confirmed_donations']} donation(s) acknowledged by the CMO',
+                      ),
+                      const SizedBox(height: 8),
+                      Progress(
+                        delivered: r['total_items_delivered'] as num? ?? 0,
+                        needed: r['total_items_needed'] as num? ?? 0,
+                        percent: r['fulfillment_percentage'] as num?,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            const SectionTitle('Donation references'),
+            if (donations.isEmpty) const EmptyState('No donations yet.'),
+            for (final d in donations)
+              Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  dense: true,
+                  title: Text(
+                    '${d['item_name']} · ${itemAmount(d)} · ${d['qr_reference']}',
+                  ),
+                  // G-002 (D8)
+                  isThreeLine: true,
+                  subtitle: Text('${itemQuantities(d)}\n${d['report_label']}'),
+                  trailing: Badge2.status('${d['status']}'),
+                ),
+              ),
           ],
         );
       },

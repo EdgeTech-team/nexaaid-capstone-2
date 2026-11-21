@@ -60,7 +60,12 @@ def view_inventory(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role("CSWS Main Office", "Administrator")),
 ):
-    query = db.query(Inventory, Item.item_name, Item.unit_of_measure).join(Item, Inventory.item_id == Item.item_id)
+    # A row whose goods all went out on deliveries stays in the table at 0
+    # (it comes back up if a delivery is cancelled). Only what is really in
+    # stock is listed.
+    query = (db.query(Inventory, Item.item_name, Item.unit_of_measure)
+             .join(Item, Inventory.item_id == Item.item_id)
+             .filter(Inventory.quantity > 0))
     if report_id is not None:
         query = query.filter(Inventory.report_id == report_id)
 
@@ -122,6 +127,7 @@ def find_by_qr(
         "unit": item.unit_of_measure if item else None,
         "quantity": d.quantity,
         "packaging": d.packaging,
+        "contents": d.contents,   # a note (Nov 22)
         "estimated_value": d.estimated_value,
         "handover_method": d.handover_method,
         "pickup_address": d.pickup_address,

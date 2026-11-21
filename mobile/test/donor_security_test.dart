@@ -19,8 +19,6 @@ import 'package:mobile/ui/verify_email_sheet.dart';
 import 'package:mobile/ui/widgets.dart' show Names;
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'step_form_helpers.dart';
-
 final _lookups = <String, dynamic>{
   'items': [
     {
@@ -114,11 +112,40 @@ void main() {
         tester,
         DonateScreen(report: _report, names: Names(_lookups)),
       );
-      await openStep(tester, 'Handover'); // UI redesign: in steps
       expect(find.byKey(const ValueKey('door-to-door-locked')), findsOneWidget);
       expect(find.text(guestPickupBlockedText), findsOneWidget);
       expect(find.text('Register (takes 2 minutes)'), findsOneWidget);
       expect(find.text('Sign in'), findsOneWidget);
+    }, () => _Recorder().client);
+  });
+
+  testWidgets('Guests: tapping Door to Door asks to register, and Register '
+      'opens the stepped registration pop-up', (tester) async {
+    Api.instance.token = null;
+    await http.runWithClient(() async {
+      await _pump(
+        tester,
+        DonateScreen(report: _report, names: Names(_lookups)),
+      );
+      await tester.tap(find.byKey(const ValueKey('door-to-door-locked')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('guest-register-prompt')), findsOneWidget);
+      expect(find.text('Register to request a pickup'), findsOneWidget);
+
+      // Not now: nothing changes, Door to Door stays locked.
+      await tester.tap(find.text('Not now'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('guest-register-prompt')), findsNothing);
+      expect(find.byKey(const ValueKey('door-to-door-locked')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('door-to-door-locked')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('guest-register-prompt-register')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Register as donor'), findsOneWidget);
+      expect(find.byKey(const ValueKey('register-step-label')), findsOneWidget);
     }, () => _Recorder().client);
   });
 
@@ -141,7 +168,6 @@ void main() {
         tester,
         DonateScreen(report: _report, names: Names(_lookups)),
       );
-      await openStep(tester, 'Handover'); // UI redesign: in steps
       expect(find.byKey(const ValueKey('door-to-door-locked')), findsNothing);
       await tester.tap(find.text('Door to Door'));
       await tester.pumpAndSettle();
@@ -192,7 +218,6 @@ void main() {
         tester,
         DonateScreen(report: _report, names: Names(_lookups)),
       );
-      await openStep(tester, 'Handover'); // UI redesign: in steps
       expect(find.text('Door to Door'), findsOneWidget);
       expect(find.text(guestPickupLimitText), findsNothing);
     }, () => _Recorder().client);
