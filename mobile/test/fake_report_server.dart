@@ -1,5 +1,5 @@
 // NF-003: a fake of the paged report endpoints for widget tests. It filters,
-// sorts and pages like backend/app/services/report_paging.py (the backend
+// sorts and pages like backend/app/core/m2_disaster_reporting/report_paging.py (the backend
 // test test_report_paging.py checks the real server against the same
 // rules: the app's own sortAndFilterReports).
 import 'dart:convert';
@@ -84,7 +84,7 @@ http.Response? fakeReportResponse(
 }
 
 /// NF-003: GET /public/reports/feed and /counts (donor Reports tab, guest
-/// Donate page), filtered, sorted and paged like services/report_feed.py.
+/// Donate page), filtered, sorted and paged like core/m2_disaster_reporting/report_feed.py.
 http.Response? fakeFeedResponse(
   Uri url,
   List<Map<String, dynamic>> rows, {

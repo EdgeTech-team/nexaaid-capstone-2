@@ -1,4 +1,4 @@
-"""Android push notifications (core/push.py, GET /push/topic). No network:
+"""Android push notifications (core/notifications/push.py, GET /push/topic). No network:
 FCM and Google's token endpoint are replaced by fakes."""
 import jwt
 from cryptography.hazmat.primitives import serialization

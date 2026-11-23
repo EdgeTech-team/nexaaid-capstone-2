@@ -1,6 +1,6 @@
 """Ending a donation that will not be handed over: cancel, expire, reinstate.
 
-Rules and reasons: services/donation_expiry.py (team decision Oct 9, 2026,
+Rules and reasons: core/m4_donation_management/donation_expiry.py (team decision Oct 9, 2026,
 an addition to manuscript 3.2 "Pending donation records").
 
     GET  /donations/expiry-rules                 deadlines in plain words (public)

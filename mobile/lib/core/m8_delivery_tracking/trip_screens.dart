@@ -9,7 +9,7 @@ import 'handover_code.dart';
 import '../shared/item_amounts.dart';
 
 // ---------------------------------------------------------------------------
-// Delivery trips: several reports on one truck (backend: api/v1/trips.py).
+// Delivery trips: several reports on one truck (backend: core/m8_delivery_tracking/trips.py).
 //
 // Example: 3 Banilad reports and 2 reports in nearby barangays go out in one
 // run. Each report still gets its own delivery, so stock, the barangay's

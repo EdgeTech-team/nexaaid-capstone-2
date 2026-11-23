@@ -45,7 +45,7 @@ def _email_taken(db: Session, email: str) -> bool:
 
 
 def _username_taken(db: Session, username: str) -> bool:
-    # Usernames are saved in lowercase (core/usernames.py), and the schema
+    # Usernames are saved in lowercase (core/m1_user_management/usernames.py), and the schema
     # already lowercased this one.
     return db.query(User).filter(User.username == username.lower()).first() is not None
 
@@ -348,7 +348,7 @@ def reset_password(
 # Same pattern as forgot password: a 6-digit code, stored hashed
 # (_code_hash), valid VERIFY_CODE_MINUTES, MAX_VERIFY_ATTEMPTS wrong tries,
 # at most MAX_VERIFY_CODES_PER_HOUR codes an hour. Registration still signs
-# in at once; only Door to Door pickups wait for it (services/email_hold.py).
+# in at once; only Door to Door pickups wait for it (core/m4_donation_management/email_hold.py).
 # ---------------------------------------------------------------------------
 VERIFY_CODE_MINUTES = 15
 MAX_VERIFY_ATTEMPTS = 5

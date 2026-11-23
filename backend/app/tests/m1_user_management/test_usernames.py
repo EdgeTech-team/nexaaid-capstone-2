@@ -1,4 +1,4 @@
-# tests/test_usernames.py
+# tests/m1_user_management/test_usernames.py
 import pytest
 
 from core.m1_user_management.usernames import clean_username

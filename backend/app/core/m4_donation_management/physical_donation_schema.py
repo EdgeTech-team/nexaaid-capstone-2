@@ -49,7 +49,7 @@ def pickup_rules() -> dict:
         "min_lead_hours": _env_int("PICKUP_MIN_LEAD_HOURS", 1),
         # Testing (Oct 28): Door to Door dates within the next 2 weeks
         # (today + 13 days), the same 14 days the pickup planner covers
-        # (services/pickup_planner.py window_days), so every date a donor
+        # (core/m5_inventory/pickup_planner.py window_days), so every date a donor
         # can choose is on the CSWS pickup calendar.
         "max_days_ahead": _env_int("PICKUP_MAX_DAYS_AHEAD", 13),
         "timezone": "Asia/Manila",
@@ -339,9 +339,9 @@ def normalize_ph_mobile(raw: str) -> str:
 
 # Testing fix 4.1: the quantity unit says how much (kg, pcs, gallons...). A
 # sack is packaging, which already has its own field, so it is not a unit.
-# Same list as mobile/lib/ui/quantity_units.dart.
+# Same list as mobile/lib/core/shared/quantity_units.dart.
 # Base units (per-item fulfillment): weight is kg, volume is L; grams, ml
-# and gallons are given as the size of each (services/units.py).
+# and gallons are given as the size of each (core/reference_data/units.py).
 QUANTITY_UNITS = (
     "kg", "L", "pcs", "packs", "cans", "bottles", "boxes", "kits", "sets", "pairs",
 )
@@ -415,7 +415,7 @@ class _ItemFields(BaseModel):
     packaging: Optional[str] = Field(default=None, max_length=100)
     quantity: Optional[int] = Field(default=None, gt=0)
     # Newer apps (per-item fulfillment, Oct 2026): describe it instead and
-    # the server works out the total in the base unit (services/units.py):
+    # the server works out the total in the base unit (core/reference_data/units.py):
     #   pack_count x per_pack x size   e.g. 3 boxes x 16 x 1.5 L = 72 L
     # size = one of the item's sizes (size_id, from /lookups), or a custom
     # size_amount + size_unit (kg/g for weight, L/ml/gallon for volume),

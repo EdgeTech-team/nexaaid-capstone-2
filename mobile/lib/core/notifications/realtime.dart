@@ -7,7 +7,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../shared/api.dart';
 
-/// Live updates from the backend (GET /ws, backend core/realtime.py).
+/// Live updates from the backend (GET /ws, backend core/notifications/realtime.py).
 ///
 /// One connection for the signed-in user. Each new notification arrives as
 /// {type: notification, event, entity_type, entity_id, unread_count}, so the

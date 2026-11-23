@@ -1,4 +1,4 @@
-"""Phase 4: live updates over WebSocket (core/realtime.py, GET /ws) and the
+"""Phase 4: live updates over WebSocket (core/notifications/realtime.py, GET /ws) and the
 delivery timeline (Table 37) from GET /deliveries/{id}/history."""
 import pytest
 from starlette.websockets import WebSocketDisconnect

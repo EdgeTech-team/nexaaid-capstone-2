@@ -387,7 +387,7 @@ def donation_records(
 
     NF-001: optional disaster_type_id (the report's type); an unknown id
     gives an empty list. NF-003: optional limit / offset. With limit the database groups,
-    filters, sorts and pages the entries (services/entry_paging.py) and only
+    filters, sorts and pages the entries (core/m4_donation_management/entry_paging.py) and only
     the page's entries are built; X-Total-Count holds the total. Without
     limit the answer is exactly as before (installed APKs send no limit).
     """
@@ -477,7 +477,7 @@ def donation_records_per_report(
 # NF-003 (CSWS Main Office): the Receive screen's tabs, 20 rows per page.
 # Same rows as before (GET /donations/entries?pending_only=true,
 # GET /donations/records, GET /donations/inventory), with the screen's
-# filters and sorts applied here (services/receive_queue.py).
+# filters and sorts applied here (core/m5_inventory/receive_queue.py).
 # ---------------------------------------------------------------------------
 from core.shared.pagination import paginate_list  # noqa: E402
 from core.m5_inventory import receive_queue  # noqa: E402

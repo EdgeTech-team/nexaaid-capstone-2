@@ -3,7 +3,7 @@ F-02 / F-03: password reset and sign-in limits.
 - forgot-password answers the same for every email (F-03);
 - at most 5 reset codes and 10 wrong code guesses per account per hour (F-02);
 - 5 wrong passwords for one login within 15 minutes make it wait (F-02).
-Real auth stack: the `api` fixture of tests/test_role_flows.py.
+Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 """
 import re
 

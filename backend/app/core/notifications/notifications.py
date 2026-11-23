@@ -35,7 +35,7 @@ EVENTS: dict[str, tuple[str, str]] = {
     "org_rejected": ("Organization registration rejected", "{reason}"),
     # Reports
     # {title} is the readable label ("Flood in Barangay Looc") and {story}
-    # the plain description (services/report_story.py); {report_no} is the
+    # the plain description (core/notifications/report_story.py); {report_no} is the
     # report number staff look it up by.
     "report_submitted": ("New report: {title}",
                          "{story} Report #{report_no} needs validation."),
@@ -58,14 +58,14 @@ EVENTS: dict[str, tuple[str, str]] = {
     "donation_items_added": ("Items added to a donation", "The donor added {count} item(s) to donation #{batch_no} (Batch {addition_no}). Collect them together with the rest of the donation."),
     "donation_item_removed": ("Item removed from a donation", "The donor removed {item} from donation #{batch_no}. Reason: {reason}"),
     "donation_held_staff": ("Donation on hold", "The CMO put donation #{batch_no} for {report} on hold. {reason}"),
-    # Donors follow their donation's delivery (Oct 17, services/delivery_notices.py)
+    # Donors follow their donation's delivery (Oct 17, core/m8_delivery_tracking/delivery_notices.py)
     "donation_in_transit": ("Your donation is on the way", "Donation #{batch_no} left the CSWS office for {barangay} (delivery #{delivery_id})."),
     "donation_delivered": ("Your donation arrived", "Donation #{batch_no} was delivered to {barangay}. The barangay will confirm receipt."),
     "donation_barangay_confirmed": ("The barangay received your donation", "{barangay} confirmed receiving donation #{batch_no}. Thank you!"),
     "donation_delivery_rescheduled": ("Delivery date changed", "Donation #{batch_no} will now go to {barangay} on {date}. {reason}"),
     "donation_delivery_returned": ("Delivery delayed", "Donation #{batch_no} went back to the CSWS office: {reason}. A new date will follow."),
     "donation_delivery_cancelled": ("Delivery cancelled", "The delivery of donation #{batch_no} was cancelled: {reason}. It will go on a later delivery."),
-    # Donation expiry / cancellation (services/donation_expiry.py)
+    # Donation expiry / cancellation (core/m4_donation_management/donation_expiry.py)
     "donation_expiring_soon": ("Donation due soon", "Please hand over donation {batch_no} by {date}, or it will expire."),
     "donation_expired": ("Donation expired", "Donation {batch_no} expired because it was not handed over in time. Contact CSWS if you still want to give it."),
     "donation_cancelled": ("Donation cancelled", "Donation {batch_no} was cancelled. {reason}"),
@@ -78,7 +78,7 @@ EVENTS: dict[str, tuple[str, str]] = {
     "logistics_cancelled": ("Logistics request cancelled", "CSWS no longer needs transport for {title}: {reason}"),
     "logistics_completed": ("Logistics support completed", "DRRMO completed the support for {title}. {summary}"),
     "logistics_withdrawn": ("DRRMO can no longer help", "Transport for {title} was withdrawn: {reason}. Ask again or arrange another vehicle."),
-    # Reminders (services/delivery_reminders.py, every 5 minutes)
+    # Reminders (core/m7_logistics_support/delivery_reminders.py, every 5 minutes)
     "reminder_request_waiting": ("Request waiting for DRRMO", "The transport request for {title} has waited {hours}. Please accept or decline it."),
     "reminder_request_waiting_csws": ("DRRMO has not answered", "DRRMO has not answered the transport request for {title} in {hours}. Please call DRRMO to accept or decline it."),
     "reminder_in_transit_long": ("Still on the way", "{title} has been on the way for {hours}. Check with the driver, or use \"Truck came back\" if it returned."),
@@ -92,7 +92,7 @@ EVENTS: dict[str, tuple[str, str]] = {
     # J1 / NF-009: the barangay's count differs from what CSWS sent.
     "delivery_receipt_discrepancy": ("Received with differences", "{barangay} confirmed {title}, but the count differs from what was sent: {differences}."),
     "delivery_acknowledged": ("Aid acknowledged", "{barangay} acknowledged {title}. This is the final record of the delivery."),
-    # Unexpected problems (api/v1/delivery_problems.py)
+    # Unexpected problems (core/m8_delivery_tracking/delivery_problems.py)
     "delivery_rescheduled": ("Delivery date changed", "{title} is now set for {date}. {reason}"),
     "delivery_returned": ("Delivery delayed", "{title} went back to the CSWS office: {reason}. A new date will follow."),
     "delivery_cancelled": ("Delivery cancelled", "{title} was cancelled: {reason}"),
@@ -131,9 +131,9 @@ def notify(
     )
     db.add(n)
     db.flush()
-    # Live update after the commit (core/realtime.py); never fails the save.
+    # Live update after the commit (core/notifications/realtime.py); never fails the save.
     queue_push(db, user_id, event, entity_type, entity_id)
-    # Push to the Android app after the commit (core/push.py); same rule.
+    # Push to the Android app after the commit (core/notifications/push.py); same rule.
     push.queue(db, user_id, event, n.title, n.message, entity_type, entity_id, n.notification_id)
     return n
 

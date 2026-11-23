@@ -330,7 +330,7 @@ class ServiceArea {
   static String _squash(String s) =>
       s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
 
-  /// Same rule as the server (schemas/physical_donation_schema.in_service_area).
+  /// Same rule as the server (core/m4_donation_management/physical_donation_schema.in_service_area).
   bool covers(String text) {
     final t = _squash(text);
     if (!{name, ...aliases}.any((a) => t.contains(_squash(a)))) return false;

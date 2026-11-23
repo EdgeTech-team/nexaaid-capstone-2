@@ -8,7 +8,7 @@ import '../shared/widgets.dart';
 /// Opened from Profile > Change password, and opened automatically after
 /// logging in with the temporary password the Administrator gave
 /// ([forced] = true: no back button, only Log out). The backend repeats
-/// every rule (api/v1/account_router.py).
+/// every rule (core/m1_user_management/account_router.py).
 class ChangePasswordScreen extends StatefulWidget {
   final bool forced;
   const ChangePasswordScreen({super.key, this.forced = false});

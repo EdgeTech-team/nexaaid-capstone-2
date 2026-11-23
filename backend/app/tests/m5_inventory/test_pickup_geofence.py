@@ -46,7 +46,7 @@ def test_the_list_comes_from_env(monkeypatch):
 
 def test_donation_outside_the_area_is_refused(monkeypatch):
     """Through the API helper: one Door to Door rule (the service areas in
-    schemas/physical_donation_schema.py). A pin in Minglanilla is refused
+    core/m4_donation_management/physical_donation_schema.py). A pin in Minglanilla is refused
     with the message, before anything is saved."""
     import core.m4_donation_management.donation_routes as routes
     from fastapi import HTTPException

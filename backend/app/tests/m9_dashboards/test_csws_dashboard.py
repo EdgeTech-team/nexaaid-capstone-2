@@ -1,5 +1,5 @@
 """Nov 23, 2026: the CSWS Main Office dashboard (four cards, inventory,
-recent activity) and its pages (api/v1/csws_overview_routes.py)."""
+recent activity) and its pages (core/m9_dashboards/csws_overview_routes.py)."""
 from datetime import datetime, timedelta, timezone
 
 import core.shared.database as database

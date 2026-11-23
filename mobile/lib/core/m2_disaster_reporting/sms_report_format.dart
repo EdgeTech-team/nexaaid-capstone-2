@@ -28,7 +28,7 @@ const smsReportHeader = 'NEXAAID REPORT';
 const smsWholeBarangay = 'Whole barangay';
 
 /// The disaster type for anything not on the list (backend
-/// models/disaster_type_model.py). A report of this type also says what
+/// core/reference_data/disaster_type_model.py). A report of this type also says what
 /// kind of disaster it was (`disaster_type_other`, e.g. "Gas leak").
 const otherDisasterType = 'Other';
 

@@ -80,7 +80,7 @@ def clear_failed_logins(key: str | None = None) -> None:
 # NF-005 (D2): guest donations per connection, same pattern as F-02 (server
 # memory, no table). At most GUEST_MAX_PER_IP_HOUR guest submissions an hour
 # from one client address. The address is request.client.host, which
-# core/client_ip.py (F-21) already reads from the trusted end of
+# core/shared/client_ip.py (F-21) already reads from the trusted end of
 # X-Forwarded-For behind Render's proxy, so a forged header cannot reset it.
 GUEST_SUBMIT_WINDOW_SECONDS = 60 * 60
 _guest_submits: dict = {}

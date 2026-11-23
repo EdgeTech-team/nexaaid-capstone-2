@@ -1,7 +1,7 @@
 """
 NF-003 (T1): pagination foundation.
 
-- core/pagination.py: limit / offset validation, the clamp at 100, the
+- core/shared/pagination.py: limit / offset validation, the clamp at 100, the
   X-Total-Count header, paging a list and a SQL query.
 - Pilot GET /donations/records (Module 4.4 / 4.5): no limit = byte-for-byte
   the old answer; pages hold every entry exactly once in a stable order even
@@ -330,7 +330,7 @@ def test_web_build_can_read_the_total():
 
 
 # ---------------------------------------------------------------------------
-# SQL-level paging (services/entry_paging.py): with limit the database picks
+# SQL-level paging (core/m4_donation_management/entry_paging.py): with limit the database picks
 # the page. Its pages put together must equal the old full answer.
 # ---------------------------------------------------------------------------
 

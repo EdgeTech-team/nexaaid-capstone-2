@@ -75,7 +75,7 @@ String entryTitle(Map e) {
 
 /// Filters by status, report, handover method and search (QR reference,
 /// donor or item name), then sorts. Same rules as the backend's
-/// services/donation_entries.filter_and_sort.
+/// core/m4_donation_management/donation_entries.filter_and_sort.
 List<Map> filterEntries(
   List<Map> entries, {
   String search = '',

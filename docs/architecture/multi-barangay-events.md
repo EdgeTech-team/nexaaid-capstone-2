@@ -56,7 +56,7 @@ Every need fills itself, the preset ones and the ones the reporter adds:
 
 | | Per-family amount used |
 |---|---|
-| 1st | the disaster type's preset (`services/need_templates.py`) |
+| 1st | the disaster type's preset (`core/m2_disaster_reporting/need_templates.py`) |
 | 2nd | the item's own standard, `/lookups` `items[].per_family` (`ITEM_PER_FAMILY`) |
 | 3rd | 1 per family (no standard yet, or an "Other" item) |
 
@@ -143,4 +143,4 @@ donations backend.
 - Sitios: the multi form saves each barangay as the whole barangay; staff
   can add sitios to a report afterwards with the existing edit.
 - Per-family amounts are the team's assumptions until CSWS gives its
-  standards (`services/need_templates.py`).
+  standards (`core/m2_disaster_reporting/need_templates.py`).

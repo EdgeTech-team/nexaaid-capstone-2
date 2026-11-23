@@ -1,5 +1,5 @@
 """
-core/storage.py — where uploaded bytes live.
+core/shared/storage.py — where uploaded bytes live.
  
 LocalStorage writes under settings.UPLOAD_DIR (default backend/app/var/uploads).
 That folder is NEVER mounted as static files: every read goes through

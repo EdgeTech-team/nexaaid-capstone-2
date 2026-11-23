@@ -9,7 +9,7 @@ import '../shared/widgets.dart';
 //
 // Report Validation, Report Status and Validated Reports used to load every
 // report and filter / sort them in the app. Now the server does it
-// (backend services/report_paging.py) and sends 10 at a time; the counts in
+// (backend core/m2_disaster_reporting/report_paging.py) and sends 10 at a time; the counts in
 // the Filter panel ("Not Started (9)") come from a counts endpoint with the
 // same filters.
 // ---------------------------------------------------------------------------

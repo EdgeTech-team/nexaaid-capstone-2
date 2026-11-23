@@ -13,7 +13,7 @@ VALID_LEVELS = ("Low", "Medium", "High", "Critical")
 #   severity = affected families and disaster type, in the 40 : 30 ratio the
 #              team chose (option A), i.e. 4/7 and 3/7 of the severity score.
 #   missing  = 100 - the report's delivered fulfillment % (per item, averaged;
-#              services/fulfillment.py). It scales the severity from 100%
+#              core/m8_delivery_tracking/fulfillment.py). It scales the severity from 100%
 #              (nothing delivered) down to MISSING_FLOOR (almost everything
 #              delivered), so the level steps down as goods arrive instead of
 #              sitting at High and jumping to Low at the end.

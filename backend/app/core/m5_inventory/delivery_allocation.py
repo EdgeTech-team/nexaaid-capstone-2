@@ -37,7 +37,7 @@ from core.m5_inventory.received_goods_model import ReceivedGoods
 
 # Delivery status -> how far the goods got. Preparing has not left yet.
 RANK = {"In Transit": 1, "Delivered": 2, "Confirmed": 3}
-# ... and the matching step of the donor's timeline (design/status.dart).
+# ... and the matching step of the donor's timeline (core/shared/design/status.dart).
 STEP = {1: "In Transit", 2: "Delivered", 3: "Acknowledged"}
 
 

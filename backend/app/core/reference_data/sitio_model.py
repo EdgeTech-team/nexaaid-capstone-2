@@ -1,4 +1,4 @@
-# models/sitio_model.py
+# core/reference_data/sitio_model.py
 from sqlalchemy import Column, Integer, String, ForeignKey
 from core.shared.database import Base
 

@@ -6,7 +6,7 @@ import '../shared/item_amounts.dart';
 
 // Report -> Entries -> Items (team rule, Oct 6). One ENTRY = one donor
 // submission = one batch_reference. The grouping comes from the backend
-// (services/donation_entries.py); this file only displays it.
+// (core/m4_donation_management/donation_entries.py); this file only displays it.
 
 /// 5.1: the held donations behind the Admin dashboard tile.
 void openHeldDonations(BuildContext context) => _openEntriesPage(

@@ -61,7 +61,7 @@ class PhysicalDonation(Base):
     packaging = Column(String(100), nullable=False)
     # Total in the item's base unit (kg, L, pcs...). With the breakdown
     # below it is worked out by the server: pack_count x per_pack x
-    # size_amount, rounded to a whole unit (services/units.py).
+    # size_amount, rounded to a whole unit (core/reference_data/units.py).
     quantity = Column(Integer, nullable=False)
     # How the donor described it (Oct 2026, per-item fulfillment), e.g.
     # 3 boxes x 16 x 1.5 L bottle. NULL for donations from older apps, which
@@ -85,7 +85,7 @@ class PhysicalDonation(Base):
     pickup_notes = Column(Text, nullable=True)
     # Door to Door: the days the donor is home for the pickup, as ISO weekday
     # numbers "1,3,5" (1 = Monday). Pickups happen within the CSWS pickup
-    # hours (schemas/physical_donation_schema.pickup_rules).
+    # hours (core/m4_donation_management/physical_donation_schema.pickup_rules).
     pickup_days = Column(String(20), nullable=True)
     # Door to Door: the specific dates the donor is home, "2026-10-26,2026-10-28"
     # (calendar picker). When set, pickup_days holds their weekdays so older
@@ -108,7 +108,7 @@ class PhysicalDonation(Base):
     status =Column(String(50), nullable=False, server_default="Pending")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    # Termination of donations that never arrive (services/donation_expiry.py).
+    # Termination of donations that never arrive (core/m4_donation_management/donation_expiry.py).
     # Pending items are handed over by expires_at, or the system marks them
     # 'Expired'. A donor (or CSWS for them) can mark them 'Cancelled'.
     # Closed rows are never deleted: they stay here for the records and audit.

@@ -46,12 +46,12 @@ const _customSize = 'custom';
 /// Quick choices for "items per pack". 1 = single items, not in packs.
 const _perPackChoices = [1, 6, 10, 12, 15, 16, 24];
 
-/// Same limits as the server (schemas/physical_donation_schema.py).
+/// Same limits as the server (core/m4_donation_management/physical_donation_schema.py).
 const _maxPacks = 100000;
 const _maxPerPack = 10000;
 
 /// How many base units (kg or L) one of each unit is. Same as FACTORS in
-/// the backend's services/units.py.
+/// the backend's core/reference_data/units.py.
 const _unitFactors = {
   'kg': 1.0,
   'g': 0.001,
@@ -719,7 +719,7 @@ class _DonateScreenState extends State<DonateScreen> {
     );
   }
 
-  /// Guest limits (services/guest_limits.py) explained in a sheet with a
+  /// Guest limits (core/m4_donation_management/guest_limits.py) explained in a sheet with a
   /// way forward, instead of an error message. True when [r] was one.
   Future<bool> _explainGuestLimit(ApiResult r) async {
     if (api.loggedIn ||
@@ -2330,7 +2330,7 @@ const guestPickupBlockedText =
     '2 minutes: you\'ll need a valid ID (front and back) and your email. '
     'Your donation stays filled in.';
 
-/// Same reason the server gives (services/guest_limits.GUEST_ONE_PICKUP).
+/// Same reason the server gives (core/m4_donation_management/guest_limits.GUEST_ONE_PICKUP).
 const guestPickupLimitText =
     'For NexaAid security and the safety of our pickup team, a guest can '
     'have only one Door to Door pickup waiting at a time. Register an '

@@ -1,9 +1,9 @@
 """
-core/uploads.py — rules for what can be uploaded, by whom, and how
+core/shared/uploads.py — rules for what can be uploaded, by whom, and how
 registration attaches a file to a new account.
 
 Used by:
-  - api/v1/upload_routes.py   (POST/GET /uploads)
+  - core/shared/upload_routes.py   (POST/GET /uploads)
   - registration (adviser items 2 and 2.1): claim_registration_files()
   - Mariquit, barangay donation QR (adviser item 7): purpose "barangay_donation_qr"
   - Mariquit, proof of receipt (J2 / NF-015): purposes "receipt_signature"

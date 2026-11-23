@@ -2,7 +2,7 @@
 F-08: deleting an account also removes the person's data where it was
 copied (audit entries, the organization's contact details, donation pickup
 locations), while every record and audit entry stays.
-Real auth stack: the `api` fixture of tests/test_role_flows.py.
+Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 """
 import json
 

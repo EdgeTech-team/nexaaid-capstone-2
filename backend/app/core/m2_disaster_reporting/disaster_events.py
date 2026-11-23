@@ -14,8 +14,8 @@ own disaster report. This builds GET /reports/events/{event_id}:
   and "Awaiting validation". Withdrawn (Cancelled) and deleted reports are
   left out for them;
 - the event's barangay count, families, % and priority come from the
-  VALIDATED reports only. Event % = the reports' official % (services/
-  fulfillment.py) weighted by affected families, computed on read.
+  VALIDATED reports only. Event % = the reports' official %
+  (core/m8_delivery_tracking/fulfillment.py) weighted by affected families, computed on read.
 """
 from typing import Optional
 
@@ -48,7 +48,7 @@ def highest_priority(reports: list) -> Optional[str]:
 
 
 def _still_needed(n: dict) -> int:
-    """J6 / NF-011: needed minus VERIFIED pledges (services/pledge_trust.py).
+    """J6 / NF-011: needed minus VERIFIED pledges (core/m4_donation_management/pledge_trust.py).
     A guest pledge counts once CSWS receives it. Falls back to "pledged"
     for a row without the split."""
     verified = n.get("pledged_verified", n.get("pledged"))

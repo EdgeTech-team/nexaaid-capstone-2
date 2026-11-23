@@ -1,4 +1,4 @@
-"""Live updates over WebSocket (GET /ws, api/v1/realtime_router.py).
+"""Live updates over WebSocket (GET /ws, core/notifications/realtime_router.py).
 
 When core.notifications.notifications.notify() adds a notification, it queues a push for
 that user here. After the database commit succeeds, each queued user who has

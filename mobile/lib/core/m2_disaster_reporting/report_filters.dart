@@ -40,7 +40,7 @@ String? fulfillmentState(Map r) {
 const fulfillmentStates = ['Not Started', 'In Progress', 'Fulfilled'];
 
 /// Report statuses, exactly as the backend stores them
-/// (models/report.py, disaster_reports.status).
+/// (core/m2_disaster_reporting/report_model.py, disaster_reports.status).
 const reportStatuses = ['Pending', 'Validated', 'Rejected', 'Cancelled'];
 
 /// Priority levels for Appendix H 3.3 priority-based report filtering.
@@ -91,7 +91,7 @@ List<Map<String, dynamic>> sortAndFilterReports(
   return list;
 }
 
-/// NF-003: the sort as the server names it (services/report_paging.py).
+/// NF-003: the sort as the server names it (core/m2_disaster_reporting/report_paging.py).
 String reportSortParam(ReportSort s) => switch (s) {
   ReportSort.urgent => 'urgent',
   ReportSort.leastFulfilled => 'least_fulfilled',

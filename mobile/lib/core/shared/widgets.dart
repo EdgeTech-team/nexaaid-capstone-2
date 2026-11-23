@@ -12,7 +12,7 @@ final api = Api.instance;
 // ---------------------------------------------------------------------------
 // Brand colors (old names, kept so existing screens compile).
 // New code: use Theme.of(context).colorScheme, or the design system in
-// lib/design/. These fixed colors do not adapt to dark mode, so replace
+// lib/core/shared/design/. These fixed colors do not adapt to dark mode, so replace
 // Brand.ink / Brand.muted with colorScheme.onSurface / onSurfaceVariant
 // when you restyle your screens.
 // ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ String roleLine() {
 
 // ---------------------------------------------------------------------------
 // Colors for statuses and priority levels: one fixed color per status,
-// defined in lib/design/status.dart.
+// defined in lib/core/shared/design/status.dart.
 // ---------------------------------------------------------------------------
 Color statusTone(String? s) => StatusColors.base(s);
 

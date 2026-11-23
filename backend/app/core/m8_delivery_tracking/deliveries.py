@@ -1,8 +1,8 @@
 """
-app/api/v1/deliveries.py
+app/core/m8_delivery_tracking/deliveries.py
 module 3.10 - Delivery Tracking & Receipt Confirmation (Mariquit)
 
-ASSUMPTIONS TO VERIFY (same caveats as api/v1/reports.py):
+ASSUMPTIONS TO VERIFY (same caveats as core/m2_disaster_reporting/reports.py):
 -require_role/get_current_user shape-see the note in reports.py.
 -Role names ("csws_main office", "barangay_receiving_rep", "admin")
 are placeholders- swap for real RBAC role names once Known.
@@ -142,7 +142,7 @@ def create_delivery(
 
   # Goods are released from this report's inventory (manuscript: "Inventory
   # is linked to specific report records"), so there must be enough stock.
-  # services/delivery_stock.py: shared with trips, plain-language messages.
+  # core/m5_inventory/delivery_stock.py: shared with trips, plain-language messages.
   # Oct 13 (team): no items = the whole report, i.e. every donation the CMO
   # acknowledged that has not gone out yet (the app always does this).
   # Oct 15: or only the entries Main Office kept ticked (each one whole).
@@ -369,7 +369,7 @@ def _drrmo_actions(db: Session, user, now) -> list:
 
 
 # J5 / NF-010 (team agreement A3): short deliveries and CSWS Main Office's
-# review of their cause (services/shortfall.py). Declared before
+# review of their cause (core/m8_delivery_tracking/shortfall.py). Declared before
 # /{delivery_id}, so "discrepancies" is never read as a delivery id.
 @router.get("/discrepancies", response_model=List[ShortDelivery])
 def list_discrepancies(
@@ -521,7 +521,7 @@ def move_to_next_status(db: Session, delivery: Delivery, current_user,
                         issue_code: bool = True) -> Delivery:
     """One step forward (Preparing -> In Transit -> Delivered) with the
     timestamped history and notifications. Used by advance_delivery and by
-    trips (api/v1/trips.py) so both behave the same. Does not commit.
+    trips (core/m8_delivery_tracking/trips.py) so both behave the same. Does not commit.
 
     J2 / NF-015: reaching Delivered makes the handover code (every way of
     arriving: CSWS, a trip stop, DRRMO). The code is left on
@@ -750,7 +750,7 @@ def new_handover_code(
 #   fewer than sent: Short, Damaged or Wrong item       otherwise 422
 # A difference is still Confirmed (has_discrepancy = true); CSWS Main Office
 # and the reporter are told what differs. Fulfillment counts
-# min(received, sent) per line (services/fulfillment.py delivered_line).
+# min(received, sent) per line (core/m8_delivery_tracking/fulfillment.py delivered_line).
 
 
 def _item_label(line: DeliveryItem) -> tuple:
@@ -769,7 +769,7 @@ def check_counts(delivery: Delivery, counts) -> list:
     """J1 / NF-009: check the barangay's counts against what CSWS sent.
     Returns [(delivery_item, received, reason, note)] in line order, or
     raises 422 naming the first problem. Changes nothing, so the trip
-    confirmation (api/v1/trips.py) can check every delivery first."""
+    confirmation (core/m8_delivery_tracking/trips.py) can check every delivery first."""
     sent = {line.delivery_item_id: line for line in delivery.items}
     given = {}
     for c in counts:
@@ -835,7 +835,7 @@ def record_receipt(db: Session, delivery: Delivery, counted: list, proof: Receip
     """Save one receipt whose code, counts and files were already checked:
     its counts (J1 / NF-009), the signer and files (J2 / NF-015), the
     Confirmed status, the acknowledgement, the notices and the fulfillment.
-    Shared by confirm_receipt and the trip confirmation (api/v1/trips.py),
+    Shared by confirm_receipt and the trip confirmation (core/m8_delivery_tracking/trips.py),
     so both follow the same rules. Does not commit."""
     differences = _differences(counted)
 
@@ -1027,7 +1027,7 @@ def _is_acknowledged(db: Session, delivery_id: int) -> bool:
     ).first() is not None
 
 
-# J2 / NF-015: the read-only Acknowledgment Receipt (services/acknowledgment.py).
+# J2 / NF-015: the read-only Acknowledgment Receipt (core/m8_delivery_tracking/acknowledgment.py).
 # Full view: CSWS Main Office, Disaster Unit, Administrator, the rep of that
 # barangay. Donor view: donors whose goods were on the delivery (items,
 # barangay, reference no., date). Everyone else: 403.
@@ -1195,7 +1195,7 @@ def _recalculate_fulfillment(
 ) -> ReportFulfillment:
   """Per-item fulfillment (Oct 2026): each need of the report is measured
   against the confirmed deliveries of THAT item, capped at 100%, and the
-  report's percentage is the average (services/fulfillment.py). Old reports
+  report's percentage is the average (core/m8_delivery_tracking/fulfillment.py). Old reports
   have one "General needs" line, which counts every item like before.
 
   Alt flow 5a: if the linked report is already closed/resolved, this

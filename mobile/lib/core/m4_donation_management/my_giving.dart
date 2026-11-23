@@ -30,7 +30,7 @@ const _donationLabels = ['Pledged', 'Received by CSWS'];
 
 /// Oct 12 (team): each donation entry shows its full journey again, as on
 /// develop: Pledged -> Received by CSWS -> In transit -> Delivered ->
-/// Barangay confirmed (design/status.dart), and "Show QR" while it still
+/// Barangay confirmed (core/shared/design/status.dart), and "Show QR" while it still
 /// waits for drop-off or pickup.
 /// donationLifecycleLabels with line breaks, so the steps fit a phone.
 const _journeyLabels = [

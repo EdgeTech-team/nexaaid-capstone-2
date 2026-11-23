@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../shared/api.dart';
 
 /// Per-item fulfillment (Oct 2026): one bar per need of the report.
-/// Data comes from GET /reports/{id}/needs (services/fulfillment.py).
+/// Data comes from GET /reports/{id}/needs (core/m8_delivery_tracking/fulfillment.py).
 /// Each bar has three layers: pledged (lightest), in stock / CMO-confirmed,
 /// and delivered (darkest, the official figure).
 class NeedsProgress extends StatefulWidget {

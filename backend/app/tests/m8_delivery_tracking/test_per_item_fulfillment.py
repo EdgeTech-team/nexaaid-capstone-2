@@ -244,7 +244,7 @@ def test_editing_needs_and_matching_items_at_receiving(api):
 
     # A donor types "Dinorado" (a kind of rice); CSWS receives it as Rice, so
     # it counts for Rice. ("Bigas" itself now maps to Rice at once:
-    # services/items.ITEM_ALIASES, migration f3b8d1c5a9e7.)
+    # core/reference_data/items.ITEM_ALIASES, migration f3b8d1c5a9e7.)
     d = ok(client.post("/donations/", headers=t["donor"], json={
         "report_id": rid, "other_item_name": "Dinorado", "other_item_unit": "kg",
         "pack_count": 2, "size_amount": 10, "size_unit": "kg", "handover_method": "Drop Off"}))

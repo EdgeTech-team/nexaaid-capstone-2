@@ -1,9 +1,9 @@
 """
 NF-003 (CSWS Main Office): the Receive screen's three tabs, 20 rows per page.
 
-The Receive screen (mobile/lib/ui/csws_screens.dart) used to download every
+The Receive screen (mobile/lib/core/m5_inventory/csws_screens.dart) used to download every
 pending entry, every donation record and the whole inventory, then filter and
-sort them in the app (mobile/lib/ui/receive_filters.dart and
+sort them in the app (mobile/lib/core/m5_inventory/receive_filters.dart and
 inventory_view.dart). The same rules run here, written again line for line:
 
   pending    entries still waiting, grouped by report. Pages hold 20 ENTRIES;

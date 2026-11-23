@@ -1,5 +1,5 @@
 """
-Termination of donations that are never handed over (services/donation_expiry.py,
+Termination of donations that are never handed over (core/m4_donation_management/donation_expiry.py,
 team decision Oct 9, 2026; an addition to manuscript 3.2).
 
   Drop Off      expires 14 days after it was submitted

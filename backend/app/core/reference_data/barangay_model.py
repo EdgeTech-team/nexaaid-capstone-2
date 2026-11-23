@@ -1,4 +1,4 @@
-# models/barangay_model.py
+# core/reference_data/barangay_model.py
 from sqlalchemy import Column, Integer, String, ForeignKey
 from core.shared.database import Base
 

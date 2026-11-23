@@ -1,6 +1,6 @@
 """Fixed pickup zones (testing, Oct 31): "cluster first, route second".
 
-A Door to Door donation is placed in a fixed zone (services/pickup_zones.py)
+A Door to Door donation is placed in a fixed zone (core/m5_inventory/pickup_zones.py)
 and the planner fills a day zone by zone: must-go stops first (last allowed
 date, deadline close), then the zone of the day, then the nearest zones.
 The order inside a day is the shortest route from the CSWS office.

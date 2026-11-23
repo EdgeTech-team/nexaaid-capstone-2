@@ -1,4 +1,4 @@
-# models/user_rbac_model.py
+# core/m1_user_management/user_rbac_model.py
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -6,7 +6,7 @@ from core.shared.database import Base
 
 class User(Base):
     __tablename__ = "users"
-    # Usernames are saved in lowercase (core/usernames.py), so a plain unique
+    # Usernames are saved in lowercase (core/m1_user_management/usernames.py), so a plain unique
     # constraint is case-insensitive in practice. NULLs don't clash, so donors
     # and older accounts can leave it empty.
     __table_args__ = (UniqueConstraint("username", name="uq_users_username"),)
@@ -24,7 +24,7 @@ class User(Base):
     organization_id = Column(Integer, ForeignKey("organizations.organization_id", ondelete="SET NULL"), nullable=True)
     assigned_barangay_id = Column(Integer, ForeignKey("barangays.barangay_id", ondelete="SET NULL"), nullable=True)  # NEW — column now exists in Neon
     id_document_url = Column(Text, nullable=True)  # front of the valid ID (UC-D1 step 3)
-    # Kind of valid ID (schemas/user_schema.ID_TYPES). Donors only; migration f3dd12dbc3d7.
+    # Kind of valid ID (core/m1_user_management/user_schema.ID_TYPES). Donors only; migration f3dd12dbc3d7.
     id_type = Column(String(40), nullable=True)
     address = Column(Text, nullable=True)  # optional home address (donors)
     is_active = Column(Boolean, server_default="true", nullable=False)

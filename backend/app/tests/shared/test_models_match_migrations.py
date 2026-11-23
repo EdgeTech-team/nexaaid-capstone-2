@@ -3,7 +3,7 @@ The SQLAlchemy models must match the schema the Alembic migrations build.
 
 Why: a model column that the database doesn't have only fails at runtime,
 on Neon, usually as a 500. Example: a misplaced parenthesis in
-models/upload_model.py renamed uploads.owner_user_id to
+core/shared/upload_model.py renamed uploads.owner_user_id to
 "fk_uploads_owner_user_id" (fixed in #19). The SQLite tests didn't notice,
 because they build their tables from the models themselves.
 

@@ -1,6 +1,6 @@
 """The "stage" of a logistics request, in SQL (NF-001 / NF-003).
 
-api/v1/drrmo_router.request_rows gives every request a stage: its status,
+core/m7_logistics_support/drrmo_router.request_rows gives every request a stage: its status,
 except that an Accepted request whose delivery has left CSWS (In Transit,
 Delivered or Confirmed) reads "In Transit" (UC-DR2) until DRRMO completes it.
 The DRRMO and records screens filter and count by that stage, so the same

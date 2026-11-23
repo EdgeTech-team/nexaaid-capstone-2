@@ -12,7 +12,7 @@ Logged-in donors never reach these checks.
   Per phone number       at most GUEST_MAX_OPEN_ENTRIES (2) Pending
                          guest entries per normalized number            429
   Per connection         at most GUEST_MAX_PER_IP_HOUR (5) guest
-                         submissions an hour (core/auth.py, in memory)  429
+                         submissions an hour (core/m1_user_management/auth.py, in memory)  429
   Duplicates             same number + same report + same item within
                          24 hours                                       409
   Quantity cap           each item line at most GUEST_MAX_LINE_QTY

@@ -1,11 +1,11 @@
 """
-api/v1/upload_routes.py — Sprint 0 foundation: upload service (Castillo).
+core/shared/upload_routes.py — Sprint 0 foundation: upload service (Castillo).
  
 POST /uploads            multipart: purpose + file  ->  {file_id, url, ...}
 GET  /uploads/{file_id}  the file itself (private files: owner or Administrator only)
  
 Agreed response shape for the team: {file_id, url}. Anonymous uploads
-(registration) also get a one-time claim_token — see core/uploads.claim_upload.
+(registration) also get a one-time claim_token — see core/shared/uploads.claim_upload.
 """
 import hashlib
 import secrets

@@ -1,4 +1,4 @@
-/// Client-side rules. They mirror the backend (core/validators.py) so the app
+/// Client-side rules. They mirror the backend (core/shared/validators.py) so the app
 /// and the API agree. Each returns null when valid, or the error text.
 class Validators {
   static const _l = 'A-Za-zÀ-ÖØ-öø-ÿ';
@@ -16,7 +16,7 @@ class Validators {
 
   /// 8-64 characters, no spaces, at least one capital letter and one
   /// number. Keep this in sync with validate_password_strength in
-  /// backend/app/core/passwords.py.
+  /// backend/app/core/m1_user_management/passwords.py.
   static String? newPassword(String? v) {
     final s = v ?? '';
     const common = {

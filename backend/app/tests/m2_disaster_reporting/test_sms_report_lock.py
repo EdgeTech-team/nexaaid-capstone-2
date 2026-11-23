@@ -9,7 +9,7 @@ are refused for SMS reports, the stored SMS stays as received); every
 encode and validate is audit-logged with the Administrator's name; the
 role checks (only the Administrator patches; only the Administrator and the
 Disaster Unit read the raw SMS).
-Real auth stack: the `api` fixture of tests/test_role_flows.py.
+Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 """
 from tests.m1_user_management.test_role_flows import api, ok  # noqa: F401  (fixture)
 

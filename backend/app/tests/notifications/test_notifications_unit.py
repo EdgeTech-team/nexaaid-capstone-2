@@ -1,4 +1,4 @@
-"""No database needed. Run from backend/app:  pytest tests/test_notifications_unit.py"""
+"""No database needed. Run from backend/app:  pytest tests/notifications/test_notifications_unit.py"""
 import core.shared.email as mail
 from core.notifications.notifications import render_event
 

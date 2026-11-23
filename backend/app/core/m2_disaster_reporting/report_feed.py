@@ -3,7 +3,7 @@ NF-003 (Donor, Organization, guest): the validated reports feed.
 
 The donor Reports tab and the guest Donate page used to get every validated
 report through GET /lookups (`validated_reports`) and filter / sort them in
-the app (mobile/lib/ui/donor_screens.dart, ReportsFeed). GET
+the app (mobile/lib/core/m4_donation_management/donor_screens.dart, ReportsFeed). GET
 /public/reports/feed does the same filtering and sorting on the server and
 sends 20 at a time; the row shape is the same one /lookups sends.
 """

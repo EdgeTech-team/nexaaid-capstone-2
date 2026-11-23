@@ -21,7 +21,7 @@ import 'sms_original.dart';
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: number limits. Must match the backend
-// (app/schemas/report.py: MAX_AFFECTED_FAMILIES, MAX_ESTIMATED_QUANTITY).
+// (app/core/m2_disaster_reporting/report_schema.py: MAX_AFFECTED_FAMILIES, MAX_ESTIMATED_QUANTITY).
 // ---------------------------------------------------------------------------
 const maxAffectedFamilies = 20000;
 // Testing (Oct 28): no limit on how much a report needs, per item or in
@@ -411,7 +411,7 @@ class _NewReportScreenState extends State<NewReportScreen> {
   }
 
   /// Module 3 (Oct 2026): suggested needs for a disaster type, from
-  /// /lookups `need_templates` (backend services/need_templates.py).
+  /// /lookups `need_templates` (backend core/m2_disaster_reporting/need_templates.py).
   Map<String, dynamic>? _templateFor(Names names) {
     for (final t in names.rows('need_templates')) {
       if ('${t['id']}' == typeId) return t;

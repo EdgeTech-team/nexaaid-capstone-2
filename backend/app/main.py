@@ -61,7 +61,7 @@ def api_docs_settings(app_env: str) -> dict:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Phase 5: delivery reminders every 5 minutes while the server runs
-    (services/delivery_reminders.py). REMINDERS=off turns them off."""
+    (core/m7_logistics_support/delivery_reminders.py). REMINDERS=off turns them off."""
     task = asyncio.create_task(reminder_loop()) if reminders_enabled() else None
     try:
         yield
@@ -149,9 +149,9 @@ app.include_router(admin_document_router)
 app.include_router(donation_info_router)
 app.include_router(contacts_router)
 app.include_router(account_router)
-app.include_router(realtime_router)      # GET /ws live updates (core/realtime.py)
-app.include_router(push_router)          # GET /push/topic, Android push (core/push.py)
+app.include_router(realtime_router)      # GET /ws live updates (core/notifications/realtime.py)
+app.include_router(push_router)          # GET /push/topic, Android push (core/notifications/push.py)
 
-# F-21: the real client address behind Render's proxy (core/client_ip.py).
+# F-21: the real client address behind Render's proxy (core/shared/client_ip.py).
 # Added last, so it runs first.
 app.add_middleware(ClientIPMiddleware)

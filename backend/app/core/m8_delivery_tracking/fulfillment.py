@@ -6,7 +6,7 @@ the item's base unit. For every need three meters are worked out:
   pledged    donations not expired/cancelled (the received amount once
              CSWS has counted it, the donor's declared amount before).
              J6 / NF-011 splits it into pledged_verified and
-             pledged_unverified (services/pledge_trust.py, D3) for the
+             pledged_unverified (core/m4_donation_management/pledge_trust.py, D3) for the
              donate form's "still needed" chips only
   confirmed  received by CSWS AND acknowledged by the CMO ("in stock";
              stays counted after the goods are delivered)

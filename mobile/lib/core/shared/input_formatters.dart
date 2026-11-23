@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 /// (adviser item 2). TextCapitalization.words only changes the keyboard,
 /// and users can still type lower case, so the text itself is fixed here.
 /// The rest of each word is kept as typed ("McDonald" stays). The backend
-/// does the same in core/names.py.
+/// does the same in core/m1_user_management/names.py.
 class CapitalizeWordsFormatter extends TextInputFormatter {
   const CapitalizeWordsFormatter();
 
@@ -46,7 +46,7 @@ class CapitalizeFirstLetterFormatter extends TextInputFormatter {
 /// Capitalizes the first letter of every word in an organization name. Words
 /// are split on spaces only, so "St. Mary's" is not turned into "St. Mary'S".
 /// The rest of each word is kept as typed ("NGO" stays). The backend does the
-/// same in core/names.py (capitalize_org_words).
+/// same in core/m1_user_management/names.py (capitalize_org_words).
 class CapitalizeOrgWordsFormatter extends TextInputFormatter {
   const CapitalizeOrgWordsFormatter();
 

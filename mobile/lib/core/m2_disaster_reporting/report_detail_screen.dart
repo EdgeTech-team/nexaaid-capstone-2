@@ -6,7 +6,7 @@ import '../shared/nexa_widgets.dart';
 import '../m8_delivery_tracking/needs_progress.dart';
 
 /// Screen 2: report detail with AI-assisted priority guidance.
-/// Styled from the app theme (design/theme.dart) so it matches the rest of
+/// Styled from the app theme (core/shared/design/theme.dart) so it matches the rest of
 /// the system in both light and dark mode.
 class ReportDetailScreen extends StatelessWidget {
   final Report report;

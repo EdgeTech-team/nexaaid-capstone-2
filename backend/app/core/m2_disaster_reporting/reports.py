@@ -1,5 +1,5 @@
 """
-app/api/v1/reports.py
+app/core/m2_disaster_reporting/reports.py
 
 Module 3.4 — Report Management (Mariquit)
 
@@ -398,7 +398,7 @@ def create_event_reports(
 # ---------------------------------------------------------------------------
 # NF-003: the event page. Public like /reports/{id}/needs and /lookups:
 # guests may open it. Unvalidated reports are only placeholders for anyone
-# who may not open them (services/disaster_events.py).
+# who may not open them (core/m2_disaster_reporting/disaster_events.py).
 # ---------------------------------------------------------------------------
 @router.get("/events/{event_id}")
 def get_event(
@@ -417,7 +417,7 @@ def get_event(
 #
 # NF-003 (all roles): every report list also has a paged mode. Send `offset`
 # (with `limit`, at most 100) and the list is filtered by fulfillment status,
-# sorted in the database (services/report_paging.py) and the total comes in
+# sorted in the database (core/m2_disaster_reporting/report_paging.py) and the total comes in
 # the X-Total-Count header. Without `offset` the answer is exactly as before,
 # so installed APKs keep working.
 # ---------------------------------------------------------------------------
@@ -803,7 +803,7 @@ def update_report(
 
     # Weak spot 5: changing what the report needs (or its families / type)
     # after validation must move fulfillment and priority with it. Priority
-    # itself cannot be set here (schemas/report.py, testing #5).
+    # itself cannot be set here (core/m2_disaster_reporting/report_schema.py, testing #5).
     affects_priority = needs_changed or {"affected_families", "disaster_type_id"} & set(updates)
     if report.status == "Validated" and affects_priority:
         if needs_changed and report.fulfillment is not None:

@@ -8,7 +8,7 @@ Also: a blank or too long reason = 422 and nothing is saved; a deactivated
 member's number, or a number of another role, is unknown; the reason is in
 the ENCODE SMS REPORT audit row; the J7 lock still holds (the reason cannot
 be added or changed with a PATCH); the role checks.
-Real auth stack: the `api` fixture of tests/test_role_flows.py.
+Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 """
 import core.shared.database as database
 from core.shared.audit_log_model import AuditLog

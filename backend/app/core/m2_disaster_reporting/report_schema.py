@@ -1,5 +1,5 @@
 """
-app/schemas/report.py
+app/core/m2_disaster_reporting/report_schema.py
 
 Pydantic schemas for Module 3.4 — Report Management.
 

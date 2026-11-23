@@ -1,4 +1,4 @@
-# models/city_model.py
+# core/reference_data/city_model.py
 from sqlalchemy import Column, Integer, String
 from core.shared.database import Base
 

@@ -42,7 +42,7 @@ enum ReceiveWhen {
 }
 
 // ---------------------------------------------------------------------------
-// Small helpers (pure, unit tested in test/receive_filters_test.dart)
+// Small helpers (pure, unit tested in test/m5_inventory/receive_filters_test.dart)
 // ---------------------------------------------------------------------------
 
 /// Report label as the server writes it: "#21 Typhoon - Banilad"

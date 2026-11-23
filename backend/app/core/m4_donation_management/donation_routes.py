@@ -174,7 +174,7 @@ def _donor_ids(db: Session, current_user: Optional[User], guest_info) -> tuple:
 
 
 def _resolve_item_id(db: Session, item_id, other_name, other_unit) -> int:
-    # Moved to services/items.py (reports use it for their needs too).
+    # Moved to core/reference_data/items.py (reports use it for their needs too).
     # F-15: an item typed in on a donation waits for CSWS review.
     return resolve_item_id(db, item_id, other_name, other_unit, review=True)
 
@@ -330,7 +330,7 @@ def _batch_view(db: Session, rows: list, staff: bool) -> dict:
         **_pickup_days_view(pickup),
         "preferred_pickup_at": _iso(pickup.preferred_pickup_at),
         "created_at": first.created_at,
-        # Handover deadline / why it was closed (services/donation_expiry.py)
+        # Handover deadline / why it was closed (core/m4_donation_management/donation_expiry.py)
         **entry_expiry_info(rows),
         # NF-011 (D3): a guest pledge, or one from an account whose email is
         # not verified, until CSWS receives it.
@@ -409,14 +409,14 @@ def _reverse_props(lat: float, lng: float) -> dict:
 # ---------------------------------------------------------------------------
 # NF-004 / NF-005: guest donations. Door to Door for guests follows the
 # GUEST_DOOR_TO_DOOR setting (blocked by default); the other limits always apply.
-# The rules and their numbers are in services/guest_limits.py.
+# The rules and their numbers are in core/m4_donation_management/guest_limits.py.
 # ---------------------------------------------------------------------------
 class _BotTrap(Exception):
     """The hidden "website" field was filled in: answer as if saved."""
 
 
 def _client_ip(request: Request) -> Optional[str]:
-    """F-21: core/client_ip.py already set this from the trusted end of
+    """F-21: core/shared/client_ip.py already set this from the trusted end of
     X-Forwarded-For (Render's proxy), so a client cannot fake it."""
     return request.client.host if request.client else None
 
@@ -483,7 +483,7 @@ def _create_entry(db: Session, payload, current_user: Optional[User], ip: Option
     resolved = []
     for line in lines:
         item_id = _resolve_item_id(db, line.item_id, line.other_item_name, line.other_item_unit)
-        # quantity (base unit) + packaging + breakdown (services/units.py)
+        # quantity (base unit) + packaging + breakdown (core/reference_data/units.py)
         resolved.append((line, item_id, line_amounts(db, db.get(Item, item_id), line)))
     if current_user is None:
         _guest_db_checks(db, payload, [i for _, i, _ in resolved],
@@ -516,7 +516,7 @@ def _create_entry(db: Session, payload, current_user: Optional[User], ip: Option
         )
         db.add(row)
         rows.append(row)
-    set_deadline(rows)  # handover deadline (services/donation_expiry.py)
+    set_deadline(rows)  # handover deadline (core/m4_donation_management/donation_expiry.py)
     apply_hold(rows, current_user)  # NF-006: Door to Door waits for the email code
     db.flush()  # assigns donation_id for the notifications
 
@@ -541,7 +541,7 @@ def create_donation_batch(
 ):
     """One donation with one or more items, one QR reference. All items are
     saved together or none are (alt 3a: no QR for an incomplete entry).
-    Guests: Drop Off only, with limits (services/guest_limits.py)."""
+    Guests: Drop Off only, with limits (core/m4_donation_management/guest_limits.py)."""
     try:
         ip = _guest_gate(payload, request, current_user)
     except _BotTrap:
@@ -618,7 +618,7 @@ def _drop_from_pickup_runs(db: Session, reference: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Oct 23 (Dave): add items to a pledged donation, or remove one, keeping the
-# SAME donation and QR. Rules: services/donation_additions.py. Both are the
+# SAME donation and QR. Rules: core/m4_donation_management/donation_additions.py. Both are the
 # donor's own actions; CSWS Main Office is notified so it sees the change
 # before scanning, and the audit log keeps who did it and when.
 # ---------------------------------------------------------------------------

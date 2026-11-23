@@ -1,7 +1,7 @@
 """NF-004: guest Door to Door follows GUEST_DOOR_TO_DOOR (blocked by default,
 or limited to one pickup per number), and NF-005 (D2) limits on guest
 donations (anti-flooding). Logged-in donors are not affected.
-Rules and numbers: services/guest_limits.py."""
+Rules and numbers: core/m4_donation_management/guest_limits.py."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -34,7 +34,7 @@ def _post(client, body, ip="203.0.113.10", headers=None):
 @pytest.fixture(autouse=True)
 def _client_ip_from_test_header(monkeypatch):
     """The per-connection limit reads request.client.host (set from
-    X-Forwarded-For by core/client_ip.py in production). TestClient always
+    X-Forwarded-For by core/shared/client_ip.py in production). TestClient always
     connects from "testclient", so tests name the address in a header."""
     import core.m4_donation_management.donation_routes as routes
     monkeypatch.setattr(routes, "_client_ip",

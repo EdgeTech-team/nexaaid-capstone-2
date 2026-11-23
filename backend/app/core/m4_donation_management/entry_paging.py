@@ -13,7 +13,7 @@ then slice one page. This module lets the database do the heavy part:
    field is exactly what the old answer had.
 
 The rules mirror build_entries / group_by_report / filter_and_sort and
-core.m4_donation_management.donation_expiry.entry_status; tests/test_pagination.py checks that
+core.m4_donation_management.donation_expiry.entry_status; tests/shared/test_pagination.py checks that
 the SQL pages put together equal the old full list for every filter and
 sort. Without limit, receiving_routes still uses the old code unchanged.
 
@@ -57,7 +57,7 @@ def _grouped(db: Session, own_barangay: Optional[int], report_id: Optional[int],
     n_cancelled = func.sum(case((PD.status == "Cancelled", 1), else_=0))
     n_pending = func.sum(case((PD.status == OPEN, 1), else_=0))
     open_kinds = func.count(func.distinct(case((is_open, PD.status))))
-    # services/donation_expiry.entry_status, in SQL
+    # core/m4_donation_management/donation_expiry.entry_status, in SQL
     status = case(
         (n_open == 0, case((n_cancelled == total, "Cancelled"), else_="Expired")),
         (open_kinds == 1, func.min(case((is_open, PD.status)))),

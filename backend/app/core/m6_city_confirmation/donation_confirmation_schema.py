@@ -1,4 +1,4 @@
-# schemas/donation_confirmation_schema.py
+# core/m6_city_confirmation/donation_confirmation_schema.py
 from pydantic import BaseModel, Field, model_validator
 from typing import Optional
 from pydantic import ConfigDict

@@ -1,4 +1,4 @@
-# models/disaster_type_model.py
+# core/reference_data/disaster_type_model.py
 from sqlalchemy import Column, Integer, String, Text
 from core.shared.database import Base
 from sqlalchemy import Boolean, Column, Integer, String, Text, false

@@ -2,7 +2,7 @@
 
 CSWS collects Door to Door donations zone by zone, so one day's run stays
 in one part of the service area instead of crossing it ("cluster first,
-route second": services/pickup_planner.py groups a day by zone, then
+route second": core/m5_inventory/pickup_planner.py groups a day by zone, then
 orders it by the shortest route).
 
 A donation's zone is read from what the donor already gave, in order:

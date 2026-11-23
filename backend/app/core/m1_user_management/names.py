@@ -1,6 +1,6 @@
 """Capitalize each word of a person's name (UC-D1 / UC-A2 registration).
 
-The Flutter form does the same while typing (mobile/lib/ui/input_formatters.dart),
+The Flutter form does the same while typing (mobile/lib/core/shared/input_formatters.dart),
 but the backend repeats it so API clients can't store "jUAN dela cruz".
 Only the first letter of each part is changed; the rest is kept as typed,
 so "McDonald" and "DeLa Cruz" stay as the person wrote them.

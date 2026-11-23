@@ -1,4 +1,4 @@
-# models/barangay_hazard_model.py
+# core/reference_data/barangay_hazard_model.py
 from sqlalchemy import Column, ForeignKey, Index, Integer, String, UniqueConstraint
 from core.shared.database import Base
 

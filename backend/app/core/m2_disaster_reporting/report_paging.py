@@ -4,7 +4,7 @@ NF-003 (all roles): report lists a page at a time.
 The report screens (Report Validation, Report Status, Validated Reports)
 used to load every report and then filter by fulfillment status and sort in
 the app. In paged mode the database does both, with the same rules the app
-used (mobile/lib/ui/report_filters.dart):
+used (mobile/lib/core/m2_disaster_reporting/report_filters.dart):
 
   fulfillment  Not Started  percentage <= 0      (reports with a fulfillment row)
                In Progress  0 < percentage < 100

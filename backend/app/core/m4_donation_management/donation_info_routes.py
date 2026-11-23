@@ -1,5 +1,5 @@
 """
-api/v1/donation_info_routes.py — barangay donation-sending info (adviser item 7).
+core/m4_donation_management/donation_info_routes.py — barangay donation-sending info (adviser item 7).
 
 DISPLAY ONLY (manuscript Scope Limitation #5): NexaAid never processes,
 holds or verifies money. Donors send it straight to the barangay.

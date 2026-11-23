@@ -1,7 +1,7 @@
 """Listing deliveries: filters, sorting and readable names (UC-CM2 step 6,
 "monitor the movement of distributed goods"; Appendix H 8.5 delivery records).
 
-Kept out of api/v1/deliveries.py so trips and the delivery list read the
+Kept out of core/m8_delivery_tracking/deliveries.py so trips and the delivery list read the
 same way.
 """
 from datetime import date, datetime, time, timedelta

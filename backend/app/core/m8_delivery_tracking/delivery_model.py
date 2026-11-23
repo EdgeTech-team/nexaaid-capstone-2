@@ -1,5 +1,5 @@
 """
-app/models/delivery.py
+app/core/m8_delivery_tracking/delivery_model.py
 Models 'deliveries','delivery_items', 'delivery_items', and 'receipts',matching the real Neon schema exactly. These are the tables this module OWNS.
 
 Also includes a minimal STUB for 'items' (delivery_items.item_id references it ) - same pattern as a DisasterType/Barangay/Sitio in models/report/report.py. Whoever owns inventory should replace this with their real model; delete this stub when that happens.
@@ -55,14 +55,14 @@ class Delivery(Base):
     delivery_date = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now())
 
-    # Several reports on one truck (api/v1/trips.py). NULL = a delivery made
+    # Several reports on one truck (core/m8_delivery_tracking/trips.py). NULL = a delivery made
     # on its own, exactly as before. stop_order: 1 = first barangay visited.
     trip_id = Column(
         Integer, ForeignKey("delivery_trips.trip_id", ondelete="SET NULL"), nullable=True, index=True
     )
     stop_order = Column(Integer, nullable=True)
 
-    # Unexpected problems (api/v1/delivery_problems.py): a delivery that
+    # Unexpected problems (core/m8_delivery_tracking/delivery_problems.py): a delivery that
     # cannot go ahead is Cancelled, its goods go back to stock, and the
     # reason is kept here (migration 9c4e2b7a1f35).
     cancelled_at = Column(TIMESTAMP(timezone=True), nullable=True)
@@ -79,7 +79,7 @@ class Delivery(Base):
     )
 
     # J2 / NF-015 (team agreement A2): the 6-digit handover code made when
-    # the delivery arrives. Only a keyed hash is kept (services/handover.py);
+    # the delivery arrives. Only a keyed hash is kept (core/m8_delivery_tracking/handover.py);
     # the code is shown once to CSWS Main Office (or the DRRMO user carrying
     # it) and never to the Barangay Receiving Representative. NULL = no code
     # yet, or the arrival was undone. Migration a8c3e5f7b9d1.
@@ -138,7 +138,7 @@ class DeliveryTrip(Base):
     report, the barangay's own receipt confirmation (UC-B1 alt 3a) and
     fulfillment per report work exactly as for a single delivery. The trip
     only groups them: prepare together, leave together, one stop per
-    barangay. Its status is worked out from its deliveries (api/v1/trips.py),
+    barangay. Its status is worked out from its deliveries (core/m8_delivery_tracking/trips.py),
     so it can never disagree with them. No route optimisation (Limitation 6).
     """
 
@@ -214,7 +214,7 @@ class Receipt(Base):
 
         # J2 / NF-015 (team agreement A2): proof of receipt. NULL on receipts
         # saved before J2; the API requires name, position and signature for
-        # every new receipt. Files are uploads (core/uploads.py purposes
+        # every new receipt. Files are uploads (core/shared/uploads.py purposes
         # receipt_signature and receipt_slip_photo), referenced by file_id;
         # ON DELETE RESTRICT keeps them while the receipt exists.
         # Migration a8c3e5f7b9d1.
@@ -268,7 +268,7 @@ class ReceiptItem(Base):
                         fewer arrived; empty when they match
 
     Fulfillment counts min(received_quantity, expected_quantity) as
-    delivered (services/fulfillment.py). Migration f7b2d4e6a8c1."""
+    delivered (core/m8_delivery_tracking/fulfillment.py). Migration f7b2d4e6a8c1."""
 
     __tablename__ = "receipt_items"
     __table_args__ = (
@@ -316,7 +316,7 @@ class DeliveryAllocation(Base):
     preparation). Stock is pooled per report and item, so when CSWS sends
     65 of 80 kg the system records which donations they came from: first
     received, first sent, CMO-acknowledged donations before the others
-    (services/delivery_allocation.py). A donor's step (In transit /
+    (core/m5_inventory/delivery_allocation.py). A donor's step (In transit /
     Delivered / Barangay confirmed) follows these rows. Cancelled
     deliveries are ignored, so their goods count as unsent again.
 

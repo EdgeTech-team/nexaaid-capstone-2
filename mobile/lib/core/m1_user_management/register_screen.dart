@@ -23,8 +23,8 @@ import '../shared/widgets.dart';
 /// validated automatically and sign in right after registering. The
 /// Administrator's view is for review only.
 ///
-/// Every rule here is repeated by the backend (schemas/user_schema.py,
-/// schemas/organization_schema.py), so the API can't be used to skip them.
+/// Every rule here is repeated by the backend (core/m1_user_management/user_schema.py,
+/// core/m1_user_management/organization_schema.py), so the API can't be used to skip them.
 ///
 /// UI concern (new notes): from the landing page both forms open as
 /// pop-ups over the blurred page ([showRegisterPopup]), like the login.
@@ -73,7 +73,7 @@ Future<void> showRegisterPopup(
   await showLoginPopup(context);
 }
 
-/// NF-008 (D6): same lists as backend schemas/organization_schema.py
+/// NF-008 (D6): same lists as backend core/m1_user_management/organization_schema.py
 /// (GOVERNMENT_TYPES, NON_GOVERNMENT_TYPES), shown as one grouped dropdown.
 const governmentTypes = [
   'Barangay / Barangay Council',
@@ -122,7 +122,7 @@ const termsAndConditionsText =
     'see it. The Administrator may delete an account with a fake ID or an '
     'invalid document, and will tell you why.';
 
-/// Same list as backend RESERVED_USERNAMES (core/usernames.py).
+/// Same list as backend RESERVED_USERNAMES (core/m1_user_management/usernames.py).
 const reservedUsernames = [
   'admin',
   'administrator',

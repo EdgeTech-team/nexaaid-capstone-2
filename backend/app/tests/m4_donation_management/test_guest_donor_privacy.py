@@ -4,7 +4,7 @@ F-09: guest donor data. A guest must agree to the processing of their data
 endpoints, and records when consent was given. Guest input is validated like
 a registration. Staff who handle donations see the guest's contact details;
 barangay representatives do not.
-Real auth stack: the `api` fixture of tests/test_role_flows.py.
+Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 """
 import json
 

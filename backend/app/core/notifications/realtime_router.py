@@ -1,7 +1,7 @@
 """GET /ws?token=<the login JWT>: live updates for the signed-in user
-(core/realtime.py). Browsers cannot set an Authorization header on a
+(core/notifications/realtime.py). Browsers cannot set an Authorization header on a
 WebSocket, so the token comes as a query parameter; the access log never
-shows query strings (F-22, core/log_privacy.py).
+shows query strings (F-22, core/shared/log_privacy.py).
 
 The server sends {"type": "hello", "unread_count": n} first, then one
 {"type": "notification", ...} per new notification. The app sends "ping"
@@ -23,7 +23,7 @@ log = logging.getLogger("uvicorn.error")
 
 def _sign_in(token: str):
     """(user_id, unread count), or (None, None) for a bad, expired or
-    temporary-password token. Same checks as every HTTP endpoint (core/auth
+    temporary-password token. Same checks as every HTTP endpoint (core/m1_user_management/auth
     is used as is). The database session is closed right away, so an open
     socket never holds a connection."""
     db = database.SessionLocal()

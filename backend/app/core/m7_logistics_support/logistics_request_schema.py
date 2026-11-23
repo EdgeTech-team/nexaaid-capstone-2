@@ -93,7 +93,7 @@ class AcceptLogisticsRequest(BaseModel):
     def _not_past(cls, v: Optional[datetime]) -> Optional[datetime]:
         if v is None:
             return None
-        if v.tzinfo is None:          # stored times are UTC (services/donation_expiry.utc)
+        if v.tzinfo is None:          # stored times are UTC (core/m4_donation_management/donation_expiry.utc)
             v = v.replace(tzinfo=timezone.utc)
         if v < datetime.now(timezone.utc) - SCHEDULE_GRACE:
             raise ValueError("Pick a date and time that has not passed yet")

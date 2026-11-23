@@ -281,7 +281,7 @@ class _ReceiveScreenState extends State<ReceiveScreen>
   InventorySort _inventorySort = InventorySort.itemAz;
 
   /// NF-003: each tab 20 rows per page, filtered and sorted by the server
-  /// (GET /donations/receive-queue, services/receive_queue.py). It used to
+  /// (GET /donations/receive-queue, core/m5_inventory/receive_queue.py). It used to
   /// download every pending entry, every record and the whole inventory.
   late final PagedController _list = PagedController(fetch: _fetch());
 

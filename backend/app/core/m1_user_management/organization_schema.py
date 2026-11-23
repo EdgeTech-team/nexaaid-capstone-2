@@ -1,4 +1,4 @@
-# schemas/organization_schema.py
+# core/m1_user_management/organization_schema.py
 from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator

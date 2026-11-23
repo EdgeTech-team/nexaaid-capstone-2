@@ -24,8 +24,8 @@ import '../shared/widgets.dart';
 //                both what CSWS received and still holds
 //   Recent activity, as before
 //
-// Backend: api/v1/dashboard_routes.py (overview) and
-// api/v1/csws_overview_routes.py (the pages).
+// Backend: core/m9_dashboards/dashboard_routes.py (overview) and
+// core/m9_dashboards/csws_overview_routes.py (the pages).
 // ---------------------------------------------------------------------------
 
 abstract final class CswsColors {

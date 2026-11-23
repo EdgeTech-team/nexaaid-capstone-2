@@ -2,7 +2,7 @@
 NF-003 (all roles): report lists a page at a time.
 
 The app used to load every report and filter / sort them itself
-(mobile/lib/ui/report_filters.dart, sortAndFilterReports). In paged mode the
+(mobile/lib/core/m2_disaster_reporting/report_filters.dart, sortAndFilterReports). In paged mode the
 server must give exactly the same rows in exactly the same order, split into
 pages with no repeats and no gaps. Without `offset` the answer is unchanged
 for installed APKs.

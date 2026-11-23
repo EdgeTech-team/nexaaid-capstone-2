@@ -1,5 +1,5 @@
 """
-api/v1/account_router.py — the logged-in user's own account (Ivan, I1).
+core/m1_user_management/account_router.py — the logged-in user's own account (Ivan, I1).
 
 I1 (Module 1.2): the Administrator creates internal accounts with a
 temporary password, so users.must_change_password starts True. After
@@ -44,7 +44,7 @@ def change_password(
     if payload.new_password == payload.current_password:
         raise HTTPException(status_code=422, detail="Choose a new password, not the current one")
     try:
-        # Same rule as registration (core/passwords.py, relaxed by Dave in D2).
+        # Same rule as registration (core/m1_user_management/passwords.py, relaxed by Dave in D2).
         validate_password_strength(
             payload.new_password, email=user.email, names=(user.first_name, user.last_name)
         )

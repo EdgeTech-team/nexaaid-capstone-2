@@ -10,7 +10,7 @@ import '../shared/app_navigator.dart';
 import 'notifications_screen.dart' show openNotification;
 
 /// Push notifications on Android (Firebase Cloud Messaging; backend
-/// core/push.py). Every in-app notification also arrives as a push while
+/// core/notifications/push.py). Every in-app notification also arrives as a push while
 /// the app is closed or in the background; tapping it opens what it is
 /// about, like tapping it in the inbox. With the app open, the bell and the
 /// live updates (realtime.dart) already show it, so nothing more happens.

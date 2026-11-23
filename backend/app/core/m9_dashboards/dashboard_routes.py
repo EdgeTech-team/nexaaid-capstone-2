@@ -165,7 +165,7 @@ def csws_main_dashboard(
     Only small numbers and capped previews (4 Needs-attention counts, the
     top 3 Most urgent, the top 3 Delivery alerts, the top 6 inventory items
     and the 3 Aid-operations counts); each detail page lists the rest
-    (api/v1/csws_overview_routes.py). No donation list, no activity log."""
+    (core/m9_dashboards/csws_overview_routes.py). No donation list, no activity log."""
     from core.m9_dashboards.csws_overview import cached, overview
     from core.m4_donation_management.donation_expiry import expire_overdue
 

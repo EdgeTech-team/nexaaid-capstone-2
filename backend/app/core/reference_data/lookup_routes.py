@@ -36,7 +36,7 @@ router = APIRouter(prefix="/lookups", tags=["lookups"])
 LIMIT = 200  # newest rows per list, as before
 
 # F-01: who receives each internal list. Each list fills one dropdown
-# (mobile/lib/modules.dart), so it goes only to the role(s) using it:
+# (mobile/lib/core/shared/modules.dart), so it goes only to the role(s) using it:
 #   reports              Administrator: validate / reject a report
 #                        (POST /reports/{id}/validate, /reject)
 #                        CSWS Main Office: report filter of the inventory
@@ -62,7 +62,7 @@ INTERNAL_LIST_ROLES = {
 
 
 def _may_see(user: Optional[User], key: str) -> bool:
-    # The role is the account's role in the database (core/auth.py), never
+    # The role is the account's role in the database (core/m1_user_management/auth.py), never
     # anything the request says about itself.
     return user is not None and has_role(user, *INTERNAL_LIST_ROLES[key])
 

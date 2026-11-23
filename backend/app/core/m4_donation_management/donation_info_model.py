@@ -1,5 +1,5 @@
 """
-models/donation_info_model.py — where donors can send money directly to a
+core/m4_donation_management/donation_info_model.py — where donors can send money directly to a
 barangay (adviser item 7). DISPLAY ONLY: NexaAid never processes, holds or
 verifies money (manuscript Scope Limitation #5).
 

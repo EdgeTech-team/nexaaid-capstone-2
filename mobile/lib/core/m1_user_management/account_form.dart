@@ -12,7 +12,7 @@ import '../shared/widgets.dart';
 ///
 /// [AccountsScreen] creates an office-based account; [AccountEditScreen]
 /// edits any account with the same rules. The backend repeats every rule
-/// (schemas/user_schema.py, api/v1/admin_router.py).
+/// (core/m1_user_management/user_schema.py, core/m1_user_management/admin_router.py).
 ///
 /// No password is typed here. When an account is created the server
 /// generates a temporary password and emails it to the staff member.

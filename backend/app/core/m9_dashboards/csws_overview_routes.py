@@ -2,7 +2,7 @@
 
 Every page answers with a JSON array, 10 at a time with ?limit=10&offset=N
 (X-Total-Count = matching rows), and has a /counts sibling for its filter
-chips ("All (28)"). Rows come from services/csws_overview.py.
+chips ("All (28)"). Rows come from core/m9_dashboards/csws_overview.py.
 
   GET /dashboard/csws-main/waiting   "Waiting to be received" card:
                                      every pledge not received yet

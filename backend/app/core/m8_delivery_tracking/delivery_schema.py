@@ -1,5 +1,5 @@
 """
-app/schemas/delivery.py
+app/core/m8_delivery_tracking/delivery_schema.py
 Pydantic schemas for Module 3.10 - Delivery Tracking & Receipt Confirmation.
 """
 
@@ -14,7 +14,7 @@ DeliveryStatus = Literal["Preparing", "In Transit", "Delivered", "Confirmed", "C
 
 # J1 / NF-009: why the barangay's count differs from what CSWS sent.
 # "Over" only when more arrived; the other three only when fewer arrived
-# (checked in api/v1/deliveries.py and by chk_receipt_items_reason_fits).
+# (checked in core/m8_delivery_tracking/deliveries.py and by chk_receipt_items_reason_fits).
 DiscrepancyReason = Literal["Short", "Damaged", "Wrong item", "Over"]
 SHORT_REASONS = ("Short", "Damaged", "Wrong item")
 OVER_REASON = "Over"
@@ -91,11 +91,11 @@ class DeliveryResponse(BaseModel):
     destination_barangay_name: Optional[str] = None
     trip_id: Optional[int] = None
     stop_order: Optional[int] = None
-    # Set when CSWS cancelled it (api/v1/delivery_problems.py).
+    # Set when CSWS cancelled it (core/m8_delivery_tracking/delivery_problems.py).
     cancelled_at: Optional[datetime] = None
     cancel_reason: Optional[str] = None
     # When each step was reached, e.g. {"Preparing": ..., "In Transit": ...}
-    # (services/delivery_views.py status_times).
+    # (core/m8_delivery_tracking/delivery_views.py status_times).
     status_times: Optional[Dict[str, datetime]] = None
     # J1 / NF-009: the barangay counted a different quantity on a line.
     has_discrepancy: bool = False
@@ -224,7 +224,7 @@ class ReceiptConfirmResponse(BaseModel):
 
 
 # J2 / NF-015: the read-only Acknowledgment Receipt
-# (GET /deliveries/{id}/acknowledgment, services/acknowledgment.py).
+# (GET /deliveries/{id}/acknowledgment, core/m8_delivery_tracking/acknowledgment.py).
 
 class AcknowledgmentLine(BaseModel):
     """One item as every viewer sees it, donors included."""

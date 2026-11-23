@@ -2,7 +2,7 @@
 F-07: PATCH /reports/{id} no longer changes a report's status (validate /
 reject / withdraw / delete do, with their own checks, records and notices),
 and every correction it makes is written to the audit log.
-Real auth stack: the `api` fixture of tests/test_role_flows.py.
+Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 """
 from tests.m1_user_management.test_role_flows import api, ok  # noqa: F401  (fixture)
 

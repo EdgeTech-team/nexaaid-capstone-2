@@ -1,5 +1,5 @@
 """
-backend/app/tests/test_reports.py
+backend/app/tests/m2_disaster_reporting/test_reports.py
 
 Tests for Module 3.4 — Report Management.
 

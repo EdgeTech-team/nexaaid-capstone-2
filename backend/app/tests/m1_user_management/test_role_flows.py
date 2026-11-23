@@ -1,5 +1,5 @@
 """
-backend/app/tests/test_role_flows.py
+backend/app/tests/m1_user_management/test_role_flows.py
 
 End-to-end check of every user role against the real auth stack:
 real /token login, real require_role() (no auth overrides), and the

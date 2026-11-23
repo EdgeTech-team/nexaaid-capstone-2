@@ -28,7 +28,7 @@ const shortReasons = ['Short', 'Damaged', 'Wrong item'];
 /// The only reason for a count higher than what CSWS sent.
 const overReason = 'Over';
 
-/// The largest slip photo the server accepts (core/uploads.py).
+/// The largest slip photo the server accepts (core/shared/uploads.py).
 const maxSlipPhotoBytes = 1024 * 1024;
 
 /// The reasons that fit [received] against [sent]; empty when they match.

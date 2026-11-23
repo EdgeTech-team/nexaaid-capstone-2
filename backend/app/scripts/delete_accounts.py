@@ -5,7 +5,7 @@ account still says email already registered." Deleting rows in Neon by hand
 cannot remove a user who has reports, deliveries, receipts or logistics
 requests (RESTRICT foreign keys), so those users stayed. This script deletes
 them the same way the Administrator's Delete button does
-(services/accounts.py): anonymized, email and employee ID freed, ID photos
+(core/m1_user_management/accounts.py): anonymized, email and employee ID freed, ID photos
 removed, records kept under "Deleted User".
 
 DRY RUN by default: lists the accounts that match and writes nothing.

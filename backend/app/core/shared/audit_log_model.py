@@ -1,4 +1,4 @@
-# models/audit_log_model.py
+# core/shared/audit_log_model.py
 # audit_logs, as in the manuscript's data dictionary (Table 39): who did
 # what, to which record, with the before/after values.
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text

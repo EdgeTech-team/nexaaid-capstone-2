@@ -1,4 +1,4 @@
-# models/guest_donor_model.py
+# core/m4_donation_management/guest_donor_model.py
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 from core.shared.database import Base

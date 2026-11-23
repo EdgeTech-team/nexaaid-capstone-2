@@ -33,7 +33,7 @@ from core.m8_delivery_tracking.delivery_views import report_labels
 
 STAFF_READERS = ("csws_main_office", "csws_disaster_unit", "admin")
 DONOR_ROLES = ("Individual Donor", "Relief Organization")
-# Route guards in api/v1/deliveries.py.
+# Route guards in core/m8_delivery_tracking/deliveries.py.
 FULL_READERS = STAFF_READERS + ("barangay_receiving_rep",)
 READERS = FULL_READERS + DONOR_ROLES
 

@@ -1,5 +1,5 @@
 """
-backend/app/tests/test_uploads.py — Sprint 0 upload service.
+backend/app/tests/shared/test_uploads.py — Sprint 0 upload service.
 
 Uses the real-auth `api` fixture from test_role_flows (real /token login,
 real roles), with files written to a temp folder instead of var/uploads.

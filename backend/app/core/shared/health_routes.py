@@ -12,4 +12,4 @@ def health():
 def health_secure(user: User = Depends(get_current_user_allow_temporary_password)):
     return {"status": "ok", "user": user.email, "role": user.role.role_name}
 
-# Login (/token, /auth/login, /auth/me) lives in api/v1/session_router.py.
+# Login (/token, /auth/login, /auth/me) lives in core/m1_user_management/session_router.py.

@@ -16,7 +16,7 @@ class Item(Base):
     # of this item in the system (needs, donations, received goods,
     # inventory, deliveries) is a whole number in this unit. kg = weight,
     # L = volume, anything else is counted (pcs, cans, packs, kits...).
-    # See services/units.py.
+    # See core/reference_data/units.py.
     unit_of_measure = Column(String(50), nullable=False)
     # False = kept for old records only, hidden from every dropdown
     # (e.g. the old "Drinking Water" in gallons). Migration 9b3f7c1d2e48.

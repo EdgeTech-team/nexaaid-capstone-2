@@ -1,9 +1,9 @@
 """J6 / NF-011: the "still needed" chips subtract verified pledges only.
 
-services/fulfillment.py splits "pledged" into pledged_verified and
-pledged_unverified with D3's pledge_is_verified (services/pledge_trust.py):
+core/m8_delivery_tracking/fulfillment.py splits "pledged" into pledged_verified and
+pledged_unverified with D3's pledge_is_verified (core/m4_donation_management/pledge_trust.py):
 a pledge is verified once CSWS has received it, or when it comes from an
-account whose email is verified. _still_needed (services/disaster_events.py)
+account whose email is verified. _still_needed (core/m2_disaster_reporting/disaster_events.py)
 and the donate form's chips use pledged_verified; pledged_unverified_count
 feeds "+ N unconfirmed pledges".
 

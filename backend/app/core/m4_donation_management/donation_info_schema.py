@@ -5,7 +5,7 @@ CHANGE LOG
 - Concerns2.txt 2.1 (Castillo): account numbers follow provider standards.
   Bank: 10-16 digits. Other: 6-20 digits (was any 3-50 characters).
   Spaces or hyphens between digit groups are allowed. GCash/Maya unchanged
-  (11-digit 09 mobile number). Must match mobile/lib/ui/donation_info.dart.
+  (11-digit 09 mobile number). Must match mobile/lib/core/m4_donation_management/donation_info.dart.
   Input-only: no column or migration change; existing rows still display.
 - Testing 2.1: choosing provider "Other" now asks for the specific provider's
   name (provider_other, 2-50 characters, migration c5d8f2a7b1e3). Any other

@@ -3,7 +3,7 @@
 // quantities that exist: declared by the donor, counted by CSWS, and
 // received by the barangay. The server sends amount_text, packaging,
 // declared_quantity, counted_quantity and barangay_received_quantity
-// (services/item_quantities.py); older answers only quantity and unit.
+// (core/reference_data/item_quantities.py); older answers only quantity and unit.
 
 /// "10 packs x 5 kg", or "50 kg" when the server sent no breakdown.
 /// Nov 22: a kit with contents adds them, "2 kits · Includes: Spoon, Fork",

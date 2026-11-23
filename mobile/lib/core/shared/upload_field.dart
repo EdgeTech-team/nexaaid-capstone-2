@@ -8,7 +8,7 @@ import 'api.dart';
 import 'design/design.dart';
 
 /// What POST /uploads sent back for one file
-/// (backend: api/v1/upload_routes.py).
+/// (backend: core/shared/upload_routes.py).
 class UploadedFile {
   final String fileId;
   final String url; // relative, e.g. /uploads/<file_id>
@@ -40,7 +40,7 @@ enum _Status { empty, uploading, done, failed }
 /// Lets the user take a photo, pick one from the gallery, or pick a PDF.
 /// Uploads it right away and shows a preview.
 ///
-/// [purpose] must match one in backend core/uploads.py PURPOSES:
+/// [purpose] must match one in backend core/shared/uploads.py PURPOSES:
 /// id_front, id_back, legitimacy_document, barangay_donation_qr, ...
 ///
 /// [onChanged] gets the uploaded file, or null while nothing valid is

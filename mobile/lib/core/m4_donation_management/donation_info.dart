@@ -10,7 +10,7 @@ import '../shared/widgets.dart';
 /// Barangay donation-sending info (adviser item 7).
 ///
 /// DISPLAY ONLY (manuscript Scope Limitation #5): NexaAid never processes,
-/// holds or verifies money. Backend: api/v1/donation_info_routes.py.
+/// holds or verifies money. Backend: core/m4_donation_management/donation_info_routes.py.
 
 const donationNote =
     'NexaAid does not process or verify payments. Send directly to the barangay.';
@@ -19,7 +19,7 @@ const donationProviders = ['GCash', 'Maya', 'Bank', 'Other'];
 
 // ---------------------------------------------------------------------------
 // Concerns2.txt 2.1: account number limits by provider. Must match the
-// backend (app/schemas/donation_info_schema.py).
+// backend (app/core/m4_donation_management/donation_info_schema.py).
 //   GCash / Maya: PH mobile number, 11 digits starting 09
 //   Bank:         10-16 digits (PH bank account numbers)
 //   Other:        6-20 digits
@@ -275,7 +275,7 @@ class ReportDonationInfo extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 /// Values of the donation info form, with the same checks as the backend
-/// (schemas/donation_info_schema.py).
+/// (core/m4_donation_management/donation_info_schema.py).
 class DonationInfoController extends ChangeNotifier {
   String? provider;
 

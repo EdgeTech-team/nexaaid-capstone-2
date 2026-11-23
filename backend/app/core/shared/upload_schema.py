@@ -1,5 +1,5 @@
 """A file the app uploaded with POST /uploads, sent back in another request
-(registration, internal accounts). See core/uploads.claim_upload."""
+(registration, internal accounts). See core/shared/uploads.claim_upload."""
 from typing import Optional
 
 from pydantic import BaseModel, Field

@@ -1,4 +1,4 @@
-"""GET /push/topic: the signed-in user's push topic (core/push.py). The
+"""GET /push/topic: the signed-in user's push topic (core/notifications/push.py). The
 Android app subscribes to it after signing in and unsubscribes when the user
 signs out. "enabled" is false while the server has no Firebase service
 account; the app still subscribes, so pushes start once it is set."""

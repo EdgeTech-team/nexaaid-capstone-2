@@ -1,11 +1,11 @@
 """
 F-01: GET /lookups stays public for the reference lists and the validated
 reports, but the six lists of internal records reach only the staff role
-whose screen uses them (api/v1/lookup_routes.py, INTERNAL_LIST_ROLES).
+whose screen uses them (core/reference_data/lookup_routes.py, INTERNAL_LIST_ROLES).
 Everyone else gets those keys as empty lists.
 
 Runs on the real auth stack: real /token logins and the live role names
-(the `api` fixture of tests/test_role_flows.py).
+(the `api` fixture of tests/m1_user_management/test_role_flows.py).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -235,7 +235,7 @@ def test_bad_tokens_and_forged_roles_get_the_guest_view(api):
 
 
 def test_deactivated_account_is_refused_like_everywhere_else(api):
-    """core/auth.get_current_user_optional: a deactivated account's old token
+    """core/m1_user_management/auth.get_current_user_optional: a deactivated account's old token
     gets 403, not the guest view (test_role_flows checks the same rule)."""
     client, t = api
     assert ok(client.get("/lookups", headers=t["csws"]))        # active: allowed

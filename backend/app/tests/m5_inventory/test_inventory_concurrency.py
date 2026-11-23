@@ -39,7 +39,7 @@ pytestmark = pytest.mark.skipif(not TEST_URL, reason="Set TEST_POSTGRES_URL to a
 
 
 def _seed(Session):
-    """The same rows as the `api` fixture of tests/test_role_flows.py."""
+    """The same rows as the `api` fixture of tests/m1_user_management/test_role_flows.py."""
     db = Session()
     db.add_all([Role(role_id=i, role_name=n) for i, n in ROLES.items()])
     db.add_all([City(city_id=1, city_name="Test City"),

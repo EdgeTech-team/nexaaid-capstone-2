@@ -3,7 +3,7 @@ donations).
 
 Either an item from the list (item_id), or "Something else" (other name +
 unit): an existing item with that name is reused, otherwise it is added
-with category "Other". Its unit becomes its base unit (services/units.py).
+with category "Other". Its unit becomes its base unit (core/reference_data/units.py).
 Retired items (items.active = false, e.g. the old gallons water) can no
 longer be picked for anything new.
 

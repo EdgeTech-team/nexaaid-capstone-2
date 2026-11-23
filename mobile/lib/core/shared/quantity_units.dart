@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 // Testing fix 4.1: one unit list for "how much", used by the donation form
 // and the report needs list. A sack is packaging (its own field on the
 // donation form), so it is not a quantity unit.
-// Same list as QUANTITY_UNITS in backend/app/schemas/physical_donation_schema.py.
+// Same list as QUANTITY_UNITS in backend/app/core/m4_donation_management/physical_donation_schema.py.
 // ---------------------------------------------------------------------------
 // Per-item fulfillment: these are base units. Weight is always kg and
 // volume always L (grams, ml and gallons are entered as the size of each,

@@ -3,7 +3,7 @@ the SAME donation and QR (batch_reference). Batches: addition_no 1 = the
 original pledge, 2+ = added later. The CMO acknowledges the donation as
 one entry, added items included (no separate batch acknowledgement).
 
-Rules: services/donation_additions.py.
+Rules: core/m4_donation_management/donation_additions.py.
 """
 import core.shared.database as database
 from core.m4_donation_management.physical_donation_model import PhysicalDonation

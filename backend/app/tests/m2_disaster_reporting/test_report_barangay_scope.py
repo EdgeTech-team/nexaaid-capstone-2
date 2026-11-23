@@ -2,7 +2,7 @@
 F-05: a Barangay Receiving Representative opens a report that is not
 validated yet (Pending, Rejected, Cancelled) only in its own assigned
 barangay, on all three single-report endpoints. Validated reports stay open
-as before. Real auth stack: the `api` fixture of tests/test_role_flows.py.
+as before. Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 Barangay Test is id 1 (rep "brgy"), Barangay Two is id 2 (rep "brgy2").
 """
 import core.shared.database as database

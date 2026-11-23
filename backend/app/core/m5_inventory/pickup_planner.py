@@ -23,7 +23,7 @@ that staff can check by hand:
   4. Fill, by zone (testing, Oct 31: "cluster first, route second"):
              a. must go today: the stop's last allowed date, or its
                 handover deadline is close (call_donor_days_left);
-             b. then the zone of the day (services/pickup_zones.py): the
+             b. then the zone of the day (core/m5_inventory/pickup_zones.py): the
                 zone of the first stop in the run, or of the most urgent
                 stop. Stops in that zone come first, nearest to the run;
              c. a stop from another zone joins only if it is within
@@ -46,7 +46,7 @@ Terms: donation = one QR code (one or more items); stop = one place the
 picker visits; run = one trip on one date.
 
 Pure Python (no database, no FastAPI) so every rule can be unit tested.
-api/v1/pickup_plan_routes.py loads the rows and calls plan(). The time
+core/m5_inventory/pickup_plan_routes.py loads the rows and calls plan(). The time
 settings below are placeholders; change them without code in .env:
     PICKUP_PLANNER_CONFIG='{"minutes_per_stop": 20, "speed_kmh": 15}'
 """
@@ -126,7 +126,7 @@ class Donation:
     too_far: bool = False
     days_left: Optional[int] = None        # to the handover deadline
     view: dict = field(default_factory=dict)   # passthrough fields for the screens
-    zone: Optional[str] = None             # services/pickup_zones.py
+    zone: Optional[str] = None             # core/m5_inventory/pickup_zones.py
     flags: list = field(default_factory=list)  # filled in by plan()
     # Specific dates the donor is home (calendar picker). When given, only
     # these dates count, not every matching weekday.

@@ -77,7 +77,7 @@ bool _availableOn(Set<int> days, Set<DateTime> dates, DateTime? d) {
 /// Grey for pickups outside the distance limit.
 const farGrey = Color(0xFF6B7280);
 
-/// Fixed pickup zones (testing, Oct 31; backend services/pickup_zones.py):
+/// Fixed pickup zones (testing, Oct 31; backend core/m5_inventory/pickup_zones.py):
 /// one colour each on the map and in the lists.
 const zoneColors = <String, Color>{
   'Mandaue North': Color(0xFF1565C0),
@@ -181,7 +181,7 @@ class PlanStop {
   final String landmark;
   final String address;
   final String? barangay; // read from the address text; null: not found
-  final String? zone; // fixed pickup zone (services/pickup_zones.py)
+  final String? zone; // fixed pickup zone (core/m5_inventory/pickup_zones.py)
   final Set<int> days; // the days every donor here allows
   final Set<DateTime> dates; // the dates every donor here allows (calendar)
   final List<PlanDonation> donations;

@@ -1,5 +1,5 @@
 """
-Unexpected delivery problems (api/v1/delivery_problems.py): reschedule,
+Unexpected delivery problems (core/m8_delivery_tracking/delivery_problems.py): reschedule,
 truck came back, cancel (goods back to stock), cancel a DRRMO request, and
 DRRMO withdrawing an accepted request. Each keeps a record and tells the
 people affected.

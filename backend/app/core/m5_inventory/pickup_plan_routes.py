@@ -137,7 +137,7 @@ def _waiting(db: Session) -> list:
         req = runs.get(ref)
         expiry = entry_expiry_info(lines)
         distance = _distance_view(spot)
-        # Fixed pickup zone (services/pickup_zones.py, testing Oct 31).
+        # Fixed pickup zone (core/m5_inventory/pickup_zones.py, testing Oct 31).
         zone = zone_of(spot.pickup_address, spot.pickup_landmark,
                        _num(spot.pickup_lat), _num(spot.pickup_lng))
         out.append(Donation(

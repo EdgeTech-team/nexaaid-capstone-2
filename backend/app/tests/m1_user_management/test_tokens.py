@@ -1,7 +1,7 @@
 """F-22: tokens are made and checked by PyJWT (replacing python-jose):
 creation, expiry, signature and algorithm checks on the real auth stack.
 F-10 revocation after a password change or reset is covered by
-tests/test_password_change_tokens.py, which now runs on PyJWT too."""
+tests/m1_user_management/test_password_change_tokens.py, which now runs on PyJWT too."""
 import base64
 import json
 from datetime import datetime, timedelta, timezone

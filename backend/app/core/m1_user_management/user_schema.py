@@ -1,4 +1,4 @@
-# schemas/user_schema.py
+# core/m1_user_management/user_schema.py
 from typing import Literal, Optional
 
 from pydantic import ConfigDict
@@ -27,7 +27,7 @@ IdType = Literal[
 
 
 def clean_name(value: str, label: str) -> str:
-    """Letters only (core/validators.py), then capitalize each word."""
+    """Letters only (core/shared/validators.py), then capitalize each word."""
     return capitalize_words(clean_person_name(value, label))
 
 
@@ -39,7 +39,7 @@ class DonorRegisterRequest(BaseModel):
     email: EmailStr
     contact_number: str
     # Donors choose their own password (staff get a temporary one by email).
-    # The strength rules are in core/passwords.py (validate_password_strength).
+    # The strength rules are in core/m1_user_management/passwords.py (validate_password_strength).
     password: str = Field(..., min_length=8, max_length=64)
     confirm_password: str = Field(..., min_length=1, max_length=64)
     # D1: optional and no longer sent by the app. Kept so old clients and the
@@ -127,7 +127,7 @@ class InternalAccountCreateRequest(BaseModel):
     Same name / phone / email rules as registration.
 
     There is no password field: the server generates a temporary password
-    (core/temp_password.py) and emails it to the staff member. The account
+    (core/m1_user_management/temp_password.py) and emails it to the staff member. The account
     is flagged must_change_password, so they replace it at first login.
     This applies to staff accounts only; donors choose their own password."""
     first_name: str
@@ -230,7 +230,7 @@ class LoginRequest(BaseModel):
     # Fields must be indented under the class line, or Python raises
     # "IndentationError: expected an indented block after class definition".
     # Despite the name, this holds an email OR an organization's username
-    # (core/auth.authenticate_user decides which). The name stays "email" so
+    # (core/m1_user_management/auth.authenticate_user decides which). The name stays "email" so
     # the app's request body doesn't change.
     email: str = Field(..., min_length=1, max_length=150)
     password: str

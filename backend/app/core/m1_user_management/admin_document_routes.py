@@ -1,5 +1,5 @@
 """
-api/v1/admin_document_routes.py — what the Administrator needs to review
+core/m1_user_management/admin_document_routes.py — what the Administrator needs to review
 an account or an organization (adviser items 2 and 2.1).
 
 GET /admin/users/{user_id}                       account detail (UC-A1)

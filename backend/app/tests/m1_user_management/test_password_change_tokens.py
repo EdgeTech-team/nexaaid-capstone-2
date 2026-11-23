@@ -3,7 +3,7 @@ F-10: a token stops working once the password changes (change, reset), and
 an account still on its temporary password can only change it. /auth/me
 and /health/secure stay open for it because the app calls them at login.
 
-Real auth stack: the `api` fixture of tests/test_role_flows.py.
+Real auth stack: the `api` fixture of tests/m1_user_management/test_role_flows.py.
 """
 import jwt
 

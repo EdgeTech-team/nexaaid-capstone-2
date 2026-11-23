@@ -1,12 +1,12 @@
 # NexaAid design system
 
-Owner: Fernandez (UI/UX lead). Code: `mobile/lib/design/`.
+Owner: Fernandez (UI/UX lead). Code: `mobile/lib/core/shared/design/`.
 See every component live in **Profile > Developer tools > Design system
 gallery**.
 
 ## Import
 
-Screens that already import `ui/widgets.dart` get the design system
+Screens that already import `core/shared/widgets.dart` get the design system
 automatically. New files:
 
 ```dart
@@ -30,7 +30,7 @@ import '../design/design.dart';
    padding is `Space.page`.
 4. **One color per status.** Show statuses with `StatusChip(status)` and
    priorities with `PriorityChip(priority)`. Never pick a status color by
-   hand. New status? Add it to `lib/design/status.dart` (PR to Fernandez).
+   hand. New status? Add it to `lib/core/shared/design/status.dart` (PR to Fernandez).
 5. **Every screen that loads data has three states:** loading
    (`SkeletonList` or `SkeletonCard`), empty (`EmptyView` that says what
    will appear and what to do), and error (`ErrorView.forStatus` with

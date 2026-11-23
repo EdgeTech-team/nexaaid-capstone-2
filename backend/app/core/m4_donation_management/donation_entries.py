@@ -25,7 +25,7 @@ from core.m4_donation_management.donation_expiry import entry_expiry_info, entry
 
 
 def entry_status(statuses: Iterable[str]) -> str:
-    # Lives in services/donation_expiry.py so it also knows Expired / Cancelled.
+    # Lives in core/m4_donation_management/donation_expiry.py so it also knows Expired / Cancelled.
     return _entry_status(statuses)
 
 

@@ -89,7 +89,7 @@ def seed(db_session):
 
     Role names here ("Reporter", "Admin") are arbitrary test labels —
     they're NOT the same thing as the require_role("citizen"/"admin")
-    strings used in api/v1/reports.py. Those two systems aren't wired
+    strings used in core/m2_disaster_reporting/reports.py. Those two systems aren't wired
     together yet (see the open item about real RBAC role names).
     """
     org = Organization(
@@ -149,7 +149,7 @@ def seed(db_session):
 
 class FakeRole:
     """Mirrors the real Role model's shape enough for auth checks:
-    core/auth.py does `user.role.role_name`, not a flat string."""
+    core/m1_user_management/auth.py does `user.role.role_name`, not a flat string."""
     def __init__(self, role_name: str):
         self.role_name = role_name
 
@@ -307,7 +307,7 @@ def sent_emails(request, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_push(monkeypatch):
-    """Android pushes (core/push.py) stay off in tests, even when .env names
+    """Android pushes (core/notifications/push.py) stay off in tests, even when .env names
     a Firebase service account. test_push.py turns them on with a fake one."""
     from core.notifications import push
     monkeypatch.setattr(push, "credentials", lambda: None)

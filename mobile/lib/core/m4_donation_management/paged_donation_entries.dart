@@ -65,7 +65,7 @@ class PagedDonationEntries extends StatefulWidget {
   State<PagedDonationEntries> createState() => _PagedDonationEntriesState();
 }
 
-/// Sort names the backend accepts (services/donation_entries.ENTRY_SORTS).
+/// Sort names the backend accepts (core/m4_donation_management/donation_entries.ENTRY_SORTS).
 const _sortParam = {
   EntrySort.newest: 'newest',
   EntrySort.oldest: 'oldest',

@@ -1,5 +1,5 @@
 """
-app/api/v1/contacts.py
+app/core/m2_disaster_reporting/contacts.py
 
 GET /contacts/sms-receivers  (Scope 2.4, UC-CD1 alt 11b; Oct 15 team)
     The Administrators' numbers. The CSWS Disaster Unit, offline, sends a

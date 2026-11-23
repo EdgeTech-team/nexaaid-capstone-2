@@ -1,5 +1,5 @@
 """
-app/models/report.py
+app/core/m2_disaster_reporting/report_model.py
 
 Module 3.4 — Report Management (Mariquit)
 
@@ -19,7 +19,7 @@ the Foundation layer:
       (two mapped classes can't point at the same table at once)
 
 `User` is NOT stubbed here — the real one already exists at
-app/models/user_rbac_model.py (Hoyohoy's 3.3) and is already wired
+app/core/m1_user_management/user_rbac_model.py (Hoyohoy's 3.3) and is already wired
 into app/alembic/env.py, so it's imported directly below.
 """
 
@@ -54,7 +54,7 @@ def canonical_source(value):
                 return s
     return value
 
-# The real User model already exists — models/user_rbac_model.py (Hoyohoy's
+# The real User model already exists — core/m1_user_management/user_rbac_model.py (Hoyohoy's
 # 3.3) — and is already registered with Base via app/alembic/env.py. Import
 # the real one instead of stubbing it: two classes mapping to the same
 # 'users' table would crash SQLAlchemy with a mapper conflict the moment
@@ -293,7 +293,7 @@ class ReportNeed(Base):
     delivered item, which is exactly how fulfillment worked before.
 
     Fulfillment is worked out per need (delivered / needed, capped at 100%)
-    and the report's percentage is the average (services/fulfillment.py).
+    and the report's percentage is the average (core/m8_delivery_tracking/fulfillment.py).
     Migration 9b3f7c1d2e48."""
 
     __tablename__ = "report_needs"
@@ -328,9 +328,9 @@ class ReportFulfillment(Base):
     the reported need has actually been delivered and confirmed.
  
     Created automatically when a report is validated (see
-    validate_report in api/v1/reports.py) with total_items_needed
+    validate_report in core/m2_disaster_reporting/reports.py) with total_items_needed
     seeded from the report's own estimated_quantity. Recalculated
-    every time a delivery's receipt is confirmed (api/v1/deliveries.py).
+    every time a delivery's receipt is confirmed (core/m8_delivery_tracking/deliveries.py).
     """
     __tablename__= "report_fulfillments"
 

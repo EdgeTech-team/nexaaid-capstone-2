@@ -1863,7 +1863,7 @@ class _StatBox extends StatelessWidget {
 class LandingFaq extends StatefulWidget {
   const LandingFaq({super.key});
 
-  /// Keep in line with how the system works (and core/priority_engine.py
+  /// Keep in line with how the system works (and core/m3_priority_guidance/priority_engine.py
   /// for the priority answer).
   static const items = [
     (

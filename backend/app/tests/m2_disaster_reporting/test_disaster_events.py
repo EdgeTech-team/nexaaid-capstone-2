@@ -2,7 +2,7 @@
 
 POST /reports/batch saves one disaster report per barangay, grouped by a
 disaster_events row; GET /reports/events/{id} is the event page donors pick
-a barangay from. See services/disaster_events.py for the visibility rules.
+a barangay from. See core/m2_disaster_reporting/disaster_events.py for the visibility rules.
 """
 from decimal import Decimal
 

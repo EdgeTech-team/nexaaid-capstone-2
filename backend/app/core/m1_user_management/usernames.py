@@ -1,10 +1,10 @@
-# core/usernames.py
+# core/m1_user_management/usernames.py
 """Rules for the organization login username (users.username).
 
 Usernames are saved in lowercase, so "CTU_Org" and "ctu_org" are the same
 account. They can never contain "@", which is how login tells a username
 from an email address. Keep this in step with usernameError() in
-mobile/lib/ui/register_screen.dart.
+mobile/lib/core/m1_user_management/register_screen.dart.
 """
 import re
 

@@ -2,7 +2,7 @@
 
 Manuscript Scope 2.4: registered users get a push when something happens
 (e.g. their SMS report is validated). Every in-app notification
-(core/notifications.notify) is also sent as a push, after the commit.
+(core/notifications/notifications.notify) is also sent as a push, after the commit.
 
 No schema change: there is no device_tokens table. Each user has one FCM
 topic, "u_" + an HMAC of their user_id with SECRET_KEY, so nobody can guess

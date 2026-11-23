@@ -4,7 +4,7 @@ import '../shared/widgets.dart';
 
 // ---------------------------------------------------------------------------
 // Donation deadlines, expiry and cancellation (backend:
-// services/donation_expiry.py, api/v1/donation_lifecycle_routes.py).
+// core/m4_donation_management/donation_expiry.py, core/m4_donation_management/donation_lifecycle_routes.py).
 //
 // Drop Off: hand over within 14 days. Door to Door: CSWS has 7 days after
 // the preferred pickup time. After that the donation is marked Expired.

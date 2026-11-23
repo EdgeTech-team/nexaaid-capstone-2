@@ -1,6 +1,6 @@
 """
 Deliveries screen (Oct 9): sorting, filtering, readable names, and stock
-messages; plus trips: several reports on one truck (api/v1/trips.py).
+messages; plus trips: several reports on one truck (core/m8_delivery_tracking/trips.py).
 
 Example used throughout: 3 reports in Barangay Test (like Banilad) and one
 in Barangay Two (a nearby barangay) leave together on one trip.

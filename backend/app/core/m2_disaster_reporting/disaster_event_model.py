@@ -1,4 +1,4 @@
-# models/disaster_event_model.py
+# core/m2_disaster_reporting/disaster_event_model.py
 from sqlalchemy import TIMESTAMP, Column, ForeignKey, Integer, String, func
 
 from core.shared.database import Base

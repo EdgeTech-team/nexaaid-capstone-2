@@ -1,4 +1,4 @@
-# api/v1/admin_router.py
+# core/m1_user_management/admin_router.py
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -315,7 +315,7 @@ def update_user(
 
 
 # Appendix H 1.2 (testing feedback, Oct 2026): delete a deactivated account.
-# Anonymized, not removed: see services/accounts.py for why. Restore = the
+# Anonymized, not removed: see core/m1_user_management/accounts.py for why. Restore = the
 # existing PATCH with is_active = true (the app's "Restore account" button).
 @router.delete("/users/{user_id}")
 def delete_user(

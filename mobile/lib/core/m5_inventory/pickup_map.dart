@@ -32,7 +32,7 @@ import '../shared/widgets.dart';
 //     items and warnings in the sheet. Pins carry only the route number,
 //     so nearby pins don't cover each other. Choosing a day shows the stops
 //     the planner put on that day, numbered by the shortest route from the
-//     CSWS office, zone by zone (testing, Oct 31: services/pickup_zones.py,
+//     CSWS office, zone by zone (testing, Oct 31: core/m5_inventory/pickup_zones.py,
 //     pickup_planner.py). Other donors home that day but planned on another
 //     day are shown faded, without a number (_dayStops). Pins take their
 //     zone's colour.

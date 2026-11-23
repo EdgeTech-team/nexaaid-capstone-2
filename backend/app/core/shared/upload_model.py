@@ -1,7 +1,7 @@
 """
-models/upload_model.py — Sprint 0 foundation: upload service (Castillo).
+core/shared/upload_model.py — Sprint 0 foundation: upload service (Castillo).
  
-One row per uploaded file. The bytes live in storage (core/storage.py)
+One row per uploaded file. The bytes live in storage (core/shared/storage.py)
 and, since problema_napud 2.1, a copy in upload_blobs: the team runs one
 shared Neon database from several machines, and a file saved on one
 machine's disk was missing ("QR image unavailable") on every other one.
@@ -44,7 +44,7 @@ class Upload(Base):
     # Random UUID shown to clients. Sequential ids would let anyone guess
     # other people's files, so upload_id never leaves the backend.
     file_id = Column(String(36), nullable=False, unique=True, index=True)
-    purpose = Column(String(40), nullable=False)        # see core/uploads.PURPOSES
+    purpose = Column(String(40), nullable=False)        # see core/shared/uploads.PURPOSES
     visibility = Column(String(10), nullable=False)     # 'private' | 'public'
     content_type = Column(String(50), nullable=False)   # sniffed from bytes, not trusted from client
     
@@ -71,7 +71,7 @@ class UploadBlob(Base):
     """The bytes of one upload, shared by every machine that uses the
     database. GET /uploads/{file_id} serves the local file when there is
     one and otherwise copies these bytes back to local storage first
-    (core/uploads.local_path). Deleting the upload deletes this row.
+    (core/shared/uploads.local_path). Deleting the upload deletes this row.
 
     Migration b4e7c2d9f1a6."""
     __tablename__ = "upload_blobs"

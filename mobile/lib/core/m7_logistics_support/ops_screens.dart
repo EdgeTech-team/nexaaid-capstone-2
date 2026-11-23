@@ -308,7 +308,7 @@ class DeliveriesScreen extends StatefulWidget {
   State<DeliveriesScreen> createState() => _DeliveriesScreenState();
 }
 
-/// Sort options shown as plain words (backend: services/delivery_views.py).
+/// Sort options shown as plain words (backend: core/m8_delivery_tracking/delivery_views.py).
 const _deliverySorts = {
   'newest': 'Newest first',
   'oldest': 'Oldest first',
