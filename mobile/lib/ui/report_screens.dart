@@ -2476,7 +2476,6 @@ class DashboardScreen extends StatelessWidget {
                 label: 'Disaster reports',
                 value: '${s['total_reports']}',
                 icon: Icons.report_outlined,
-                note: 'Active and done',
                 onTap: () => open('status'),
               ),
               StatCard(
@@ -2484,14 +2483,12 @@ class DashboardScreen extends StatelessWidget {
                 value: '$inNeed',
                 icon: Icons.volunteer_activism_outlined,
                 color: inNeed > 0 ? AppColors.danger : AppColors.success,
-                note: 'Validated, not yet fulfilled',
                 onTap: () => open('underserved'),
               ),
               StatCard(
                 label: 'Waiting for validation',
                 value: '$waiting',
                 icon: Icons.hourglass_top,
-                note: 'Your reports · can still edit',
                 onTap: () => open('mine:Pending'),
               ),
               StatCard(
@@ -2499,7 +2496,6 @@ class DashboardScreen extends StatelessWidget {
                 value: '$toFix',
                 icon: Icons.assignment_return_outlined,
                 color: toFix > 0 ? AppColors.danger : null,
-                note: 'Your reports sent back',
                 onTap: () => open('mine:Rejected'),
               ),
             ]),
