@@ -1,0 +1,93 @@
+"""Suggested needs per disaster type (Module 3, Oct 2026).
+
+When a report's disaster type is picked, the app fills the needs list with
+these basic items, each multiplied by the affected families and rounded up.
+The reporter can still change, remove or add any line before submitting.
+
+Amounts are per family for the first few days of relief. They are the
+team's working assumptions (rice follows the 6 kg of a DSWD family food
+pack); adjust them here. Fractions are for items given per group of
+families, e.g. 0.1 Medicine Kit = one box per 10 families.
+
+Items are matched by name to the active, reviewed catalog (database/seeds);
+a name that is missing, retired or still waiting for review (F-15) is skipped.
+
+"""
+from sqlalchemy.orm import Session
+
+from core.reference_data.item_model import Item
+from core.m2_disaster_reporting.report_model import DisasterType
+
+# NF-006 (Nov 2026): Municipal Water is out (CSWS does not receive it), and
+# clothing is counted in pieces with no set logic: n sets per family is
+# n Upper + n Lower.
+_FOOD = {"Rice": 6, "Canned Goods": 8, "Noodles": 4, "Drinking Water": 20}
+_SHELTER = {"Hygiene Kit": 1, "Blanket": 2, "Sleeping Mat": 1}
+
+
+def _clothing(sets) -> dict:
+    # Nov 22: one Clothing item (migration c6e0a4b8d2f5). Upper and Lower as
+    # two items counted clothing twice in the priority score (the missing
+    # share is averaged per item). A set is a top and a bottom: 2 pieces.
+    # Which pieces they are is a note on the donation, never an item.
+    return {"Clothing": 2 * sets}
+
+
+NEED_TEMPLATES = {
+    "Flood": {**_FOOD, **_SHELTER, 
+    **_clothing(1), "Medicine Kit": 0.1},
+    "Flash Flood": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
+    "Typhoon": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
+    "Storm Surge": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
+    "Tsunami": {**_FOOD, **_SHELTER, **_clothing(2), "Medicine Kit": 0.2},
+    # Families lose the house and everything in it, kitchen included
+    # (Kitchen Set: UAT post-meeting, Nov 2026; one set per family is the
+    # team's assumption until CSWS gives its standard).
+    "Fire": {**_FOOD, **_SHELTER, **_clothing(2), "Kitchen Set": 1},
+    "Earthquake": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
+    "Landslide": {**_FOOD, **_SHELTER, "Medicine Kit": 0.2},
+    "Drought": {**_FOOD, "Drinking Water": 40},
+    "Disease Outbreak": {**_FOOD, "Hygiene Kit": 1, "Medicine Kit": 0.5},
+    # Any other disaster: the basic relief pack; the reporter adjusts it.
+    "Other": {**_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1},
+}
+
+
+
+# Per-family amount of an item when the disaster type's template does not
+# list it (Nov 2026, UAT: a need the reporter adds is filled in too). The
+# report form uses: the template's amount for the chosen disaster type,
+# else this, else 1 per family. Team assumptions, like the templates above.
+ITEM_PER_FAMILY = {
+    **_FOOD, **_SHELTER, **_clothing(1), "Medicine Kit": 0.1, "Kitchen Set": 1,
+}
+_ITEM_PER_FAMILY = {name.lower(): amount for name, amount in ITEM_PER_FAMILY.items()}
+
+
+def item_per_family(item_name: str):
+    """The general per-family amount of an item, or None (the app then
+    suggests 1 per family)."""
+    return _ITEM_PER_FAMILY.get((item_name or "").lower())
+
+
+def need_templates(db: Session) -> list:
+    """[{id: disaster_type_id, name, items: [{item_id, item_name, unit, per_family}]}]
+    for the disaster types that have a template, as /lookups sends it."""
+    items = {
+        i.item_name.lower(): i
+        for i in db.query(Item).filter(Item.active.is_(True), Item.pending_review.is_(False)).all()
+    }
+    out = []
+    for t in db.query(DisasterType).order_by(DisasterType.disaster_type_id).all():
+        template = NEED_TEMPLATES.get(t.type_name)
+        if not template:
+            continue
+        lines = [
+            {"item_id": items[name.lower()].item_id, "item_name": items[name.lower()].item_name,
+             "unit": items[name.lower()].unit_of_measure, "per_family": per_family}
+            for name, per_family in template.items()
+            if name.lower() in items
+        ]
+        if lines:
+            out.append({"id": t.disaster_type_id, "name": t.type_name, "items": lines})
+    return out

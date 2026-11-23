@@ -5,7 +5,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
-import 'package:mobile/ui/report_filters.dart';
+import 'package:mobile/core/m2_disaster_reporting/report_filters.dart';
 
 ReportSort _sort(String? s) => switch (s) {
   'least_fulfilled' => ReportSort.leastFulfilled,

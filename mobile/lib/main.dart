@@ -4,13 +4,13 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 
-import 'api.dart';
-import 'app_navigator.dart';
-import 'app_router.dart';
-import 'app_routes.dart';
-import 'push.dart';
-import 'realtime.dart';
-import 'design/design.dart';
+import 'core/shared/api.dart';
+import 'core/shared/app_navigator.dart';
+import 'core/shared/app_router.dart';
+import 'core/shared/app_routes.dart';
+import 'core/notifications/push.dart';
+import 'core/notifications/realtime.dart';
+import 'core/shared/design/design.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

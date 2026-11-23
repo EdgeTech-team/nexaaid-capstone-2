@@ -26,19 +26,19 @@ from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 
 from main import app
-from core.database import Base, get_db
-from core.auth import (
+from core.shared.database import Base, get_db
+from core.m1_user_management.auth import (
     clear_failed_logins,
     get_current_user,
     get_current_user_optional,
     pwd_context,
 )
 
-from models.report import DisasterType, Barangay, Sitio, DisasterReport
-from models.city_model import City
-from models.user_rbac_model import User
-from models.role_model import Role
-from models.organization_model import Organization
+from core.m2_disaster_reporting.report_model import DisasterType, Barangay, Sitio, DisasterReport
+from core.reference_data.city_model import City
+from core.m1_user_management.user_rbac_model import User
+from core.m1_user_management.role_model import Role
+from core.m1_user_management.organization_model import Organization
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ def unit_client(db_session, seed):
 # ---------------------------------------------------------------------------
 # Uploaded files go to a temp folder in every test, never backend/app/var/.
 # ---------------------------------------------------------------------------
-from core.storage import LocalStorage, set_storage  # noqa: E402
+from core.shared.storage import LocalStorage, set_storage  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -265,7 +265,7 @@ def _temp_upload_storage(tmp_path):
 def _no_dashboard_cache():
     """The CSWS dashboard caches its overview for a few seconds; tests
     change data between calls, so it is off."""
-    from services import csws_overview
+    from core.m9_dashboards import csws_overview
     csws_overview.CACHE["on"] = False
     csws_overview.clear_cache()
     yield
@@ -282,7 +282,7 @@ def _fresh_login_counts():
 def _fresh_address_search():
     """F-19: the address-search cache and the count of calls to Photon are
     kept in memory; every test starts from zero."""
-    from api.v1 import donation_routes
+    from core.m4_donation_management import donation_routes
     donation_routes._GEO_CACHE.clear()
     donation_routes._geo_calls.clear()
     yield
@@ -300,8 +300,8 @@ def sent_emails(request, monkeypatch):
         sent.append({"to": to, "subject": subject, "body": body})
         return True
 
-    monkeypatch.setattr("core.email.send_email", fake_send_email)
-    monkeypatch.setattr("core.email.email_configured", lambda: True)
+    monkeypatch.setattr("core.shared.email.send_email", fake_send_email)
+    monkeypatch.setattr("core.shared.email.email_configured", lambda: True)
     return sent 
 
 
@@ -309,7 +309,7 @@ def sent_emails(request, monkeypatch):
 def _no_push(monkeypatch):
     """Android pushes (core/push.py) stay off in tests, even when .env names
     a Firebase service account. test_push.py turns them on with a fake one."""
-    from core import push
+    from core.notifications import push
     monkeypatch.setattr(push, "credentials", lambda: None)
 
 
@@ -318,7 +318,7 @@ def _no_geocoder(monkeypatch):
     """The Door to Door area check reverse geocodes pins with Photon. Tests
     run offline, so only the landmark / address text decides unless a test
     says otherwise."""
-    import api.v1.donation_routes as routes
+    import core.m4_donation_management.donation_routes as routes
 
     def offline(lat, lng):
         raise ConnectionError("no network in tests")

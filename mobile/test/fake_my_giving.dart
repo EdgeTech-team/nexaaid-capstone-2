@@ -5,8 +5,8 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
-import 'package:mobile/ui/donation_entries_view.dart';
-import 'package:mobile/ui/my_giving.dart' show isOnTheWay, isWaiting;
+import 'package:mobile/core/m4_donation_management/donation_entries_view.dart';
+import 'package:mobile/core/m4_donation_management/my_giving.dart' show isOnTheWay, isWaiting;
 
 const _sorts = {
   'newest': EntrySort.newest,

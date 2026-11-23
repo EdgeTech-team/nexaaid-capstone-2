@@ -32,9 +32,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import func, or_, text  # noqa: E402
 
-from core.auth import has_role  # noqa: E402
-from models.user_rbac_model import User  # noqa: E402
-from services.accounts import delete_account  # noqa: E402
+from core.m1_user_management.auth import has_role  # noqa: E402
+from core.m1_user_management.user_rbac_model import User  # noqa: E402
+from core.m1_user_management.accounts import delete_account  # noqa: E402
 
 import main  # noqa: E402,F401  (registers every model)
 
@@ -110,7 +110,7 @@ def main_cli(argv=None) -> int:
     parser.add_argument("--apply", action="store_true", help="delete them (asks first)")
     parser.add_argument("--as-user", help="Administrator email recorded in the audit log")
     args = parser.parse_args(argv)
-    from core.database import SessionLocal
+    from core.shared.database import SessionLocal
     db = SessionLocal()
     try:
         return run(db, args.email, args.match, apply=args.apply, as_user=args.as_user)

@@ -8,38 +8,38 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from api.v1.health_routes import router as health_router
-from api.v1.dashboard_routes import router as dashboard_router
-from api.v1.csws_overview_routes import router as csws_overview_router
-from api.v1.reports import router as report_router
-from api.v1.deliveries import router as delivery_router
-from api.v1.donation_routes import router as donation_router
-from api.v1.pickup_plan_routes import router as pickup_plan_router
-from api.v1.receiving_routes import router as receiving_router
-from api.v1.session_router import router as session_router
-from api.v1.auth_router import router as auth_router
-from api.v1.admin_router import router as admin_router
-from api.v1.cmo_router import router as cmo_router
-from api.v1.logistics_router import router as logistics_router
-from api.v1.drrmo_router import router as drrmo_router
-from api.v1.lookup_routes import router as lookup_router
-from api.v1.upload_routes import router as upload_router
-from api.v1.notifications_router import router as notifications_router
-from api.v1.contacts import router as contacts_router
-from api.v1.public_routes import router as public_router
-from api.v1.admin_document_routes import router as admin_document_router
-from api.v1.donation_info_routes import router as donation_info_router
-from api.v1.account_router import router as account_router
-from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
-from api.v1.trips import router as trips_router
-from api.v1.delivery_problems import router as delivery_problems_router
-from api.v1.realtime_router import router as realtime_router
-from api.v1.push_router import router as push_router
+from core.shared.health_routes import router as health_router
+from core.m9_dashboards.dashboard_routes import router as dashboard_router
+from core.m9_dashboards.csws_overview_routes import router as csws_overview_router
+from core.m2_disaster_reporting.reports import router as report_router
+from core.m8_delivery_tracking.deliveries import router as delivery_router
+from core.m4_donation_management.donation_routes import router as donation_router
+from core.m5_inventory.pickup_plan_routes import router as pickup_plan_router
+from core.m5_inventory.receiving_routes import router as receiving_router
+from core.m1_user_management.session_router import router as session_router
+from core.m1_user_management.auth_router import router as auth_router
+from core.m1_user_management.admin_router import router as admin_router
+from core.m6_city_confirmation.cmo_router import router as cmo_router
+from core.m7_logistics_support.logistics_router import router as logistics_router
+from core.m7_logistics_support.drrmo_router import router as drrmo_router
+from core.reference_data.lookup_routes import router as lookup_router
+from core.shared.upload_routes import router as upload_router
+from core.notifications.notifications_router import router as notifications_router
+from core.m2_disaster_reporting.contacts import router as contacts_router
+from core.m9_dashboards.public_routes import router as public_router
+from core.m1_user_management.admin_document_routes import router as admin_document_router
+from core.m4_donation_management.donation_info_routes import router as donation_info_router
+from core.m1_user_management.account_router import router as account_router
+from core.m4_donation_management.donation_lifecycle_routes import router as donation_lifecycle_router
+from core.m8_delivery_tracking.trips import router as trips_router
+from core.m8_delivery_tracking.delivery_problems import router as delivery_problems_router
+from core.notifications.realtime_router import router as realtime_router
+from core.notifications.push_router import router as push_router
 
-from core.config import settings
-from core.client_ip import ClientIPMiddleware
-from services.delivery_reminders import reminder_loop, reminders_enabled
-from core.log_privacy import hide_query_strings_in_access_log
+from core.shared.config import settings
+from core.shared.client_ip import ClientIPMiddleware
+from core.m7_logistics_support.delivery_reminders import reminder_loop, reminders_enabled
+from core.shared.log_privacy import hide_query_strings_in_access_log
 
 # F-22: the access log keeps method, path and status, not the query string.
 hide_query_strings_in_access_log()
