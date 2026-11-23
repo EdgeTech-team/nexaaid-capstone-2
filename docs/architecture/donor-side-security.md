@@ -134,7 +134,7 @@ Backfill notes:
 | CSWS Main Office | Pickup map / list / stop sheet | `GET /donations/pickup-plan` | quantity, packaging | + amount_text, quantity summary |
 | DRRMO | Pickup runs and requests | `GET /drrmo/requests` (goods) | "2 kg Rice" | "Rice: 10 packs x 5 kg (Sack)" |
 | CMO Representative | Review / acknowledge | `GET /cmo/donations/*`, `/cmo/entries/*` | quantity, packaging | + amount_text, declared, counted |
-| CSWS, Barangay, DRRMO, Donor | Deliveries, trips, scheduled deliveries | `services/delivery_views.py` | quantity, unit | + amount_text, barangay received |
+| CSWS, Barangay, DRRMO, Donor | Deliveries, trips, scheduled deliveries | `services/deliveries/delivery_views.py` | quantity, unit | + amount_text, barangay received |
 | CSWS Main Office, Barangay | Dashboards (donation entries, latest donations) | `GET /dashboard/csws-main`, `/dashboard/barangay` | quantity (+ packaging on CSWS) | + amount_text, packaging on both |
 | Administrator | Transparency dashboard | `GET /dashboard/summary` | counts only | + Verified organizations (D6) |
 
@@ -156,7 +156,7 @@ added later, a Door to Door pickup and a typed-in item:
   every `DonationDetailScreen`, renders without an exception.
 
 **No root cause was found in this setup**, so no speculative fix was made.
-Regression tests keep it covered (`tests/test_my_giving_loads.py`,
+Regression tests keep it covered (`tests/donations/test_my_giving_loads.py`,
 `mobile/test/my_giving_real_data_test.dart`). To finish: run the backend
 tests against a local Postgres (`TEST_POSTGRES_URL`) and send the Render log
 line or the app's error text from the failing account.
@@ -203,7 +203,7 @@ line or the app's error text from the failing account.
 ## Notification wording
 
 Report notifications describe the need instead of "Report #21 is now
-accepting donations" (`services/report_story.py`), e.g.
+accepting donations" (`services/reports/report_story.py`), e.g.
 "Flood in Barangay Looc: families need your help" /
 "35 families in Barangay Looc were affected by a flood. They need rice,
 drinking water and 2 more items. High priority. Tap to see what they need

@@ -61,6 +61,6 @@ The same chains are automated in `backend/app/tests/` (`pytest` from `backend/ap
 
 ## Before the real demo
 
-- Remove the demo-account card in `lib/ui/login_screen.dart` and the test accounts in `lib/account_tab.dart`.
-- Replace the placeholder drop-off address in `lib/ui/donor_screens.dart` (`storageAddress`).
+- Remove the demo-account card in `lib/features/accounts/login_screen.dart` and the test accounts in `lib/dev_tools/account_tab.dart`.
+- Replace the placeholder drop-off address in `lib/features/donations/donor_screens.dart` (`storageAddress`).
 - Tighten `allow_origins` and remove the dev error middleware in `backend/app/main.py`.

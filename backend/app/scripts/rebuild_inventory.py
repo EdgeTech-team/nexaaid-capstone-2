@@ -23,12 +23,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import func, text  # noqa: E402
 
-from core.audit import log_action  # noqa: E402
-from core.auth import has_role  # noqa: E402
-from models.inventory_model import Inventory  # noqa: E402
-from models.item_model import Item  # noqa: E402
-from models.user_rbac_model import User  # noqa: E402
-from services.inventory import stock_differences  # noqa: E402
+from core.security.audit import log_action  # noqa: E402
+from core.security.auth import has_role  # noqa: E402
+from models.receiving.inventory_model import Inventory  # noqa: E402
+from models.donations.item_model import Item  # noqa: E402
+from models.accounts.user_rbac_model import User  # noqa: E402
+from services.receiving.inventory import stock_differences  # noqa: E402
 
 import main  # noqa: E402,F401  (registers every model)
 
@@ -106,7 +106,7 @@ def main_cli(argv=None) -> int:
     parser.add_argument("--apply", action="store_true", help="write the fixes (asks first)")
     parser.add_argument("--as-user", help="Administrator email recorded in the audit log")
     args = parser.parse_args(argv)
-    from core.database import SessionLocal
+    from core.config.database import SessionLocal
     db = SessionLocal()
     try:
         return run(db, apply=args.apply, as_user=args.as_user)

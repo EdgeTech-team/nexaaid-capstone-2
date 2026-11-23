@@ -1,0 +1,241 @@
+"""
+backend/app/tests/reports/test_reports.py
+
+Tests for Module 3.4 — Report Management.
+
+Covers the flows your Capstone doc actually specifies:
+- UC-02 success path: reporter submits -> saved as Pending
+- UC-02 extension 2a: missing required field is rejected
+- UC-02 step 6: admin validates -> status=Validated, validated_by recorded
+- UC-02 extension 5a: admin rejects -> status=Rejected, reason recorded
+- Access control: non-admin can't validate/reject; a reporter can't list all reports
+- FR 2.4: SMS ingestion creates a report + linked sms_report_metadata together
+"""
+from models.reports.report import DisasterReport, ReportFulfillment
+
+
+def test_create_report_success(reporter_client, seed):
+    payload = {
+        "disaster_type_id": seed["disaster_type_id"],
+        "barangay_id": seed["barangay_id"],
+        "sitio_id": seed["sitio_id"],
+        "description": "Flooding along the main road.",
+        "affected_families": 12,
+        "assistance_needed": "Food packs, drinking water",
+        "estimated_quantity": 50,
+        "source": "web",
+    }
+    resp = reporter_client.post("/reports/", json=payload)
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "Pending"          # UC-02 step 4
+    assert body["user_id"] == seed["reporter_id"]
+    assert body["validated_by"] is None
+    assert body["rejection_reason"] is None
+
+
+def test_create_report_missing_required_field_rejected(reporter_client, seed):
+    # UC-02 extension 2a: "System prevents submission until required
+    # fields are filled." disaster_type_id is required — omit it.
+    payload = {
+        "barangay_id": seed["barangay_id"],
+        "description": "Missing disaster type.",
+        "source": "web",
+    }
+    resp = reporter_client.post("/reports/", json=payload)
+    assert resp.status_code == 422  # FastAPI/Pydantic validation error
+
+
+def test_citizen_cannot_list_all_reports(citizen_client):
+    # list_reports is staff-only (require_role); a plain "citizen" role
+    # should be forbidden.
+    resp = citizen_client.get("/reports/")
+    assert resp.status_code == 403
+
+
+def test_only_the_disaster_unit_submits_reports(citizen_client, seed):
+    # Appendix H 2.1 (Oct 17 run-through): any logged-in account could.
+    resp = citizen_client.post("/reports/", json={
+        "disaster_type_id": seed["disaster_type_id"], "barangay_id": seed["barangay_id"],
+        "affected_families": 3, "assistance_needed": "Rice"})
+    assert resp.status_code == 403
+
+
+def test_admin_validate_report(admin_client, reporter_client, seed):
+    create_resp = reporter_client.post(
+        "/reports/",
+        json={
+            "disaster_type_id": seed["disaster_type_id"],
+            "barangay_id": seed["barangay_id"],
+            "description": "Report to validate.",
+            "affected_families": 12,
+            "source": "web",
+        },
+    )
+    report_id = create_resp.json()["report_id"]
+
+    resp = admin_client.post(f"/reports/{report_id}/validate", json={})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "Validated"                    # UC-02 step 6/7
+    assert body["validated_by"] == seed["admin_id"]          # SD4 audit field
+
+
+def test_admin_reject_report_requires_reason(admin_client, reporter_client, seed):
+    create_resp = reporter_client.post(
+        "/reports/",
+        json={
+            "disaster_type_id": seed["disaster_type_id"],
+            "barangay_id": seed["barangay_id"],
+            "description": "Report to reject.",
+            "source": "web",
+        },
+    )
+    report_id = create_resp.json()["report_id"]
+
+    # Missing rejection_reason -> validation error (UC-02 5a requires
+    # the rep get specific feedback, so a blank reason isn't allowed)
+    resp = admin_client.post(f"/reports/{report_id}/reject", json={})
+    assert resp.status_code == 422
+
+    resp = admin_client.post(
+        f"/reports/{report_id}/reject",
+        json={"rejection_reason": "Missing field evidence photos."},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "Rejected"
+    assert body["rejection_reason"] == "Missing field evidence photos."
+    assert body["validated_by"] == seed["admin_id"]
+
+
+def test_reporter_cannot_validate_report(reporter_client, seed):
+    create_resp = reporter_client.post(
+        "/reports/",
+        json={
+            "disaster_type_id": seed["disaster_type_id"],
+            "barangay_id": seed["barangay_id"],
+            "description": "Should not be validatable by reporter.",
+            "source": "web",
+        },
+    )
+    report_id = create_resp.json()["report_id"]
+
+    resp = reporter_client.post(f"/reports/{report_id}/validate", json={})
+    assert resp.status_code == 403
+
+
+def test_sms_ingest_creates_report_and_metadata(unit_client, admin_client, seed):
+    # Scope 2.4, UC-A3 8a: the Disaster Unit SENDS the SMS; the
+    # Administrator reviews and ENCODES it (POST /reports/sms), then validates.
+    payload = {
+        "contact_number": "09171234567",
+        "raw_message": "FLOOD BRGY TEST 5FAM FOOD WATER",
+        "disaster_type_id": seed["disaster_type_id"],
+        "barangay_id": seed["barangay_id"],
+        "affected_families": 5,
+        "assistance_needed": "Food, water",
+        # J8: not a Disaster Unit member's number, so a reason is given.
+        "unregistered_sender_reason": "Typed in from a relayed SMS (J8)",
+    }
+
+    assert unit_client.post("/reports/sms", json=payload).status_code == 403
+
+    resp = admin_client.post("/reports/sms", json=payload)
+
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["report"]["source"] == "SMS"
+    assert body["report"]["status"] == "Pending"
+    assert body["sms_metadata"]["raw_message"] == payload["raw_message"]
+    assert body["sms_metadata"]["report_id"] == body["report"]["report_id"]
+
+def test_list_monitoring_empty(admin_client, seed):
+    resp = admin_client.get("/reports/monitoring")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+def test_list_reports_monitoring_with_fulfillment(admin_client, seed, db_session):
+    # 1. Create a validated DisasterReport directly through the ORM
+    report = DisasterReport(
+        user_id=seed["reporter_id"],
+        disaster_type_id=seed["disaster_type_id"],
+        barangay_id=seed["barangay_id"],
+        sitio_id=seed["sitio_id"],
+        source="web",
+        status="Validated",
+    )
+    db_session.add(report)
+    db_session.commit()
+    db_session.refresh(report)
+
+    # 2. Create the linked ReportFulfillment
+    fulfillment = ReportFulfillment(
+        report_id=report.report_id,
+        total_items_needed=100,
+        total_items_delivered=75,
+        fulfillment_percentage=75.0,
+        verification_status="Partial",
+    )
+    db_session.add(fulfillment)
+    db_session.commit()
+
+    # 3. Call the monitoring endpoint
+    response = admin_client.get("/reports/monitoring")
+
+    # 4. Assert successful response and exactly one report
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+
+    # 5. Assert fulfillment fields from ReportMonitoringResponse
+    item = data[0]
+    assert item["total_items_needed"] == 100
+    assert item["total_items_delivered"] == 75
+    assert item["fulfillment_percentage"] == "75.00"
+    assert item["fulfillment_status"] == "Partial"
+
+def test_a_report_with_no_data_is_corrected_before_validation(admin_client, reporter_client, seed):
+    """UC-A3 7a / priority module 1a (Oct 17 run-through): no affected
+    families, needs or quantity means no priority guidance, so the Admin
+    rejects it for correction instead of publishing it."""
+    rid = reporter_client.post("/reports/", json={
+        "disaster_type_id": seed["disaster_type_id"], "barangay_id": seed["barangay_id"]}).json()["report_id"]
+    r = admin_client.post(f"/reports/{rid}/validate", json={})
+    assert r.status_code == 422 and "Reject it" in r.json()["detail"]
+    assert admin_client.post(f"/reports/{rid}/reject", json={"rejection_reason": "Add the families"}).status_code == 200
+
+
+def test_only_the_admin_changes_status_or_priority_directly(admin_client, reporter_client, seed):
+    """PATCH /reports/{id} sets status and priority, so it is the
+    Administrator's alone (Appendix H 2.3; Oct 17 run-through)."""
+    rid = reporter_client.post("/reports/", json={
+        "disaster_type_id": seed["disaster_type_id"], "barangay_id": seed["barangay_id"],
+        "affected_families": 5}).json()["report_id"]
+    assert reporter_client.patch(f"/reports/{rid}", json={"status": "Validated"}).status_code == 403
+    assert admin_client.patch(f"/reports/{rid}", json={"description": "Fixed"}).status_code == 200
+
+
+
+def test_monitoring_filters_by_status_and_keeps_the_rejection_reason(unit_client, seed, db_session):
+    """UAT Nov 2026 (M2.5): the Disaster Unit's Report Status filter sends
+    /reports/monitoring?status=... . A rejected row carries its reason, and
+    without a status every report still comes back (backward compatible)."""
+    for status, reason in [("Pending", None), ("Validated", None),
+                           ("Rejected", "Wrong barangay"), ("Cancelled", None)]:
+        db_session.add(DisasterReport(
+            user_id=seed["reporter_id"], disaster_type_id=seed["disaster_type_id"],
+            barangay_id=seed["barangay_id"], source="web", status=status,
+            rejection_reason=reason,
+        ))
+    db_session.commit()
+
+    rejected = unit_client.get("/reports/monitoring", params={"status": "Rejected"})
+    assert rejected.status_code == 200
+    assert [r["status"] for r in rejected.json()] == ["Rejected"]
+    assert rejected.json()[0]["rejection_reason"] == "Wrong barangay"
+
+    every = unit_client.get("/reports/monitoring", params={"limit": 200}).json()
+    assert sorted(r["status"] for r in every) == ["Cancelled", "Pending", "Rejected", "Validated"]

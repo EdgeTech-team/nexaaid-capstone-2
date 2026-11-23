@@ -3,7 +3,7 @@
 -- The database schema BEFORE the first Alembic migration (revision
 -- e837b545b195 "baseline existing schema tracking", which is empty because
 -- Neon already had these tables). Used only by
--- tests/test_models_match_migrations.py: it loads this file into a
+-- tests/general/test_models_match_migrations.py: it loads this file into a
 -- temporary local Postgres, runs every migration to head, and checks the
 -- result against the SQLAlchemy models.
 --
@@ -21,7 +21,7 @@
 --     idx_* indexes and default-named foreign keys it drops, their
 --     ON DELETE rules, and the old check name organizations_status_check
 --   - notifications (no model on develop yet): columns from
---     models/notification.py on feat/notification-alerts
+--     models/notifications/notification.py on feat/notification-alerts
 -- Limitation: for tables that no migration ever touched, this copies the
 -- models, so it cannot catch a mistake that was already in the model on
 -- 2026-10-03. It does catch every column a migration adds, renames or

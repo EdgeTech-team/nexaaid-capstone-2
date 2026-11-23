@@ -1,7 +1,7 @@
 """Whose goods went on each delivery (Oct 13 concerns, delivery preparation)
 
 delivery_allocations: for every delivery line, which donations its goods
-came from and how much of each (services/delivery_allocation.py: first
+came from and how much of each (services/deliveries/delivery_allocation.py: first
 received, first sent; CMO-acknowledged donations first). The donor's
 timeline (In transit / Delivered / Barangay confirmed) follows these rows.
 

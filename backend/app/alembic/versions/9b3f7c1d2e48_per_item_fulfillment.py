@@ -4,7 +4,7 @@ Fulfillment used to compare ONE total (estimated_quantity, e.g. "Rice 50 kg
 + Water 20 gal" stored as 70) against every delivered item, whatever it
 was. Now each report lists its needs per item, every quantity is a whole
 number in the item's base unit (kg, L, pcs...), and fulfillment is worked
-out per need (services/fulfillment.py).
+out per need (services/deliveries/fulfillment.py).
 
 Changes (all additive; existing columns keep their meaning):
   - items.active: hides retired items from dropdowns, keeps old records.

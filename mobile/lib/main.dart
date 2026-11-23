@@ -4,12 +4,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 
-import 'api.dart';
-import 'app_navigator.dart';
-import 'app_router.dart';
-import 'app_routes.dart';
-import 'push.dart';
-import 'realtime.dart';
+import 'core/api.dart';
+import 'core/app_navigator.dart';
+import 'core/app_router.dart';
+import 'core/app_routes.dart';
+import 'core/push.dart';
+import 'core/realtime.dart';
 import 'design/design.dart';
 
 Future<void> main() async {

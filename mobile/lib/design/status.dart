@@ -56,7 +56,7 @@ abstract final class StatusColors {
     'rejected': (_red, Icons.cancel_outlined),
     'declined': (_red, Icons.cancel_outlined),
     'cancelled': (_slate, Icons.block),
-    // Donation never handed over in time (services/donation_expiry.py)
+    // Donation never handed over in time (services/donations/donation_expiry.py)
     'expired': (_red, Icons.timer_off_outlined),
     // Delivery trips (several reports on one truck)
     'completed': (_green, Icons.task_alt),

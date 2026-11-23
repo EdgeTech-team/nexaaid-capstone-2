@@ -1,0 +1,250 @@
+from datetime import datetime, timedelta
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status, Query
+from sqlalchemy import exists, func, literal, or_
+from core.common.pagination import PageParams, paginate_query, parse_ids, set_total_header
+from models.reports.report import DisasterReport
+from services.deliveries.logistics_stage import stage_is
+from core.security.audit import log_action
+from sqlalchemy.orm import Session
+from core.config.database import get_db
+from core.security.auth import has_role, require_role
+from models.accounts.user_rbac_model import User
+from models.deliveries.delivery import Delivery
+from models.deliveries.logistics_request_model import LogisticsRequest
+from models.donations.physical_donation_model import PhysicalDonation
+from schemas.deliveries.logistics_request_schema import (
+    SubmitLogisticsRequest, SubmitPickupLogisticsRequest, LogisticsRequestResponse,
+)
+from schemas.donations.physical_donation_schema import (
+    MANILA, decode_pickup_dates, decode_pickup_days, pickup_dates_label,
+    pickup_days_label, pickup_rules,
+)
+from core.notifications.notifications import logistics_team_ids, notify_event_many
+
+router = APIRouter(prefix="/logistics", tags=["logistics"])
+
+DISASTER_UNIT = "CSWS Disaster Unit"
+MAIN_OFFICE = "CSWS Main Office"
+OPEN = ("Pending", "Accepted")
+_DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+@router.post("/requests", response_model=LogisticsRequestResponse, status_code=status.HTTP_201_CREATED)
+def submit_logistics_request(
+    payload: SubmitLogisticsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("CSWS Main Office")),
+):
+    # The request is for goods CSWS is already preparing (UC-CM2 3a), so it
+    # attaches to that delivery instead of creating a new, empty one.
+    delivery = db.get(Delivery, payload.delivery_id)
+    if delivery is None:
+        raise HTTPException(status_code=404, detail="Delivery not found")
+    # Testing feedback (Oct 20): transport is asked for while the goods are
+    # still being prepared, not once the truck has left.
+    if delivery.status != "Preparing":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Delivery is already {delivery.status}. Ask DRRMO for transport while it is still Preparing.",
+        )
+    open_request = (
+        db.query(LogisticsRequest)
+        .filter(LogisticsRequest.delivery_id == delivery.delivery_id,
+                LogisticsRequest.status.in_(["Pending", "Accepted"]))
+        .first()
+    )
+    if open_request:
+        raise HTTPException(status_code=409, detail="This delivery already has an open logistics request")
+
+    logistics_request = open_transport_request(db, delivery, current_user, payload)
+    db.commit()
+    db.refresh(logistics_request)
+    return logistics_request
+
+
+def open_transport_request(db: Session, delivery: Delivery, user, needs) -> LogisticsRequest:
+    """UC-CM2 alt 3a: ask DRRMO for transport for a delivery being prepared.
+    Also used when the delivery is created with "Needs DRRMO transport?"
+    (deliveries.create_delivery), in the same save. Does not commit."""
+    logistics_request = LogisticsRequest(
+        request_type="Delivery",
+        delivery_id=delivery.delivery_id,
+        requested_by_user_id=user.user_id,
+        # The truck is asked for on the delivery date Main Office planned
+        # (shown from the delivery); scheduled_date stays empty until DRRMO
+        # accepts and sets its time (UC-DR1 step 5, Table 36 alt 4a).
+        notes=needs.needs_text(),   # I4: "Needs 2 trucks, 2 drivers, 3 volunteers"
+    )
+    db.add(logistics_request)
+    db.flush()
+    log_action(db, user, "REQUEST LOGISTICS SUPPORT", "logistics_requests",
+               logistics_request.request_id,
+               new={"delivery_id": delivery.delivery_id, "needs": logistics_request.notes})
+    notify_event_many(db, logistics_team_ids(db, exclude_user_id=user.user_id),
+                      "logistics_requested", "logistics_request",
+                      logistics_request.request_id, title=f"delivery #{delivery.delivery_id}")
+    return logistics_request
+
+
+@router.post("/pickup-requests", status_code=status.HTTP_201_CREATED)
+def submit_pickup_request(
+    payload: SubmitPickupLogisticsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(MAIN_OFFICE)),
+):
+    """CSWS Main Office asks DRRMO to help with a Door to Door pickup run planned on the
+    pickup map (Oct 10 notes; since Oct 11 the map is Main Office's): one day, the donation
+    entries in stop order, and what is needed (trucks, volunteers,
+    pushcarts). Like UC-CM2 alt 3a, but for collecting instead of delivering.
+
+    Checks: the day is a CSWS pickup day, today or later; every entry is a
+    Door to Door donation still waiting to be collected; the donor said they
+    are home that day; and no entry is already in another open pickup run."""
+    rules = pickup_rules()
+    today = datetime.now(MANILA).date()
+    day = payload.pickup_date
+    if day < today:
+        raise HTTPException(status_code=422, detail="Choose today or a later date for the pickup run.")
+    if day > today + timedelta(days=rules["max_days_ahead"]):
+        raise HTTPException(status_code=422,
+                            detail=f"Choose a date within {rules['max_days_ahead']} days.")
+    if day.isoweekday() not in rules["days"]:
+        raise HTTPException(status_code=422, detail=f"CSWS does pickups only on: {rules['label']}.")
+
+    rows = (db.query(PhysicalDonation)
+            .filter(PhysicalDonation.batch_reference.in_(payload.batch_references)).all())
+    by_ref: dict = {}
+    for r in rows:
+        by_ref.setdefault(r.batch_reference, []).append(r)
+    weekday = _DAY_NAMES[day.isoweekday() - 1]
+    for ref in payload.batch_references:
+        lines = by_ref.get(ref)
+        if not lines:
+            raise HTTPException(status_code=404, detail=f"No donation with reference {ref}.")
+        # Oct 23 (approved by Daniel): the pickup details of the items still
+        # waiting, not of the first item (which the donor may have removed).
+        first = next((l for l in lines if l.status == "Pending"), lines[0])
+        where = f" (near {first.pickup_landmark})" if first.pickup_landmark else ""
+        if first.handover_method != "Door to Door":
+            raise HTTPException(status_code=409, detail=f"{ref} is a Drop Off donation, not a pickup.")
+        if not any(l.status == "Pending" for l in lines):
+            raise HTTPException(status_code=409, detail=f"{ref}{where} has nothing left to collect.")
+        dates = decode_pickup_dates(first.pickup_dates)
+        if dates and day not in dates:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{ref}{where} is not available on {weekday}, {day.strftime('%b')} {day.day}. "
+                       f"The donor chose {pickup_dates_label(first.pickup_dates)}.",
+            )
+        days = decode_pickup_days(first.pickup_days)
+        if not dates and days and day.isoweekday() not in days:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{ref}{where} is not available on {weekday}. "
+                       f"The donor chose {pickup_days_label(first.pickup_days)}.",
+            )
+
+    # NF-006 (D4): a donor who has not verified the email is not on the map.
+    from services.pickup.email_hold import held_refs
+    held = sorted(held_refs(db, payload.batch_references))
+    if held:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{', '.join(held)} is waiting for the donor to verify their email.",
+        )
+    # NF-007 (D5): every stop needs a "Called – confirmed" (Reached) call first.
+    unconfirmed = [
+        ref for ref in payload.batch_references
+        if not any(l.status == "Pending" and l.contact_outcome == "Reached" for l in by_ref[ref])
+    ]
+    if unconfirmed:
+        raise HTTPException(
+            status_code=409,
+            detail=("Call these stops first (Called – confirmed): "
+                    f"{', '.join(unconfirmed)}."),
+            headers={"X-Unconfirmed-Stops": ",".join(unconfirmed)},
+        )
+
+    for req in (db.query(LogisticsRequest)
+                .filter(LogisticsRequest.request_type == "Pickup",
+                        LogisticsRequest.status.in_(OPEN)).all()):
+        taken = set(req.batch_list) & set(payload.batch_references)
+        if taken:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{', '.join(sorted(taken))} is already in pickup request #{req.request_id}.",
+            )
+
+    needs = payload.needs_text()
+    req = LogisticsRequest(
+        request_type="Pickup",
+        delivery_id=None,
+        pickup_date=day,
+        pickup_batches=",".join(payload.batch_references),
+        requested_by_user_id=current_user.user_id,
+        notes=f"{needs}\n{payload.notes}" if payload.notes else needs,
+    )
+    db.add(req)
+    db.flush()
+    log_action(db, current_user, "REQUEST PICKUP LOGISTICS SUPPORT", "logistics_requests",
+               req.request_id,
+               new={"pickup_date": day.isoformat(), "stops": payload.batch_references, "needs": needs})
+    notify_event_many(db, logistics_team_ids(db, exclude_user_id=current_user.user_id),
+                      "logistics_requested", "logistics_request", req.request_id, title=req.title)
+    db.commit()
+    db.refresh(req)
+    from api.v1.deliveries.drrmo_router import request_rows
+    return request_rows(db, [req])[0]
+
+
+@router.get("/requests")
+def list_my_requests(
+    response: Response,
+    stage: Optional[str] = None,
+    disaster_type_id: Optional[int] = None,
+    delivery_ids: Optional[str] = Query(default=None, max_length=1100,
+                                        description="Comma list: only these deliveries' requests"),
+    page: PageParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("CSWS Main Office", "Administrator", DISASTER_UNIT)),
+):
+    """CSWS sees whether DRRMO accepted, declined or completed each request
+    (the "system notifies CSWS" steps of UC-DR1). The Disaster Unit sees its
+    Door to Door pickup runs.
+
+    Appendix H 7.5 (records screen), all optional and filtered in SQL:
+    stage (Pending, Accepted, In Transit, Declined, Completed: the same
+    "stage" the rows carry), disaster_type_id (NF-001: a delivery's report,
+    or for a pickup run any of its donations' reports) and limit / offset
+    (NF-003, X-Total-Count). Without them the answer is as before."""
+    from api.v1.deliveries.drrmo_router import request_rows
+    query = db.query(LogisticsRequest)
+    if has_role(current_user, DISASTER_UNIT):
+        query = query.filter(LogisticsRequest.request_type == "Pickup")
+    if stage:
+        query = query.filter(stage_is(stage.strip()))
+    if disaster_type_id is not None:
+        query = query.filter(_of_disaster_type(disaster_type_id))
+    if delivery_ids is not None:
+        # NF-003: the requests of the deliveries on one page only.
+        query = query.filter(LogisticsRequest.delivery_id.in_(parse_ids(delivery_ids)))
+    rows, total = paginate_query(query, page, LogisticsRequest.request_id.desc())
+    set_total_header(response, page, total)
+    return request_rows(db, rows)
+
+
+def _of_disaster_type(disaster_type_id: int):
+    """A delivery request: its delivery's report. A pickup run: any of the
+    donations it collects (pickup_batches is a comma list of QR batches)."""
+    of_type = DisasterReport.disaster_type_id == disaster_type_id
+    by_delivery = exists().where(
+        Delivery.delivery_id == LogisticsRequest.delivery_id,
+        DisasterReport.report_id == Delivery.report_id, of_type)
+    batches = literal(",") + func.coalesce(LogisticsRequest.pickup_batches, "") + literal(",")
+    by_pickup = exists().where(
+        DisasterReport.report_id == PhysicalDonation.report_id, of_type,
+        batches.like(literal("%,") + PhysicalDonation.batch_reference + literal(",%")))
+    return or_(by_delivery, by_pickup)

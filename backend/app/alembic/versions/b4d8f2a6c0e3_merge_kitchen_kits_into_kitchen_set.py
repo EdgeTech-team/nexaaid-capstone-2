@@ -25,7 +25,7 @@ down_revision: Union[str, Sequence[str], None] = "a9e5c7d3b1f2"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# Other names of the kitchen item (services/items.py ITEM_ALIASES too).
+# Other names of the kitchen item (services/donations/items.py ITEM_ALIASES too).
 KITCHEN_NAMES = ("kitchen kit", "kitchen kits", "kitchen sets")
 
 

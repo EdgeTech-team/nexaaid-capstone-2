@@ -6,7 +6,7 @@ gallery**.
 
 ## Import
 
-Screens that already import `ui/widgets.dart` get the design system
+Screens that already import `shared/widgets/widgets.dart` get the design system
 automatically. New files:
 
 ```dart

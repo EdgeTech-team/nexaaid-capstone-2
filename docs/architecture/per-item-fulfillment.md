@@ -126,11 +126,11 @@ Until each screen is updated, the old behaviour continues. Reports sent the old 
 
 ## Tests
 
-`backend/app/tests/test_per_item_fulfillment.py` walks the whole chain with real logins (report with needs → validate → donations in packs → receive, including a reclassify → CMO → delivery → barangay receipt → per-item meters and priority), and checks old-style clients and editing needs. The migration was checked on Postgres: water with existing donations, General needs backfill, re-run, downgrade.
+`backend/app/tests/deliveries/test_per_item_fulfillment.py` walks the whole chain with real logins (report with needs → validate → donations in packs → receive, including a reclassify → CMO → delivery → barangay receipt → per-item meters and priority), and checks old-style clients and editing needs. The migration was checked on Postgres: water with existing donations, General needs backfill, re-run, downgrade.
 
 ## Also on this branch: account delete and cleanup (Appendix H 1.2, testing feedback)
 
 - **Admin → a deactivated account → "Delete account".** The row is kept, because reports and deliveries point at it, but it's anonymized: name, email, username, phone, address, employee ID and ID photos are removed. The email and username can then register again. The account disappears from every list. "Restore account" (previously "Activate account") brings a deactivated account back.
 - **`DELETE /admin/users/{id}`**: only for deactivated accounts (409 otherwise), not for yourself (400), Administrator only.
-- **Login tokens** must now match the account's id, so a deleted account's old token can't open a new account that reuses the email (`core/auth.py`).
+- **Login tokens** must now match the account's id, so a deleted account's old token can't open a new account that reuses the email (`core/security/auth.py`).
 - **`python scripts/delete_accounts.py --email <address>` or `--match "%@example.com"`**: dry run first, then `--apply --as-user <admin email>`. Use it for the sample accounts that blocked "email already registered". It never deletes Administrators. Read the list before applying a broad pattern: the demo seed's `.rep` / `.test` accounts also end in `@example.com`.

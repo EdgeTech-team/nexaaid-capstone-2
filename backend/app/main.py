@@ -8,37 +8,37 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from api.v1.health_routes import router as health_router
-from api.v1.dashboard_routes import router as dashboard_router
-from api.v1.reports import router as report_router
-from api.v1.deliveries import router as delivery_router
-from api.v1.donation_routes import router as donation_router
-from api.v1.pickup_plan_routes import router as pickup_plan_router
-from api.v1.receiving_routes import router as receiving_router
-from api.v1.session_router import router as session_router
-from api.v1.auth_router import router as auth_router
-from api.v1.admin_router import router as admin_router
-from api.v1.cmo_router import router as cmo_router
-from api.v1.logistics_router import router as logistics_router
-from api.v1.drrmo_router import router as drrmo_router
-from api.v1.lookup_routes import router as lookup_router
-from api.v1.upload_routes import router as upload_router
-from api.v1.notifications_router import router as notifications_router
-from api.v1.contacts import router as contacts_router
-from api.v1.public_routes import router as public_router
-from api.v1.admin_document_routes import router as admin_document_router
-from api.v1.donation_info_routes import router as donation_info_router
-from api.v1.account_router import router as account_router
-from api.v1.donation_lifecycle_routes import router as donation_lifecycle_router
-from api.v1.trips import router as trips_router
-from api.v1.delivery_problems import router as delivery_problems_router
-from api.v1.realtime_router import router as realtime_router
-from api.v1.push_router import router as push_router
+from api.v1.system.health_routes import router as health_router
+from api.v1.dashboard.dashboard_routes import router as dashboard_router
+from api.v1.reports.reports import router as report_router
+from api.v1.deliveries.deliveries import router as delivery_router
+from api.v1.donations.donation_routes import router as donation_router
+from api.v1.pickup.pickup_plan_routes import router as pickup_plan_router
+from api.v1.receiving.receiving_routes import router as receiving_router
+from api.v1.accounts.session_router import router as session_router
+from api.v1.accounts.auth_router import router as auth_router
+from api.v1.accounts.admin_router import router as admin_router
+from api.v1.donations.cmo_router import router as cmo_router
+from api.v1.deliveries.logistics_router import router as logistics_router
+from api.v1.deliveries.drrmo_router import router as drrmo_router
+from api.v1.locations.lookup_routes import router as lookup_router
+from api.v1.uploads.upload_routes import router as upload_router
+from api.v1.notifications.notifications_router import router as notifications_router
+from api.v1.locations.contacts import router as contacts_router
+from api.v1.dashboard.public_routes import router as public_router
+from api.v1.accounts.admin_document_routes import router as admin_document_router
+from api.v1.donations.donation_info_routes import router as donation_info_router
+from api.v1.accounts.account_router import router as account_router
+from api.v1.donations.donation_lifecycle_routes import router as donation_lifecycle_router
+from api.v1.deliveries.trips import router as trips_router
+from api.v1.deliveries.delivery_problems import router as delivery_problems_router
+from api.v1.notifications.realtime_router import router as realtime_router
+from api.v1.notifications.push_router import router as push_router
 
-from core.config import settings
-from core.client_ip import ClientIPMiddleware
-from services.delivery_reminders import reminder_loop, reminders_enabled
-from core.log_privacy import hide_query_strings_in_access_log
+from core.config.config import settings
+from core.security.client_ip import ClientIPMiddleware
+from services.deliveries.delivery_reminders import reminder_loop, reminders_enabled
+from core.security.log_privacy import hide_query_strings_in_access_log
 
 # F-22: the access log keeps method, path and status, not the query string.
 hide_query_strings_in_access_log()
@@ -60,7 +60,7 @@ def api_docs_settings(app_env: str) -> dict:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Phase 5: delivery reminders every 5 minutes while the server runs
-    (services/delivery_reminders.py). REMINDERS=off turns them off."""
+    (services/deliveries/delivery_reminders.py). REMINDERS=off turns them off."""
     task = asyncio.create_task(reminder_loop()) if reminders_enabled() else None
     try:
         yield
@@ -147,9 +147,9 @@ app.include_router(admin_document_router)
 app.include_router(donation_info_router)
 app.include_router(contacts_router)
 app.include_router(account_router)
-app.include_router(realtime_router)      # GET /ws live updates (core/realtime.py)
-app.include_router(push_router)          # GET /push/topic, Android push (core/push.py)
+app.include_router(realtime_router)      # GET /ws live updates (core/notifications/realtime.py)
+app.include_router(push_router)          # GET /push/topic, Android push (core/notifications/push.py)
 
-# F-21: the real client address behind Render's proxy (core/client_ip.py).
+# F-21: the real client address behind Render's proxy (core/security/client_ip.py).
 # Added last, so it runs first.
 app.add_middleware(ClientIPMiddleware)

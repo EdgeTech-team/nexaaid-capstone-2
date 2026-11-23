@@ -3,27 +3,27 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 
-from core.config import settings
-from core.database import Base
+from core.config.config import settings
+from core.config.database import Base
 
-from models.user_rbac_model import User
-from models.role_model import Role
-from models.organization_model import Organization
-from models.item_model import Item
-from models.physical_donation_model import PhysicalDonation
-from models.received_goods_model import ReceivedGoods
-from models.inventory_model import Inventory
-from models.report import DisasterReport 
-from models.city_model import City
-from models.barangay_model import Barangay
-from models.disaster_type_model import DisasterType
-from models.sitio_model import Sitio
-from models.barangay_hazard_model import BarangayHazard
-from models.disaster_event_model import DisasterEvent
+from models.accounts.user_rbac_model import User
+from models.accounts.role_model import Role
+from models.accounts.organization_model import Organization
+from models.donations.item_model import Item
+from models.donations.physical_donation_model import PhysicalDonation
+from models.receiving.received_goods_model import ReceivedGoods
+from models.receiving.inventory_model import Inventory
+from models.reports.report import DisasterReport 
+from models.locations.city_model import City
+from models.locations.barangay_model import Barangay
+from models.reports.disaster_type_model import DisasterType
+from models.locations.sitio_model import Sitio
+from models.locations.barangay_hazard_model import BarangayHazard
+from models.reports.disaster_event_model import DisasterEvent
 
-from models.guest_donor_model import GuestDonor
-from models.upload_model import Upload
-from models.donation_info_model import BarangayDonationInfo, ReportDonationInfo
+from models.accounts.guest_donor_model import GuestDonor
+from models.uploads.upload_model import Upload
+from models.donations.donation_info_model import BarangayDonationInfo, ReportDonationInfo
 
 
 # this is the Alembic Config object, which provides

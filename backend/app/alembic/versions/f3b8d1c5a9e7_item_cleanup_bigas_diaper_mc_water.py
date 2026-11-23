@@ -16,7 +16,7 @@ next to the real ones:
    is deleted when nothing uses it. Otherwise it is retired and its report
    needs are deleted, like migration c7a2d4f8e1b6.
 
-services/items.py maps a typed "Bigas" / "Diapar" to Rice / Diaper and
+services/donations/items.py maps a typed "Bigas" / "Diapar" to Rice / Diaper and
 refuses "MC Water", so they don't come back.
 
 Run scripts/recompute_priorities.py afterwards (dry run first): reports

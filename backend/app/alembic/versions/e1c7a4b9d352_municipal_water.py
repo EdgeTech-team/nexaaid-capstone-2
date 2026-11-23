@@ -2,7 +2,7 @@
 
 New item "Municipal Water" (category Water, unit L), the city's water
 supply, with a few common sizes. Every disaster's suggested needs include
-it (services/need_templates.py). Skipped when an item with that name
+it (services/reports/need_templates.py). Skipped when an item with that name
 already exists. (The typed name for "Other" disasters is Ivan's column
 disaster_reports.disaster_type_other, migration e2b6d4a8c1f9.)
 

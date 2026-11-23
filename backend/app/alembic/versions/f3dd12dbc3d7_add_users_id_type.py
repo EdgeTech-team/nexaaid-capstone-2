@@ -9,7 +9,7 @@ indexes the models don't declare, see 142a5db2006c). Adds one nullable
 column, so existing rows are untouched: donors who registered before this
 change, staff, and organizations simply have NULL.
 
-Allowed values are checked in schemas/user_schema.py (ID_TYPES), not with
+Allowed values are checked in schemas/accounts/user_schema.py (ID_TYPES), not with
 a database CHECK, so the list can grow without another migration.
 
 Before applying: `alembic heads` must print exactly one head, and it must

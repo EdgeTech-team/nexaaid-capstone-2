@@ -23,9 +23,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.database import SessionLocal  # noqa: E402
-from core.storage import get_storage  # noqa: E402
-from models.upload_model import Upload, UploadBlob  # noqa: E402
+from core.config.database import SessionLocal  # noqa: E402
+from core.uploads.storage import get_storage  # noqa: E402
+from models.uploads.upload_model import Upload, UploadBlob  # noqa: E402
 
 
 def main() -> None:

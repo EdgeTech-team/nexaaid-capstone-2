@@ -6,7 +6,7 @@ sent (delivery_items.quantity), received_quantity is what the barangay
 counted. A line that differs needs a reason: "Over" when more arrived;
 "Short", "Damaged" or "Wrong item" when fewer arrived; none when equal.
 
-Business rule (services/fulfillment.py): a confirmed line counts as
+Business rule (services/deliveries/fulfillment.py): a confirmed line counts as
 delivered = min(received_quantity, expected_quantity). Receipts saved
 before this migration have no rows here and keep the sent quantity.
 Nothing is backfilled. Additive only; downgrade drops the table.

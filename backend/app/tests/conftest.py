@@ -26,19 +26,19 @@ from sqlalchemy.pool import StaticPool
 from fastapi.testclient import TestClient
 
 from main import app
-from core.database import Base, get_db
-from core.auth import (
+from core.config.database import Base, get_db
+from core.security.auth import (
     clear_failed_logins,
     get_current_user,
     get_current_user_optional,
     pwd_context,
 )
 
-from models.report import DisasterType, Barangay, Sitio, DisasterReport
-from models.city_model import City
-from models.user_rbac_model import User
-from models.role_model import Role
-from models.organization_model import Organization
+from models.reports.report import DisasterType, Barangay, Sitio, DisasterReport
+from models.locations.city_model import City
+from models.accounts.user_rbac_model import User
+from models.accounts.role_model import Role
+from models.accounts.organization_model import Organization
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +89,7 @@ def seed(db_session):
 
     Role names here ("Reporter", "Admin") are arbitrary test labels —
     they're NOT the same thing as the require_role("citizen"/"admin")
-    strings used in api/v1/reports.py. Those two systems aren't wired
+    strings used in api/v1/reports/reports.py. Those two systems aren't wired
     together yet (see the open item about real RBAC role names).
     """
     org = Organization(
@@ -149,7 +149,7 @@ def seed(db_session):
 
 class FakeRole:
     """Mirrors the real Role model's shape enough for auth checks:
-    core/auth.py does `user.role.role_name`, not a flat string."""
+    core/security/auth.py does `user.role.role_name`, not a flat string."""
     def __init__(self, role_name: str):
         self.role_name = role_name
 
@@ -251,7 +251,7 @@ def unit_client(db_session, seed):
 # ---------------------------------------------------------------------------
 # Uploaded files go to a temp folder in every test, never backend/app/var/.
 # ---------------------------------------------------------------------------
-from core.storage import LocalStorage, set_storage  # noqa: E402
+from core.uploads.storage import LocalStorage, set_storage  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -272,7 +272,7 @@ def _fresh_login_counts():
 def _fresh_address_search():
     """F-19: the address-search cache and the count of calls to Photon are
     kept in memory; every test starts from zero."""
-    from api.v1 import donation_routes
+    from api.v1.donations import donation_routes
     donation_routes._GEO_CACHE.clear()
     donation_routes._geo_calls.clear()
     yield
@@ -290,16 +290,16 @@ def sent_emails(request, monkeypatch):
         sent.append({"to": to, "subject": subject, "body": body})
         return True
 
-    monkeypatch.setattr("core.email.send_email", fake_send_email)
-    monkeypatch.setattr("core.email.email_configured", lambda: True)
+    monkeypatch.setattr("core.notifications.email.send_email", fake_send_email)
+    monkeypatch.setattr("core.notifications.email.email_configured", lambda: True)
     return sent 
 
 
 @pytest.fixture(autouse=True)
 def _no_push(monkeypatch):
-    """Android pushes (core/push.py) stay off in tests, even when .env names
+    """Android pushes (core/notifications/push.py) stay off in tests, even when .env names
     a Firebase service account. test_push.py turns them on with a fake one."""
-    from core import push
+    from core.notifications import push
     monkeypatch.setattr(push, "credentials", lambda: None)
 
 
@@ -308,7 +308,7 @@ def _no_geocoder(monkeypatch):
     """The Door to Door area check reverse geocodes pins with Photon. Tests
     run offline, so only the landmark / address text decides unless a test
     says otherwise."""
-    import api.v1.donation_routes as routes
+    import api.v1.donations.donation_routes as routes
 
     def offline(lat, lng):
         raise ConnectionError("no network in tests")

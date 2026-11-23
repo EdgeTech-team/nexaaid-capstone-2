@@ -26,12 +26,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import func, text  # noqa: E402
 
-from core.audit import log_action  # noqa: E402
-from core.auth import has_role  # noqa: E402
-from core.priority_engine import VALID_LEVELS, apply_priority, compute_priority  # noqa: E402
-from models.report import DisasterReport  # noqa: E402
-from services.fulfillment import progress, recalculate, status_for  # noqa: E402
-from models.user_rbac_model import User  # noqa: E402
+from core.security.audit import log_action  # noqa: E402
+from core.security.auth import has_role  # noqa: E402
+from core.priority_ai.priority_engine import VALID_LEVELS, apply_priority, compute_priority  # noqa: E402
+from models.reports.report import DisasterReport  # noqa: E402
+from services.deliveries.fulfillment import progress, recalculate, status_for  # noqa: E402
+from models.accounts.user_rbac_model import User  # noqa: E402
 
 import main  # noqa: E402,F401  (registers every model)
 
@@ -114,7 +114,7 @@ def main_cli(argv=None) -> int:
     parser.add_argument("--apply", action="store_true", help="write the fixes (asks first)")
     parser.add_argument("--as-user", help="Administrator email recorded in the audit log")
     args = parser.parse_args(argv)
-    from core.database import SessionLocal
+    from core.config.database import SessionLocal
     db = SessionLocal()
     try:
         return run(db, apply=args.apply, as_user=args.as_user)

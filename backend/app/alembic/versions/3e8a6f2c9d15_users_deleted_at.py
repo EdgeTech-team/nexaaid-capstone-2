@@ -5,7 +5,7 @@ A deleted account's email (and username) must be free to register again.
 A real DELETE is impossible once the account has reports, deliveries,
 receipts or logistics requests (those foreign keys are RESTRICT), and those
 records must stay for transparency. So DELETE /admin/users/{id} anonymizes
-the row instead and stamps deleted_at (services/accounts.py).
+the row instead and stamps deleted_at (services/accounts/accounts.py).
 
 Additive and nullable: existing rows and every existing query are
 unaffected. Safe to re-run.

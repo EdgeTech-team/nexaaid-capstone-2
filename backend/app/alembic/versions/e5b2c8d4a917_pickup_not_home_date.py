@@ -2,7 +2,7 @@
 
 physical_donations.pickup_not_home_date: the date CSWS came for a Door to
 Door pickup and nobody was home. The pickup planner
-(services/pickup_planner.py) then moves that stop to the donor's next
+(services/pickup/pickup_planner.py) then moves that stop to the donor's next
 allowed day after this date. NULL = never missed (every existing row).
 
 Additive, nullable, no default, no constraint: nothing that reads

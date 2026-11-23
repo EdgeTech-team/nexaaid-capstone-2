@@ -61,8 +61,8 @@ def csws_headers(client) -> dict:
     cached = getattr(client, "_csws_headers_for_receipts", None)
     if cached is not None:
         return cached
-    # Imported here: tests/test_role_flows.py imports this module.
-    from tests.test_role_flows import ACCOUNTS, PASSWORD
+    # Imported here: tests/general/test_role_flows.py imports this module.
+    from tests.general.test_role_flows import ACCOUNTS, PASSWORD
     r = client.post("/token", data={"username": ACCOUNTS["csws"][0], "password": PASSWORD})
     assert r.status_code == 200, r.text
     headers = {"Authorization": f"Bearer {r.json()['access_token']}"}

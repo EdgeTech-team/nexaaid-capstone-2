@@ -10,7 +10,7 @@
   models rewritten to match (User: user_id/password_hash, normalized Role
   via role_id, not an enum) 
 - Alembic baselined safely (schema-drop near-miss caught before running)
-- core/auth.py: JWT login, password hashing, require_role() dependency
+- core/security/auth.py: JWT login, password hashing, require_role() dependency
 - /health, /health/secure, throwaway /token all tested working end-to-end
 - Test admin: testadmin@gmail.com / testpass123 (role: admin) — usable by
   anyone needing a logged-in user before real registration exists
@@ -37,7 +37,7 @@ number); CSWS can cancel for them, and can **Reopen** an expired one when
 the donor arrives late (UC-CM1 alt 2a). Nothing is deleted: the row keeps
 `closed_at`, `close_reason`, `closed_by_user_id` (NULL = the system).
 Received goods and inventory are never touched.
-- Rules: `services/donation_expiry.py`. Endpoints: `api/v1/donation_lifecycle_routes.py`
+- Rules: `services/donations/donation_expiry.py`. Endpoints: `api/v1/donations/donation_lifecycle_routes.py`
   (`GET /donations/expiry-rules`, `POST /donations/entries/{ref}/cancel`,
   `/reinstate`, `POST /donations/expiry/run`).
 - No scheduler needed: pending lists and dashboards run the check when they
@@ -61,7 +61,7 @@ report and one barangay, so stock per report, the barangay's own receipt
 Prepare (stock taken all-or-nothing) → Start → Arrived at each stop →
 barangay confirms (one tap for all of theirs) → Completed automatically.
 Undo is allowed only while still preparing (stock goes back).
-No route optimisation (Limitation 6). Endpoints: `api/v1/trips.py`.
+No route optimisation (Limitation 6). Endpoints: `api/v1/deliveries/trips.py`.
 DRRMO transport requests are still per delivery; per-trip requests are a
 later step (would make `logistics_requests.delivery_id` nullable).
 
@@ -79,7 +79,7 @@ later step (would make `logistics_requests.delivery_id` nullable).
   `/donations/records` hides closed entries unless `status=` or
   `include_closed=true`. Run `test_donation_*`.
 - **Mariquit** (deliveries 3.10): `create_delivery` stock check moved to
-  `services/delivery_stock.py` (same 409, clearer message);
+  `services/deliveries/delivery_stock.py` (same 409, clearer message);
   `advance_delivery` logic moved into `move_to_next_status()` (trips reuse it);
   `_receive_line` explains how to reopen an expired donation. Run
   `test_deliveries.py`, `test_delivery_lines.py`, `test_delivery_trips.py`.
@@ -90,7 +90,7 @@ later step (would make `logistics_requests.delivery_id` nullable).
 
 **Test before merging:** `pytest` (new: `test_donation_expiry.py`,
 `test_delivery_trips.py`), `TEST_POSTGRES_URL=... pytest
-tests/test_models_match_migrations.py`, then `flutter analyze` (could not be
+tests/general/test_models_match_migrations.py`, then `flutter analyze` (could not be
 run in my environment). Migrations go to Neon only after review.
 
 ---
@@ -150,14 +150,14 @@ were lost when the list refreshed).
 delivery).
 
 **Who should check what:**
-- **Hoyohoy** (donations): `schemas/physical_donation_schema.py` (pickup
+- **Hoyohoy** (donations): `schemas/donations/physical_donation_schema.py` (pickup
   days rules), `donation_routes.py` (pickup days in every view, Disaster Unit
   may read `/donations/pickups`).
 - **Mariquit** (logistics/deliveries): `logistics_router.py`,
   `drrmo_router.request_rows` (pickup runs), `delivery_problems.py` (the
   Disaster Unit cancels only its own pickup runs).
-- **Fernandez** (UI): `ui/pickup_days.dart`, `ui/pickup_map.dart`,
-  `ui/logistics_cards.dart`, `ui/qr_save.dart`.
+- **Fernandez** (UI): `features/pickup/pickup_days.dart`, `features/pickup/pickup_map.dart`,
+  `features/deliveries/logistics_cards.dart`, `features/donations/qr_save.dart`.
 
 **Tests:** `pytest` (new: `test_pickup_days_and_runs.py`,
 `test_donation_notice_order.py`), `flutter test test/pickup_days_test.dart`.
@@ -200,7 +200,7 @@ Postgres with the same check as Neon.
   ("Registrations to review").
 - Tapping a notification moves to the page that already exists (the tab in
   the bottom menu, on the right view) instead of opening a second copy:
-  `ui/home_nav.dart`. New report -> Admin Validate (Pending, the report
+  `features/home/home_nav.dart`. New report -> Admin Validate (Pending, the report
   outlined first); new organization / donor -> Accounts > Registrations;
   donations -> Receive / Acknowledge / donor Dashboard; deliveries ->
   Deliveries / Incoming aid; logistics -> DRRMO Logistics. Admin and Main
@@ -249,9 +249,9 @@ the username login commits.
   until an admin approves it), and admin-created internal staff accounts
   (CSWS, CMO, DRRMO, Barangay Rep) — all built on Castillo's
   password-hashing/`require_role()` foundation
-- New: `api/v1/auth_router.py` (registration endpoints), `api/v1/admin_router.py`
-  (admin-created accounts), `schemas/organization_schema.py`, `schemas/user_schema.py`
-- Modified: `models/organization_model.py`, `models/user_rbac_model.py` to
+- New: `api/v1/accounts/auth_router.py` (registration endpoints), `api/v1/accounts/admin_router.py`
+  (admin-created accounts), `schemas/accounts/organization_schema.py`, `schemas/accounts/user_schema.py`
+- Modified: `models/accounts/organization_model.py`, `models/accounts/user_rbac_model.py` to
   support the new registration fields
 - Removed the old `api/v1/router.py` — routes now split across the new
   router files, so double-check everything is re-wired before merging
@@ -259,7 +259,7 @@ the username login commits.
   password, missing `SECRET_KEY`) and confirmed registration/RBAC running
   end-to-end (200 OK)
 
-**Note for the team:** touched `models/user_rbac_model.py`, which Ivan's
+**Note for the team:** touched `models/accounts/user_rbac_model.py`, which Ivan's
 dashboard/report work also modified — diff this file carefully before merging.
 
 ---
@@ -286,7 +286,7 @@ dashboard/report work also modified — diff this file carefully before merging.
   status/percentage/items alongside each report for staff/admin/barangay
   official roles.
 - **3.11 AI-Assisted Priority Level Assignment**: rule-based scoring
-  (core/priority_engine.py) triggered on report validation — factors in
+  (core/priority_ai/priority_engine.py) triggered on report validation — factors in
   affected_families, estimated_quantity, disaster type severity, and
   current fulfillment status. Handles the manuscript's alt flows:
   insufficient data → "Needs Review", missing fulfillment record →
@@ -300,7 +300,7 @@ dashboard/report work also modified — diff this file carefully before merging.
   Neon DB — Typhoon/Fire/Earthquake severities in priority_engine.py's
   DISASTER_SEVERITY map are unreachable until whoever owns reference
   tables actually seeds those rows.
-- Found a real mismatch: models/report.py's DisasterType stub maps the
+- Found a real mismatch: models/reports/report.py's DisasterType stub maps the
   column as `name`, but the actual Postgres column is `type_name` — hasn't
   broken anything yet since nothing reads it, but will the moment code
   (like priority_engine.py) starts using report.disaster_type.name.
@@ -319,7 +319,7 @@ dashboard/report work also modified — diff this file carefully before merging.
   as a safety net — if Hoyohoy/others build canonical models for these
   tables, swap to their import instead of mine, same way I did for
   DisasterReport)
-- Reused real `DisasterReport` model from `models/report.py` — did NOT
+- Reused real `DisasterReport` model from `models/reports/report.py` — did NOT
   duplicate it
 - Protected with `require_role("admin", "csws_staff", "barangay_official")`
   — matches the confirmed role strings used in reports.py
@@ -353,13 +353,13 @@ dashboard/report work also modified — diff this file carefully before merging.
   toggle, `AppCard`, `StatCard`, `StatusChip`, `PriorityChip`,
   `FulfillmentBar`, `StatusTimeline`, skeletons, `EmptyView`, `ErrorView`).
   Rules: `docs/design/DESIGN_SYSTEM.md`.
-- **Everyone's screens restyled for free:** `ui/widgets.dart` now draws the
+- **Everyone's screens restyled for free:** `shared/widgets/widgets.dart` now draws the
   old `Badge2`, `StatTile`, `Progress`, `EmptyState`, `PageHeader` and
   `Loader` with the new components, and re-exports the design system.
   No screen code changed.
 - **App shell:** new app bar, bottom bar on phones and side rail on
   tablets/Chrome, Appearance setting (System / Light / Dark) in Profile,
-  `_shellActions` slot in `ui/home.dart` for the notification bell.
+  `_shellActions` slot in `features/home/home.dart` for the notification bell.
 - **Component gallery:** Profile > Developer tools > Design system gallery,
   with dark-mode and 100/130/200% text switches.
 - **Landing page (Item 8)** in `ui/landing/`: shown when signed out. Hero
@@ -403,7 +403,7 @@ then Module 8 delivery screens.
 
 **Disaster report form**
 - Every disaster type fills in its needs by itself, "Other" too
-  (`services/need_templates.py`). The "Use suggested" button is gone;
+  (`services/reports/need_templates.py`). The "Use suggested" button is gone;
   "Add need" is now below the list.
 - "Other" last + "What kind of disaster?": Ivan's PR #102
   (`disaster_reports.disaster_type_other`), merged into `copy-develop`
