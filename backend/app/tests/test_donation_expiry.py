@@ -149,7 +149,8 @@ def test_reminder_is_sent_once_before_the_deadline(api):
     assert _notes(DONOR, "donation_expiring_soon") == 1
     assert _rows(e["batch_reference"])[0].status == "Pending"
     dash = ok(client.get("/dashboard/csws-main", headers=t["csws"]))
-    assert dash["due_soon_donations"] == 1 and dash["expired_donations"] == 0
+    # Nov 23: still waiting to be received, not due today yet, not expired.
+    assert dash["waiting"] == 1 and dash["due_today"] == 0 and dash["expired_donations"] == 0
 
 
 def test_door_to_door_expires_after_the_pickup_window(api):

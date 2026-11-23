@@ -110,6 +110,8 @@ def test_donation_records_filter_by_disaster_type(api):
         assert {e["batch_reference"] for e in old} == flood_refs
         paged, totals = _pages(client, t[who], "/donations/records", 3,
                                include_closed="true", disaster_type_id=FLOOD)
+        for e in paged:   # Nov 24: pages also name confirmed deliveries' receipts
+            e.pop("receipt_deliveries", None)
         assert paged == old and totals == {7}
         assert ok(client.get("/donations/records", headers=t[who],
                              params={"disaster_type_id": UNKNOWN, "limit": 20})) == []

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from api.v1.health_routes import router as health_router
 from api.v1.dashboard_routes import router as dashboard_router
+from api.v1.csws_overview_routes import router as csws_overview_router
 from api.v1.reports import router as report_router
 from api.v1.deliveries import router as delivery_router
 from api.v1.donation_routes import router as donation_router
@@ -125,6 +126,7 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(dashboard_router)
+app.include_router(csws_overview_router)   # CSWS dashboard detail pages (Nov 23)
 app.include_router(report_router)
 app.include_router(delivery_router)
 app.include_router(trips_router)

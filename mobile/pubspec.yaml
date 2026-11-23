@@ -31,6 +31,8 @@ dependencies:
   firebase_core: ^5.1.0
   firebase_messaging: ^17.0.1
   web_socket_channel: ^3.0.3
+  # CSWS dashboard (Nov 23): single-color item icons drawn from SVG files.
+  flutter_svg: ^2.4.0
 
 dev_dependencies:
   flutter_test:
@@ -48,6 +50,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+    - assets/item_icons/
 
 flutter_launcher_icons:
   android: true

@@ -11,7 +11,6 @@ import 'paginated_list.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'widgets.dart';
 import 'item_amounts.dart';
-import 'needs_action.dart' show RoleNeedsActionCard;
 
 // ---------------------------------------------------------------------------
 // CMO Representative (UC-C1 / UC-C2, City Confirmation Module).
@@ -524,7 +523,6 @@ class _CmoScreenState extends State<CmoScreen>
               'Acknowledge Donations',
               subtitle: 'Review donations received by CSWS.',
             ),
-            const RoleNeedsActionCard(),
             StatGrid([
               StatTile(
                 'Needs review',

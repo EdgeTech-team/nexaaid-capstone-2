@@ -375,16 +375,6 @@ class _UsersScreenState extends State<UsersScreen> {
   }
 }
 
-/// Why the Administrator deletes a registration (required, emailed).
-const deleteAccountReasons = [
-  'Fake ID',
-  'Invalid document',
-  'ID does not match the person',
-  'Unreadable ID or document',
-  'Duplicate account',
-  'Other',
-];
-
 /// UC-A2 + Oct 11 notes (Jenises): new registrations of individual donors
 /// and organizations in one list. Accounts are active as soon as they
 /// register; the Administrator reviews each registration here (Reviewed /
@@ -563,51 +553,6 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
     if (r.ok && _focus != null && i['id'] == _focus!['id']) _loadFocus();
   }
 
-  /// Registration review: a fake ID or invalid document. The account is
-  /// removed in one step (it signed in right after registering), with a
-  /// required reason that is kept in the audit log and emailed to them.
-  Future<void> _deleteAccount(Map<String, dynamic> i, int accountId) async {
-    final v = await formDialog(
-      context,
-      title: 'Delete ${i['name']}?',
-      message:
-          'The account is removed and can no longer sign in. Its records '
-          'stay, without personal data. The reason is emailed to them. This '
-          'cannot be undone.',
-      fields: const [
-        DialogField(
-          'reason',
-          'Reason',
-          options: deleteAccountReasons,
-        ),
-        DialogField(
-          'details',
-          'Details (optional)',
-          required: false,
-          multiline: true,
-          hint: 'e.g. The ID photo does not match the name.',
-        ),
-      ],
-      confirm: 'Delete account',
-    );
-    if (v == null || !mounted) return;
-    final details = (v['details'] ?? '').trim();
-    final reason = details.isEmpty ? v['reason']! : '${v['reason']}: $details';
-    final r = await act(
-      context,
-      () => api.post(
-        '/admin/users/$accountId/delete',
-        body: {'reason': reason},
-      ),
-      success: '${i['name']} deleted. The reason was emailed.',
-    );
-    if (!mounted || !r.ok) return;
-    if (_focus != null && i['id'] == _focus!['id']) {
-      setState(() => _focus = null);
-    }
-    _list.refresh(fetch: _fetch());
-  }
-
   Widget _card(Map<String, dynamic> i, {bool highlighted = false}) => Padding(
     padding: const EdgeInsets.only(bottom: Space.sm),
     child: _RegistrationCard(
@@ -617,7 +562,6 @@ class _RegistrationsScreenState extends State<RegistrationsScreen> {
       onReview: (v) => _setReviewed(i, v),
       onVerify: () => _verifyOrg(i),
       onDeactivate: () => _deactivateOrg(i),
-      onDelete: (accountId) => _deleteAccount(i, accountId),
     ),
   );
 
@@ -728,15 +672,12 @@ class _RegistrationCard extends StatelessWidget {
   final VoidCallback? onVerify;
   final VoidCallback? onDeactivate;
 
-  /// Delete the account (fake ID / invalid document), with its user id.
-  final void Function(int accountId)? onDelete;
   const _RegistrationCard({
     required this.item,
     required this.busy,
     required this.onReview,
     this.onVerify,
     this.onDeactivate,
-    this.onDelete,
     this.highlighted = false,
   });
 
@@ -910,14 +851,8 @@ class _RegistrationCard extends StatelessWidget {
                   icon: const Icon(Icons.block, size: 18),
                   label: const Text('Deactivate'),
                 ),
-              if (accountId != null && onDelete != null)
-                TextButton.icon(
-                  key: const ValueKey('registration-delete'),
-                  onPressed: () => onDelete!(accountId),
-                  style: TextButton.styleFrom(foregroundColor: cs.error),
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  label: const Text('Delete account'),
-                ),
+              // Defense fixes (Nov 23): no Delete here. An account is
+              // deleted from Accounts > Deactivated (account detail).
             ],
           ),
         ],

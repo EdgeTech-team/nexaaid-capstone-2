@@ -31,7 +31,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from models.delivery import Delivery, DeliveryAllocation, DeliveryItem
+from models.delivery import Delivery, DeliveryAllocation, DeliveryItem, Receipt
 from models.physical_donation_model import PhysicalDonation
 from models.received_goods_model import ReceivedGoods
 
@@ -281,3 +281,33 @@ def add_delivery_progress(db: Session, entries: list) -> None:
             e["lifecycle_status"] = STEP[min(ranks)]
         if notes:
             e["delivery_note"] = "; ".join(notes) + ". The rest goes on a later delivery."
+
+
+def add_receipts(db: Session, entries: list) -> list:
+    """Staff and barangay records (Nov 24): the deliveries the barangay
+    confirmed that carried any of each entry's goods, newest first, so the
+    app can show "View receipt" for each. Adds receipt_deliveries:
+    [{"delivery_id", "received_at"}]. Returns the same list."""
+    ids = [i["donation_id"] for e in entries for i in e.get("items", [])]
+    found: dict = defaultdict(dict)   # donation_id -> {delivery_id: received_at}
+    if ids:
+        rows = (
+            db.query(DeliveryAllocation.donation_id, Delivery.delivery_id, Receipt.received_at)
+            .join(DeliveryItem, DeliveryItem.delivery_item_id == DeliveryAllocation.delivery_item_id)
+            .join(Delivery, Delivery.delivery_id == DeliveryItem.delivery_id)
+            .join(Receipt, Receipt.delivery_id == Delivery.delivery_id)
+            .filter(DeliveryAllocation.donation_id.in_(ids), Delivery.status == "Confirmed",
+                    Delivery.deleted_at.is_(None))
+            .distinct().all()
+        )
+        for donation_id, delivery_id, at in rows:
+            found[donation_id][delivery_id] = at
+    for e in entries:
+        merged: dict = {}
+        for i in e.get("items", []):
+            merged.update(found.get(i["donation_id"], {}))
+        e["receipt_deliveries"] = [
+            {"delivery_id": d, "received_at": at.isoformat() if at else None}
+            for d, at in sorted(merged.items(), key=lambda kv: kv[0], reverse=True)
+        ]
+    return entries

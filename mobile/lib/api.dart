@@ -322,8 +322,13 @@ class Api extends ChangeNotifier {
     }
   }
 
-  Future<ApiResult> get(String path, {Map<String, String>? query}) =>
-      send('GET', path, query: query);
+  /// [timeout]: longer for a summary the server works out from many tables
+  /// (the CSWS dashboard); the default suits everything else.
+  Future<ApiResult> get(
+    String path, {
+    Map<String, String>? query,
+    Duration timeout = const Duration(seconds: 20),
+  }) => send('GET', path, query: query, timeout: timeout);
 
   /// [timeout]: longer for a request that saves many rows at once (e.g.
   /// POST /reports/batch, one report per barangay).

@@ -120,10 +120,13 @@ def test_qr_inventory_stock_and_delivery_history(api):
         "CONFIRM RECEIPT", "ACKNOWLEDGE AID"]
     assert hist["acknowledged"] and all(h["at"] for h in hist["history"])
 
+    # Nov 23: four cards, inventory and the recent activity; no "total
+    # distributed" and no list of donations any more.
     main = ok(client.get("/dashboard/csws-main", headers=t["csws"]))
-    assert main["total_quantity_received"] == 55 and main["total_quantity_distributed"] == 40
-    assert main["inventory_summary"] == [{"item": "Rice", "unit": "kg", "quantity": 15}]
+    assert [(r["item_name"], r["unit"], r["quantity"]) for r in main["inventory"]["rows"]]         == [("Rice", "kg", 15)]
+    assert main["entries_received"] == 1 and main["deliveries_made"] == 1
     assert main["recent_activity"]
+    assert "total_quantity_distributed" not in main and "donation_entries" not in main
 
     b = ok(client.get("/dashboard/barangay", headers=t["brgy"]))
     assert b["acknowledged"] == 1 and b["reports"][0]["total_items_delivered"] == 40

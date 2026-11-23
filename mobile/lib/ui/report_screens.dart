@@ -7,7 +7,6 @@ import '../api.dart';
 import 'donation_info.dart' show NewReportDonationInfo;
 import 'form_draft.dart';
 import 'input_formatters.dart';
-import 'records_screens.dart' show SupportRecordsScreen;
 import 'paged_reports.dart';
 import 'report_filters.dart';
 import 'report_summary_card.dart';
@@ -1816,6 +1815,11 @@ class _NewReportScreenState extends State<NewReportScreen> {
   }
 }
 
+/// ReportViewMemory keys of Reports > Validated and Reports > Status, so the
+/// Disaster Unit's dashboard cards can open them on the right filters.
+const validatedListKey = 'validated';
+const monitoringListKey = 'monitoring';
+
 // ---------------------------------------------------------------------------
 // Appendix H 2.4 View validated reports (every role), with 3.3
 // priority-based filtering for the roles that have it.
@@ -1837,7 +1841,7 @@ class ValidatedReportsScreen extends StatefulWidget {
 
 class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
   // Kept while the app is open (UAT Nov 2026, option A).
-  static const _list = 'validated';
+  static const _list = validatedListKey;
   late ReportView view = ReportViewMemory.read(_list, const ReportView());
 
   void _show(ReportView v) {
@@ -1856,9 +1860,10 @@ class _ValidatedReportsScreenState extends State<ValidatedReportsScreen> {
         'priority_level': ?priority,
         'fulfillment': ?view.fulfillment,
         'sort': reportSortParam(view.sort),
+        ...view.placeQuery,
       },
       countsPath: '/reports/validated/counts',
-      countsQuery: {'priority_level': ?priority},
+      countsQuery: {'priority_level': ?priority, ...view.placeQuery},
       header: (counts) => [
         if (widget.header)
           PageHeader(
@@ -1909,9 +1914,35 @@ class _ReportsHubState extends State<ReportsHub>
   @override
   String get homeTab => 'Reports';
 
+  /// Bumped to open Validated again on the filters a dashboard card set.
+  int _validated = 0;
+
   @override
   void applyHomeTarget(HomeTarget target) {
     if (target.view == 'validated') monitor = false;
+    // Disaster Unit dashboard: validated reports still in need, the least
+    // fulfilled first (other filters cleared so none hides a report).
+    if (target.view == 'underserved') {
+      monitor = false;
+      final v = ReportViewMemory.read(validatedListKey, const ReportView());
+      ReportViewMemory.write(
+        validatedListKey,
+        v.withFilters().withSort(ReportSort.leastFulfilled),
+      );
+      _validated++;
+      return;
+    }
+    // Disaster Unit dashboard: only its own reports of one status
+    // ('mine:Pending', 'mine:Rejected').
+    final view = target.view ?? '';
+    if (view.startsWith('mine:')) {
+      final v = ReportViewMemory.read(monitoringListKey, const ReportView());
+      ReportViewMemory.write(
+        monitoringListKey,
+        v.withFilters().withOnlyMine(true),
+      );
+      target = HomeTarget(target.tab, view: view.substring(5), id: target.id);
+    }
     if (target.view == 'status' || reportStatuses.contains(target.view)) {
       monitor = true;
       _focusStatus = reportStatuses.contains(target.view) ? target.view : null;
@@ -1965,7 +1996,10 @@ class _ReportsHubState extends State<ReportsHub>
                     focusStatus: _focusStatus,
                     focusId: _focusId,
                   )
-                : const ValidatedReportsScreen(filter: true),
+                : ValidatedReportsScreen(
+                    key: ValueKey('validated-$_validated'),
+                    filter: true,
+                  ),
           ),
         ),
       ],
@@ -1990,7 +2024,7 @@ class MonitoringScreen extends StatefulWidget {
 
 class _MonitoringScreenState extends State<MonitoringScreen> {
   // Kept while the app is open (UAT Nov 2026, option A).
-  static const _list = 'monitoring';
+  static const _list = monitoringListKey;
   late ReportView view = _initialView();
   int _loads = 0;
 
@@ -2093,6 +2127,7 @@ class _MonitoringScreenState extends State<MonitoringScreen> {
       'status': ?view.status,
       'priority_level': ?view.priority,
       if (view.onlyMine) 'mine': 'true',
+      ...view.placeQuery,
     };
     // NF-003: status, priority, fulfillment, "only mine" and the sort are
     // applied by the server, 20 reports at a time. With "Only my reports",
@@ -2297,10 +2332,11 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
               'priority_level': ?view.priority,
               'fulfillment': ?view.fulfillment,
               'sort': reportSortParam(view.sort),
+              ...view.placeQuery,
             }
-          : {'status': status, 'sort': 'newest'},
+          : {'status': status, 'sort': 'newest', ...view.placeQuery},
       countsPath: validated ? '/reports/validated/counts' : null,
-      countsQuery: {'priority_level': ?view.priority},
+      countsQuery: {'priority_level': ?view.priority, ...view.placeQuery},
       reloadKey: _loads,
       // The report a notification pointed at comes first, outlined.
       focusId: _highlight,
@@ -2323,7 +2359,11 @@ class _AdminReportsScreenState extends State<AdminReportsScreen>
       ],
       empty: ReportListEmpty(
         'No ${status.toLowerCase()} reports.',
-        filtered: view.priority != null || view.fulfillment != null,
+        filtered:
+            view.priority != null ||
+            view.fulfillment != null ||
+            view.barangayId != null ||
+            view.disasterTypeId != null,
         onClear: () => _show(view.withFilters(status: status)),
       ),
       // J7 / NF-012: an SMS report shows the SMS as received beside it.
@@ -2389,207 +2429,166 @@ class DashboardScreen extends StatelessWidget {
     return Loader(
       load: [
         () => api.get('/dashboard/summary'),
-        () => api.get('/dashboard/reports-breakdown'),
-        () => api.get('/dashboard/fulfillment'),
-        () => api.get('/dashboard/logistics'),
+        // Validated reports per fulfillment status (Not Started,
+        // In Progress, Fulfilled), for "Still need help".
+        () => api.get('/reports/validated/counts'),
+        // The unit's own reports, for its coordination with the Admin.
+        () => api.get('/reports/mine'),
+        // "Most in need": validated reports, open first, then priority
+        // (Critical first), then least fulfilled (report_paging "urgent").
+        () => api.get(
+          '/reports/validated',
+          query: {'offset': '0', 'limit': '5', 'sort': 'urgent'},
+        ),
+        api.lookupsResult,
       ],
       builder: (context, d) {
-        final s = d[0] as Map,
-            b = d[1] as Map,
-            f = d[2] as Map,
-            l = d[3] as Map;
-        Widget bars(
-          String title,
-          List rows,
-          String key,
-          Color Function(String?) tone,
-        ) {
-          final total = rows.fold<int>(0, (a, r) => a + (r['count'] as int));
-          return Card(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 10),
-                  if (rows.isEmpty) const Text('No data yet'),
-                  for (final r in rows)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 100,
-                            child: Text('${r[key] ?? 'None'}'),
-                          ),
-                          Expanded(
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: LinearProgressIndicator(
-                                value: total == 0 ? 0 : r['count'] / total,
-                                minHeight: 10,
-                                color: tone(r[key] as String?),
-                                backgroundColor: Theme.of(context)
-                                    .colorScheme
-                                    .surfaceContainerHighest,
-                              ),
-                            ),
-                          ),
-                          SizedBox(
-                            width: 36,
-                            child: Text(
-                              '${r['count']}',
-                              textAlign: TextAlign.right,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          );
-        }
+        final s = d[0] as Map, f = d[1] as Map;
+        final mine = (d[2] as List).cast<Map>();
+        final names = Names(Map<String, dynamic>.from(d[4] as Map));
+        // Fulfilled reports sort last; drop any that filled the 5 rows.
+        final mostInNeed = (d[3] as List)
+            .cast<Map>()
+            .where(
+              (r) =>
+                  (num.tryParse('${r['fulfillment_percentage']}') ?? 0) < 100,
+            )
+            .toList();
+        final waiting = mine.where((r) => r['status'] == 'Pending').length;
+        final toFix = mine.where((r) => r['status'] == 'Rejected').length;
+        int n(Object? v) => (v as num?)?.toInt() ?? 0;
+        final inNeed = n(f['Not Started']) + n(f['In Progress']);
 
-        // 9.3 (testing): the cards open what is behind the number.
-        void reportStatus() =>
-            HomeNav.go(context, const HomeTarget('Reports', view: 'status'));
-        void sheet(String title, List rows) => showModalBottomSheet<void>(
-          context: context,
-          showDragHandle: true,
-          builder: (_) => SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: bars(title, rows, 'status', statusTone),
-            ),
-          ),
-        );
+        void open(String view) =>
+            HomeNav.go(context, HomeTarget('Reports', view: view));
 
+        // Nov 24: the four cards of UC-CD2 needs monitoring, each opening
+        // the Reports list behind it. Physical goods, deliveries and
+        // logistics are the Main Office's and DRRMO's (manuscript scope
+        // boundary), so they are not here.
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            PageHeader(
-              '${api.role ?? 'System'} Dashboard',
-              subtitle: roleLine(),
-            ),
+            PageHeader('CSWS Disaster Unit Dashboard', subtitle: roleLine()),
             StatCardGrid([
               StatCard(
                 // Rejected and withdrawn reports are not counted (backend).
                 label: 'Disaster reports',
                 value: '${s['total_reports']}',
                 icon: Icons.report_outlined,
-                onTap: reportStatus,
+                note: 'Active and done',
+                onTap: () => open('status'),
               ),
               StatCard(
-                label: 'Physical donations',
-                value: '${s['total_donations']}',
+                label: 'Still need help',
+                value: '$inNeed',
                 icon: Icons.volunteer_activism_outlined,
+                color: inNeed > 0 ? AppColors.danger : AppColors.success,
+                note: 'Validated, not yet fulfilled',
+                onTap: () => open('underserved'),
               ),
               StatCard(
-                label: 'Deliveries',
-                value: '${s['total_deliveries']}',
-                icon: Icons.local_shipping_outlined,
-                // The Disaster Unit has no delivery list (Appendix H 8.5):
-                // show the deliveries by status.
-                onTap: () => sheet(
-                  'Deliveries by status',
-                  l['deliveries_by_status'] as List,
-                ),
+                label: 'Waiting for validation',
+                value: '$waiting',
+                icon: Icons.hourglass_top,
+                note: 'Your reports · can still edit',
+                onTap: () => open('mine:Pending'),
               ),
               StatCard(
-                label: 'Logistics requests',
-                value: '${s['total_logistics_requests']}',
-                icon: Icons.fire_truck_outlined,
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: const Text('Logistics requests')),
-                      body: const SupportRecordsScreen(),
-                    ),
-                  ),
-                ),
-              ),
-              StatCard(
-                label: 'Average fulfillment',
-                value:
-                    '${(f['average_fulfillment_percentage'] as num).toStringAsFixed(0)}%',
-                icon: Icons.pie_chart_outline,
-                color: AppColors.success,
-                onTap: reportStatus,
-              ),
-              StatCard(
-                label: 'Est. value of donations',
-                value: pesos(b['total_estimated_value']) ?? 'PHP 0',
-                icon: Icons.payments_outlined,
-              ),
-              // NF-008 (D6): organizations the Administrator verified.
-              StatCard(
-                label: 'Verified organizations',
-                value: '${s['verified_organizations'] ?? 0}',
-                icon: Icons.verified_outlined,
-                color: AppColors.success,
-                onTap: () => showModalBottomSheet<void>(
-                  context: context,
-                  showDragHandle: true,
-                  builder: (_) => SafeArea(
-                    child: ListView(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      children: [
-                        const Text(
-                          'Verified organizations',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        for (final n
-                            in (s['verified_organization_names'] as List? ??
-                                const []))
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.apartment_outlined),
-                            title: Text('$n'),
-                            trailing: const StatusChip(
-                              'Confirmed',
-                              label: 'Verified',
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+                label: 'Returned to correct',
+                value: '$toFix',
+                icon: Icons.assignment_return_outlined,
+                color: toFix > 0 ? AppColors.danger : null,
+                note: 'Your reports sent back',
+                onTap: () => open('mine:Rejected'),
               ),
             ]),
-            const SizedBox(height: 12),
-            bars(
-              'Reports by status',
-              b['by_status'] as List,
-              'status',
-              statusTone,
+            // UC-CD2: which barangays still need help, not just how many.
+            SectionHeader(
+              'Most in need',
+              subtitle: 'Highest priority, least fulfilled first',
+              action: inNeed > 0
+                  ? TextButton(
+                      onPressed: () => open('underserved'),
+                      child: Text('See all $inNeed'),
+                    )
+                  : null,
             ),
-            bars(
-              'Reports by priority',
-              b['by_priority'] as List,
-              'priority_level',
-              priorityTone,
-            ),
-            bars(
-              'Deliveries by status',
-              l['deliveries_by_status'] as List,
-              'status',
-              statusTone,
-            ),
-            bars(
-              'Logistics requests by status',
-              l['requests_by_status'] as List,
-              'status',
-              statusTone,
-            ),
+            if (mostInNeed.isEmpty)
+              AppCard(
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle_outline,
+                        color: AppColors.success),
+                    Gaps.h12,
+                    const Expanded(
+                      child: Text('All validated reports are fulfilled.'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              for (final r in mostInNeed)
+                _NeedRow(
+                  r,
+                  names,
+                  // Report Status > Validated, with this report first and
+                  // outlined (as a notification about it opens it).
+                  onTap: () => HomeNav.go(
+                    context,
+                    HomeTarget(
+                      'Reports',
+                      view: 'Validated',
+                      id: (r['report_id'] as num?)?.toInt(),
+                    ),
+                  ),
+                ),
           ],
         );
       },
+    );
+  }
+}
+
+/// One "Most in need" row: barangay and disaster, priority, fulfillment.
+class _NeedRow extends StatelessWidget {
+  final Map r;
+  final Names names;
+  final VoidCallback onTap;
+  const _NeedRow(this.r, this.names, {required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: Space.sm),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${names.of('barangays', r['barangay_id'])} · '
+                  '${disasterLabel(r, names)}',
+                  style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Gaps.h8,
+              PriorityChip(r['priority_level'] as String?, showIcon: false),
+            ],
+          ),
+          Gaps.v12,
+          FulfillmentBar(
+            delivered: r['total_items_delivered'] as num? ?? 0,
+            needed: r['total_items_needed'] as num? ?? 0,
+            percent: num.tryParse('${r['fulfillment_percentage']}'),
+          ),
+        ],
+      ),
     );
   }
 }

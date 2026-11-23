@@ -183,14 +183,13 @@ void main() {
     }, () => _server);
   });
 
-  testWidgets('Nov 22: Delete account opens without crashing and needs a '
-      'reason', (tester) async {
+  testWidgets('Defense fixes (Nov 23): no Delete account in Registrations', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(800, 3000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     Api.instance.token = 'test-token';
-    posted.clear();
-
     await http.runWithClient(() async {
       await tester.pumpWidget(
         MaterialApp(
@@ -201,25 +200,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Individual donors'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('registration-delete')).first);
-      await tester.pumpAndSettle();
-      // The dialog used to crash here (an empty value in the reason list).
-      expect(tester.takeException(), isNull);
-      expect(find.text('Delete Maria Santos?'), findsOneWidget);
-
-      final confirm = find.widgetWithText(FilledButton, 'Delete account');
-      await tester.tap(confirm);
-      await tester.pumpAndSettle();
-      expect(find.text('Choose a reason'), findsOneWidget);
-      expect(posted, isEmpty);
-
-      await tester.tap(find.text('Reason'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Fake ID').last);
-      await tester.pumpAndSettle();
-      await tester.tap(confirm);
-      await tester.pumpAndSettle();
-      expect(posted, ['/admin/users/7/delete {"reason":"Fake ID"}']);
+      // Deleting is only for a deactivated account (Accounts > account).
+      expect(find.byKey(const ValueKey('registration-delete')), findsNothing);
+      expect(find.text('Delete account'), findsNothing);
     }, () => _server);
   });
 

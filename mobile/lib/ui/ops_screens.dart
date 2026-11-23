@@ -10,7 +10,6 @@ import 'input_formatters.dart' show pesos;
 import 'trip_screens.dart';
 import 'widgets.dart';
 import 'logistics_cards.dart';
-import 'needs_action.dart';
 import 'paged_donation_entries.dart' show searchDebounce;
 import 'paginated_list.dart';
 import 'receipt_count_dialog.dart';
@@ -2502,7 +2501,7 @@ class _DrrmoScreenState extends State<DrrmoScreen>
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 PageHeader('DRRMO Logistics Support', subtitle: roleLine()),
-                const ResponseTimesCard(), // Phase 7
+                // Defense concerns (Nov 24): no response times for any role.
                 // 9.6 (testing): each card shows its requests below.
                 StatGrid([
                   tile(

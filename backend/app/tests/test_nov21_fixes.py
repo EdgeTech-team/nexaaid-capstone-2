@@ -280,8 +280,8 @@ def test_inventory_lists_only_items_in_stock(api):
         db.close()
     rows = ok(client.get("/donations/inventory", headers=t["csws"]))
     assert [(r["item_name"], r["quantity"]) for r in rows] == [("Soap", 12)]
-    summary = ok(client.get("/dashboard/csws-main", headers=t["csws"]))["inventory_summary"]
-    assert [(r["item"], r["quantity"]) for r in summary] == [("Soap", 12)]
+    summary = ok(client.get("/dashboard/csws-main", headers=t["csws"]))["inventory"]["rows"]
+    assert [(r["item_name"], r["quantity"]) for r in summary] == [("Soap", 12)]
 
 
 # ---------------------------------------------------------------------------
