@@ -262,6 +262,16 @@ def _temp_upload_storage(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_dashboard_cache():
+    """The CSWS dashboard caches its overview for a few seconds; tests
+    change data between calls, so it is off."""
+    from services import csws_overview
+    csws_overview.CACHE["on"] = False
+    csws_overview.clear_cache()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_login_counts():
     """F-02: failed sign-ins are counted in memory; every test starts from zero."""
     clear_failed_logins()

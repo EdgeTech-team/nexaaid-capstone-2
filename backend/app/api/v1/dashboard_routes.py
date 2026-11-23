@@ -124,10 +124,8 @@ def get_logistics_overview(
 # Dashboard). The four endpoints above stay as the shared summary.
 # ---------------------------------------------------------------------------
 from models.audit_log_model import AuditLog
-from models.received_goods_model import ReceivedGoods
 from models.inventory_model import Inventory
 from models.item_model import Item
-from models.delivery import DeliveryItem
 from models.user_rbac_model import User
 from models.role_model import Role
 from models.report import DisasterType, Barangay
@@ -163,70 +161,22 @@ def csws_main_dashboard(
     db: Session = Depends(get_db),
     user=Depends(require_role("csws_main_office", "admin")),
 ):
-    """Manuscript 7.1 / UC-CM3."""
-    from services.donation_expiry import effective_deadline, expire_overdue, now_utc
-    expire_overdue(db)  # overdue donations leave the pending count
-    donations = db.query(PhysicalDonation).order_by(PhysicalDonation.donation_id.desc()).all()
-    soon = now_utc().timestamp() + 3 * 86400
-    items = {i.item_id: i for i in db.query(Item).all()}
-    labels = _labels(db, {d.report_id for d in donations})
-    received_qty = db.query(func.coalesce(func.sum(ReceivedGoods.actual_quantity), 0)).scalar() or 0
-    # Goods of a cancelled delivery went back to stock, so they were not
-    # distributed (and must not be counted twice).
-    distributed = (
-        db.query(DeliveryItem.item_id, func.sum(DeliveryItem.quantity))
-        .join(delivery, delivery.delivery_id == DeliveryItem.delivery_id)
-        .filter(delivery.status != "Cancelled", delivery.deleted_at.is_(None))
-        .group_by(DeliveryItem.item_id).all()
-    )
-    # Only items really in stock: a row that went out on deliveries stays
-    # in the table at 0.
-    inventory = (
-        db.query(Inventory.item_id, func.sum(Inventory.quantity))
-        .group_by(Inventory.item_id)
-        .having(func.sum(Inventory.quantity) > 0).all()
-    )
-    unit = lambda i: items[i].unit_of_measure if i in items else ""
-    name = lambda i: items[i].item_name if i in items else f"Item #{i}"
-    return {
-        "pending_donations": sum(1 for d in donations if d.status == "Pending"),
-        # Donation expiry: items due within 3 days, and closed ones (never deleted).
-        "due_soon_donations": sum(
-            1 for d in donations
-            if d.status == "Pending" and (effective_deadline(d).timestamp() <= soon)),
-        "expired_donations": sum(1 for d in donations if d.status == "Expired"),
-        "cancelled_donations": sum(1 for d in donations if d.status == "Cancelled"),
-        "entries_received": sum(1 for d in donations if d.status in ("Received", "Confirmed")),
-        "total_quantity_received": int(received_qty),
-        "deliveries_made": db.query(func.count(delivery.delivery_id)).scalar() or 0,
-        "total_quantity_distributed": int(sum(q for _, q in distributed)),
-        "inventory_summary": [
-            {"item": name(i), "unit": unit(i), "quantity": int(q)} for i, q in inventory
-        ],
-        "distributed_summary": [
-            {"item": name(i), "unit": unit(i), "quantity": int(q)} for i, q in distributed
-        ],
-        "donation_entries": [
-            {
-                "donation_id": d.donation_id,
-                "qr_reference": d.qr_reference,
-                "item_name": name(d.item_id),
-                "unit": unit(d.item_id),
-                "packaging": d.packaging,
-                "contents": d.contents,   # a note (Nov 22)
-                "declared_quantity": d.quantity,
-                # G-002 (D8)
-                "amount_text": readable_amount(d, unit(d.item_id)),
-                "estimated_value": float(d.estimated_value) if d.estimated_value is not None else None,
-                "handover_method": d.handover_method,
-                "report_label": labels.get(d.report_id),
-                "status": d.status,
-            }
-            for d in donations[:20]
-        ],
-        "recent_activity": _recent_logs(
-            db, ["physical_donations", "deliveries", "logistics_requests"]),
-    }
+    """Manuscript 7.1 / UC-CM3, Nov 23 redesign: a coordination dashboard.
+    Only small numbers and capped previews (4 Needs-attention counts, the
+    top 3 Most urgent, the top 3 Delivery alerts, the top 6 inventory items
+    and the 3 Aid-operations counts); each detail page lists the rest
+    (api/v1/csws_overview_routes.py). No donation list, no activity log."""
+    from services.csws_overview import cached, overview
+    from services.donation_expiry import expire_overdue
+
+    def fresh():
+        # Overdue donations leave the pending counts; at most once a minute
+        # (each run touches every pending donation).
+        cached("expire_overdue", 60, lambda: expire_overdue(db))
+        return overview(db)
+
+    # Requests that arrive together share one answer, reused for 10 s.
+    return cached("overview", 10, fresh)
 
 
 @router.get("/barangay")
@@ -296,8 +246,11 @@ def admin_dashboard(
 ):
     """Manuscript 7.7 / UC-A4 / wireframe Fig. 53."""
     held = len(_held_donation_ids(db))
-    total_users = db.query(func.count(User.user_id)).scalar() or 0
-    active_users = db.query(func.count(User.user_id)).filter(User.is_active.is_(True)).scalar() or 0
+    # Defense fixes (Nov 23): deleted accounts are gone, so "Active users
+    # 66 / 74" counts only active and deactivated accounts.
+    kept = db.query(func.count(User.user_id)).filter(User.deleted_at.is_(None))
+    total_users = kept.scalar() or 0
+    active_users = kept.filter(User.is_active.is_(True)).scalar() or 0
     pending_orgs = db.query(func.count(Organization.organization_id)).filter(
         Organization.reviewed_at.is_(None)).scalar() or 0
     pending_donors = (

@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../api.dart' show ApiResult;
 import '../realtime.dart';
-import 'home_nav.dart';
 import 'widgets.dart';
 
 /// "45 min", "1 h 20 min", "2 days" for the response times.
@@ -100,97 +98,5 @@ class _ResponseTimesCardState extends State<ResponseTimesCard> {
   }
 }
 
-/// "Needs your action" on the CMO Representative's Acknowledge screen
-/// (GET /dashboard/needs-action): the received donations waiting for
-/// acknowledgement, as a count. With nothing to do it says "All caught up".
-/// Tapping the line opens the tab that lists them. Reloads by itself after
-/// an action or a live change. Nov 22: the CMO is the only role with it.
-class RoleNeedsActionCard extends StatefulWidget {
-  const RoleNeedsActionCard({super.key});
-
-  @override
-  State<RoleNeedsActionCard> createState() => _RoleNeedsActionCardState();
-}
-
-class _RoleNeedsActionCardState extends State<RoleNeedsActionCard> {
-  List<Map>? _items; // null until the first answer
-
-  Future<void> _load() async {
-    final ApiResult r = await api.get('/dashboard/needs-action');
-    if (!mounted || !r.ok || r.json is! Map) return;
-    final items = (r.json as Map)['items'];
-    // An answer without a list (an older server) shows nothing.
-    if (items is! List) return;
-    setState(() => _items = items.whereType<Map>().toList());
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    api.addListener(_load);
-    Realtime.instance.logistics.addListener(_load);
-  }
-
-  @override
-  void dispose() {
-    api.removeListener(_load);
-    Realtime.instance.logistics.removeListener(_load);
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final items = _items;
-    if (items == null) return const SizedBox.shrink();
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: AppCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Needs your action', style: t.titleMedium),
-            Gaps.v8,
-            if (items.isEmpty)
-              Row(
-                children: [
-                  Icon(Icons.check_circle_outline, color: cs.primary),
-                  Gaps.h8,
-                  const Expanded(child: Text('All caught up')),
-                ],
-              ),
-            for (final i in items)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                dense: true,
-                leading: Icon(Icons.flag_outlined, color: cs.primary),
-                title: Text('${i['label']}'),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    CircleAvatar(
-                      radius: 13,
-                      backgroundColor: cs.primaryContainer,
-                      child: Text(
-                        '${i['count']}',
-                        style: t.labelMedium?.copyWith(
-                          color: cs.onPrimaryContainer,
-                        ),
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right),
-                  ],
-                ),
-                onTap: () {
-                  final to = '${i['view'] ?? ''}';
-                  if (to.isNotEmpty) HomeNav.go(context, HomeTarget(to));
-                },
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// Defense fixes (Nov 23): "Needs your action" is removed for every role,
+// the CMO included (its Acknowledge tiles already show the counts).

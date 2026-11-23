@@ -14,6 +14,36 @@ import 'package:mobile/ui/ops_screens.dart';
 import 'package:mobile/ui/paged_donation_entries.dart' show searchDebounce;
 import 'package:mobile/ui/records_screens.dart';
 
+/// A delivered entry: its goods went out on delivery #31, which the
+/// barangay confirmed (Nov 24: "View receipt").
+final _delivered = {
+  'batch_reference': 'DON-RCPT',
+  'report_id': 12,
+  'report_label': '#12 Flood - Tipolo',
+  'entry_no': 1,
+  'status': 'Confirmed',
+  'handover_method': 'Drop Off',
+  'created_at': '2026-11-20T08:00:00',
+  'donor': 'Juan Cruz',
+  'total_items': 1,
+  'pending_items': 0,
+  'on_hold_items': 0,
+  'items': [
+    {
+      'donation_id': 5,
+      'item_name': 'Rice',
+      'unit': 'kg',
+      'quantity': 40,
+      'packaging': 'Sack',
+      'status': 'Confirmed',
+      'actual_quantity_received': 40,
+    },
+  ],
+  'receipt_deliveries': [
+    {'delivery_id': 31, 'received_at': '2026-11-22T09:00:00Z'},
+  ],
+};
+
 void main() {
   setUpAll(() => AppTheme.useGoogleFonts = false);
 
@@ -57,6 +87,7 @@ void main() {
         'by_status': {'Pending': 2, 'Received': 1},
         'reports': [],
       },
+      '/donations/records' => [_delivered],
       _ => <dynamic>[],
     };
     return http.Response(
@@ -157,7 +188,7 @@ void main() {
     },
   );
 
-  testWidgets("One report's records: fixed report, summary from the server", (
+  testWidgets("One report's records: fixed report, no summary (Nov 23)", (
     tester,
   ) async {
     Api.instance.role = Roles.admin;
@@ -169,9 +200,41 @@ void main() {
       final page = to('/donations/records').first;
       expect(page['report_id'], '12');
       expect(page['limit'], '10');
-      expect(find.text('3 entries · 4 items'), findsOneWidget);
+      // Defense fixes (Nov 23): no Status summary / Needs attention here.
+      expect(find.text('3 entries · 4 items'), findsNothing);
+      expect(find.text('Status summary'), findsNothing);
+      expect(find.text('Needs attention'), findsNothing);
       // The report is fixed, so there is no Report dropdown.
       expect(find.byKey(const ValueKey('entries-report')), findsNothing);
+    }, server);
+  });
+
+  for (final role in [Roles.cswsMain, Roles.barangay, Roles.admin]) {
+    testWidgets('Records: View receipt on a delivered entry ($role)', (
+      tester,
+    ) async {
+      Api.instance.role = role;
+      await http.runWithClient(() async {
+        await pump(
+          tester,
+          const ReportRecordsScreen(reportId: 12, title: '#12 Flood - Tipolo'),
+        );
+        expect(find.byKey(const ValueKey('view-receipt-31')), findsOneWidget);
+        expect(find.text('View receipt'), findsOneWidget);
+      }, server);
+    });
+  }
+
+  testWidgets('Records: no receipt button for roles that cannot read it', (
+    tester,
+  ) async {
+    Api.instance.role = Roles.cmo;
+    await http.runWithClient(() async {
+      await pump(
+        tester,
+        const ReportRecordsScreen(reportId: 12, title: '#12 Flood - Tipolo'),
+      );
+      expect(find.text('View receipt'), findsNothing);
     }, server);
   });
 }

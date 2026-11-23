@@ -5,8 +5,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../app_routes.dart';
-import '../realtime.dart';
-import 'needs_action.dart';
 import 'records_screens.dart' show DonationRecordsScreen;
 import 'home_nav.dart';
 import 'paginated_list.dart';
@@ -17,10 +15,9 @@ import 'inventory_view.dart';
 import 'input_formatters.dart' show pesos;
 import 'donation_entries_view.dart' show DonationEntryCard;
 import 'receive_filters.dart';
-import 'ops_screens.dart' show showDeliveryHistory;
-import 'scheduled_deliveries.dart';
 import 'item_amounts.dart';
 export 'batch_sheet.dart' show openDonationByQr, BatchSheet;
+export 'csws_dashboard.dart' show CswsMainDashboard;
 
 /// Camera QR scanner. Returns the scanned text (e.g. DON-1A2B3C...).
 class ScannerPage extends StatefulWidget {
@@ -826,134 +823,8 @@ class PendingReportCard extends StatelessWidget {
   }
 }
 
-// ---------------------------------------------------------------------------
-// UC-CM3 / manuscript 7.1 CSWS Main Office dashboard
-// ---------------------------------------------------------------------------
-class CswsMainDashboard extends StatelessWidget {
-  const CswsMainDashboard({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Loader(
-      // Live: a delivery or DRRMO request changed (Realtime).
-      refresh: Realtime.instance.logistics,
-      load: [
-        () => api.get('/dashboard/csws-main'),
-        // Testing #19: deliveries that have not arrived yet.
-        () => api.get('/deliveries/', query: scheduledDeliveriesQuery),
-      ],
-      builder: (context, data) {
-        final m = data[0] as Map;
-        final scheduled = (data[1] as List).cast<Map>();
-        final inv = (m['inventory_summary'] as List).cast<Map>();
-        final entries = (m['donation_entries'] as List).cast<Map>();
-        final logs = (m['recent_activity'] as List).cast<Map>();
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            PageHeader('CSWS Main Office Dashboard', subtitle: roleLine()),
-            const ResponseTimesCard(), // Phase 7
-            StatGrid([
-              // Tiles open the tab that lists what they count.
-              StatTile(
-                'Pending donations',
-                '${m['pending_donations']}',
-                Icons.hourglass_top,
-                color: const Color(0xFFEF6C00),
-                onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
-              ),
-              // 9.2 (testing, Oct 19): "Due within 3 days" removed. It is
-              // not in UC-CM3; expired donations are counted below and are
-              // in Records > Expired.
-              StatTile(
-                'Expired or cancelled',
-                '${(m['expired_donations'] ?? 0) + (m['cancelled_donations'] ?? 0)}',
-                Icons.timer_off_outlined,
-                color: StatusColors.base('Expired'),
-              ),
-              StatTile(
-                'Entries received',
-                '${m['entries_received']}',
-                Icons.move_to_inbox_outlined,
-                onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
-              ),
-              StatTile(
-                'Total quantity received',
-                '${m['total_quantity_received']}',
-                Icons.inventory_2_outlined,
-                onTap: () => HomeNav.go(context, const HomeTarget('Receive')),
-              ),
-              StatTile(
-                'Deliveries made',
-                '${m['deliveries_made']}',
-                Icons.local_shipping_outlined,
-                onTap: () =>
-                    HomeNav.go(context, const HomeTarget('Deliveries')),
-              ),
-              StatTile(
-                'Total quantity distributed',
-                '${m['total_quantity_distributed']}',
-                Icons.outbox_outlined,
-                color: const Color(0xFF2E7D32),
-                // What the barangays received (Confirmed deliveries).
-                onTap: () => HomeNav.go(
-                  context,
-                  const HomeTarget('Deliveries', view: 'Confirmed'),
-                ),
-              ),
-            ]),
-            ScheduledDeliveriesCard(
-              deliveries: scheduled,
-              onOpen: (d) =>
-                  showDeliveryHistory(context, d['delivery_id'] as int),
-              onSeeAll: () =>
-                  HomeNav.go(context, const HomeTarget('Deliveries')),
-            ),
-            const SectionTitle('Inventory summary'),
-            if (inv.isEmpty) const EmptyState('Inventory is empty.'),
-            Card(
-              child: Column(
-                children: [
-                  for (final i in inv)
-                    ListTile(
-                      dense: true,
-                      leading: const Icon(Icons.warehouse_outlined),
-                      title: Text('${i['item']}'),
-                      trailing: Text(
-                        '${i['quantity']} ${i['unit']}',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SectionTitle('Donation entries'),
-            if (entries.isEmpty) const EmptyState('No donations yet.'),
-            for (final d in entries)
-              Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  // G-002 (D8): "Rice · 10 packs x 5 kg (Sack)".
-                  title: Text(
-                    '${d['item_name']} · ${itemAmount(d)} (${d['packaging']})',
-                  ),
-                  subtitle: Text(
-                    '${d['qr_reference']} · ${d['handover_method']}'
-                    '${d['estimated_value'] != null ? ' · ${pesos(d['estimated_value'])}' : ''}'
-                    '\n${d['report_label'] ?? ''}',
-                  ),
-                  isThreeLine: true,
-                  trailing: DonationStatusChip('${d['status']}'),
-                ),
-              ),
-            const SectionTitle('Recent activity'),
-            ActivityList(logs),
-          ],
-        );
-      },
-    );
-  }
-}
+// UC-CM3 / manuscript 7.1: the CSWS Main Office dashboard is in
+// csws_dashboard.dart (Nov 23 redesign).
 
 /// Activity log rows (audit_logs).
 class ActivityList extends StatelessWidget {

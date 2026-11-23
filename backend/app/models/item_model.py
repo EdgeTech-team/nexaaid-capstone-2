@@ -25,6 +25,9 @@ class Item(Base):
     # CSWS Main Office or the Administrator before it is in any dropdown.
     # Migration c8e2f4a6b913.
     pending_review = Column(Boolean, nullable=False, default=False, server_default=false())
+    # CSWS dashboard (Nov 23): below this office-wide stock, in the base
+    # unit, the item is "Low". 0 = no minimum. Migration d8a2c4e6f0b3.
+    min_stock = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     sizes = relationship("ItemSize", order_by="ItemSize.sort_order", lazy="selectin")

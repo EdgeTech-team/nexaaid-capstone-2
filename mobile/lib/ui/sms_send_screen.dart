@@ -7,7 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 //import '../api.dart';
-import 'input_formatters.dart';
+import 'copyable_phone.dart';
 import 'report_screens.dart' show maxAffectedFamilies, maxEstimatedQuantity;
 import 'sitio_picker.dart';
 import 'sms_report_format.dart';
@@ -84,7 +84,6 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   List<Map> receivers = const [];
   String? savedAt;
   bool loading = true;
-  bool online = false;
 
   SharedPreferences? _prefs;
 
@@ -100,7 +99,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
   /// The Administrator numbers the text goes to: all of them, unless the
   /// sender leaves some out.
   final picked = <String>{};
-  bool _choseReceivers = false;
+  final bool _choseReceivers = false;
   String? type, barangay;
 
   /// Sitio names, one per row ('' = not chosen); see SitioPicker.
@@ -168,14 +167,12 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
       lookups = _offlineLookups(fresh);
       if (r.ok && r.json is List) receivers = (r.json as List).cast<Map>();
       savedAt = DateTime.now().toIso8601String();
-      online = true;
       await prefs?.setString(_cacheLookups, jsonEncode(lookups));
       await prefs?.setString(_cacheReceivers, jsonEncode(receivers));
       await prefs?.setString(_cacheSavedAt, savedAt!);
       _pickAllReceivers();
       if (mounted && _reconcileChoices()) _epoch++;
     } catch (_) {
-      online = false; // No internet: keep using what is saved.
     }
     if (mounted) {
       setState(() {});
@@ -383,7 +380,7 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
 
   /// Who the text goes to, in the saved order.
   List<String> get _recipients => _receiverNumbers.isEmpty
-      ? [to.text.trim()]
+      ? [if (to.text.trim().isNotEmpty) to.text.trim()]
       : [
           for (final n in _receiverNumbers)
             if (picked.contains(n)) n,
@@ -499,14 +496,6 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
 
   bool _check() {
     if (!_form.currentState!.validate()) return false;
-    if (_recipients.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Choose at least one Administrator number.'),
-        ),
-      );
-      return false;
-    }
     final missing = _report.missing;
     if (missing.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -652,66 +641,39 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               ],
             ),
           ),
-          Card(
-            margin: EdgeInsets.zero,
-            child: ListTile(
-              leading: Icon(online ? Icons.wifi : Icons.wifi_off),
-              title: Text(online ? 'Online' : 'Offline'),
-              subtitle: Text(
-                savedAt == null
-                    ? 'Nothing saved on this phone yet. Open this screen once '
-                          'with internet so it works offline later.'
-                    : 'Lists and numbers saved on this phone: ${niceDate(savedAt)}',
-              ),
-            ),
-          ),
-          const SectionTitle('Send to'),
+          // Defense fixes (Nov 23): no Online / Offline card and no "Send
+          // to" picker (sending is outside NexaAid, on the phone). The
+          // Administrator's number is shown with a copy button instead.
+          const SectionTitle("Administrator's number"),
           if (_receiverNumbers.isNotEmpty) ...[
             Text(
-              'The text goes to every Administrator number below, filled in '
-              'for you. Tap a number to leave it out.',
+              'Send the text to this number from your phone. Tap the number '
+              'or the copy icon to copy it.',
               style: t.bodySmall,
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final r in receivers)
-                  if ('${r['contact_number'] ?? ''}'.trim().isNotEmpty)
-                    FilterChip(
-                      label: Text('${r['name']} · ${r['contact_number']}'),
-                      selected: picked.contains(
-                        '${r['contact_number']}'.trim(),
+            Card(
+              margin: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  for (final r in receivers)
+                    if ('${r['contact_number'] ?? ''}'.trim().isNotEmpty)
+                      ListTile(
+                        leading: const Icon(Icons.admin_panel_settings_outlined),
+                        title: Text('${r['name'] ?? 'Administrator'}'),
+                        subtitle: CopyablePhone(
+                          number: '${r['contact_number']}'.trim(),
+                        ),
                       ),
-                      onSelected: (on) => setState(() {
-                        _choseReceivers = true;
-                        final n = '${r['contact_number']}'.trim();
-                        on ? picked.add(n) : picked.remove(n);
-                      }),
-                    ),
-              ],
+                ],
+              ),
             ),
-          ] else ...[
+          ] else
             Text(
-              'No Administrator numbers saved yet. Open this screen once with '
-              'internet, or type the number you were given.',
+              'No Administrator number saved on this phone yet. Open this '
+              'screen once with internet to save it.',
               style: t.bodySmall,
             ),
-            const SizedBox(height: 8),
-            TextFormField(
-              controller: to,
-              keyboardType: TextInputType.phone,
-              inputFormatters: phoneFormatters,
-              decoration: const InputDecoration(
-                labelText: 'Administrator SMS number',
-                hintText: '09XXXXXXXXX',
-              ),
-              validator: (v) => RegExp(r'^09\d{9}$').hasMatch((v ?? '').trim())
-                  ? null
-                  : 'Mobile number, 11 digits, e.g. 09171234567',
-            ),
-          ],
           const SectionTitle('Disaster and location'),
           _choice(
             label: 'Disaster type',
@@ -832,7 +794,24 @@ class _SmsSendScreenState extends State<SmsSendScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () async {
+              await Clipboard.setData(
+                ClipboardData(text: _report.toMessage()),
+              );
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Text copied')),
+              );
+            },
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(50),
+            ),
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy the text'),
+          ),
+          const SizedBox(height: 8),
           FilledButton.icon(
             onPressed: _openSmsApp,
             style: FilledButton.styleFrom(

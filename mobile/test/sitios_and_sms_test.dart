@@ -86,7 +86,7 @@ void main() {
     expect(find.byKey(const Key('add-sitio')), findsNothing);
   });
 
-  testWidgets('SMS: every Administrator number is chosen, no Copy text', (
+  testWidgets("SMS: the Administrator's numbers to copy, no Send to (Nov 23)", (
     tester,
   ) async {
     tester.view.physicalSize = const Size(800, 2400);
@@ -127,13 +127,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final chips = tester
-          .widgetList<FilterChip>(find.byType(FilterChip))
-          .toList();
-      expect(chips.length, 2);
-      expect(chips.every((c) => c.selected), isTrue);
-      expect(find.text('Copy text'), findsNothing);
-      expect(find.text('Administrator SMS number'), findsNothing);
+      // Defense fixes (Nov 23): no Online card and no "Send to" picker;
+      // each Administrator number is shown to copy, and the text too.
+      expect(find.text('Online'), findsNothing);
+      expect(find.text('Offline'), findsNothing);
+      expect(find.text('Send to'), findsNothing);
+      expect(find.byType(FilterChip), findsNothing);
+      expect(find.text("Administrator's number"), findsOneWidget);
+      expect(find.text('09171111111'), findsOneWidget);
+      expect(find.text('09172222222'), findsOneWidget);
+      expect(find.text('Copy the text'), findsOneWidget);
 
       // The sitio list appears with the barangay and follows it.
       expect(find.byType(SitioPicker), findsNothing);

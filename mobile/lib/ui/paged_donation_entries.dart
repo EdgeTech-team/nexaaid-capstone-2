@@ -89,8 +89,6 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
   /// GET /donations/records/counts for the current filters.
   Map? counts;
 
-  /// The whole report's counts (fixed report only), for the summary.
-  Map? reportCounts;
   int _countsGeneration = 0;
 
   late final controller = PagedController(fetch: _fetchFor(_filters()));
@@ -131,7 +129,6 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
   Future<void> _reload() {
     final filters = _filters();
     _loadCounts(filters);
-    _loadReportCounts();
     return controller.refresh(fetch: _fetchFor(filters));
   }
 
@@ -142,18 +139,6 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
     // Answers for an older filter are dropped.
     if (!mounted || generation != _countsGeneration) return;
     setState(() => counts = r.ok && r.json is Map ? r.json as Map : null);
-  }
-
-  Future<void> _loadReportCounts() async {
-    final id = widget.reportId;
-    if (id == null) return;
-    final r = await api.get(
-      '/donations/records/counts',
-      query: {'include_closed': 'true', 'report_id': '$id'},
-    );
-    if (mounted && r.ok && r.json is Map) {
-      setState(() => reportCounts = r.json as Map);
-    }
   }
 
   void _set(VoidCallback change) {
@@ -192,12 +177,16 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
   List<Widget> _filterBar(BuildContext context) {
     final reports = ((counts?['reports'] as List?) ?? const []).cast<Map>();
     return [
-      EntryAttentionCard(
-        counts: {for (final (s, _) in attentionStatuses) s: _count(s) ?? 0},
-        selected: status,
-        onSelect: (s) => _set(() => status = status == s ? null : s),
-      ),
-      Gaps.v12,
+      // Defense fixes (Nov 23): a report's own records have no "Needs
+      // attention" card; the status chips below filter them.
+      if (widget.reportId == null) ...[
+        EntryAttentionCard(
+          counts: {for (final (s, _) in attentionStatuses) s: _count(s) ?? 0},
+          selected: status,
+          onSelect: (s) => _set(() => status = status == s ? null : s),
+        ),
+        Gaps.v12,
+      ],
       SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
@@ -292,10 +281,8 @@ class _PagedDonationEntriesState extends State<PagedDonationEntries> {
       onRefresh: _reload,
       header: [
         ...widget.header,
-        if (reportCounts != null) ...[
-          EntryStatusSummary.fromCounts(reportCounts!),
-          Gaps.v16,
-        ],
+        // Defense fixes (Nov 23): no "Status summary" / "Needs attention"
+        // on a report's records; the status chips below filter them.
         ..._filterBar(context),
       ],
       empty: _filtered

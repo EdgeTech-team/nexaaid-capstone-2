@@ -44,7 +44,9 @@ const fulfillmentStates = ['Not Started', 'In Progress', 'Fulfilled'];
 const reportStatuses = ['Pending', 'Validated', 'Rejected', 'Cancelled'];
 
 /// Priority levels for Appendix H 3.3 priority-based report filtering.
-const priorityLevels = ['Critical', 'High', 'Medium', 'Low', 'Needs Review'];
+/// Defense fixes (Nov 23): no "Needs Review"; the priority filter is for
+/// validated reports, which always have a level.
+const priorityLevels = ['Critical', 'High', 'Medium', 'Low'];
 
 enum ReportSort {
   urgent('Most urgent'),
@@ -98,13 +100,19 @@ String reportSortParam(ReportSort s) => switch (s) {
   ReportSort.newest => 'newest',
 };
 
-/// What a report list shows: the three filters of the Filter panel (null =
-/// all), the sort, and "Only my reports" (Report Status, Disaster Unit).
+/// What a report list shows: the Filter panel's filters (null = all), the
+/// sort, and "Only my reports" (Report Status, Disaster Unit). Defense fixes
+/// (Nov 23): every report list also filters by barangay and disaster type;
+/// the names are kept for the chips.
 @immutable
 class ReportView {
   final String? status;
   final String? priority;
   final String? fulfillment;
+  final int? barangayId;
+  final String? barangayName;
+  final int? disasterTypeId;
+  final String? disasterTypeName;
   final ReportSort sort;
   final bool onlyMine;
 
@@ -112,47 +120,93 @@ class ReportView {
     this.status,
     this.priority,
     this.fulfillment,
+    this.barangayId,
+    this.barangayName,
+    this.disasterTypeId,
+    this.disasterTypeName,
     this.sort = ReportSort.urgent,
     this.onlyMine = false,
   });
 
-  /// These three filters (the ones left out are "all"), same sort and
-  /// "Only my reports".
+  /// These filters (the ones left out are "all"), same sort and "Only my
+  /// reports".
   ReportView withFilters({
     String? status,
     String? priority,
     String? fulfillment,
+    int? barangayId,
+    String? barangayName,
+    int? disasterTypeId,
+    String? disasterTypeName,
   }) => ReportView(
     status: status,
     priority: priority,
     fulfillment: fulfillment,
+    barangayId: barangayId,
+    barangayName: barangayId == null ? null : barangayName,
+    disasterTypeId: disasterTypeId,
+    disasterTypeName: disasterTypeId == null ? null : disasterTypeName,
     sort: sort,
     onlyMine: onlyMine,
   );
 
-  ReportView withSort(ReportSort s) => ReportView(
-    status: status,
-    priority: priority,
-    fulfillment: fulfillment,
-    sort: s,
-    onlyMine: onlyMine,
-  );
+  ReportView _copy({
+    Object? status = _keep,
+    Object? priority = _keep,
+    Object? fulfillment = _keep,
+    Object? place = _keep,
+    Object? type = _keep,
+    ReportSort? sort,
+    bool? onlyMine,
+  }) {
+    final p = place == _keep
+        ? (barangayId, barangayName)
+        : place as (int?, String?);
+    final d = type == _keep
+        ? (disasterTypeId, disasterTypeName)
+        : type as (int?, String?);
+    return ReportView(
+      status: status == _keep ? this.status : status as String?,
+      priority: priority == _keep ? this.priority : priority as String?,
+      fulfillment: fulfillment == _keep
+          ? this.fulfillment
+          : fulfillment as String?,
+      barangayId: p.$1,
+      barangayName: p.$2,
+      disasterTypeId: d.$1,
+      disasterTypeName: d.$2,
+      sort: sort ?? this.sort,
+      onlyMine: onlyMine ?? this.onlyMine,
+    );
+  }
 
-  ReportView withOnlyMine(bool v) => ReportView(
-    status: status,
-    priority: priority,
-    fulfillment: fulfillment,
-    sort: sort,
-    onlyMine: v,
-  );
+  ReportView withStatus(String? v) => _copy(status: v);
+  ReportView withPriority(String? v) => _copy(priority: v);
+  ReportView withFulfillment(String? v) => _copy(fulfillment: v);
+  ReportView withBarangay(int? id, [String? name]) =>
+      _copy(place: (id, id == null ? null : name));
+  ReportView withDisasterType(int? id, [String? name]) =>
+      _copy(type: (id, id == null ? null : name));
+  ReportView withSort(ReportSort s) => _copy(sort: s);
+  ReportView withOnlyMine(bool v) => _copy(onlyMine: v);
+
+  /// Query parameters for the barangay and disaster type filters.
+  Map<String, String> get placeQuery => {
+    if (barangayId != null) 'barangay_id': '$barangayId',
+    if (disasterTypeId != null) 'disaster_type_id': '$disasterTypeId',
+  };
 }
+
+const _keep = Object();
 
 /// How many of the panel's filters differ from [defaults] (the number on
 /// the Filter button).
 int activeFilters(ReportView v, [ReportView defaults = const ReportView()]) =>
     (v.status != defaults.status ? 1 : 0) +
     (v.priority != null ? 1 : 0) +
-    (v.fulfillment != null ? 1 : 0);
+    (v.fulfillment != null ? 1 : 0) +
+    (v.barangayId != null ? 1 : 0) +
+    (v.disasterTypeId != null ? 1 : 0);
 
 /// UAT Nov 2026, option A: each report list keeps its filters and sort while
 /// the app is open, so leaving the tab and coming back shows the same view.
@@ -237,7 +291,7 @@ class ReportFilterBar extends StatelessWidget {
   ReportView _usable(ReportView v) =>
       detailsOnlyFor == null || v.status == detailsOnlyFor
       ? v
-      : v.withFilters(status: v.status);
+      : v.withPriority(null).withFulfillment(null);
 
   List<Widget> _chips() {
     final v = value;
@@ -256,23 +310,27 @@ class ReportFilterBar extends StatelessWidget {
           // The status a screen always shows (Pending) cannot be removed.
           v.status == defaults.status
               ? null
-              : v.withFilters(
-                  status: defaults.status,
-                  priority: v.priority,
-                  fulfillment: v.fulfillment,
-                ),
+              : v.withStatus(defaults.status),
         ),
       if (v.priority != null)
-        chip(
-          v.priority!,
-          PriorityColors.base(v.priority),
-          v.withFilters(status: v.status, fulfillment: v.fulfillment),
-        ),
+        chip(v.priority!, PriorityColors.base(v.priority), v.withPriority(null)),
       if (v.fulfillment != null)
         chip(
           v.fulfillment!,
           StatusColors.base(v.fulfillment),
-          v.withFilters(status: v.status, priority: v.priority),
+          v.withFulfillment(null),
+        ),
+      if (v.barangayId != null)
+        chip(
+          v.barangayName ?? 'Barangay',
+          AppColors.harbor,
+          v.withBarangay(null),
+        ),
+      if (v.disasterTypeId != null)
+        chip(
+          v.disasterTypeName ?? 'Disaster type',
+          AppColors.harbor,
+          v.withDisasterType(null),
         ),
     ];
   }
@@ -359,12 +417,14 @@ class _FilterPanelState extends State<_FilterPanel> {
     required String? priority,
     required String? fulfillment,
   }) => setState(
-    () => draft = draft.withFilters(
-      status: status,
-      priority: priority,
-      fulfillment: fulfillment,
-    ),
+    () => draft = draft
+        .withStatus(status)
+        .withPriority(priority)
+        .withFulfillment(fulfillment),
   );
+
+  /// Barangays and disaster types for the two dropdowns (GET /lookups).
+  late final Future<Map<String, dynamic>> _lookups = Api.instance.lookups();
 
   void _done(ReportView v) {
     widget.bar.onChanged(widget.bar._usable(v));
@@ -503,6 +563,69 @@ class _FilterPanelState extends State<_FilterPanel> {
                   StatusColors.base(s),
                 ),
             ], note: note),
+            FutureBuilder<Map<String, dynamic>>(
+              future: _lookups,
+              builder: (context, snap) {
+                List<Map> list(String key) =>
+                    ((snap.data?[key] as List?) ?? const []).cast<Map>();
+                Widget pick(
+                  String label,
+                  List<Map> options,
+                  int? value,
+                  void Function(int? id, String? name) onPick,
+                ) => Padding(
+                  padding: const EdgeInsets.only(bottom: Space.md),
+                  child: DropdownButtonFormField<int?>(
+                    key: ValueKey('filter-$label-${options.length}'),
+                    isExpanded: true,
+                    initialValue: options.any((o) => o['id'] == value)
+                        ? value
+                        : null,
+                    decoration: InputDecoration(labelText: label),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('All'),
+                      ),
+                      for (final o in options)
+                        DropdownMenuItem<int?>(
+                          value: (o['id'] as num).toInt(),
+                          child: Text(
+                            '${o['name']}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: (id) => onPick(
+                      id,
+                      id == null
+                          ? null
+                          : '${options.firstWhere((o) => o['id'] == id)['name']}',
+                    ),
+                  ),
+                );
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    pick(
+                      'Barangay',
+                      list('barangays'),
+                      d.barangayId,
+                      (id, name) =>
+                          setState(() => draft = draft.withBarangay(id, name)),
+                    ),
+                    pick(
+                      'Disaster type',
+                      list('disaster_types'),
+                      d.disasterTypeId,
+                      (id, name) => setState(
+                        () => draft = draft.withDisasterType(id, name),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
             Row(
               children: [
                 TextButton(

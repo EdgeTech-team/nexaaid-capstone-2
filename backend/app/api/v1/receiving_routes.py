@@ -12,6 +12,7 @@ from models.inventory_model import Inventory
 from schemas.received_goods_schema import ReceivedGoodsCreate, ReceivedGoodsResponse
 from core.notifications import notify, notify_many, user_ids_with_role
 from services.inventory import add_received_stock
+from services.delivery_allocation import add_receipts
 from services.donation_entries import ENTRY_SORTS, build_entries, filter_and_sort, group_by_report
 from services.donation_expiry import CLOSED, close_rows, expire_overdue, nice_date
 
@@ -399,7 +400,8 @@ def donation_records(
             disaster_type_id=disaster_type_id,
         )
         set_total_header(response, page, total)
-        return rows
+        # Nov 24: "View receipt" for each delivery the barangay confirmed.
+        return add_receipts(db, rows)
 
     entries = _scoped_entries(db, current_user, report_id, disaster_type_id)
     if not status and not include_closed:
@@ -407,6 +409,8 @@ def donation_records(
     if _is_on_hold(status):
         entries = [e for e in entries if (e.get("on_hold_items") or 0) > 0]
         status = None
+    # Without limit the answer stays byte for byte the old one (installed
+    # APKs); the app's paged lists get receipt_deliveries above.
     return filter_and_sort(entries, status=status, handover_method=handover_method, search=q, sort=sort)
 
 

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
 import '../app_routes.dart';
+import 'brand_title.dart';
 import 'admin_screens.dart';
 import 'csws_screens.dart';
 import 'donor_dashboard.dart';
@@ -397,46 +399,13 @@ class _RoleHomeState extends State<RoleHome> {
     if (index >= tabs.length) index = 0;
     _visited.add(index);
     final wide = MediaQuery.sizeOf(context).width >= Breakpoints.expanded;
-    final cs = Theme.of(context).colorScheme;
-    final t = Theme.of(context).textTheme;
 
     final body = _tabBodies(tabs);
 
     return Scaffold(
       appBar: AppBar(
         titleSpacing: Space.md,
-        title: Row(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: cs.primary,
-                borderRadius: BorderRadius.circular(Radii.sm),
-              ),
-              child: Icon(
-                Icons.volunteer_activism,
-                size: 18,
-                color: cs.onPrimary,
-              ),
-            ),
-            Gaps.h12,
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('NexaAid', style: t.titleMedium),
-                  Text(
-                    api.loggedIn ? (api.role ?? 'Signed in') : 'Guest',
-                    overflow: TextOverflow.ellipsis,
-                    style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+        title: const BrandAppBarTitle(),
         actions: [const NotificationBell(), ..._shellActions(context), Gaps.h8],
       ),
       body: wide

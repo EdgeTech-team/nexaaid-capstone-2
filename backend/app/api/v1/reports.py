@@ -525,13 +525,17 @@ def report_monitoring_counts(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     priority_level: Optional[str] = Query(default=None),
     mine: bool = Query(default=False),
+    barangay_id: Optional[int] = Query(default=None),
+    disaster_type_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
     current_user=Depends(require_role("csws_staff", "admin", "barangay_official")),
 ):
     """NF-003: reports per fulfillment status for the Filter panel, with the
-    same filters as the list (the app no longer has every report to count)."""
+    same filters as the list (the app no longer has every report to count).
+    Defense fixes (Nov 23): also barangay and disaster type."""
     query = _staff_reports(db, current_user, status_filter=status_filter,
-                           priority_level=priority_level, mine=mine)
+                           priority_level=priority_level, mine=mine,
+                           barangay_id=barangay_id, disaster_type_id=disaster_type_id)
     return report_paging.fulfillment_counts(report_paging.with_fulfillment(query))
 
 
@@ -563,11 +567,15 @@ def list_validated_reports(
 @router.get("/validated/counts")
 def validated_report_counts(
     priority_level: Optional[str] = Query(default=None),
+    barangay_id: Optional[int] = Query(default=None),
+    disaster_type_id: Optional[int] = Query(default=None),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    """NF-003: validated reports per fulfillment status (Filter panel)."""
-    query = _validated_reports(db, priority_level=priority_level)
+    """NF-003: validated reports per fulfillment status (Filter panel), with
+    the list's barangay and disaster type filters (defense fixes, Nov 23)."""
+    query = _validated_reports(db, priority_level=priority_level, barangay_id=barangay_id,
+                               disaster_type_id=disaster_type_id)
     return report_paging.fulfillment_counts(report_paging.with_fulfillment(query))
 
 

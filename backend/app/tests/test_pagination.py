@@ -402,6 +402,10 @@ def test_sql_pages_equal_the_old_list_for_every_filter_and_sort(api):
                 old = client.get("/donations/records", headers=t[who], params=params)
                 assert old.status_code == 200 and TOTAL_HEADER.lower() not in old.headers
                 paged, totals = _all_pages(client, t[who], 4, **params)
+                # Nov 24: pages also name each confirmed delivery's receipt
+                # (receipt_deliveries); the rest is the old list exactly.
+                for e in paged:
+                    e.pop("receipt_deliveries", None)
                 assert paged == old.json(), (who, params)
                 assert totals == {len(old.json())}, (who, params)
 

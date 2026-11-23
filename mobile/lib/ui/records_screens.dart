@@ -3,8 +3,7 @@ import 'package:flutter/material.dart';
 import 'kept_views.dart';
 import '../app_routes.dart';
 import '../api.dart' show Roles;
-import 'batch_sheet.dart' show openDonationByQr;
-import 'csws_screens.dart' show ScannerPage;
+import 'acknowledgment_screen.dart' show canSeeReceipt, openAcknowledgment;
 import 'donation_entries_view.dart';
 import 'expiry_widgets.dart';
 import 'home_nav.dart';
@@ -43,17 +42,7 @@ bool get _canManageRecords =>
 
 class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
   bool perReport = false;
-  int _loads = 0;
-
-  /// problema_napud 5.1: the Administrator can scan a donor's QR here,
-  /// e.g. right after a donation notification.
-  Future<void> _scan() async {
-    final code = await Navigator.of(context)
-        .push<String>(MaterialPageRoute(builder: (_) => const ScannerPage()));
-    if (code == null || !mounted) return;
-    await openDonationByQr(context, code);
-    if (mounted) setState(() => _loads++);
-  }
+  final int _loads = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -67,16 +56,8 @@ class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
                     'one is in the process.'
               : 'Every donation entry and where it is in the process.',
         ),
-      // CSWS Main Office scans on its Receive tab.
-      if (api.role == Roles.admin) ...[
-        AppButton(
-          'Scan QR code',
-          icon: Icons.qr_code_scanner,
-          expand: true,
-          onPressed: _scan,
-        ),
-        Gaps.v12,
-      ],
+      // Defense fixes (Nov 23): no QR scanner in Records; CSWS Main Office
+      // scans on its Receive tab.
       SegmentedButton<bool>(
         showSelectedIcon: false,
         segments: const [
@@ -114,7 +95,7 @@ class _DonationRecordsScreenState extends State<DonationRecordsScreen> {
               header: top,
               disasterTypeId: widget.disasterTypeId,
               disasterTypeName: widget.disasterTypeName,
-              footer: _canManageRecords ? (e) => _EntryActions(e) : null,
+              footer: _entryFooter,
               emptyTitle: 'No donations to show.',
               emptyMessage: barangay
                   ? "Donations for your barangay's reports appear here."
@@ -195,7 +176,7 @@ class _PagedReportRecordsState extends State<PagedReportRecords> {
           padding: const EdgeInsets.only(bottom: Space.sm),
           child: AppCard(
             key: ValueKey('report-records-$id'),
-            onTap: () => openReportRecords(context, reportId: id, title: label),
+            // Defense fixes (Nov 23): a summary only, not clickable.
             child: Row(
               children: [
                 Expanded(
@@ -213,7 +194,6 @@ class _PagedReportRecordsState extends State<PagedReportRecords> {
                     ],
                   ),
                 ),
-                const Icon(Icons.chevron_right),
               ],
             ),
           ),
@@ -255,11 +235,7 @@ class ReportRecordsList extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: Space.sm),
             child: AppCard(
               key: ValueKey('report-records-$id'),
-              onTap: () => openReportRecords(
-                context,
-                reportId: id,
-                title: entryReportLabel(byReport[id]!.first),
-              ),
+              // Defense fixes (Nov 23): a summary only, not clickable.
               child: Row(
                 children: [
                   Expanded(
@@ -280,7 +256,6 @@ class ReportRecordsList extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const Icon(Icons.chevron_right),
                 ],
               ),
             ),
@@ -334,7 +309,7 @@ class ReportRecordsScreen extends StatelessWidget {
       // the whole report on top and the filters on the server.
       body: PagedDonationEntries(
         reportId: reportId,
-        footer: _canManageRecords ? (e) => _EntryActions(e) : null,
+        footer: _entryFooter,
         emptyTitle: 'No donations for this report yet.',
         emptyMessage: 'Donation entries appear here once donors submit them.',
       ),
@@ -342,7 +317,11 @@ class ReportRecordsScreen extends StatelessWidget {
   }
 }
 
-/// Reopen (Expired / Cancelled) or cancel for the donor (still waiting).
+Widget _entryFooter(Map e) => _EntryActions(e);
+
+/// View receipt (every role that may read receipts); reopen (Expired /
+/// Cancelled) or cancel for the donor (still waiting): CSWS Main Office
+/// and the Administrator.
 class _EntryActions extends StatelessWidget {
   final Map entry;
   const _EntryActions(this.entry);
@@ -355,19 +334,38 @@ class _EntryActions extends StatelessWidget {
           (i) =>
               (i as Map)['status'] == 'Expired' || i['status'] == 'Cancelled',
         );
-    final waiting = hasWaitingItems(entry);
-    if (!closed && !waiting) return const SizedBox.shrink();
+    final waiting = hasWaitingItems(entry) && _canManageRecords;
+    final reopen = closed && _canManageRecords;
+    // Nov 24: the Acknowledgment Receipt of each delivery the barangay
+    // confirmed that carried these goods.
+    final receipts = canSeeReceipt(api.role)
+        ? ((entry['receipt_deliveries'] as List?) ?? const []).cast<Map>()
+        : const <Map>[];
+    if (!reopen && !waiting && receipts.isEmpty) return const SizedBox.shrink();
     return Wrap(
       alignment: WrapAlignment.end,
       spacing: Space.xs,
       children: [
-        if (waiting)
+        for (final r in receipts)
+          TextButton.icon(
+            key: ValueKey('view-receipt-${r['delivery_id']}'),
+            onPressed: () =>
+                openAcknowledgment(context, (r['delivery_id'] as num).toInt()),
+            icon: const Icon(Icons.receipt_long_outlined),
+            label: Text(
+              receipts.length == 1
+                  ? 'View receipt'
+                  : 'View receipt · Delivery #${r['delivery_id']}',
+            ),
+          ),
+        // Defense fixes (Nov 23): only CSWS Main Office cancels for a donor.
+        if (waiting && api.role != Roles.admin)
           TextButton.icon(
             onPressed: () => cancelDonation(context, entry, staff: true),
             icon: const Icon(Icons.block),
             label: const Text('Cancel for donor'),
           ),
-        if (closed)
+        if (reopen)
           FilledButton.icon(
             onPressed: () => reinstateDonation(context, entry),
             icon: const Icon(Icons.restart_alt),

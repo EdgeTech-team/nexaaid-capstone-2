@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart' show ApiResult, Roles;
+import 'acknowledgment_screen.dart' show canSeeReceipt, openAcknowledgment;
 import 'delivery_widgets.dart';
 import 'ops_screens.dart' show showDeliveryHistory;
 import 'widgets.dart';
@@ -568,6 +569,20 @@ class _StopDelivery extends StatelessWidget {
                           showDeliveryHistory(context, d['delivery_id'] as int),
                       child: const Text('History'),
                     ),
+                    // Nov 24: the Acknowledgment Receipt once this stop's
+                    // barangay confirmed (as on the Deliveries list).
+                    if (d['status'] == 'Confirmed' && canSeeReceipt(api.role))
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          padding: EdgeInsets.zero,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () => openAcknowledgment(
+                          context,
+                          d['delivery_id'] as int,
+                        ),
+                        child: const Text('View receipt'),
+                      ),
                     // One stop has a problem (e.g. barangay not ready).
                     if (_canManageTrips &&
                         (d['status'] == 'Preparing' ||
