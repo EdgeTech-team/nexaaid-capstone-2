@@ -183,6 +183,10 @@ class _NewReportScreenState extends State<NewReportScreen> {
   List<_Need> _needsOf(String id) =>
       multiNeeds.putIfAbsent(id, () => [_Need()]);
 
+  /// Nov 23: barangays whose needs list is folded away (tap the arrow on
+  /// the right of the name). All open at first.
+  final _collapsedBrgys = <String>{};
+
   int _familiesOf(String id) =>
       int.tryParse(multiRows[id]?.text.trim() ?? '') ?? 0;
   final eventName = TextEditingController();
@@ -849,6 +853,8 @@ class _NewReportScreenState extends State<NewReportScreen> {
     // The pop-up's own checks too: in "Several barangays" a collapsed
     // barangay's needs are checked here.
     if (!valid || _missing(names).isNotEmpty) {
+      // Open every barangay again so what is missing can be seen.
+      if (_collapsedBrgys.isNotEmpty) setState(_collapsedBrgys.clear);
       await _showMissing(names);
       return;
     }
@@ -1268,6 +1274,14 @@ class _NewReportScreenState extends State<NewReportScreen> {
               final list = _needsOf(row.key);
               final name = names.of('barangays', row.key);
               final items = list.where((n) => n.itemId != null).length;
+              final open = !_collapsedBrgys.contains(row.key);
+              void toggle() => setState(() {
+                if (open) {
+                  _collapsedBrgys.add(row.key);
+                } else {
+                  _collapsedBrgys.remove(row.key);
+                }
+              });
               return Card(
                 key: ValueKey('multi-needs-${row.key}'),
                 margin: const EdgeInsets.only(bottom: 10),
@@ -1276,68 +1290,85 @@ class _NewReportScreenState extends State<NewReportScreen> {
                   side: BorderSide(color: cs.outlineVariant),
                 ),
                 clipBehavior: Clip.antiAlias,
-                // Nov 22: always open, like the one-barangay form: the
-                // barangay's name on top, its needs under it.
+                // Nov 22: the barangay's name on top, its needs under it.
+                // Nov 23: tap the name or the arrow to fold the needs away
+                // so a long list of barangays is easy to scroll.
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Container(
+                    Material(
                       color: cs.primaryContainer,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.place, color: cs.onPrimaryContainer),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  name,
-                                  style: t.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: cs.onPrimaryContainer,
-                                  ),
-                                ),
-                                Text(
-                                  '${withCommas(row.value)} '
-                                  '${row.value == 1 ? 'family' : 'families'} · '
-                                  '$items ${items == 1 ? 'item' : 'items'}',
-                                  style: t.bodySmall?.copyWith(
-                                    color: cs.onPrimaryContainer,
-                                  ),
-                                ),
-                              ],
-                            ),
+                      child: InkWell(
+                        key: ValueKey('multi-toggle-${row.key}'),
+                        onTap: toggle,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
                           ),
-                        ],
+                          child: Row(
+                            children: [
+                              Icon(Icons.place, color: cs.onPrimaryContainer),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      name,
+                                      style: t.titleMedium?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                        color: cs.onPrimaryContainer,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${withCommas(row.value)} '
+                                      '${row.value == 1 ? 'family' : 'families'} · '
+                                      '$items ${items == 1 ? 'item' : 'items'}',
+                                      style: t.bodySmall?.copyWith(
+                                        color: cs.onPrimaryContainer,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Icon(
+                                open
+                                    ? Icons.keyboard_arrow_up
+                                    : Icons.keyboard_arrow_down,
+                                color: cs.onPrimaryContainer,
+                                semanticLabel: open
+                                    ? 'Hide needs of $name'
+                                    : 'Show needs of $name',
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          for (var i = 0; i < list.length; i++)
-                            _needRow(list, i, names),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: OutlinedButton.icon(
-                              key: ValueKey('multi-add-${row.key}'),
-                              onPressed: () {
-                                setState(() => list.add(_Need()));
-                                _saveDraft();
-                              },
-                              icon: const Icon(Icons.add),
-                              label: const Text('Add another item'),
+                    if (open)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (var i = 0; i < list.length; i++)
+                              _needRow(list, i, names),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: OutlinedButton.icon(
+                                key: ValueKey('multi-add-${row.key}'),
+                                onPressed: () {
+                                  setState(() => list.add(_Need()));
+                                  _saveDraft();
+                                },
+                                icon: const Icon(Icons.add),
+                                label: const Text('Add another item'),
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
                   ],
                 ),
               );
