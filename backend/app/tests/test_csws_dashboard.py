@@ -7,9 +7,10 @@ from models.physical_donation_model import PhysicalDonation
 from tests.test_role_flows import api, ok  # noqa: F401  (fixture)
 
 
-def _report(client, t, qty=100):
+def _report(client, t, qty=100, barangay_id=1, disaster_type_id=1):
     rid = ok(client.post("/reports/", headers=t["unit"], json={
-        "disaster_type_id": 1, "barangay_id": 1, "estimated_quantity": qty}), 201)["report_id"]
+        "disaster_type_id": disaster_type_id, "barangay_id": barangay_id,
+        "estimated_quantity": qty}), 201)["report_id"]
     ok(client.post(f"/reports/{rid}/validate", headers=t["admin"], json={}))
     return rid
 
@@ -97,6 +98,33 @@ def test_inventory_is_what_was_received_per_report(api):
     assert total == 1 and items[0]["quantity"] == 60
     assert ok(client.get(f"/inventory/per-report/{a}/counts", headers=t["csws"]))["food_water"] == 1
     assert client.get("/inventory/per-report/999999", headers=t["csws"]).status_code == 404
+
+
+def test_inventory_filters_by_barangay_and_disaster_type(api):
+    """Nov 24: the inventory has the Barangay and Disaster type filters of
+    every report list (stock is held per report)."""
+    client, t = api
+    a = _report(client, t, barangay_id=1, disaster_type_id=1)
+    b = _report(client, t, barangay_id=2, disaster_type_id=2)
+    _stock(client, t, a, 60)
+    _stock(client, t, b, 15)
+
+    rows, _ = _page(client, t, "/inventory/summary", barangay_id=2)
+    assert [r["quantity"] for r in rows] == [15]
+    rows, _ = _page(client, t, "/inventory/summary", disaster_type_id=1)
+    assert [r["quantity"] for r in rows] == [60]
+    rows, total = _page(client, t, "/inventory/summary", barangay_id=1, disaster_type_id=2)
+    assert total == 0
+    counts = ok(client.get("/inventory/summary/counts", headers=t["csws"],
+                           params={"barangay_id": 2}))
+    assert counts["all"] == 1 and counts["food_water"] == 1
+
+    cards, total = _page(client, t, "/inventory/per-report", barangay_id=2)
+    assert total == 1 and cards[0]["report_id"] == b
+    cards, total = _page(client, t, "/inventory/per-report", disaster_type_id=1)
+    assert total == 1 and cards[0]["report_id"] == a
+    assert ok(client.get("/inventory/per-report/counts", headers=t["csws"],
+                         params={"disaster_type_id": 2})) == {"all": 1}
 
 
 def test_overview_cache_shares_one_answer_without_hanging(api):

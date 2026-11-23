@@ -94,6 +94,18 @@ void main() {
       ], total: 1);
     }
     if (p == '/inventory/per-report/counts') return json({'all': 1});
+    if (p == '/inventory/summary/counts') return json({'all': 1, 'food_water': 1});
+    if (p == '/lookups') {
+      return json({
+        'barangays': [
+          {'id': 1, 'name': 'Casili'},
+          {'id': 2, 'name': 'Tawason'},
+        ],
+        'disaster_types': [
+          {'id': 1, 'name': 'Fire'},
+        ],
+      });
+    }
     if (p.startsWith('/notifications')) return json({'items': [], 'unread': 0});
     return json([], total: 0);
   });
@@ -102,6 +114,7 @@ void main() {
     requests = [];
     Api.instance.token = 'test-token';
     Api.instance.role = Roles.cswsMain;
+    Api.instance.refreshLookups();
   });
   tearDown(() {
     Api.instance.token = null;
@@ -174,18 +187,36 @@ void main() {
     }, () => server());
   });
 
-  testWidgets('Waiting to be received: chips, 10 at a time, end', (tester) async {
+  testWidgets('Waiting to be received: Filter panel, 10 at a time, end', (tester) async {
     await http.runWithClient(() async {
       await pump(tester, const CswsMainDashboard());
       await tester.tap(find.text('Waiting to be received'));
       await tester.pumpAndSettle();
 
-      expect(find.text('All (15)'), findsOneWidget);
-      expect(find.text('Due today or late (2)'), findsOneWidget);
       expect(find.text('Showing 1–10 of 15'), findsOneWidget);
+      expect(find.text('Sort: Due soonest'), findsOneWidget);
       final first = requests.lastWhere((r) => r.url.path == '/dashboard/csws-main/waiting');
       expect(first.url.queryParameters['limit'], '10');
       expect(first.url.queryParameters['sort'], 'due_soonest');
+
+      // Nov 24: the chips are in the Filter panel, as in every report list.
+      await tester.tap(find.text('Filter'));
+      await tester.pumpAndSettle();
+      expect(find.text('All (15)'), findsOneWidget);
+      await tester.tap(find.text('Due today or late (2)'));
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+      final due = requests.lastWhere((r) => r.url.path == '/dashboard/csws-main/waiting');
+      expect(due.url.queryParameters['filter'], 'due');
+      // A removable chip shows the filter; removing it shows all again.
+      expect(find.widgetWithText(InputChip, 'Due today or late'), findsOneWidget);
+      await tester.tap(find.byTooltip('Remove Due today or late'));
+      await tester.pumpAndSettle();
+      expect(
+        requests.lastWhere((r) => r.url.path == '/dashboard/csws-main/waiting')
+            .url.queryParameters.containsKey('filter'),
+        isFalse,
+      );
 
       await tester.dragUntilVisible(
         find.text("That's all 15"),
@@ -199,6 +230,27 @@ void main() {
             r.url.queryParameters['offset'] == '10'),
         isNotEmpty,
       );
+    }, () => server());
+  });
+
+  testWidgets('Inventory filters by barangay like the report lists', (tester) async {
+    await http.runWithClient(() async {
+      await pump(tester, const InventoryPage());
+      await tester.tap(find.text('Filter'));
+      await tester.pumpAndSettle();
+      expect(find.text('Category'), findsOneWidget);
+      expect(find.text('Food & water (1)'), findsOneWidget);
+      await tester.tap(find.widgetWithText(DropdownButtonFormField<int?>, 'Barangay'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Tawason').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Apply'));
+      await tester.pumpAndSettle();
+      final last = requests.lastWhere((r) => r.url.path == '/inventory/summary');
+      expect(last.url.queryParameters['barangay_id'], '2');
+      final counts = requests.lastWhere((r) => r.url.path == '/inventory/summary/counts');
+      expect(counts.url.queryParameters['barangay_id'], '2');
+      expect(find.widgetWithText(InputChip, 'Tawason'), findsOneWidget);
     }, () => server());
   });
 

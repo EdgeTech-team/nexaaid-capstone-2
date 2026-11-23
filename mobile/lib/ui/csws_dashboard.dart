@@ -7,10 +7,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import '../api.dart';
 import '../realtime.dart';
 import 'batch_sheet.dart' show openDonationByQr;
-import 'brand_title.dart';
 import 'csws_screens.dart' show ActivityList;
 import 'home_nav.dart';
-import 'notifications_screen.dart' show NotificationBell;
 import 'ops_screens.dart' show showDeliveryHistory;
 import 'scheduled_deliveries.dart';
 import 'widgets.dart';
@@ -83,7 +81,9 @@ String _more(Object? n) {
 }
 
 // ---------------------------------------------------------------------------
-// Item icons: one color (Harbor teal on mist), only the shape changes.
+// Item icons (Dave's item icon set): one icon per catalog item, in its
+// category color on a soft tint. Matched by item name; any other item
+// shows its category icon, and anything else a box.
 // ---------------------------------------------------------------------------
 String itemSvgAsset(Object? itemName, [Object? category]) {
   final n = '${itemName ?? ''}'.toLowerCase();
@@ -91,6 +91,8 @@ String itemSvgAsset(Object? itemName, [Object? category]) {
   String file;
   if (has(['rice', 'grain'])) {
     file = 'rice';
+  } else if (has(['canned', 'sardine', 'tuna', 'corned'])) {
+    file = 'canned';
   } else if (has(['noodle', 'pasta'])) {
     file = 'noodles';
   } else if (has(['water', 'drink'])) {
@@ -103,8 +105,12 @@ String itemSvgAsset(Object? itemName, [Object? category]) {
     file = 'diaper';
   } else if (has(['blanket', 'mat'])) {
     file = 'blanket';
+  } else if (has(['lower', 'pants', 'short'])) {
+    file = 'pants';
   } else if (has(['cloth', 'shirt'])) {
     file = 'cloth';
+  } else if (has(['kitchen', 'utensil', 'cook'])) {
+    file = 'kitchen';
   } else if (has(['tent', 'tarp'])) {
     file = 'tent';
   } else {
@@ -115,11 +121,39 @@ String itemSvgAsset(Object? itemName, [Object? category]) {
       'Hygiene' => 'hyg',
       'Shelter' => 'blanket',
       'Clothing' => 'cloth',
+      'Kitchen' => 'kitchen',
       _ => 'other', // "Any", donor-typed (Other), anything else: a box
     };
   }
   return 'assets/item_icons/$file.svg';
 }
+
+/// The category color of an item icon and its soft tint (Dave's set).
+(Color, Color) itemIconColors(String asset) {
+  final file = asset.split('/').last.replaceAll('.svg', '');
+  return switch (file) {
+    'rice' || 'canned' || 'noodles' => (
+      const Color(0xFFC2410C),
+      const Color(0xFFFFF1EA),
+    ), // Food
+    'water' => (const Color(0xFF1D4ED8), const Color(0xFFEFF6FF)),
+    'hyg' || 'diaper' => (const Color(0xFF6D28D9), const Color(0xFFF3EEFF)),
+    'blanket' || 'tent' => (const Color(0xFF15803D), const Color(0xFFEAFBF1)),
+    'med' => (const Color(0xFFBE185D), const Color(0xFFFDEEF4)),
+    'cloth' || 'pants' => (const Color(0xFFC0267E), const Color(0xFFFCEFF7)),
+    'kitchen' => (const Color(0xFFB45309), const Color(0xFFFFF8EB)),
+    'report' => (CswsColors.harbor, CswsColors.iconMist),
+    _ => (const Color(0xFF475569), const Color(0xFFF1F5F9)), // Any other item
+  };
+}
+
+/// An item icon in its category color, without the tile.
+Widget itemSvg(String asset, double size) => SvgPicture.asset(
+  asset,
+  width: size,
+  height: size,
+  colorFilter: ColorFilter.mode(itemIconColors(asset).$1, BlendMode.srcIn),
+);
 
 class ItemIcon extends StatelessWidget {
   final Object? itemName;
@@ -135,22 +169,23 @@ class ItemIcon extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => ExcludeSemantics(
-    child: Container(
-      width: size,
-      height: size,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: CswsColors.iconMist,
-        borderRadius: BorderRadius.circular(size * 0.25),
+  Widget build(BuildContext context) {
+    final file = asset ?? itemSvgAsset(itemName, category);
+    final (fg, bg) = itemIconColors(file);
+    return ExcludeSemantics(
+      child: Container(
+        width: size,
+        height: size,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(size * 0.25),
+          border: Border.all(color: fg.withValues(alpha: 0.18)),
+        ),
+        child: itemSvg(file, size * 0.6),
       ),
-      child: SvgPicture.asset(
-        asset ?? itemSvgAsset(itemName, category),
-        width: size * 0.6,
-        height: size * 0.6,
-      ),
-    ),
-  );
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -208,60 +243,7 @@ class CswsTag extends StatelessWidget {
 // Layout pieces
 // ---------------------------------------------------------------------------
 
-/// The teal band at the top of the overview and of every page.
-class CswsBand extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final String? backLabel;
-  const CswsBand(this.title, this.subtitle, {super.key, this.backLabel});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    return Container(
-      width: double.infinity,
-      color: CswsColors.harbor,
-      padding: const EdgeInsets.fromLTRB(Space.md, Space.md, Space.md, 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (backLabel != null)
-            InkWell(
-              onTap: () => Navigator.of(context).maybePop(),
-              child: Padding(
-                padding: const EdgeInsets.only(bottom: Space.xs),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.arrow_back, color: Colors.white, size: 20),
-                    Gaps.h8,
-                    Text(
-                      backLabel!,
-                      style: t.bodyLarge?.copyWith(color: Colors.white),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          Semantics(
-            header: true,
-            child: Text(
-              title,
-              style: t.headlineSmall?.copyWith(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          Gaps.v4,
-          Text(subtitle, style: t.bodyMedium?.copyWith(color: Colors.white)),
-        ],
-      ),
-    );
-  }
-}
-
-/// White rounded card used for every block on these screens.
+/// The app's own card (the copy-develop look before PR #124), tappable.
 class CswsCard extends StatelessWidget {
   final Widget child;
   final VoidCallback? onTap;
@@ -274,98 +256,14 @@ class CswsCard extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Material(
-      color: cs.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Radii.lg),
-        side: BorderSide(color: cs.outlineVariant),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(padding: padding, child: child),
-      ),
-    );
-  }
-}
-
-/// "Inventory   6 of 11 items                 See all"
-class SectionHead extends StatelessWidget {
-  final String title;
-  final String? hint;
-  final VoidCallback? onSeeAll;
-  const SectionHead(this.title, {super.key, this.hint, this.onSeeAll});
-
-  @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(0, Space.lg, 0, Space.xs),
-      child: Row(
-        children: [
-          Flexible(
-            child: Text(
-              title,
-              style: t.titleLarge?.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ),
-          if (hint != null) ...[
-            Gaps.h8,
-            Text(hint!, style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
-          ],
-          const Spacer(),
-          if (onSeeAll != null)
-            TextButton(
-              onPressed: onSeeAll,
-              style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
-              child: const Text('See all'),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Puts [children] in rows of [columns], each row as tall as its tallest.
-class EvenGrid extends StatelessWidget {
-  final List<Widget> children;
-  final int columns;
-  final double gap;
-  const EvenGrid({
-    super.key,
-    required this.children,
-    required this.columns,
-    this.gap = Space.sm,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final rows = <Widget>[];
-    for (var i = 0; i < children.length; i += columns) {
-      final cells = <Widget>[];
-      for (var k = 0; k < columns; k++) {
-        if (k > 0) cells.add(SizedBox(width: gap));
-        cells.add(
-          Expanded(
-            child: i + k < children.length ? children[i + k] : const SizedBox(),
-          ),
-        );
-      }
-      if (rows.isNotEmpty) rows.add(SizedBox(height: gap));
-      rows.add(
-        IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: cells,
-          ),
-        ),
-      );
-    }
-    return Column(children: rows);
-  }
+  Widget build(BuildContext context) => Card(
+    margin: EdgeInsets.zero,
+    clipBehavior: Clip.antiAlias,
+    child: InkWell(
+      onTap: onTap,
+      child: Padding(padding: padding, child: child),
+    ),
+  );
 }
 
 Future<void> _push(BuildContext context, Widget page) =>
@@ -412,7 +310,6 @@ class _Overview extends StatelessWidget {
     final cancelled = (m['cancelled_donations'] as num?) ?? 0;
     final due = (m['due_today'] as num?) ?? 0;
     final withStock = (inv['reports_with_stock'] as num?) ?? 0;
-    final wide = MediaQuery.sizeOf(context).width >= Breakpoints.expanded;
     final t = Theme.of(context).textTheme;
     final cs = Theme.of(context).colorScheme;
 
@@ -447,132 +344,87 @@ class _Overview extends StatelessWidget {
       ),
     ]);
 
+    // The copy-develop look before PR #124 (page header, section titles,
+    // plain cards with list rows); the content is the Nov 23 dashboard.
     return ListView(
-      padding: EdgeInsets.zero,
+      padding: const EdgeInsets.all(16),
       children: [
-        const CswsBand('CSWS Main Office Dashboard', 'CSWS Main Office'),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(Space.md, Space.md, Space.md, Space.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              cards,
-              Gaps.v16,
-              ScheduledDeliveriesCard(
-                deliveries: scheduled,
-                onOpen: (d) => showDeliveryHistory(context, d['delivery_id'] as int),
-                onSeeAll: () => HomeNav.go(context, const HomeTarget('Deliveries')),
-              ),
-
-              SectionHead(
-                'Inventory',
-                hint: '${invRows.length} of ${_n(inv['total'])} items',
-                onSeeAll: () => _push(context, const InventoryPage()),
-              ),
-              if (invRows.isEmpty)
-                const EmptyState('Inventory is empty.')
-              else
-                EvenGrid(
-                  columns: wide ? 3 : 2,
-                  children: [for (final i in invRows) _StockCard(i)],
-                ),
-              Gaps.v12,
-              OutlinedButton.icon(
-                onPressed: () => _push(context, const InventoryPage()),
-                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                icon: const Icon(Icons.inventory_2_outlined),
-                label: Text('View all inventory (${_n(inv['total'])})'),
-              ),
-              Gaps.v12,
-              CswsCard(
-                onTap: () => _push(context, const InventoryPage(perReport: true)),
-                child: Row(
-                  children: [
-                    const ItemIcon(null, asset: 'assets/item_icons/report.svg'),
-                    Gaps.h12,
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Per report',
-                            style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          Text(
-                            'Stock held for ${_n(withStock)} '
-                            '${withStock == 1 ? 'report' : 'reports'}',
-                            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, color: cs.onSurfaceVariant),
-                  ],
-                ),
-              ),
-
-              const SectionTitle('Recent activity'),
-              ActivityList(logs),
-            ],
+        const PageHeader(
+          'CSWS Main Office Dashboard',
+          subtitle: 'CSWS Main Office',
+        ),
+        cards,
+        ScheduledDeliveriesCard(
+          deliveries: scheduled,
+          onOpen: (d) => showDeliveryHistory(context, d['delivery_id'] as int),
+          onSeeAll: () => HomeNav.go(context, const HomeTarget('Deliveries')),
+        ),
+        SectionTitle(
+          'Inventory summary',
+          trailing: Text(
+            '${invRows.length} of ${_n(inv['total'])} items',
+            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
         ),
+        if (invRows.isEmpty)
+          const EmptyState('Inventory is empty.')
+        else
+          Card(
+            child: Column(
+              children: [for (final i in invRows) _StockRow(i)],
+            ),
+          ),
+        Gaps.v8,
+        OutlinedButton.icon(
+          onPressed: () => _push(context, const InventoryPage()),
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+          icon: const Icon(Icons.inventory_2_outlined),
+          label: Text('View all inventory (${_n(inv['total'])})'),
+        ),
+        Gaps.v8,
+        Card(
+          child: ListTile(
+            onTap: () => _push(context, const InventoryPage(perReport: true)),
+            leading: const Icon(Icons.assignment_outlined),
+            title: const Text('Per report'),
+            subtitle: Text(
+              'Stock held for ${_n(withStock)} '
+              '${withStock == 1 ? 'report' : 'reports'}',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+          ),
+        ),
+        const SectionTitle('Recent activity'),
+        ActivityList(logs),
       ],
     );
   }
 }
 
-class _StockCard extends StatelessWidget {
+/// One item in the overview's inventory card: icon, name, quantity.
+class _StockRow extends StatelessWidget {
   final Map i;
-  const _StockCard(this.i);
+  const _StockRow(this.i);
 
   @override
-  Widget build(BuildContext context) {
-    final t = Theme.of(context).textTheme;
-    final cs = Theme.of(context).colorScheme;
-    return CswsCard(
-      padding: const EdgeInsets.all(Space.sm),
-      child: Row(
-        children: [
-          ItemIcon(i['item_name'], category: i['category']),
-          Gaps.h12,
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${i['item_name']}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: t.bodyLarge,
-                ),
-                Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  spacing: 6,
-                  children: [
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(
-                            text: _n(i['quantity']),
-                            style: t.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          TextSpan(
-                            text: ' ${i['unit'] ?? ''}',
-                            style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (i['low'] == true) const CswsTag('Low', kind: TagKind.serious),
-                  ],
-                ),
-              ],
-            ),
-          ),
+  Widget build(BuildContext context) => ListTile(
+    dense: true,
+    leading: ItemIcon(i['item_name'], category: i['category'], size: 36),
+    title: Text('${i['item_name']}', maxLines: 1, overflow: TextOverflow.ellipsis),
+    trailing: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (i['low'] == true) ...[
+          const StatusChip('Pending', label: 'Low'),
+          Gaps.h8,
         ],
-      ),
-    );
-  }
+        Text(
+          '${_n(i['quantity'])} ${i['unit'] ?? ''}'.trim(),
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+      ],
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -596,15 +448,16 @@ class ListSort {
 
 typedef RowBuilder = Widget Function(BuildContext context, Map row, VoidCallback reload);
 
-/// Teal band with a back link, checkmark chips with counts, search, sort,
-/// "Showing 1–10 of N", 10 rows at a time loaded as the list scrolls (a
+/// Teal band with a back link, search, the Filter button and Sort menu of
+/// every report list (Nov 24: a panel with the chips and their counts, plus
+/// Barangay and Disaster type when [placeFilters]; a removable chip for each
+/// filter that is on), "Showing 1–10 of N", 10 rows at a time loaded as the list scrolls (a
 /// "Load 10 more" button on the web), "That's all N", pull to refresh and
 /// an empty state. A chip, search or sort change starts again at the first
 /// 10; answers for an older filter are dropped.
 class CswsListPage extends StatefulWidget {
   final String title;
   final String description;
-  final String backLabel;
   final String path;
   final String? countsPath;
   final String chipParam;
@@ -612,6 +465,13 @@ class CswsListPage extends StatefulWidget {
   final String initialChip;
   final List<ListSort> sorts;
   final String searchHint;
+
+  /// The chips' section title in the Filter panel ("Category").
+  final String chipTitle;
+
+  /// Barangay and Disaster type in the Filter panel (sent as barangay_id
+  /// and disaster_type_id), as in every report list.
+  final bool placeFilters;
   final RowBuilder itemBuilder;
   final String emptyTitle;
   final String emptyMessage;
@@ -627,13 +487,14 @@ class CswsListPage extends StatefulWidget {
     required this.itemBuilder,
     required this.emptyTitle,
     required this.emptyMessage,
-    this.backLabel = 'Dashboard',
     this.countsPath,
     this.chipParam = '',
     this.chips = const [],
     this.initialChip = '',
     this.sorts = const [],
     this.searchHint = 'Search',
+    this.chipTitle = 'Show',
+    this.placeFilters = false,
     this.top = const [],
   });
 
@@ -650,6 +511,10 @@ class _CswsListPageState extends State<CswsListPage> {
   late String chip = widget.initialChip;
   late String sort = widget.sorts.isEmpty ? '' : widget.sorts.first.value;
   String q = '';
+  int? barangayId;
+  String? barangayName;
+  int? disasterTypeId;
+  String? disasterTypeName;
 
   final List<Map> items = [];
   int? total;
@@ -660,7 +525,17 @@ class _CswsListPageState extends State<CswsListPage> {
   int _generation = 0;
 
   bool get hasMore => total == null ? !loadedOnce : items.length < total!;
-  bool get filtered => q.isNotEmpty || chip != widget.initialChip;
+  /// Filters on, for the badge on the Filter button.
+  int get activeFilters =>
+      (chip != widget.initialChip ? 1 : 0) +
+      (barangayId != null ? 1 : 0) +
+      (disasterTypeId != null ? 1 : 0);
+  bool get filtered => q.isNotEmpty || activeFilters > 0;
+
+  Map<String, String> get _place => {
+    if (barangayId != null) 'barangay_id': '$barangayId',
+    if (disasterTypeId != null) 'disaster_type_id': '$disasterTypeId',
+  };
 
   @override
   void initState() {
@@ -687,6 +562,7 @@ class _CswsListPageState extends State<CswsListPage> {
     if (chip.isNotEmpty && widget.chipParam.isNotEmpty) widget.chipParam: chip,
     if (sort.isNotEmpty) 'sort': sort,
     if (q.isNotEmpty) 'q': q,
+    ..._place,
   };
 
   void _nearEnd() {
@@ -725,7 +601,7 @@ class _CswsListPageState extends State<CswsListPage> {
   Future<void> _loadCounts(int gen) async {
     final path = widget.countsPath;
     if (path == null) return;
-    final r = await api.get(path, query: {if (q.isNotEmpty) 'q': q});
+    final r = await api.get(path, query: {if (q.isNotEmpty) 'q': q, ..._place});
     if (!mounted || gen != _generation || !r.ok || r.json is! Map) return;
     setState(() => counts = r.json as Map);
   }
@@ -763,9 +639,19 @@ class _CswsListPageState extends State<CswsListPage> {
     });
   }
 
-  void _setChip(String v) {
-    if (v == chip) return;
-    chip = v;
+  /// The Filter panel's Apply / Clear, or a removed chip.
+  void _setFilters({
+    required String chip,
+    int? barangayId,
+    String? barangayName,
+    int? disasterTypeId,
+    String? disasterTypeName,
+  }) {
+    this.chip = chip;
+    this.barangayId = barangayId;
+    this.barangayName = barangayId == null ? null : barangayName;
+    this.disasterTypeId = disasterTypeId;
+    this.disasterTypeName = disasterTypeId == null ? null : disasterTypeName;
     _restart();
   }
 
@@ -781,33 +667,7 @@ class _CswsListPageState extends State<CswsListPage> {
   void _clearFilters() {
     _search.clear();
     q = '';
-    chip = widget.initialChip;
-    _restart();
-  }
-
-  Future<void> _pickSort() async {
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final s in widget.sorts)
-              ListTile(
-                title: Text(s.label),
-                trailing: s.value == sort
-                    ? const Icon(Icons.check, color: CswsColors.harbor)
-                    : null,
-                onTap: () => Navigator.pop(ctx, s.value),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (picked == null || picked == sort) return;
-    sort = picked;
-    _restart();
+    _setFilters(chip: widget.initialChip);
   }
 
   @override
@@ -817,6 +677,51 @@ class _CswsListPageState extends State<CswsListPage> {
     final sortLabel = widget.sorts
         .firstWhere((s) => s.value == sort, orElse: () => const ListSort('', 'Sort'))
         .label;
+    final hasFilter = widget.chips.isNotEmpty || widget.placeFilters;
+
+    // A removable chip for each filter that is on (as in report lists).
+    Widget onChip(String label, VoidCallback remove) => InputChip(
+      avatar: const Icon(Icons.circle, size: 10, color: CswsColors.harbor),
+      label: Text(label),
+      visualDensity: VisualDensity.compact,
+      onDeleted: remove,
+      deleteButtonTooltipMessage: 'Remove $label',
+    );
+    final chipLabel = widget.chips
+        .where((c) => c.value == chip)
+        .map((c) => c.label)
+        .firstOrNull;
+    final onChips = [
+      if (chip != widget.initialChip && chipLabel != null)
+        onChip(
+          chipLabel,
+          () => _setFilters(
+            chip: widget.initialChip,
+            barangayId: barangayId,
+            barangayName: barangayName,
+            disasterTypeId: disasterTypeId,
+            disasterTypeName: disasterTypeName,
+          ),
+        ),
+      if (barangayId != null)
+        onChip(
+          barangayName ?? 'Barangay',
+          () => _setFilters(
+            chip: chip,
+            disasterTypeId: disasterTypeId,
+            disasterTypeName: disasterTypeName,
+          ),
+        ),
+      if (disasterTypeId != null)
+        onChip(
+          disasterTypeName ?? 'Disaster type',
+          () => _setFilters(
+            chip: chip,
+            barangayId: barangayId,
+            barangayName: barangayName,
+          ),
+        ),
+    ];
 
     Widget footer() {
       if (error != null && items.isEmpty) {
@@ -877,46 +782,27 @@ class _CswsListPageState extends State<CswsListPage> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        titleSpacing: Space.md,
-        title: const BrandAppBarTitle(),
-        actions: const [NotificationBell(), SizedBox(width: 8)],
-      ),
+      // The copy-develop look before PR #124: a plain app bar with the
+      // page title and the back arrow.
+      appBar: AppBar(title: Text(widget.title)),
       body: RefreshIndicator(
         onRefresh: _restart,
         child: CustomScrollView(
           controller: _scroll,
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
-            SliverToBoxAdapter(
-              child: CswsBand(widget.title, widget.description, backLabel: widget.backLabel),
-            ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(Space.md, Space.md, Space.md, 0),
               sliver: SliverList.list(
                 children: [
-                  ...widget.top,
-                  if (widget.chips.isNotEmpty)
-                    Wrap(
-                      spacing: Space.xs,
-                      runSpacing: Space.xs,
-                      children: [
-                        for (final c in widget.chips)
-                          FilterChip(
-                            showCheckmark: true,
-                            selected: chip == c.value,
-                            selectedColor: CswsColors.mist,
-                            checkmarkColor: CswsColors.deep,
-                            label: Text(
-                              counts.containsKey(c.countKey)
-                                  ? '${c.label} (${_n(counts[c.countKey])})'
-                                  : c.label,
-                            ),
-                            onSelected: (_) => _setChip(c.value),
-                          ),
-                      ],
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: Space.sm),
+                    child: Text(
+                      widget.description,
+                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                     ),
-                  Gaps.v12,
+                  ),
+                  ...widget.top,
                   TextField(
                     controller: _search,
                     onChanged: _setSearch,
@@ -937,37 +823,71 @@ class _CswsListPageState extends State<CswsListPage> {
                     ),
                   ),
                   Gaps.v12,
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  Wrap(
+                    spacing: Space.xs,
+                    runSpacing: Space.xs,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      if (widget.sorts.length > 1)
-                        Flexible(
-                          child: OutlinedButton(
-                            onPressed: _pickSort,
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size(48, 48),
-                              padding: const EdgeInsets.symmetric(horizontal: Space.sm),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.sort, size: 18),
-                                Gaps.h8,
-                                Flexible(
-                                  child: Text(sortLabel, overflow: TextOverflow.ellipsis),
-                                ),
-                              ],
-                            ),
+                      if (hasFilter)
+                        _ListFilterButton(
+                          active: activeFilters,
+                          panel: (close) => _ListFilterPanel(
+                            chipTitle: widget.chipTitle,
+                            chips: widget.chips,
+                            counts: counts,
+                            placeFilters: widget.placeFilters,
+                            chip: chip,
+                            initialChip: widget.initialChip,
+                            barangayId: barangayId,
+                            barangayName: barangayName,
+                            disasterTypeId: disasterTypeId,
+                            disasterTypeName: disasterTypeName,
+                            onApply: _setFilters,
+                            close: close,
                           ),
                         ),
-                      const SizedBox(width: Space.sm),
-                      if (items.isNotEmpty)
-                        Text(
-                          'Showing 1–${items.length} of ${_n(total ?? items.length)}',
-                          style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                      if (widget.sorts.length > 1)
+                        MenuAnchor(
+                          alignmentOffset: const Offset(0, Space.xxs),
+                          menuChildren: [
+                            for (final o in widget.sorts)
+                              MenuItemButton(
+                                leadingIcon: Icon(
+                                  o.value == sort ? Icons.check : null,
+                                  size: 18,
+                                ),
+                                onPressed: () {
+                                  if (o.value == sort) return;
+                                  sort = o.value;
+                                  _restart();
+                                },
+                                child: Text(o.label),
+                              ),
+                          ],
+                          builder: (context, menu, _) => OutlinedButton.icon(
+                            onPressed: () =>
+                                menu.isOpen ? menu.close() : menu.open(),
+                            icon: const Icon(Icons.sort),
+                            label: Text('Sort: $sortLabel'),
+                          ),
                         ),
                     ],
                   ),
+                  if (onChips.isNotEmpty) ...[
+                    Gaps.v8,
+                    Wrap(
+                      spacing: Space.xs,
+                      runSpacing: Space.xs,
+                      children: onChips,
+                    ),
+                  ],
+                  if (items.isNotEmpty) ...[
+                    Gaps.v12,
+                    Text(
+                      'Showing 1–${items.length} of ${_n(total ?? items.length)}',
+                      style: t.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ],
                   Gaps.v12,
                 ],
               ),
@@ -984,6 +904,238 @@ class _CswsListPageState extends State<CswsListPage> {
                   );
                 },
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The Filter button with the number of filters on, opening its panel
+/// under it (the same button as in every report list).
+class _ListFilterButton extends StatefulWidget {
+  final int active;
+  final Widget Function(VoidCallback close) panel;
+  const _ListFilterButton({required this.active, required this.panel});
+
+  @override
+  State<_ListFilterButton> createState() => _ListFilterButtonState();
+}
+
+class _ListFilterButtonState extends State<_ListFilterButton> {
+  final _menu = MenuController();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return MenuAnchor(
+      controller: _menu,
+      alignmentOffset: const Offset(0, Space.xxs),
+      menuChildren: [widget.panel(_menu.close)],
+      builder: (context, menu, _) => Badge(
+        isLabelVisible: widget.active > 0,
+        label: Text('${widget.active}'),
+        backgroundColor: cs.primary,
+        textColor: cs.onPrimary,
+        child: OutlinedButton.icon(
+          onPressed: () => menu.isOpen ? menu.close() : menu.open(),
+          icon: const Icon(Icons.filter_list),
+          label: const Text('Filter'),
+        ),
+      ),
+    );
+  }
+}
+
+typedef _ApplyFilters =
+    void Function({
+      required String chip,
+      int? barangayId,
+      String? barangayName,
+      int? disasterTypeId,
+      String? disasterTypeName,
+    });
+
+/// The panel under the Filter button: the chips with their counts, then
+/// Barangay and Disaster type. Choices change a draft; Apply uses it,
+/// Clear goes back to all (as in every report list).
+class _ListFilterPanel extends StatefulWidget {
+  final String chipTitle;
+  final List<ListChip> chips;
+  final Map counts;
+  final bool placeFilters;
+  final String chip;
+  final String initialChip;
+  final int? barangayId;
+  final String? barangayName;
+  final int? disasterTypeId;
+  final String? disasterTypeName;
+  final _ApplyFilters onApply;
+  final VoidCallback close;
+
+  const _ListFilterPanel({
+    required this.chipTitle,
+    required this.chips,
+    required this.counts,
+    required this.placeFilters,
+    required this.chip,
+    required this.initialChip,
+    required this.barangayId,
+    required this.barangayName,
+    required this.disasterTypeId,
+    required this.disasterTypeName,
+    required this.onApply,
+    required this.close,
+  });
+
+  @override
+  State<_ListFilterPanel> createState() => _ListFilterPanelState();
+}
+
+class _ListFilterPanelState extends State<_ListFilterPanel> {
+  late String chip = widget.chip;
+  late int? barangayId = widget.barangayId;
+  late String? barangayName = widget.barangayName;
+  late int? disasterTypeId = widget.disasterTypeId;
+  late String? disasterTypeName = widget.disasterTypeName;
+
+  /// Barangays and disaster types for the two dropdowns (GET /lookups).
+  late final Future<Map<String, dynamic>> _lookups = api.lookups();
+
+  void _apply({bool clear = false}) {
+    if (clear) {
+      widget.onApply(chip: widget.initialChip);
+    } else {
+      widget.onApply(
+        chip: chip,
+        barangayId: barangayId,
+        barangayName: barangayName,
+        disasterTypeId: disasterTypeId,
+        disasterTypeName: disasterTypeName,
+      );
+    }
+    widget.close();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return SizedBox(
+      // Under the button, never wider than the screen (phones, web).
+      width: (MediaQuery.sizeOf(context).width - 2 * Space.md).clamp(
+        240.0,
+        360.0,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(Space.md),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (widget.chips.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Space.md),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(widget.chipTitle, style: t.titleSmall),
+                    Gaps.v8,
+                    Wrap(
+                      spacing: Space.xs,
+                      runSpacing: Space.xs,
+                      children: [
+                        for (final c in widget.chips)
+                          ChoiceChip(
+                            label: Text(
+                              widget.counts.containsKey(c.countKey)
+                                  ? '${c.label} (${_n(widget.counts[c.countKey])})'
+                                  : c.label,
+                            ),
+                            selected: chip == c.value,
+                            onSelected: (_) => setState(() => chip = c.value),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            if (widget.placeFilters)
+              FutureBuilder<Map<String, dynamic>>(
+                future: _lookups,
+                builder: (context, snap) {
+                  List<Map> list(String key) =>
+                      ((snap.data?[key] as List?) ?? const []).cast<Map>();
+                  Widget pick(
+                    String label,
+                    List<Map> options,
+                    int? value,
+                    void Function(int? id, String? name) onPick,
+                  ) => Padding(
+                    padding: const EdgeInsets.only(bottom: Space.md),
+                    child: DropdownButtonFormField<int?>(
+                      key: ValueKey('filter-$label-${options.length}'),
+                      isExpanded: true,
+                      initialValue: options.any((o) => o['id'] == value)
+                          ? value
+                          : null,
+                      decoration: InputDecoration(labelText: label),
+                      items: [
+                        const DropdownMenuItem<int?>(
+                          value: null,
+                          child: Text('All'),
+                        ),
+                        for (final o in options)
+                          DropdownMenuItem<int?>(
+                            value: (o['id'] as num).toInt(),
+                            child: Text(
+                              '${o['name']}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: (id) => onPick(
+                        id,
+                        id == null
+                            ? null
+                            : '${options.firstWhere((o) => o['id'] == id)['name']}',
+                      ),
+                    ),
+                  );
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      pick(
+                        'Barangay',
+                        list('barangays'),
+                        barangayId,
+                        (id, name) => setState(() {
+                          barangayId = id;
+                          barangayName = name;
+                        }),
+                      ),
+                      pick(
+                        'Disaster type',
+                        list('disaster_types'),
+                        disasterTypeId,
+                        (id, name) => setState(() {
+                          disasterTypeId = id;
+                          disasterTypeName = name;
+                        }),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => _apply(clear: true),
+                  child: const Text('Clear'),
+                ),
+                const Spacer(),
+                FilledButton(onPressed: _apply, child: const Text('Apply')),
+              ],
             ),
           ],
         ),
@@ -1190,6 +1342,8 @@ class _InventoryPageState extends State<InventoryPage> {
         countsPath: '/inventory/summary/counts',
         chipParam: 'category',
         chips: _categoryChips,
+        chipTitle: 'Category',
+        placeFilters: true,
         sorts: const [
           ListSort('lowest', 'Lowest stock first'),
           ListSort('highest', 'Highest quantity'),
@@ -1209,6 +1363,7 @@ class _InventoryPageState extends State<InventoryPage> {
       description: 'The stock CSWS holds for each disaster report.',
       path: '/inventory/per-report',
       countsPath: '/inventory/per-report/counts',
+      placeFilters: true,
       sorts: const [
         ListSort('most_stock', 'Most stock first'),
         ListSort('newest', 'Newest report'),
@@ -1303,7 +1458,7 @@ class _StockChip extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SvgPicture.asset(itemSvgAsset(i['item_name'], i['category']), width: 20, height: 20),
+          itemSvg(itemSvgAsset(i['item_name'], i['category']), 20),
           Gaps.h4,
           Flexible(
             child: Text(
@@ -1329,11 +1484,11 @@ class ReportStockPage extends StatelessWidget {
     return CswsListPage(
       title: '${report['report_label']} · ${report['barangay'] ?? ''}',
       description: 'What CSWS received for this report and still holds.',
-      backLabel: 'Inventory · Per report',
       path: '/inventory/per-report/$id',
       countsPath: '/inventory/per-report/$id/counts',
       chipParam: 'category',
       chips: _categoryChips,
+      chipTitle: 'Category',
       sorts: const [
         ListSort('highest', 'Highest quantity'),
         ListSort('lowest', 'Lowest stock first'),

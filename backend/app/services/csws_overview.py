@@ -234,11 +234,26 @@ def _stock_row(item: Item, qty, updated) -> dict:
     }
 
 
-def inventory_summary(db: Session) -> list:
+def _by_place(q, barangay_id: Optional[int], disaster_type_id: Optional[int]):
+    """Only the stock held for reports in that barangay / of that disaster
+    type (the Barangay and Disaster type filters of every report list)."""
+    if barangay_id is None and disaster_type_id is None:
+        return q
+    q = q.join(DisasterReport, DisasterReport.report_id == Inventory.report_id)
+    if barangay_id is not None:
+        q = q.filter(DisasterReport.barangay_id == barangay_id)
+    if disaster_type_id is not None:
+        q = q.filter(DisasterReport.disaster_type_id == disaster_type_id)
+    return q
+
+
+def inventory_summary(db: Session, barangay_id: Optional[int] = None,
+                      disaster_type_id: Optional[int] = None) -> list:
     """Stock per item, all reports added together; only items above 0."""
-    rows = (db.query(Item, func.sum(Inventory.quantity), func.max(Inventory.last_updated))
-            .options(noload(Item.sizes))
-            .join(Inventory, Inventory.item_id == Item.item_id)
+    q = (db.query(Item, func.sum(Inventory.quantity), func.max(Inventory.last_updated))
+         .options(noload(Item.sizes))
+         .join(Inventory, Inventory.item_id == Item.item_id))
+    rows = (_by_place(q, barangay_id, disaster_type_id)
             .group_by(Item.item_id)
             .having(func.sum(Inventory.quantity) > 0).all())
     return [_stock_row(item, qty, updated) for item, qty, updated in rows]
@@ -267,7 +282,9 @@ def sort_inventory(rows: list, sort: str) -> list:
 # ---------------------------------------------------------------------------
 # Inventory, Per report tab: what CSWS holds for each report
 # ---------------------------------------------------------------------------
-def report_stock(db: Session, report_id: Optional[int] = None) -> list:
+def report_stock(db: Session, report_id: Optional[int] = None,
+                 barangay_id: Optional[int] = None,
+                 disaster_type_id: Optional[int] = None) -> list:
     """One row per report that has stock: its items in stock (quantity > 0)."""
     q = (db.query(Inventory.report_id, Inventory.quantity, Inventory.last_updated, Item)
          .join(Item, Item.item_id == Inventory.item_id)
@@ -275,6 +292,7 @@ def report_stock(db: Session, report_id: Optional[int] = None) -> list:
          .filter(Inventory.quantity > 0))
     if report_id is not None:
         q = q.filter(Inventory.report_id == report_id)
+    q = _by_place(q, barangay_id, disaster_type_id)
     by_report: dict = defaultdict(list)
     for rid, qty, updated, item in q.all():
         by_report[rid].append(_stock_row(item, qty, updated))

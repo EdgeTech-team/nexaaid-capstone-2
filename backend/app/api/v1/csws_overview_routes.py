@@ -9,6 +9,9 @@ chips ("All (28)"). Rows come from services/csws_overview.py.
   GET /inventory/summary             Inventory, Summary tab
   GET /inventory/per-report          Inventory, Per report tab
   GET /inventory/per-report/{id}     The stock held for one report
+
+Summary and Per report also take barangay_id and disaster_type_id, the
+Barangay and Disaster type filters every report list has (Nov 24).
 """
 from typing import Optional
 
@@ -69,25 +72,32 @@ def waiting_counts(q: Optional[str] = None, db: Session = Depends(get_db),
 # ---------------------------------------------------------------------------
 # Inventory: Summary and Per report (what CSWS received and still holds)
 # ---------------------------------------------------------------------------
-def _stock(db, q):
-    return [r for r in ov.inventory_summary(db) if ov.matches(q, r["item_name"], r["category"])]
+def _stock(db, q, barangay_id=None, disaster_type_id=None):
+    return [r for r in ov.inventory_summary(db, barangay_id, disaster_type_id)
+            if ov.matches(q, r["item_name"], r["category"])]
 
 
 @router.get("/inventory/summary")
 def inventory_summary(response: Response, category: Optional[str] = None,
                       q: Optional[str] = None, sort: str = "lowest",
+                      barangay_id: Optional[int] = None,
+                      disaster_type_id: Optional[int] = None,
                       page: PageParams = Depends(), db: Session = Depends(get_db),
                       user=Depends(require_role(*ROLES))):
     ov.bad("category", category, ov.INVENTORY_GROUPS)
     ov.bad("sort", sort, ov.INVENTORY_SORTS)
-    rows = [r for r in _stock(db, q) if not category or r["category_group"] == category]
+    rows = [r for r in _stock(db, q, barangay_id, disaster_type_id)
+            if not category or r["category_group"] == category]
     return _send(response, page, ov.sort_inventory(rows, sort))
 
 
 @router.get("/inventory/summary/counts")
-def inventory_summary_counts(q: Optional[str] = None, db: Session = Depends(get_db),
+def inventory_summary_counts(q: Optional[str] = None,
+                             barangay_id: Optional[int] = None,
+                             disaster_type_id: Optional[int] = None,
+                             db: Session = Depends(get_db),
                              user=Depends(require_role(*ROLES))):
-    rows = _stock(db, q)
+    rows = _stock(db, q, barangay_id, disaster_type_id)
     return {"all": len(rows), "low": sum(1 for r in rows if r["low"]),
             **{g: sum(1 for r in rows if r["category_group"] == g) for g in ov.INVENTORY_GROUPS}}
 
@@ -97,22 +107,27 @@ def _card(r: dict) -> dict:
     return {k: v for k, v in r.items() if k != "items"}
 
 
-def _per_report(db, q):
-    return [r for r in ov.report_stock(db) if ov.matches(q, r["report_label"], r["barangay"])]
+def _per_report(db, q, barangay_id=None, disaster_type_id=None):
+    return [r for r in ov.report_stock(db, barangay_id=barangay_id,
+                                       disaster_type_id=disaster_type_id)
+            if ov.matches(q, r["report_label"], r["barangay"])]
 
 
 @router.get("/inventory/per-report")
 def per_report(response: Response, q: Optional[str] = None, sort: str = "most_stock",
+               barangay_id: Optional[int] = None, disaster_type_id: Optional[int] = None,
                page: PageParams = Depends(), db: Session = Depends(get_db),
                user=Depends(require_role(*ROLES))):
     ov.bad("sort", sort, ov.PER_REPORT_SORTS)
-    return _send(response, page, [_card(r) for r in ov.sort_reports(_per_report(db, q), sort)])
+    rows = _per_report(db, q, barangay_id, disaster_type_id)
+    return _send(response, page, [_card(r) for r in ov.sort_reports(rows, sort)])
 
 
 @router.get("/inventory/per-report/counts")
-def per_report_counts(q: Optional[str] = None, db: Session = Depends(get_db),
-                      user=Depends(require_role(*ROLES))):
-    return {"all": len(_per_report(db, q))}
+def per_report_counts(q: Optional[str] = None, barangay_id: Optional[int] = None,
+                      disaster_type_id: Optional[int] = None,
+                      db: Session = Depends(get_db), user=Depends(require_role(*ROLES))):
+    return {"all": len(_per_report(db, q, barangay_id, disaster_type_id))}
 
 
 @router.get("/inventory/per-report/{report_id}")

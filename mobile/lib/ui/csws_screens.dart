@@ -5,7 +5,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../app_routes.dart';
-import 'records_screens.dart' show DonationRecordsScreen;
 import 'home_nav.dart';
 import 'paginated_list.dart';
 import 'paged_donation_entries.dart' show searchDebounce;
@@ -482,21 +481,8 @@ class _ReceiveScreenState extends State<ReceiveScreen>
           icon: const Icon(Icons.qr_code_scanner),
           label: const Text('Scan QR code'),
         ),
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(title: const Text('Donation records')),
-                  body: const DonationRecordsScreen(header: false),
-                ),
-              ),
-            ),
-            icon: const Icon(Icons.folder_open_outlined),
-            label: const Text('All donation records'),
-          ),
-        ),
+        // Defense concerns (Nov 24): no "All donation records" here; the
+        // records stay in the Records tab.
         Row(
           children: [
             Expanded(

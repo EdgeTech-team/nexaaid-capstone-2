@@ -2403,10 +2403,26 @@ class DashboardScreen extends StatelessWidget {
         () => api.get('/reports/validated/counts'),
         // The unit's own reports, for its coordination with the Admin.
         () => api.get('/reports/mine'),
+        // "Most in need": validated reports, open first, then priority
+        // (Critical first), then least fulfilled (report_paging "urgent").
+        () => api.get(
+          '/reports/validated',
+          query: {'offset': '0', 'limit': '5', 'sort': 'urgent'},
+        ),
+        api.lookupsResult,
       ],
       builder: (context, d) {
         final s = d[0] as Map, f = d[1] as Map;
         final mine = (d[2] as List).cast<Map>();
+        final names = Names(Map<String, dynamic>.from(d[4] as Map));
+        // Fulfilled reports sort last; drop any that filled the 5 rows.
+        final mostInNeed = (d[3] as List)
+            .cast<Map>()
+            .where(
+              (r) =>
+                  (num.tryParse('${r['fulfillment_percentage']}') ?? 0) < 100,
+            )
+            .toList();
         final waiting = mine.where((r) => r['status'] == 'Pending').length;
         final toFix = mine.where((r) => r['status'] == 'Rejected').length;
         int n(Object? v) => (v as num?)?.toInt() ?? 0;
@@ -2456,9 +2472,92 @@ class DashboardScreen extends StatelessWidget {
                 onTap: () => open('mine:Rejected'),
               ),
             ]),
+            // UC-CD2: which barangays still need help, not just how many.
+            SectionHeader(
+              'Most in need',
+              subtitle: 'Highest priority, least fulfilled first',
+              action: inNeed > 0
+                  ? TextButton(
+                      onPressed: () => open('underserved'),
+                      child: Text('See all $inNeed'),
+                    )
+                  : null,
+            ),
+            if (mostInNeed.isEmpty)
+              AppCard(
+                child: Row(
+                  children: [
+                    const Icon(Icons.check_circle_outline,
+                        color: AppColors.success),
+                    Gaps.h12,
+                    const Expanded(
+                      child: Text('All validated reports are fulfilled.'),
+                    ),
+                  ],
+                ),
+              )
+            else
+              for (final r in mostInNeed)
+                _NeedRow(
+                  r,
+                  names,
+                  // Report Status > Validated, with this report first and
+                  // outlined (as a notification about it opens it).
+                  onTap: () => HomeNav.go(
+                    context,
+                    HomeTarget(
+                      'Reports',
+                      view: 'Validated',
+                      id: (r['report_id'] as num?)?.toInt(),
+                    ),
+                  ),
+                ),
           ],
         );
       },
+    );
+  }
+}
+
+/// One "Most in need" row: barangay and disaster, priority, fulfillment.
+class _NeedRow extends StatelessWidget {
+  final Map r;
+  final Names names;
+  final VoidCallback onTap;
+  const _NeedRow(this.r, this.names, {required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    return AppCard(
+      margin: const EdgeInsets.only(bottom: Space.sm),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '${names.of('barangays', r['barangay_id'])} · '
+                  '${disasterLabel(r, names)}',
+                  style: t.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Gaps.h8,
+              PriorityChip(r['priority_level'] as String?, showIcon: false),
+            ],
+          ),
+          Gaps.v12,
+          FulfillmentBar(
+            delivered: r['total_items_delivered'] as num? ?? 0,
+            needed: r['total_items_needed'] as num? ?? 0,
+            percent: num.tryParse('${r['fulfillment_percentage']}'),
+          ),
+        ],
+      ),
     );
   }
 }
