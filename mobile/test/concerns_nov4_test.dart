@@ -342,6 +342,16 @@ void main() {
       expect(find.widgetWithText(TextFormField, '120'), findsNothing);
       expect(find.widgetWithText(TextFormField, '400'), findsOneWidget);
 
+      // Nov 23: the arrow by Casili's name folds its needs away and back.
+      await tester.tap(find.byKey(const ValueKey('multi-toggle-2')));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextFormField, '18'), findsNothing);
+      expect(find.byKey(const ValueKey('multi-add-2')), findsNothing);
+      expect(find.widgetWithText(TextFormField, '60'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('multi-toggle-2')));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextFormField, '18'), findsOneWidget);
+
       await tester.enterText(
         find.widgetWithText(
           TextFormField,
