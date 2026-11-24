@@ -1,0 +1,316 @@
+"""
+core/shared/uploads.py — rules for what can be uploaded, by whom, and how
+registration attaches a file to a new account.
+
+Used by:
+  - core/shared/upload_routes.py   (POST/GET /uploads)
+  - registration (adviser items 2 and 2.1): claim_registration_files()
+  - Mariquit, barangay donation QR (adviser item 7): purpose "barangay_donation_qr"
+  - Mariquit, proof of receipt (J2 / NF-015): purposes "receipt_signature"
+    and "receipt_slip_photo"
+"""
+
+import hashlib
+import io
+import secrets
+from dataclasses import dataclass
+from datetime import datetime,timedelta, timezone
+from pathlib import Path
+from typing import Iterable, Optional, Tuple
+
+from fastapi import HTTPException, status
+from PIL import Image, ImageOps, UnidentifiedImageError
+from sqlalchemy.orm import Session
+
+from core.shared.config import settings
+from core.shared.storage import get_storage
+from core.shared.upload_model import Upload, UploadBlob
+from sqlalchemy import func
+
+
+MAX_BYTES = settings.MAX_UPLOAD_MB * 1024 * 1024
+UNCLAIMED_TTL = timedelta(hours=24)  # a registration upload can be claimed for this long
+# F-14: ownerless uploads are deleted once they can no longer be claimed. The
+# extra hour keeps the purge clear of a registration finishing at hour 24.
+PURGE_UNCLAIMED_AFTER = UNCLAIMED_TTL + timedelta(hours=1)
+# F-14: uploads made before login are refused while all unclaimed files
+# together exceed this, so nobody can fill the disk and the Neon database.
+MAX_UNCLAIMED_BYTES = 200 * 1024 * 1024
+
+JPEG, PNG, PDF = "image/jpeg", "image/png", "application/pdf"
+EXTENSION = {JPEG: "jpg", PNG: "png", PDF: "pdf"}
+LABEL = {JPEG: "JPG", PNG: "PNG", PDF: "PDF"}
+
+#Refuse "decompression bombs": tiny files that expand to huge images.
+Image.MAX_IMAGE_PIXELS = 40_000_000  # 40 megapixels, about 8k x 5k. The default is 89 million, which is too high.
+
+
+@dataclass(frozen=True)
+class Purpose:
+    visibility: str             #private | public
+    types: frozenset
+    roles: Optional[Tuple[str, ...]]    #None = anyone, even before logging in.
+    # J2 / NF-015: a smaller cap than MAX_UPLOAD_MB for this purpose, checked
+    # on the saved (re-encoded) bytes. None = MAX_UPLOAD_MB only.
+    max_bytes: Optional[int] = None
+
+DOCS = frozenset({JPEG, PNG, PDF})
+IMAGES = frozenset({JPEG, PNG})
+
+# J2 / NF-015: who confirms a receipt. The Administrator stays until J4
+# (only the Barangay Receiving Representative confirms).
+RECEIPT_SIGNERS = ("Barangay Receiving Representative", "Administrator")
+
+PURPOSES = {
+    #UC-D1 step 3 / alt 6a: donor's valid ID, front and back.
+    "id_front": Purpose("private", DOCS, None),
+    "id_back": Purpose("private", DOCS, None),
+    #UC-R1 / UC-A2 alt 4a: organization legitimacy documents
+    "legitimacy_document": Purpose ("private", DOCS, None),
+    #UC-A1: staff member's employee ID card. Uploaded by the Administrator,
+    #then handed to the new account (transfer_upload) so the staff member
+    #and Administrators can view it.
+    "employee_id_card": Purpose("private", DOCS, ("Administrator",)),
+    #Barangay Ewallet QR shown to donors. DISPLAY ONLY;
+    #NexaAid never processes money (manucsript limitation)
+    "barangay_donation_qr": Purpose(
+        "public", IMAGES,
+        ("Barangay Receiving Representative", "CSWS Disaster Unit", "Administrator"),
+        ),
+    # J2 / NF-015 (team agreement A2): the representative's e-signature,
+    # drawn on the app's signature pad and saved as a small PNG.
+    "receipt_signature": Purpose(
+        "private", frozenset({PNG}), RECEIPT_SIGNERS, max_bytes=300 * 1024,
+    ),
+    # J2 / NF-015: optional photo of the stamped paper acknowledgment slip
+    # (a document only: no photos of goods or people, no seal image).
+    "receipt_slip_photo": Purpose(
+        "private", IMAGES, RECEIPT_SIGNERS, max_bytes=1024 * 1024,
+    ),
+}
+
+# J2 / NF-015: files that are part of an official record (an Acknowledgment
+# Receipt). Never removed by a clean-up, even if they lost their owner.
+RECORD_PURPOSES = ("receipt_signature", "receipt_slip_photo")
+
+
+def size_label(n: int) -> str:
+    """1048576 -> '1 MB', 307200 -> '300 KB'."""
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):g} MB"
+    return f"{n // 1024} KB"
+
+
+def file_url(file_id:str) -> str:
+    return f"/uploads/{file_id}"
+
+def hash_token(token:str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+
+def read_limited(fileobj) -> bytes:
+    data = fileobj.read(MAX_BYTES + 1)
+    if not data:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "The file is empty")
+    if len(data) > MAX_BYTES:
+        raise HTTPException(
+            413,
+            f"The file is larger than {settings.MAX_UPLOAD_MB} MB.",
+        )
+    return data
+
+
+def sniff(data: bytes) -> Optional[str]:
+    #Decide the type from the file's first bytes. The filename and the client's Content-Type header are ignored, since both can be faked.
+    if data.startswith(b"\xFF\xD8\xFF"):
+        return JPEG
+    if data.startswith(b"\x89PNG\r\n\x1A\n"):
+        return PNG
+    if data.startswith(b"%PDF-"):
+        return PDF
+    return None
+
+
+def clean_image(data: bytes, content_type: str) -> bytes:
+    """Re-encode the image. This drops EXIF metadata (phone photos of IDs
+    often carry the GPS location of the donor's home) and anything hidden
+    after the image data."""
+    try:
+        with Image.open(io.BytesIO(data)) as original:
+            original.load()  #load the image data to catch errors early
+            img = ImageOps.exif_transpose(original)
+            out = io.BytesIO()
+            if content_type == JPEG:
+                img.convert("RGB").save(out,"JPEG", quality=88, optimize=True)
+            else:
+                img.save(out, "PNG", optimize=True)
+            return out.getvalue()
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError):
+        # UC-D1 alt 6a: "If the ID is invalid or unreadable, the system asks for re-upload."
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "The image could not be read. Please take or choose the photo again.",
+        )
+
+
+def local_path(db: Session, up: Upload) -> Optional[Path]:
+    """The file on this machine's disk, or None when it is gone everywhere.
+
+    problema_napud 2.1: the team shares one database from several machines.
+    A file uploaded on another machine is copied here from upload_blobs;
+    a file uploaded before upload_blobs existed is copied INTO it the
+    first time the machine that has it serves it, so the others see it too.
+    """
+    path = get_storage().path(up.storage_key)
+    blob = db.get(UploadBlob, up.upload_id)
+    if path.exists():
+        if blob is None:
+            db.add(UploadBlob(upload_id=up.upload_id, data=path.read_bytes()))
+            db.flush()
+        return path
+    if blob is None:
+        return None
+    get_storage().save(up.storage_key, blob.data)
+    return path
+
+
+def _as_utc(dt: datetime) -> datetime:
+    # SQLite (tests) returns naive UTC datetimes; Postgres returns aware ones.
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def claim_upload(
+    db: Session,
+    file_id: str,
+    claim_token: Optional[str],
+    user,
+    allowed_purposes: Iterable[str],
+) -> Upload:
+    """Attach a file uploaded before the account existed to that account.
+
+    Registration flow (Hoyohoy): the app uploads first and gets
+    {file_id, claim_token}; the register request sends both back; the
+    router creates the user, then calls this and stores file_url(file_id)
+    in users.id_document_url / organizations.legitimacy_document_url.
+
+    The token proves the caller is the one who uploaded the file, so a
+    leaked or guessed file_id alone can't be attached to another account.
+    Every failure gives the same message, so nothing leaks about the file.
+    """
+    not_found = HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        "The uploaded file was not found or has expired. Please upload it again.",
+    )
+    up = db.query(Upload).filter(Upload.file_id == file_id).first()
+    if up is None or up.purpose not in set(allowed_purposes):
+        raise not_found
+    if up.owner_user_id is not None:
+        if up.owner_user_id == user.user_id:
+            return up  # already theirs (e.g. uploaded while logged in)
+        raise not_found
+    if (
+        not claim_token
+        or up.claim_token_hash is None
+        or not secrets.compare_digest(up.claim_token_hash, hash_token(claim_token))
+        or _as_utc(up.created_at) < datetime.now(timezone.utc) - UNCLAIMED_TTL
+    ):
+        raise not_found
+    up.owner_user_id = user.user_id
+    up.claim_token_hash = None  # single use
+    up.claimed_at = datetime.now(timezone.utc)
+    return up
+
+
+def claim_registration_files(db: Session, user, refs: dict) -> dict:
+    """Claim every file of one registration for the new account.
+
+    refs maps the expected purpose to the UploadRef the app sent, e.g.
+    {"id_front": ref, "id_back": ref} (UC-D1) or {"legitimacy_document": ref}
+    (UC-A2). Each file must have exactly that purpose, so a front photo
+    can't be sent as the back. Raises on the first failure; the caller
+    lets get_db roll back, so the account is not created either.
+    """
+    ids = [ref.file_id for ref in refs.values()]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Each document must be a separate upload. Upload the back of your ID separately.",
+        )
+    return {
+        purpose: claim_upload(db, ref.file_id, ref.claim_token, user, [purpose])
+        for purpose, ref in refs.items()
+    }
+
+
+def transfer_upload(db: Session, file_id: str, from_user, to_user, purpose: str) -> Upload:
+    """Hand a file the caller uploaded while logged in to another account
+    (UC-A1: the Administrator uploads a staff member's employee ID card).
+
+    Only the uploader can hand it over, and only a file of that purpose.
+    Older files of the same purpose owned by to_user are deleted, so a
+    replaced card is not kept (RA 10173: no personal data longer than needed).
+    """
+    not_found = HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        "The uploaded file was not found. Please upload it again.",
+    )
+    up = db.query(Upload).filter(Upload.file_id == file_id).first()
+    if up is None or up.purpose != purpose:
+        raise not_found
+    if up.owner_user_id not in (from_user.user_id, to_user.user_id):
+        raise not_found
+    up.owner_user_id = to_user.user_id
+    up.claim_token_hash = None
+    up.claimed_at = datetime.now(timezone.utc)
+    older = (
+        db.query(Upload)
+        .filter(Upload.owner_user_id == to_user.user_id, Upload.purpose == purpose,
+                Upload.upload_id != up.upload_id)
+        .all()
+    )
+    keys = [row.storage_key for row in older]
+    for row in older:
+        db.delete(row)
+    db.flush()  # rows gone first; a file is never deleted while its row remains
+    for key in keys:
+        get_storage().delete(key)
+    return up
+
+
+def purge_unclaimed(db: Session, older_than: timedelta = PURGE_UNCLAIMED_AFTER) -> int:
+    """F-14: delete ownerless files that can no longer be claimed: abandoned
+    registrations (ID photos, organization documents) and files whose
+    account was deleted (RA 10173: don't keep personal data longer than
+    needed). Runs on every upload made before login and in the donation
+    expiry job, so no scheduler is needed. Deletes the row, its copy in
+    upload_blobs and the file on this machine. Does not commit.
+
+    J2 / NF-015: files of an Acknowledgment Receipt (RECORD_PURPOSES) are
+    never purged, even if their owner is gone; receipts reference them with
+    ON DELETE RESTRICT."""
+    cutoff = datetime.now(timezone.utc) - older_than
+    rows = (
+        db.query(Upload.upload_id, Upload.storage_key)
+        .filter(Upload.owner_user_id.is_(None), Upload.created_at < cutoff,
+                Upload.purpose.notin_(RECORD_PURPOSES))
+        .all()
+    )
+    if not rows:
+        return 0
+    ids = [r.upload_id for r in rows]
+    db.query(UploadBlob).filter(UploadBlob.upload_id.in_(ids)).delete(synchronize_session=False)
+    db.query(Upload).filter(Upload.upload_id.in_(ids)).delete(synchronize_session=False)
+    db.flush()  # rows gone first; a file is never deleted while its row remains
+    for r in rows:
+        get_storage().delete(r.storage_key)
+    return len(rows)
+
+
+def unclaimed_bytes(db: Session) -> int:
+    """F-14: total size of the files still waiting to be claimed."""
+    return int(
+        db.query(func.coalesce(func.sum(Upload.size_bytes), 0))
+        .filter(Upload.owner_user_id.is_(None))
+        .scalar()
+    )

@@ -1,0 +1,15 @@
+from fastapi import APIRouter, Depends
+from core.m1_user_management.auth import get_current_user_allow_temporary_password
+from core.m1_user_management.user_rbac_model import User
+
+router = APIRouter()
+
+@router.get("/health")
+def health():
+    return {"status": "ok"}
+
+@router.get("/health/secure")
+def health_secure(user: User = Depends(get_current_user_allow_temporary_password)):
+    return {"status": "ok", "user": user.email, "role": user.role.role_name}
+
+# Login (/token, /auth/login, /auth/me) lives in core/m1_user_management/session_router.py.

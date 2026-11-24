@@ -1,0 +1,796 @@
+import 'package:flutter/material.dart';
+
+import 'expiry_widgets.dart';
+import '../shared/item_amounts.dart';
+import '../shared/widgets.dart';
+
+/// Appendix H 4.4 View donation records / 4.5 Monitor donation status.
+/// Records are shown per donation entry (one QR / batch_reference) with its
+/// items, never one row per item. Rows come from GET /donations/records
+/// (staff) or the "entries" of GET /donations/mine (donor / organization).
+/// The filters and sort only change what is shown.
+
+// Oct 13: items that were not brought are closed at receiving ("Not
+// brought"), so new entries never become Partly Received. The chip and the
+// summary still show it only while older entries have it.
+const entryStatuses = [
+  'Pending',
+  'Partly Received',
+  'Received',
+  'Confirmed',
+  // Never handed over in time, or withdrawn (nothing is deleted).
+  'Expired',
+  'Cancelled',
+];
+const handoverMethods = ['Drop Off', 'Door to Door'];
+
+/// problema_napud 4.4 / 4.5: the statuses that need someone to act, each
+/// with what it means, in their own section above the list. 'On Hold' is
+/// not an entry status: it is an entry with an item the CMO put on hold.
+const attentionStatuses = <(String, String)>[
+  (
+    'On Hold',
+    "The City Mayor's Office paused the acknowledgement. The reason is on the entry.",
+  ),
+  (
+    'Expired',
+    'Not handed over by its deadline. CSWS can reopen it when the goods come.',
+  ),
+];
+
+/// [status] matches the entry's status, or 'On Hold' = has an item on hold.
+/// [donor]: "Received" also covers what the CMO acknowledged (Oct 25).
+bool entryHasStatus(Map e, String status, {bool donor = false}) =>
+    status == 'On Hold'
+    ? (e['on_hold_items'] as num? ?? 0) > 0
+    : donor && status == 'Received'
+    ? e['status'] == 'Received' || e['status'] == 'Confirmed'
+    : e['status'] == status;
+
+enum EntrySort {
+  newest('Newest first'),
+  oldest('Oldest first'),
+  mostItems('Most items'),
+  fewestItems('Fewest items'),
+  dueSoonest('Due soonest');
+
+  final String label;
+  const EntrySort(this.label);
+}
+
+String entryReportLabel(Map e) {
+  final r = e['report'] as Map?;
+  return '${e['report_label'] ?? r?['label'] ?? 'Report #${e['report_id']}'}';
+}
+
+String entryTitle(Map e) {
+  // Nov 1: items the donor removed are not counted (not handed over).
+  final items = ((e['items'] as List?) ?? const []).cast<Map>();
+  final n = items.isEmpty
+      ? (e['total_items'] as int? ?? 0)
+      : items.where((i) => i['removed_by_donor'] != true).length;
+  return '${e['entry_no'] != null ? 'Donation ${e['entry_no']}' : '${e['batch_reference']}'}'
+      ' · $n ${n == 1 ? 'item' : 'items'}';
+}
+
+/// Filters by status, report, handover method and search (QR reference,
+/// donor or item name), then sorts. Same rules as the backend's
+/// core/m4_donation_management/donation_entries.filter_and_sort.
+List<Map> filterEntries(
+  List<Map> entries, {
+  String search = '',
+  String? status,
+  int? reportId,
+  String? handover,
+  EntrySort sort = EntrySort.newest,
+  bool donor = false,
+}) {
+  final q = search.trim().toLowerCase();
+  final shown = entries
+      .where((e) => status == null || entryHasStatus(e, status, donor: donor))
+      .where((e) => reportId == null || e['report_id'] == reportId)
+      .where((e) => handover == null || e['handover_method'] == handover)
+      .where(
+        (e) =>
+            q.isEmpty ||
+            '${e['batch_reference']}'.toLowerCase().contains(q) ||
+            '${e['donor'] ?? ''}'.toLowerCase().contains(q) ||
+            (e['items'] as List).any(
+              (i) => '${i['item_name']}'.toLowerCase().contains(q),
+            ),
+      )
+      .toList();
+  // The first item's id follows the order entries were submitted in.
+  int first(Map e) =>
+      ((e['items'] as List).first['donation_id'] as num).toInt();
+  int count(Map e) => (e['total_items'] as num?)?.toInt() ?? 0;
+  shown.sort(switch (sort) {
+    EntrySort.newest => (a, b) => first(b).compareTo(first(a)),
+    EntrySort.oldest => (a, b) => first(a).compareTo(first(b)),
+    EntrySort.mostItems =>
+      (a, b) => count(b) != count(a)
+          ? count(b).compareTo(count(a))
+          : first(b).compareTo(first(a)),
+    EntrySort.fewestItems =>
+      (a, b) => count(a) != count(b)
+          ? count(a).compareTo(count(b))
+          : first(b).compareTo(first(a)),
+    // Closest to expiring first; donations with no deadline go last.
+    EntrySort.dueSoonest => (a, b) {
+      final da = '${a['expires_at'] ?? ''}', db = '${b['expires_at'] ?? ''}';
+      if (da.isEmpty != db.isEmpty) return da.isEmpty ? 1 : -1;
+      final c = da.compareTo(db);
+      return c != 0 ? c : first(a).compareTo(first(b));
+    },
+  });
+  return shown;
+}
+
+class DonationEntriesView extends StatefulWidget {
+  final List<Map> entries;
+
+  /// Optional extra content under each entry (e.g. the donor's timeline).
+  final Widget Function(Map entry)? footer;
+  final void Function(Map entry)? onTap;
+  final String emptyTitle;
+  final String emptyMessage;
+
+  /// The "Report" dropdown. Off on a single report's records page.
+  final bool reportFilter;
+
+  /// Space between two entry cards (9.4: the donor's list needs more).
+  final double gap;
+
+  /// Oct 25: the donor's own list. The CMO's acknowledgement is not shown;
+  /// an acknowledged donation reads (and filters) as received.
+  final bool donor;
+
+  const DonationEntriesView({
+    super.key,
+    required this.entries,
+    this.footer,
+    this.onTap,
+    this.emptyTitle = 'No donations yet.',
+    this.emptyMessage = 'Donation entries will show here once submitted.',
+    this.reportFilter = true,
+    this.gap = Space.sm,
+    this.donor = false,
+  });
+
+  @override
+  State<DonationEntriesView> createState() => _DonationEntriesViewState();
+}
+
+class _DonationEntriesViewState extends State<DonationEntriesView> {
+  final searchC = TextEditingController();
+  String search = '';
+  String? status;
+  int? reportId;
+  String? handover;
+  EntrySort sort = EntrySort.newest;
+
+  @override
+  void dispose() {
+    searchC.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.entries.isEmpty) {
+      return EmptyView(
+        icon: Icons.volunteer_activism_outlined,
+        title: widget.emptyTitle,
+        message: widget.emptyMessage,
+        compact: true,
+      );
+    }
+    final reports = <int, String>{};
+    for (final e in widget.entries) {
+      reports.putIfAbsent(e['report_id'] as int, () => entryReportLabel(e));
+    }
+    int countOf(String s) => widget.entries
+        .where((e) => entryHasStatus(e, s, donor: widget.donor))
+        .length;
+    final shown = filterEntries(
+      widget.entries,
+      search: search,
+      status: status,
+      reportId: reportId,
+      handover: handover,
+      sort: sort,
+      donor: widget.donor,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _AttentionCard(
+          counts: {for (final (s, _) in attentionStatuses) s: countOf(s)},
+          selected: status,
+          onSelect: (s) => setState(() => status = status == s ? null : s),
+        ),
+        Gaps.v12,
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final s in <String?>[null, ...entryStatuses])
+                if ((s != 'Partly Received' || countOf(s!) > 0) &&
+                    !(widget.donor && s == 'Confirmed'))
+                  Padding(
+                    padding: const EdgeInsets.only(right: Space.xs),
+                    child: ChoiceChip(
+                      label: Text(
+                        s == null
+                            ? 'All (${widget.entries.length})'
+                            : '${donationStatusText(s, donor: widget.donor)} '
+                                  '(${countOf(s)})',
+                      ),
+                      selected: status == s,
+                      onSelected: (_) => setState(() => status = s),
+                    ),
+                  ),
+            ],
+          ),
+        ),
+        Gaps.v12,
+        AppTextField(
+          controller: searchC,
+          label: widget.entries.any((e) => e['donor'] != null)
+              ? 'Search QR reference, donor or item'
+              : 'Search QR reference or item',
+          icon: Icons.search,
+          onChanged: (v) => setState(() => search = v),
+        ),
+        if (widget.reportFilter && reports.length > 1) ...[
+          Gaps.v12,
+          DropdownButtonFormField<int?>(
+            key: const ValueKey('entries-report'),
+            initialValue: reportId,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Report'),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('All reports')),
+              for (final e in reports.entries)
+                DropdownMenuItem(
+                  value: e.key,
+                  child: Text(e.value, overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: (v) => setState(() => reportId = v),
+          ),
+        ],
+        Gaps.v12,
+        Row(
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<String?>(
+                key: const ValueKey('entries-handover'),
+                initialValue: handover,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Handover'),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('All')),
+                  for (final h in handoverMethods)
+                    DropdownMenuItem(value: h, child: Text(h)),
+                ],
+                onChanged: (v) => setState(() => handover = v),
+              ),
+            ),
+            Gaps.h12,
+            Expanded(
+              child: DropdownButtonFormField<EntrySort>(
+                key: const ValueKey('entries-sort'),
+                initialValue: sort,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Sort by'),
+                items: [
+                  for (final s in EntrySort.values)
+                    DropdownMenuItem(value: s, child: Text(s.label)),
+                ],
+                onChanged: (v) => setState(() => sort = v ?? sort),
+              ),
+            ),
+          ],
+        ),
+        Gaps.v16,
+        if (shown.isEmpty)
+          const EmptyView(
+            icon: Icons.filter_alt_off_outlined,
+            title: 'No donations match.',
+            message: 'Try another status, report or search.',
+            compact: true,
+          ),
+        for (final e in shown)
+          Padding(
+            padding: EdgeInsets.only(bottom: widget.gap),
+            child: DonationEntryCard(
+              entry: e,
+              donor: widget.donor,
+              footer: widget.footer?.call(e),
+              onTap: widget.onTap == null ? null : () => widget.onTap!(e),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// "Needs attention": Partly Received, On Hold and Expired with their
+/// counts and meaning. Tap one to show only those entries; tap it again
+/// to show all.
+class _AttentionCard extends StatelessWidget {
+  final Map<String, int> counts;
+  final String? selected;
+  final ValueChanged<String> onSelect;
+  const _AttentionCard({
+    required this.counts,
+    required this.selected,
+    required this.onSelect,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return AppCard(
+      key: const ValueKey('needs-attention'),
+      padding: const EdgeInsets.symmetric(vertical: Space.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              Space.md,
+              Space.xs,
+              Space.md,
+              Space.xxs,
+            ),
+            child: Text('Needs attention', style: t.titleMedium),
+          ),
+          for (final (status, meaning) in attentionStatuses)
+            InkWell(
+              key: ValueKey('attention-$status'),
+              onTap: () => onSelect(status),
+              child: Container(
+                color: selected == status
+                    ? cs.primaryContainer.withValues(alpha: 0.6)
+                    : null,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Space.md,
+                  vertical: Space.xs,
+                ),
+                child: Row(
+                  children: [
+                    Icon(switch (status) {
+                      'Partly Received' => Icons.incomplete_circle,
+                      'On Hold' => Icons.pause_circle_outline,
+                      _ => Icons.timer_off_outlined,
+                    }, color: StatusColors.base(status)),
+                    Gaps.h12,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(donationStatusText(status), style: t.titleSmall),
+                          Text(
+                            meaning,
+                            style: t.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Gaps.h8,
+                    Text(
+                      '${counts[status] ?? 0}',
+                      style: t.titleLarge?.copyWith(
+                        color: (counts[status] ?? 0) > 0
+                            ? StatusColors.base(status)
+                            : cs.onSurfaceVariant,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Status summary on top of a report's donation records (Reminder 4.4):
+/// how many entries there are and how many are at each status.
+class EntryStatusSummary extends StatelessWidget {
+  final int entryCount;
+  final int items;
+
+  /// Entries per status (entryStatuses order), only the ones above 0.
+  final Map<String, int> counts;
+
+  EntryStatusSummary(List<Map> entries, {super.key})
+    : entryCount = entries.length,
+      items = entries.fold<int>(
+        0,
+        (n, e) => n + ((e['total_items'] as num?)?.toInt() ?? 0),
+      ),
+      counts = {
+        for (final s in entryStatuses)
+          s: entries.where((e) => e['status'] == s).length,
+      }..removeWhere((_, n) => n == 0);
+
+  /// NF-003: the same summary from GET /donations/records/counts, when the
+  /// entries arrive a page at a time.
+  EntryStatusSummary.fromCounts(Map serverCounts, {super.key})
+    : entryCount = (serverCounts['all'] as num?)?.toInt() ?? 0,
+      items = (serverCounts['items'] as num?)?.toInt() ?? 0,
+      counts = {
+        for (final s in entryStatuses)
+          s: ((serverCounts['by_status'] as Map?)?[s] as num?)?.toInt() ?? 0,
+      }..removeWhere((_, n) => n == 0);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    return AppCard(
+      key: const ValueKey('entry-status-summary'),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Status summary', style: t.titleMedium),
+          Gaps.v4,
+          Text(
+            '$entryCount ${entryCount == 1 ? 'entry' : 'entries'}'
+            ' · $items ${items == 1 ? 'item' : 'items'}',
+            style: t.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          if (counts.isNotEmpty) ...[
+            Gaps.v12,
+            // One bar split by status, so the mix shows at a glance.
+            ClipRRect(
+              borderRadius: BorderRadius.circular(Radii.sm),
+              child: Row(
+                children: [
+                  for (final c in counts.entries)
+                    Expanded(
+                      flex: c.value,
+                      child: Container(
+                        height: 8,
+                        color: StatusColors.base(c.key),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Gaps.v12,
+            Wrap(
+              spacing: Space.md,
+              runSpacing: Space.xs,
+              children: [
+                for (final c in counts.entries)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.circle,
+                        size: 10,
+                        color: StatusColors.base(c.key),
+                      ),
+                      Gaps.h4,
+                      Text(
+                        '${c.value} ${donationStatusText(c.key)}',
+                        style: t.bodyMedium,
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One donation entry: its status, report, handover, and every item with
+/// its own status, received quantity and CMO hold reason.
+class DonationEntryCard extends StatelessWidget {
+  final Map entry;
+  final Widget? footer;
+  final VoidCallback? onTap;
+
+  /// Oct 23: a trailing action per item (the donor's Remove button), or
+  /// null for none.
+  final Widget? Function(Map item)? itemAction;
+
+  /// Oct 25: shown to the donor, who does not see the CMO's step.
+  final bool donor;
+  const DonationEntryCard({
+    super.key,
+    required this.entry,
+    this.footer,
+    this.onTap,
+    this.itemAction,
+    this.donor = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final e = entry;
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final muted = t.bodySmall?.copyWith(color: cs.onSurfaceVariant);
+    final items = (e['items'] as List).cast<Map>();
+    final mixed =
+        items
+            .where((i) => i['removed_by_donor'] != true)
+            .map((i) => donationStatusText('${i['status']}', donor: donor))
+            .toSet()
+            .length >
+        1;
+    return AppCard(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(entryTitle(e), style: t.titleMedium),
+                    Text('For ${entryReportLabel(e)}', style: muted),
+                  ],
+                ),
+              ),
+              Gaps.h8,
+              // Oct 13: once its goods are on a delivery, the chip follows
+              // the timeline (In Transit / Delivered / Barangay confirmed).
+              switch (e['lifecycle_status']) {
+                'In Transit' => const StatusChip(
+                  'In Transit',
+                  label: 'In transit',
+                ),
+                'Delivered' => const StatusChip('Delivered'),
+                'Acknowledged' => const StatusChip(
+                  'Confirmed',
+                  label: 'Barangay confirmed',
+                ),
+                _ => DonationStatusChip('${e['status']}', donor: donor),
+              },
+            ],
+          ),
+          Gaps.v8,
+          Wrap(
+            spacing: Space.md,
+            runSpacing: Space.xxs,
+            children: [
+              _Meta(Icons.qr_code_2, '${e['batch_reference']}'),
+              if (e['donor'] != null)
+                _Meta(Icons.person_outline, '${e['donor']}'),
+              // NF-008 (D6): an organization the Administrator verified.
+              if (e['donor'] != null && e['organization_verified'] == true)
+                const StatusChip('Confirmed', label: 'Verified'),
+              _Meta(Icons.local_shipping_outlined, '${e['handover_method']}'),
+              _Meta(Icons.event_outlined, niceDate(e['created_at'])),
+            ],
+          ),
+          // Deadline to hand it over, or when and why it was closed.
+          if (isClosedEntry(e) ||
+              e['expires_label'] != null ||
+              (e['closed_items'] as num? ?? 0) > 0) ...[
+            Gaps.v8,
+            ExpiryNote(e, forStaff: e['donor'] != null),
+          ],
+          if ((e['on_hold_items'] as num? ?? 0) > 0) ...[
+            Gaps.v8,
+            const StatusChip('On Hold'),
+          ],
+          // NF-011 (D3) for CSWS: "Guest – not yet received" or "Email not
+          // verified" until the pledge can be trusted.
+          if (e['donor'] != null && e['pledge_flag'] != null) ...[
+            Gaps.v8,
+            StatusChip('On Hold', label: '${e['pledge_flag']}'),
+          ],
+          // NF-006 (D4): Door to Door waiting for the donor's email code.
+          if (e['awaiting_email'] == true) ...[
+            Gaps.v8,
+            StatusChip(
+              'Pending',
+              label: e['donor'] != null
+                  ? 'Off the pickup map until the email is verified'
+                  : 'Enter the code from your email',
+            ),
+          ],
+          // Oct 23: seen without scanning: the donor removed items (why).
+          if ((e['removed_items'] as num? ?? 0) > 0) ...[
+            Gaps.v8,
+            RemovedItemsNote(e),
+          ],
+          const Divider(height: Space.lg),
+          // Nov 1: one list for the whole donation (one QR). Removed items
+          // are in the note above, not in the list.
+          for (final i in items)
+            if (i['removed_by_donor'] != true)
+              _itemRow(context, i, mixed, muted),
+          if (footer != null) ...[Gaps.v16, footer!],
+        ],
+      ),
+    );
+  }
+
+  Widget _itemRow(BuildContext context, Map i, bool mixed, TextStyle? muted) {
+    final t = Theme.of(context).textTheme;
+    final cs = Theme.of(context).colorScheme;
+    final action = itemAction?.call(i);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: Space.xxs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.inventory_2_outlined,
+            size: 18,
+            color: cs.onSurfaceVariant,
+          ),
+          Gaps.h8,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // G-002 (D8): "Rice · 10 packs x 5 kg", then packaging and
+                // the quantities that exist (declared, counted, at barangay).
+                Text(
+                  '${i['item_name']} · ${itemAmount(i)}',
+                  style: t.bodyMedium,
+                ),
+                Text(itemQuantities(i), style: muted),
+                if (i['hold_reason'] != null)
+                  Text('On hold: ${i['hold_reason']}', style: muted),
+                if (AddedLaterTag.applies(i))
+                  Padding(
+                    padding: const EdgeInsets.only(top: Space.xxs),
+                    child: AddedLaterTag(i),
+                  ),
+              ],
+            ),
+          ),
+          if (mixed || i['hold_reason'] != null) ...[
+            Gaps.h8,
+            if (isNotBrought(i))
+              const StatusChip('Cancelled', label: 'Not brought')
+            else
+              DonationStatusChip(
+                i['hold_reason'] != null ? 'On Hold' : '${i['status']}',
+                donor: donor,
+              ),
+          ],
+          if (action != null) ...[Gaps.h4, action],
+        ],
+      ),
+    );
+  }
+}
+
+/// Nov 1: a donation is one QR and one list. An item the donor added after
+/// pledging carries this small tag ("Added later · Oct 23") instead of a
+/// separate "Batch 2" section, so nobody mistakes it for a second donation.
+class AddedLaterTag extends StatelessWidget {
+  final Map item;
+  const AddedLaterTag(this.item, {super.key});
+
+  static bool applies(Map i) => ((i['addition_no'] as num?)?.toInt() ?? 1) > 1;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final at = item['added_at'];
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: cs.tertiaryContainer,
+        borderRadius: BorderRadius.circular(Radii.pill),
+      ),
+      child: Text(
+        at == null ? 'Added later' : 'Added later · ${niceDate(at)}',
+        style: t.labelSmall?.copyWith(
+          color: cs.onTertiaryContainer,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+/// "1 item removed by donor: Bottled water (Expired stock)". Shown on the
+/// entry in staff lists, so CSWS knows before scanning.
+class RemovedItemsNote extends StatelessWidget {
+  final Map entry;
+  const RemovedItemsNote(this.entry, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final t = Theme.of(context).textTheme;
+    final notes = ((entry['removed_notes'] as List?) ?? const []).cast<Map>();
+    final n = (entry['removed_items'] as num?)?.toInt() ?? notes.length;
+    return Container(
+      padding: const EdgeInsets.all(Space.sm),
+      decoration: BoxDecoration(
+        color: cs.secondaryContainer.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.remove_circle_outline,
+            size: 18,
+            color: cs.onSecondaryContainer,
+          ),
+          Gaps.h8,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$n item${n == 1 ? '' : 's'} removed by the donor',
+                  style: t.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                for (final r in notes)
+                  Text(
+                    '${r['item_name'] ?? 'Item'}: ${r['reason'] ?? ''}',
+                    style: t.bodySmall,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Meta extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _Meta(this.icon, this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: cs.onSurfaceVariant),
+        Gaps.h4,
+        Flexible(
+          child: Text(
+            text,
+            style: Theme.of(context).textTheme.bodySmall
+                ?.copyWith(color: cs.onSurfaceVariant),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// NF-003: the "Needs attention" card for the paged staff records list
+/// (paged_donation_entries.dart). Same card, public name; nothing above changes.
+class EntryAttentionCard extends _AttentionCard {
+  // _AttentionCard takes no key, and it stays as it is.
+  // ignore: use_key_in_widget_constructors
+  const EntryAttentionCard({
+    required super.counts,
+    required super.selected,
+    required super.onSelect,
+  });
+}

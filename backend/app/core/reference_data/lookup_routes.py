@@ -1,0 +1,216 @@
+"""
+Read-only reference data for dropdowns (disaster types, barangays, sitios,
+items, reports), so users pick names instead of typing ids.
+
+Public: anyone may call it, guest donors too. Without a login it returns the
+reference lists and the validated reports, which hold no personal data (no
+donor names or contacts).
+
+F-01: the six lists of internal records (every report, pending and received
+donations, open and delivered deliveries, pending DRRMO requests) are filled
+only for the staff role whose screen uses them (INTERNAL_LIST_ROLES). Every
+other caller gets them as empty lists, so the response keeps the same keys.
+"""
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session, joinedload
+
+from core.m1_user_management.auth import get_current_user_optional, has_role
+from core.shared.database import get_db
+from core.m2_disaster_reporting.report_model import DisasterReport, DisasterType, Barangay, Sitio, BarangayHazard
+from core.reference_data.disaster_type_model import OTHER_DISASTER_TYPE
+from core.reference_data.item_model import Item
+from core.m4_donation_management.physical_donation_model import PhysicalDonation
+from core.m8_delivery_tracking.delivery_model import Delivery
+from core.m7_logistics_support.logistics_request_model import LogisticsRequest
+from core.m1_user_management.user_rbac_model import User
+from core.m8_delivery_tracking.fulfillment import progress_for_reports
+from core.m2_disaster_reporting.report_feed import feed_row
+from core.reference_data.items import listed_items
+from core.m2_disaster_reporting.need_templates import item_per_family, need_templates
+from core.reference_data.units import dimension, units_for
+
+router = APIRouter(prefix="/lookups", tags=["lookups"])
+
+LIMIT = 200  # newest rows per list, as before
+
+# F-01: who receives each internal list. Each list fills one dropdown
+# (mobile/lib/core/shared/modules.dart), so it goes only to the role(s) using it:
+#   reports              Administrator: validate / reject a report
+#                        (POST /reports/{id}/validate, /reject)
+#                        CSWS Main Office: report filter of the inventory
+#                        (GET /donations/inventory)
+#   pending_donations    CSWS Main Office: receive goods (POST /donations/receive)
+#   received_donations   CMO Representative: acknowledge a donation
+#                        (POST /cmo/donations/{id}/confirm)
+#   open_deliveries      CSWS Main Office: advance a delivery
+#                        (POST /deliveries/{id}/advance) and ask DRRMO for
+#                        transport (POST /logistics/requests)
+#   delivered_deliveries Barangay Receiving Representative, own barangay only:
+#                        confirm receipt (POST /deliveries/{id}/confirm-receipt)
+#   pending_requests     DRRMO Logistics Support: accept / decline
+#                        (PATCH /drrmo/requests/{id}/accept, /decline)
+INTERNAL_LIST_ROLES = {
+    "reports": ("Administrator", "CSWS Main Office"),
+    "pending_donations": ("CSWS Main Office",),
+    "received_donations": ("CMO Representative",),
+    "open_deliveries": ("CSWS Main Office",),
+    "delivered_deliveries": ("Barangay Receiving Representative",),
+    "pending_requests": ("DRRMO Logistics Support",),
+}
+
+
+def _may_see(user: Optional[User], key: str) -> bool:
+    # The role is the account's role in the database (core/m1_user_management/auth.py), never
+    # anything the request says about itself.
+    return user is not None and has_role(user, *INTERNAL_LIST_ROLES[key])
+
+
+@router.get("")
+def get_lookups(
+    db: Session = Depends(get_db),
+    # Login is optional: no token, or an invalid or expired one, is a guest.
+    # A deactivated account's token gets 403, as on every other endpoint.
+    user: Optional[User] = Depends(get_current_user_optional),
+):
+    type_rows = db.query(DisasterType).all()
+    types = {t.disaster_type_id: t.type_name for t in type_rows}
+    # NF-004: the report form asks /lookups/barangays for these types only.
+    location_specific = {t.disaster_type_id for t in type_rows if t.is_location_specific}
+    barangays = {b.barangay_id: b.barangay_name for b in db.query(Barangay).all()}
+    sitios = db.query(Sitio).order_by(Sitio.barangay_id, Sitio.sitio_id).all()
+
+    def label(r):
+        return (f"#{r.report_id} {r.disaster_label(types)} - "
+                f"{barangays.get(r.barangay_id, 'Barangay')}")
+
+    # Public: the validated reports, from their own query, so newer Pending,
+    # Rejected or Cancelled reports can never push them out of the limit.
+    # Deleted reports (testing 2.3, soft delete) stay out of every list.
+    validated = (db.query(DisasterReport).options(joinedload(DisasterReport.fulfillment),
+                                                  joinedload(DisasterReport.event))
+                 .filter(DisasterReport.status == "Validated",
+                         DisasterReport.deleted_at.is_(None))
+                 .order_by(DisasterReport.report_id.desc()).limit(LIMIT).all())
+    progress = progress_for_reports(db, validated)
+
+    out = {
+        # In id order, with Other always last.
+        "disaster_types": [{"id": i, "name": n, "is_location_specific": i in location_specific}
+                           for i, n in sorted(
+            types.items(), key=lambda t: (t[1] == OTHER_DISASTER_TYPE, t[0]))],
+
+        "barangays": [{"id": i, "name": n} for i, n in sorted(barangays.items(), key=lambda x: x[1])],
+        "sitios": [
+            {"id": s.sitio_id, "name": s.sitio_name, "barangay_id": s.barangay_id}
+            for s in sitios
+        ],
+                # Retired items (active = false) and items waiting for review (F-15) stay out of the dropdowns.
+
+        "items": [
+            {"id": i.item_id, "name": f"{i.item_name} ({i.unit_of_measure})",
+             "item_name": i.item_name, "unit": i.unit_of_measure,
+             "kind": dimension(i.unit_of_measure),
+             # Suggested amount per affected family for a need the reporter
+             # adds (None = no standard yet; the form suggests 1).
+             "per_family": item_per_family(i.item_name),
+             "size_units": units_for(i.unit_of_measure),
+             "sizes": [{"id": z.size_id, "label": z.label, "amount": float(z.amount)}
+                       for z in i.sizes]}
+            for i in listed_items(db.query(Item).filter(
+                Item.active.is_(True), Item.pending_review.is_(False)).order_by(Item.item_name).all())
+
+        ],
+        # Staff only (F-01): every report, with its status. Filled below.
+        "reports": [],
+        # Donor / organization screens: only validated reports are published
+        # to donors (manuscript UC-A3 step 9, UC-D2).
+        "validated_reports": [feed_row(r, types, barangays, progress, label) for r in validated],
+        # Staff only (F-01). Filled below for the roles in INTERNAL_LIST_ROLES.
+        "pending_donations": [],     # CSWS receives these
+        "received_donations": [],    # CMO confirms these
+        "open_deliveries": [],       # CSWS advances
+        "delivered_deliveries": [],  # Barangay acknowledges
+        "pending_requests": [],      # DRRMO accepts / declines
+    }
+
+    # Each internal query runs only for a caller allowed to see its result.
+    if _may_see(user, "reports"):
+        rows = (db.query(DisasterReport).filter(DisasterReport.deleted_at.is_(None))
+                .order_by(DisasterReport.report_id.desc()).limit(LIMIT).all())
+        out["reports"] = [
+            {"id": r.report_id, "name": f"{label(r)} ({r.status})", "status": r.status}
+            for r in rows
+        ]
+
+    if _may_see(user, "pending_donations") or _may_see(user, "received_donations"):
+        item_names = {i.item_id: i.item_name for i in db.query(Item).all()}
+
+        def donations(status):
+            rows = (db.query(PhysicalDonation).filter(PhysicalDonation.status == status)
+                    .order_by(PhysicalDonation.donation_id.desc()).limit(LIMIT).all())
+            return [{"id": d.donation_id,
+                     "name": f"#{d.donation_id} {d.qr_reference} - {d.quantity} "
+                             f"{item_names.get(d.item_id, 'item')} for report #{d.report_id}"}
+                    for d in rows]
+
+        if _may_see(user, "pending_donations"):
+            out["pending_donations"] = donations("Pending")
+        if _may_see(user, "received_donations"):
+            out["received_donations"] = donations("Received")
+
+    def deliveries(*statuses, barangay_id=None):
+        query = db.query(Delivery).filter(Delivery.status.in_(statuses))
+        if barangay_id is not None:
+            query = query.filter(Delivery.destination_barangay_id == barangay_id)
+        rows = query.order_by(Delivery.delivery_id.desc()).limit(LIMIT).all()
+        return [{"id": d.delivery_id,
+                 "name": f"#{d.delivery_id} to {barangays.get(d.destination_barangay_id, 'Barangay')}"
+                         f" - report #{d.report_id} ({d.status})"}
+                for d in rows]
+
+    if _may_see(user, "open_deliveries"):
+        out["open_deliveries"] = deliveries("Preparing", "In Transit")
+    if _may_see(user, "delivered_deliveries"):
+        # Only the representative's own barangay (UC-B1 alt 3a, the rule of
+        # core.m1_user_management.auth.barangay_scope). Without an assigned barangay the list
+        # stays empty instead of failing, so the reference lists still load.
+        own = getattr(user, "assigned_barangay_id", None)
+        if own is not None:
+            out["delivered_deliveries"] = deliveries("Delivered", barangay_id=own)
+
+    if _may_see(user, "pending_requests"):
+        requests = (db.query(LogisticsRequest).filter(LogisticsRequest.status == "Pending")
+                    .order_by(LogisticsRequest.request_id.desc()).limit(LIMIT).all())
+        out["pending_requests"] = [
+            {"id": r.request_id, "name": f"#{r.request_id} for {r.title}"}
+            for r in requests
+        ]
+
+    # Module 3 (Oct 2026): suggested needs per disaster type, per family.
+    # Public like the other reference lists: item names and amounts only.
+    out["need_templates"] = need_templates(db)
+
+    return out
+
+@router.get("/barangays")
+def get_barangays(disaster_type_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """NF-004: every barangay, with is_hazard_prone for the given disaster
+    type. For a location-specific type (Landslide, Storm Surge) the prone
+    barangays come first; a general type, or no type, flags none and lists
+    them A-Z. Public like the other reference lists.
+
+    A suggestion only: POST /reports still accepts any barangay."""
+    prone = set()
+    if disaster_type_id is not None:
+        disaster_type = db.get(DisasterType, disaster_type_id)
+        if disaster_type is None:
+            raise HTTPException(status_code=404, detail="Disaster type not found.")
+        if disaster_type.is_location_specific:
+            prone = {h.barangay_id for h in db.query(BarangayHazard)
+                     .filter(BarangayHazard.disaster_type_id == disaster_type_id)}
+    rows = sorted(db.query(Barangay).all(),
+                  key=lambda b: (b.barangay_id not in prone, b.barangay_name))
+    return [{"id": b.barangay_id, "name": b.barangay_name,
+             "is_hazard_prone": b.barangay_id in prone} for b in rows]

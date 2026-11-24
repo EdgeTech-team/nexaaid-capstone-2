@@ -5,7 +5,7 @@ import io
 
 from PIL import Image
 
-# Meets core/passwords.validate_password_strength (a letter and a number).
+# Meets core/m1_user_management/passwords.validate_password_strength (a letter and a number).
 STRONG_PASSWORD = "Relief#2026ok"
 
 

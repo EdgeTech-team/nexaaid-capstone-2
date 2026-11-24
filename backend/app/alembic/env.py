@@ -3,27 +3,27 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 
-from core.config import settings
-from core.database import Base
+from core.shared.config import settings
+from core.shared.database import Base
 
-from models.user_rbac_model import User
-from models.role_model import Role
-from models.organization_model import Organization
-from models.item_model import Item
-from models.physical_donation_model import PhysicalDonation
-from models.received_goods_model import ReceivedGoods
-from models.inventory_model import Inventory
-from models.report import DisasterReport 
-from models.city_model import City
-from models.barangay_model import Barangay
-from models.disaster_type_model import DisasterType
-from models.sitio_model import Sitio
-from models.barangay_hazard_model import BarangayHazard
-from models.disaster_event_model import DisasterEvent
+from core.m1_user_management.user_rbac_model import User
+from core.m1_user_management.role_model import Role
+from core.m1_user_management.organization_model import Organization
+from core.reference_data.item_model import Item
+from core.m4_donation_management.physical_donation_model import PhysicalDonation
+from core.m5_inventory.received_goods_model import ReceivedGoods
+from core.m5_inventory.inventory_model import Inventory
+from core.m2_disaster_reporting.report_model import DisasterReport 
+from core.reference_data.city_model import City
+from core.reference_data.barangay_model import Barangay
+from core.reference_data.disaster_type_model import DisasterType
+from core.reference_data.sitio_model import Sitio
+from core.reference_data.barangay_hazard_model import BarangayHazard
+from core.m2_disaster_reporting.disaster_event_model import DisasterEvent
 
-from models.guest_donor_model import GuestDonor
-from models.upload_model import Upload
-from models.donation_info_model import BarangayDonationInfo, ReportDonationInfo
+from core.m4_donation_management.guest_donor_model import GuestDonor
+from core.shared.upload_model import Upload
+from core.m4_donation_management.donation_info_model import BarangayDonationInfo, ReportDonationInfo
 
 
 # this is the Alembic Config object, which provides

@@ -134,14 +134,14 @@ Backfill notes:
 | CSWS Main Office | Pickup map / list / stop sheet | `GET /donations/pickup-plan` | quantity, packaging | + amount_text, quantity summary |
 | DRRMO | Pickup runs and requests | `GET /drrmo/requests` (goods) | "2 kg Rice" | "Rice: 10 packs x 5 kg (Sack)" |
 | CMO Representative | Review / acknowledge | `GET /cmo/donations/*`, `/cmo/entries/*` | quantity, packaging | + amount_text, declared, counted |
-| CSWS, Barangay, DRRMO, Donor | Deliveries, trips, scheduled deliveries | `services/delivery_views.py` | quantity, unit | + amount_text, barangay received |
+| CSWS, Barangay, DRRMO, Donor | Deliveries, trips, scheduled deliveries | `core/m8_delivery_tracking/delivery_views.py` | quantity, unit | + amount_text, barangay received |
 | CSWS Main Office, Barangay | Dashboards (donation entries, latest donations) | `GET /dashboard/csws-main`, `/dashboard/barangay` | quantity (+ packaging on CSWS) | + amount_text, packaging on both |
 | Administrator | Transparency dashboard | `GET /dashboard/summary` | counts only | + Verified organizations (D6) |
 
 **Barangay received (J1).** `receipt_items.received_quantity` does not exist
 on this branch yet. Every response already carries
 `barangay_received_quantity` (null for now) and the app shows it when it is
-set. After J1 is merged, fill `services/item_quantities.barangay_received` and
+set. After J1 is merged, fill `core/reference_data/item_quantities.barangay_received` and
 `delivery_received` (one place each); no screen needs to change.
 
 ## G-003 (My Giving won't load): investigation
@@ -156,8 +156,8 @@ added later, a Door to Door pickup and a typed-in item:
   every `DonationDetailScreen`, renders without an exception.
 
 **No root cause was found in this setup**, so no speculative fix was made.
-Regression tests keep it covered (`tests/test_my_giving_loads.py`,
-`mobile/test/my_giving_real_data_test.dart`). To finish: run the backend
+Regression tests keep it covered (`tests/m9_dashboards/test_my_giving_loads.py`,
+`mobile/test/m9_dashboards/my_giving_real_data_test.dart`). To finish: run the backend
 tests against a local Postgres (`TEST_POSTGRES_URL`) and send the Render log
 line or the app's error text from the failing account.
 
@@ -203,7 +203,7 @@ line or the app's error text from the failing account.
 ## Notification wording
 
 Report notifications describe the need instead of "Report #21 is now
-accepting donations" (`services/report_story.py`), e.g.
+accepting donations" (`core/notifications/report_story.py`), e.g.
 "Flood in Barangay Looc: families need your help" /
 "35 families in Barangay Looc were affected by a flood. They need rice,
 drinking water and 2 more items. High priority. Tap to see what they need
